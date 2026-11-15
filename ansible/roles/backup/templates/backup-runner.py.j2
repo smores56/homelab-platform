@@ -3,8 +3,12 @@
 
 The backup, copies, and prune live in ``data_plane.backup.runner``, the code
 ``data_plane backup-run`` runs; this adds the flock, the recursive snapshot,
-the bind mounts, and ZFS snapshot retention. A group outside the pool (Secure
-Boot keys) is bound from its live path: a snapshot cannot capture it.
+the bind mounts, and ZFS snapshot retention. A group the plan marks ``live``
+(Secure Boot keys) is bound from its live path: a snapshot cannot capture it.
+
+Every bind is guarded. A leftover mount from an interrupted run is never
+stacked on, an unmount that fails is fatal, and SIGTERM/SIGINT unmounts before
+the unit exits so ``TimeoutStartSec`` cannot leave a bind behind.
 """
 
 from __future__ import annotations
@@ -12,6 +16,7 @@ from __future__ import annotations
 import argparse
 import fcntl
 import os
+import signal
 import subprocess
 import sys
 
@@ -24,6 +29,7 @@ from data_plane.errors import DataPlaneError  # noqa: E402
 
 SNAPSHOT_PREFIX = "data-plane-"  # every snapshot this unit takes, and retires
 LOCK_FILE = {{ (backup_cache_dir ~ "/homelab-backup.lock") | to_json }}
+RESTIC_BINARY = {{ restic_binary | to_json }}
 ZFS_KEEP_SECONDS = {{ backup_zfs_keep_days | int }} * 24 * 3600
 
 
@@ -45,15 +51,32 @@ def lock() -> int:
     return handle
 
 
-def reset_tree(plan: BackupPlan, now: float | None = None) -> None:
-    """Unmount leftovers beneath snapshot_root, then retire expired snapshots."""
+def mount_of(path: str) -> str:
+    """The mount containing ``path``: the path itself when it is a mountpoint."""
+    done = run(["findmnt", "-rn", "-o", "TARGET", "--target", path], check=False)
+    return done.stdout.strip() if done.returncode == 0 else ""
+
+
+def unmount_tree(plan: BackupPlan) -> None:
+    """Unmount everything beneath the snapshot root; a failure is fatal.
+
+    Leaving a bind in place would make the next run back up the previous
+    generation, so a failed ``umount`` stops the run instead of being ignored.
+    """
     root = plan.snapshot_root.rstrip("/")
     found = run(["findmnt", "-rn", "-o", "TARGET", "-R", root], check=False).stdout
     nested = [t for t in found.splitlines() if t == root or t.startswith(root + "/")]
     for target in sorted(nested, key=len, reverse=True):
-        run(["umount", target], check=False)
-    if now is None:
-        return
+        done = run(["umount", target], check=False)
+        if done.returncode != 0:
+            raise DataPlaneError(
+                f"umount {target} failed: {done.stderr.strip()[:400]}; "
+                "the leftover mount would be backed up as fresh data"
+            )
+
+
+def retire_snapshots(plan: BackupPlan, now: float) -> None:
+    """Destroy this unit's snapshots older than the retention window."""
     history = run(["zfs", "list", "-H", "-p", "-o", "name,creation", "-t", "snapshot",
                    "-r", plan.snapshot_dataset], check=False).stdout
     for line in history.splitlines():
@@ -63,8 +86,24 @@ def reset_tree(plan: BackupPlan, now: float | None = None) -> None:
             run(["zfs", "destroy", "-r", name], check=False)
 
 
+def bind(source: str, target: str, *, readonly: bool = False) -> None:
+    """Bind ``source`` at ``target``, refusing to stack on a live mount."""
+    target = os.path.normpath(target)
+    if mount_of(target) == target:
+        raise DataPlaneError(
+            f"{target} is already a mountpoint; refusing to stack a bind on it"
+        )
+    os.makedirs(target, exist_ok=True)
+    run(["mount", "--bind", source, target])
+    if readonly:
+        run(["mount", "-o", "remount,bind,ro", target])
+    if mount_of(target) != target:
+        raise DataPlaneError(f"{target} is not a mountpoint after mounting {source}")
+
+
 def mount_tree(plan: BackupPlan, name: str, groups: list[Group]) -> None:
-    """Bind each frozen dataset, and each live host path, under the root."""
+    """Bind each frozen dataset, and each group, under the snapshot root."""
+    root = plan.snapshot_root.rstrip("/")
     listing = run(["zfs", "list", "-H", "-r", "-o", "name,mountpoint,mounted", "-t",
                    "filesystem", plan.snapshot_dataset]).stdout
     suffix = name.split("@", 1)[-1]  # the library names the snapshot, not @dataset
@@ -72,19 +111,45 @@ def mount_tree(plan: BackupPlan, name: str, groups: list[Group]) -> None:
         fields = line.split("\t")
         if len(fields) != 3 or fields[2] != "yes" or not fields[1].startswith("/"):
             continue
-        target = plan.snapshot_root.rstrip("/") + fields[1]
-        os.makedirs(target, exist_ok=True)
-        run(["mount", "--bind", f"{fields[1].rstrip('/')}/.zfs/snapshot/{suffix}", target])
+        bind(f"{fields[1].rstrip('/')}/.zfs/snapshot/{suffix}", root + fields[1])
+    under_root = run(["findmnt", "-rn", "-o", "TARGET", "-R", root], check=False).stdout
+    frozen = [t for t in under_root.splitlines() if t.startswith(root + "/")]
     for group in groups:
-        target = plan.snapshot_path(group.id)
-        if os.path.isdir(target):
+        target = os.path.normpath(plan.snapshot_path(group.id))
+        if group.live:
+            live = f"/{group.path}"
+            if not os.path.isdir(live):
+                raise DataPlaneError(f"group {group.id!r} has no tree at {live}")
+            bind(live, target, readonly=True)
             continue
-        live = f"/{group.path}"
-        if not os.path.isdir(live):
-            raise DataPlaneError(f"group {group.id!r} has no tree at {target}")
-        os.makedirs(target, exist_ok=True)
-        run(["mount", "--bind", live, target])
-        run(["mount", "-o", "remount,bind,ro", target])
+        if not any(m == target or m.startswith(target + "/")
+                   or target.startswith(m + "/") for m in frozen):
+            raise DataPlaneError(
+                f"group {group.id!r} has no snapshot mount at {target}; refusing "
+                "to back up the live path or a stale tree"
+            )
+
+
+def cleanup_cache() -> None:
+    """Bound the restic cache; a failure is logged, never fatal."""
+    done = run([RESTIC_BINARY, "cache", "--cleanup"], check=False)
+    if done.returncode != 0:
+        print(f"backup: restic cache --cleanup failed: "
+              f"{done.stderr.strip()[:400]}", file=sys.stderr)
+
+
+def install_signal_handlers(plan: BackupPlan) -> None:
+    """Unmount the binds on SIGTERM/SIGINT before the unit is killed."""
+
+    def handler(signum: int, _frame: object) -> None:
+        try:
+            unmount_tree(plan)
+        except DataPlaneError as exc:
+            print(f"backup: {exc}", file=sys.stderr)
+        raise SystemExit(128 + signum)
+
+    signal.signal(signal.SIGTERM, handler)
+    signal.signal(signal.SIGINT, handler)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -92,31 +157,45 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--config", required=True)
     parser.add_argument("--cadence", choices=("fast", "media"))
     args = parser.parse_args(argv)
+    status = 0
     plan: BackupPlan | None = None
     handle: int | None = None
     try:
         handle = lock()
         plan = load_plan(args.config)
-        groups = [g for g in plan.groups if not args.cadence or g.cadence == args.cadence]
+        install_signal_handlers(plan)
+        groups = [
+            g for g in plan.groups if not args.cadence or g.cadence == args.cadence
+        ]
         if not groups:
             print(f"backup: no {args.cadence} groups due")
-            return 0
-        runner = SubprocessRunner()
-        point = snapshot(plan, runner=runner)
-        reset_tree(plan, point.created_at)
-        mount_tree(plan, point.name, groups)
-        for group in groups:
-            print(f"backup: {group.id} from {plan.snapshot_path(group.id)}")
-            run_group(plan, group.id, now=point.created_at, runner=runner)
-        return 0
+        else:
+            runner = SubprocessRunner()
+            point = snapshot(plan, runner=runner)
+            unmount_tree(plan)
+            retire_snapshots(plan, point.created_at)
+            mount_tree(plan, point.name, groups)
+            for group in groups:
+                print(f"backup: {group.id} from {plan.snapshot_path(group.id)}")
+                try:
+                    run_group(plan, group.id, now=point.created_at, runner=runner)
+                except Exception as exc:  # one group must not stop the others
+                    print(f"backup: group {group.id} failed: {exc}", file=sys.stderr)
+                    status = 1
     except DataPlaneError as exc:
         print(f"backup: {exc}", file=sys.stderr)
-        return 1
+        status = 1
     finally:
         if plan is not None:
-            reset_tree(plan)
+            try:
+                unmount_tree(plan)
+            except DataPlaneError as exc:
+                print(f"backup: {exc}", file=sys.stderr)
+                status = 1
+            cleanup_cache()
         if handle is not None:
             os.close(handle)
+    return status
 
 
 if __name__ == "__main__":

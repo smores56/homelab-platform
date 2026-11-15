@@ -12,7 +12,7 @@ After={{ unit }}
 {% set data_mounts = (zfs_datasets | map(attribute='mountpoint') | list)
    + (backup_mounts | map(attribute='path') | list) %}
 {% set repository_roots = backup_tiers | map(attribute='repository_root') | select('match', '^/') | list %}
-RequiresMountsFor={{ (data_mounts + repository_roots) | unique | join(' ') }}
+RequiresMountsFor={{ (data_mounts + repository_roots + [backup_cache_dir]) | unique | join(' ') }}
 {% for mount in data_mounts | unique %}
 AssertPathIsMountPoint={{ mount }}
 {% endfor %}
@@ -42,6 +42,8 @@ ProtectClock=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+# The cache sits on the primary backup disk, below the tier root, so it is
+# writable without exposing anything on the root filesystem.
 ReadWritePaths={{ backup_cache_dir }}
 ReadWritePaths=-{{ backup_snapshot_root }}
 # The runner imports the tested library from here; it is never writable.

@@ -51,6 +51,49 @@ check grep -q '"mount", "--bind"' "$role/templates/backup-runner.py.j2"
 check grep -q '"umount"' "$role/templates/backup-runner.py.j2"
 check grep -q '"zfs", "destroy"' "$role/templates/backup-runner.py.j2"
 
+# Every bind is guarded against a leftover mount and every unmount is fatal, so
+# an interrupted run can never make the next one back up the previous generation.
+runner=$role/templates/backup-runner.py.j2
+check grep -qF 'findmnt", "-rn", "-o", "TARGET", "--target"' "$runner"
+check grep -qF 'is already a mountpoint; refusing to stack a bind on it' "$runner"
+check grep -qF 'is not a mountpoint after mounting' "$runner"
+refute grep -qF 'os.path.isdir(target)' "$runner"
+if awk '/^def unmount_tree/,/^def retire_snapshots/' "$runner" | grep -qF 'raise DataPlaneError'; then
+  ok "a failed umount stops the run"
+else
+  bad "a failed umount is swallowed"
+fi
+if [[ $(grep -cF 'unmount_tree(plan)' "$runner") -ge 3 ]]; then
+  ok "unmount runs before mounting, on a signal, and in the finally"
+else
+  bad "unmount_tree is not wired into the finally and the signal handler"
+fi
+check grep -qF 'signal.signal(signal.SIGTERM' "$runner"
+check grep -qF 'signal.signal(signal.SIGINT' "$runner"
+
+# The plan decides what is live; a missing snapshot tree fails closed instead of
+# silently reading the live path.
+check grep -qF 'if group.live:' "$runner"
+check grep -qF 'has no snapshot mount at' "$runner"
+
+# One failing group never starves the rest of the cadence.
+if awk '/^ *for group in groups:/,/^    except DataPlaneError/' "$runner" \
+  | grep -qF 'except Exception as exc'; then
+  ok "a group failure is caught and the loop continues"
+else
+  bad "one group failure aborts the cadence"
+fi
+check grep -qF 'group {group.id} failed: {exc}' "$runner"
+check grep -qF 'cache", "--cleanup"' "$runner"
+
+# The restic cache lives on the backup disk, never on the root filesystem, and
+# the unit mounts and opens exactly that path.
+check grep -qE '^backup_cache_dir: /var/backups/primary/restic-cache$' "$role/defaults/main.yml"
+check grep -qF 'repository_roots + [backup_cache_dir]' "$role/templates/backup.service.j2"
+check grep -qF 'ReadWritePaths={{ backup_cache_dir }}' "$role/templates/backup.service.j2"
+check grep -qF 'Create the root-only restic cache on the mounted backup disk' "$role/tasks/main.yml"
+check grep -qF 'backup_local_roots + [backup_cache_dir]' "$role/tasks/main.yml"
+
 # The role installs that library and the unit puts it on PYTHONPATH.
 check grep -q 'libs/data_plane' "$role/tasks/main.yml"
 check grep -q 'dest: /opt/data-plane/lib/data_plane' "$role/tasks/main.yml"

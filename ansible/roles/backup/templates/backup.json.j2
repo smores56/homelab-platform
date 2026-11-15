@@ -5,7 +5,7 @@
 {% set groups = [] %}
 {% for group_id in backup_group_ids %}
 {% set spec = backup_group_specs[group_id] %}
-{% set _ = groups.append({'id': group_id, 'path': spec.path, 'cadence': spec.cadence, 'tiers': spec.tiers}) %}
+{% set _ = groups.append({'id': group_id, 'path': spec.path, 'cadence': spec.cadence, 'tiers': spec.tiers, 'live': group_id in (backup_host_paths | map(attribute='id') | list)}) %}
 {% endfor %}
 {{ {
   'schema_version': backup_schema_version | int,

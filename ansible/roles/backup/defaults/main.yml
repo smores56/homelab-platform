@@ -18,7 +18,10 @@ restic_lock_drill_enabled: false
 
 backup_python: /usr/bin/python3
 backup_program: /usr/local/sbin/homelab-backup
-backup_cache_dir: /var/cache/restic-backup
+# The restic cache must not grow the root filesystem: it lives on the primary
+# backup disk, which the unit already requires and writes. The wrapper runs
+# `restic cache --cleanup` on every run so the directory stays bounded.
+backup_cache_dir: /var/backups/primary/restic-cache
 # One recursive snapshot covers every group, so ZFS snapshots share one window.
 backup_zfs_keep_days: 7
 backup_owner: root

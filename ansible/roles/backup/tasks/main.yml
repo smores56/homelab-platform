@@ -180,7 +180,7 @@
   changed_when: false
   failed_when: restic_version not in restic_version_check.stdout
 
-- name: Create the root-only secret and cache directories
+- name: Create the root-only secret directories
   ansible.builtin.file:
     path: "{{ item.path }}"
     state: directory
@@ -190,7 +190,6 @@
   loop:
     - { path: "{{ backup_password_root }}", mode: "0700" }
     - { path: /etc/homelab, mode: "0755" }
-    - { path: "{{ backup_cache_dir }}", mode: "0700" }
   loop_control:
     label: "{{ item.path }}"
 
@@ -229,10 +228,10 @@
          | map('regex_replace', '^/dev/mapper/', 'systemd-cryptsetup@')
          | map('regex_replace', '$', '.service') | list }}
 
-- name: Check each local tier root
+- name: Check each local tier root and the restic cache directory
   ansible.builtin.command:
     argv: [findmnt, -rn, -o, TARGET, --target, "{{ item }}"]
-  loop: "{{ backup_local_roots }}"
+  loop: "{{ backup_local_roots + [backup_cache_dir] }}"
   loop_control:
     label: "{{ item }}"
   register: backup_root_checks
@@ -240,7 +239,7 @@
   failed_when: false
   check_mode: false
 
-- name: Refuse to initialise a repository on the root filesystem
+- name: Refuse to initialise a repository or cache on the root filesystem
   ansible.builtin.assert:
     that:
       - item.rc == 0
@@ -249,8 +248,8 @@
       - item.item == item.stdout or item.item.startswith(item.stdout.rstrip('/') ~ '/')
     fail_msg: >-
       {{ item.item }} is not backed by its own mount ({{ item.stdout | default('/') }});
-      mount the backup disk before applying, or a repository would land on the
-      root filesystem
+      mount the backup disk before applying, or a repository or the restic cache
+      would land on the root filesystem
     quiet: true
   loop: "{{ backup_root_checks.results }}"
   loop_control:
@@ -266,6 +265,15 @@
   loop: "{{ backup_local_roots }}"
   loop_control:
     label: "{{ item }}"
+
+# After the mount check: the cache must never be created on the root filesystem.
+- name: Create the root-only restic cache on the mounted backup disk
+  ansible.builtin.file:
+    path: "{{ backup_cache_dir }}"
+    state: directory
+    owner: "{{ backup_owner }}"
+    group: "{{ backup_group }}"
+    mode: "0700"
 
 - name: Check whether each per-group repository exists
   ansible.builtin.command:
