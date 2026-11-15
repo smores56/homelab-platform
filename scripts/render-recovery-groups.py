@@ -37,6 +37,10 @@ TARGET = ROOT / "deploy" / "data-plane" / "config" / "recovery-groups.json"
 TIER_NAMES = ["nvme", "hdd", "r2"]
 CADENCES = {"fast", "media"}
 GROUP_SPEC_KEYS = {"label", "path", "cadence", "tiers"}
+#: The recovery page refuses anything else as a group id.
+GROUP_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+#: The page also refuses empty labels and control characters in them.
+CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
 RETIRED_BACKUP_VARS = {
     "backup_domains",
     "backup_destinations",
@@ -405,8 +409,19 @@ def validate(all_vars: dict[str, Any], backup_vars: dict[str, Any]) -> list[str]
     host_paths = {row["id"]: row["path"] for row in all_vars.get("backup_host_paths", [])}
     for group_id in order:
         spec = specs[group_id]
+        if not GROUP_ID.fullmatch(group_id):
+            raise SystemExit(
+                f"backup group id {group_id!r} is not a valid manifest id"
+            )
         if not isinstance(spec, dict):
             raise SystemExit(f"backup_group_specs.{group_id} must be a mapping")
+        label = group_label(group_id, spec)
+        if not label.strip():
+            raise SystemExit(f"backup_group_specs.{group_id} needs a non-empty label")
+        if CONTROL_CHARS.search(label):
+            raise SystemExit(
+                f"backup_group_specs.{group_id} label has a control character"
+            )
         unknown = set(spec) - GROUP_SPEC_KEYS
         if unknown:
             raise SystemExit(
@@ -428,6 +443,12 @@ def validate(all_vars: dict[str, Any], backup_vars: dict[str, Any]) -> list[str]
         if [tier for tier in tiers if tier not in roots]:
             raise SystemExit(
                 f"backup_group_specs.{group_id} names an unknown tier"
+            )
+        # The public page restores from the offsite copy; a group without r2
+        # would otherwise be published with an r2 repo it never receives.
+        if "r2" not in tiers:
+            raise SystemExit(
+                f"backup_group_specs.{group_id} must include the r2 tier"
             )
         if group_id in host_paths:
             if path != host_paths[group_id].lstrip("/"):
@@ -502,6 +523,7 @@ def build_host_plan(
 
     order = validate(all_vars, backup_vars)
     specs = backup_vars["backup_group_specs"]
+    live_ids = {row["id"] for row in all_vars.get("backup_host_paths", [])}
     tiers = [
         {"name": tier["name"], "repository_root": tier["repository_root"]}
         for tier in backup_vars["backup_tiers"]
@@ -518,6 +540,9 @@ def build_host_plan(
                 "path": str(specs[group_id]["path"]),
                 "cadence": specs[group_id]["cadence"],
                 "tiers": list(specs[group_id]["tiers"]),
+                # A host path sits outside the pool and is read live; every
+                # other group is backed up from the frozen snapshot tree.
+                "live": group_id in live_ids,
             }
             for group_id in order
         ],

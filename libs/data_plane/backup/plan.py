@@ -31,7 +31,7 @@ _TOP_LEVEL_KEYS = frozenset(
     }
 )
 _TIER_KEYS = frozenset({"name", "repository_root"})
-_GROUP_KEYS = frozenset({"id", "path", "cadence", "tiers"})
+_GROUP_KEYS = frozenset({"id", "path", "cadence", "tiers", "live"})
 
 
 @dataclass(frozen=True)
@@ -53,6 +53,8 @@ class Group:
     path: str
     cadence: str
     tiers: tuple[str, ...]
+    #: Backed up from its live path, not from the recursive snapshot tree.
+    live: bool = False
 
     @property
     def primary_tier(self) -> str:
@@ -224,8 +226,9 @@ def _groups(value: Any, known_tiers: set[str]) -> tuple[Group, ...]:
                 f"group {group_id!r} cadence must be one of {', '.join(CADENCES)}"
             )
         tiers = _group_tiers(raw.get("tiers"), group_id, known_tiers)
+        live = _boolean(raw.get("live"), f"groups[{index}].live")
         groups.append(
-            Group(id=group_id, path=path, cadence=cadence, tiers=tiers)
+            Group(id=group_id, path=path, cadence=cadence, tiers=tiers, live=live)
         )
     ids = [group.id for group in groups]
     duplicates = sorted({group_id for group_id in ids if ids.count(group_id) > 1})
@@ -260,6 +263,16 @@ def _text(value: Any, field_name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise BackupConfigError(f"{field_name} must be a non-empty string")
     return value.strip()
+
+
+def _boolean(value: Any, field_name: str) -> bool:
+    """An optional flag: absent means false, anything but a bool is a bug."""
+
+    if value is None:
+        return False
+    if not isinstance(value, bool):
+        raise BackupConfigError(f"{field_name} must be a boolean")
+    return value
 
 
 def _relative_path(value: Any, field_name: str) -> str:

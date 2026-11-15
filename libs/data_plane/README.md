@@ -21,7 +21,6 @@ provider SDK. The same code runs in the local and external planes.
 | `collectors.relay` | Authenticated, schema-validated, rate-limited, idempotent ingest |
 | `collectors.staging` | Staging generation, atomic publish, cursors, tombstones, fidelity limits |
 | `memory.file_memory` | Portable per-profile file memory with provenance and tombstones |
-| `recovery.manifest` | Public per-group manifest (strongest tier first) with an atomic write |
 | `migration` | Ordered migration phases and the plan-driven backup gate |
 | `github.backup` | Safe argv for mirror/bundle capture and a verifiable manifest |
 | `cli` | Offline validation and inspection commands |
@@ -36,9 +35,29 @@ provider SDK. The same code runs in the local and external planes.
 - **No blind replay.** An `outcome_unknown` intent is reconciled by reading the
   source; it never returns to `applying`.
 - **A run has one snapshot.** One recursive ZFS snapshot feeds every group; restic reads
-  the staged path, so no group can observe a different point in time.
+  the staged path, so no group can observe a different point in time. A group marked
+  `live` (host paths such as Secure Boot keys) is read from its live path instead.
 - **A repository exists only after an operator creates it.** A missing repository
   fails closed and names the `backup-init` command; nothing auto-initializes.
+- **An empty stage is never backed up.** `run_group` refuses a group path that is
+  missing, not a directory, or has no entries: an unmounted mount must fail before
+  restic turns it into a fresh-looking empty snapshot.
+- **Freshness trusts only the real past.** Snapshots dated ahead of now (beyond a
+  five-minute clock-skew tolerance) are ignored; when only future snapshots remain,
+  the tier is reported as "dated in the future". The newest snapshot must be written
+  by the host running the check, and a tier freshness does not know is reported as
+  an unknown tier instead of a permanent NOT OK.
+- **Every copy is confirmed.** After each `restic copy` the target repository is read
+  back; a snapshot within two seconds of the primary's time, covering the group path
+  and carrying the same host name, must be present or the run fails with
+  "copy did not land".
+- **One prune budget per host and path.** `restic forget --group-by host,paths` keeps
+  a repository that holds several paths or hosts from sharing one 14/8/12 window.
+- **The public manifest is offsite only.** `scripts/render-recovery-groups.py` is the only
+  producer, and it refuses a group without an `r2` tier; the page can only open that copy.
+- **The restic binary is environment-pinned.** Builders take an explicit binary;
+  the runner resolves `DATA_PLANE_RESTIC` (default `restic`) so the role can pin
+  `/usr/local/bin/restic` without changing argv construction.
 
 ## Commands
 
@@ -49,14 +68,12 @@ tests/data-plane/check.sh
 
 PYTHONPATH=libs python3 -m data_plane validate-catalog catalog.json
 PYTHONPATH=libs python3 -m data_plane render-confirmation operation.json
-PYTHONPATH=libs python3 -m data_plane backup-manifest --plan /etc/homelab/backup.json
-PYTHONPATH=libs python3 -m data_plane backup-freshness --plan /etc/homelab/backup.json --json
+PYTHONPATH=libs python3 -m data_plane backup-freshness --plan /etc/homelab/backup.json --host "$(hostname)" --json
 PYTHONPATH=libs python3 -m data_plane.migration preflight --plan /etc/homelab/backup.json --json
 ```
 
 Everything except the `backup-*` commands and `migration preflight` is
-fixture-only. `backup-manifest` reads the plan and never contacts a repository;
-`migration preflight` only reads each repository (`restic snapshots` and
+fixture-only. `migration preflight` only reads each repository (`restic snapshots` and
 `restic check`); `backup-run`, `backup-init`, `backup-freshness`, and
 `backup-check` shell out to `zfs`/`restic` through the subprocess runner unless
 `--dry-run` records the argv instead.

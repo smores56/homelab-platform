@@ -82,6 +82,12 @@ class PlanLoadingTests(unittest.TestCase):
             "/var/backups/primary/restic/photos",
         )
 
+    def test_group_live_defaults_to_false_and_parses_true(self):
+        self.assertFalse(parse_plan(plan_document()).group("photos").live)
+        document = plan_document()
+        document["groups"][0]["live"] = True
+        self.assertTrue(parse_plan(document).group("photos").live)
+
     def test_unknown_group_or_tier_is_rejected(self):
         plan = parse_plan(plan_document())
         with self.assertRaises(BackupConfigError):
@@ -146,6 +152,10 @@ class PlanValidationTests(unittest.TestCase):
 
     def test_unknown_group_key(self):
         self.assert_rejected(lambda doc: doc["groups"][0].update(destination="x"))
+
+    def test_live_must_be_a_boolean(self):
+        self.assert_rejected(lambda doc: doc["groups"][0].update(live="yes"))
+        self.assert_rejected(lambda doc: doc["groups"][0].update(live=1))
 
     def test_missing_key_is_rejected(self):
         self.assert_rejected(lambda doc: doc.pop("groups"))

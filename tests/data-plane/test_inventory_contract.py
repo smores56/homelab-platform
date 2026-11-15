@@ -11,6 +11,7 @@ variable survives.
 from __future__ import annotations
 
 import contextlib
+import copy
 import importlib.util
 import io
 import json
@@ -81,7 +82,21 @@ class InventoryContractTests(unittest.TestCase):
         self.assertEqual(self.host_plan["snapshot_dataset"], ALL_VARS["zfs_pool"])
         self.assertEqual(self.host_plan["snapshot_root"], "/run/data-plane/current")
         for group in self.host_plan["groups"]:
-            self.assertEqual(set(group), {"id", "path", "cadence", "tiers"})
+            self.assertEqual(
+                set(group), {"id", "path", "cadence", "tiers", "live"}
+            )
+            self.assertIsInstance(group["live"], bool)
+
+    def test_only_host_path_groups_are_live(self):
+        live = {
+            group["id"] for group in self.host_plan["groups"] if group["live"]
+        }
+        self.assertEqual(live, {row["id"] for row in ALL_VARS["backup_host_paths"]})
+        self.assertIn("host-keys", live)
+
+    def test_every_group_carries_the_offsite_tier(self):
+        for group in self.host_plan["groups"]:
+            self.assertIn("r2", group["tiers"], group["id"])
 
     def test_tiers_are_nvme_hdd_r2(self):
         tiers = self.host_plan["tiers"]
@@ -193,6 +208,53 @@ class InventoryContractTests(unittest.TestCase):
         with contextlib.redirect_stdout(buffer):
             self.assertEqual(render.main(["--host-plan"]), 0)
         self.assertEqual(json.loads(buffer.getvalue()), self.host_plan)
+
+
+class RendererRefusalTests(unittest.TestCase):
+    """The renderer refuses what the public page would refuse."""
+
+    def backup_vars(self):
+        return copy.deepcopy(BACKUP_VARS)
+
+    def test_a_group_without_the_offsite_tier_is_refused(self):
+        backup_vars = self.backup_vars()
+        group = next(iter(backup_vars["backup_group_specs"]))
+        backup_vars["backup_group_specs"][group]["tiers"] = ["nvme", "hdd"]
+        with self.assertRaises(SystemExit) as caught:
+            render.validate(ALL_VARS, backup_vars)
+        self.assertIn("r2", str(caught.exception))
+
+    def test_a_blank_label_is_refused(self):
+        backup_vars = self.backup_vars()
+        group = next(iter(backup_vars["backup_group_specs"]))
+        # A blank label is present, so it is not replaced by the derived default.
+        backup_vars["backup_group_specs"][group]["label"] = "   "
+        with self.assertRaises(SystemExit) as caught:
+            render.validate(ALL_VARS, backup_vars)
+        self.assertIn("label", str(caught.exception))
+
+    def test_a_label_with_a_control_character_is_refused(self):
+        backup_vars = self.backup_vars()
+        group = next(iter(backup_vars["backup_group_specs"]))
+        backup_vars["backup_group_specs"][group]["label"] = "Broken\u0000"
+        with self.assertRaises(SystemExit) as caught:
+            render.validate(ALL_VARS, backup_vars)
+        self.assertIn("control character", str(caught.exception))
+
+    def test_an_invalid_group_id_is_refused(self):
+        all_vars = copy.deepcopy(ALL_VARS)
+        backup_vars = self.backup_vars()
+        all_vars["recovery_inventory"]["bad id"] = all_vars["recovery_inventory"][
+            next(iter(all_vars["recovery_inventory"]))
+        ]
+        backup_vars["backup_group_specs"]["bad id"] = {
+            "path": "srv/bad",
+            "cadence": "media",
+            "tiers": ["nvme", "hdd", "r2"],
+        }
+        with self.assertRaises(SystemExit) as caught:
+            render.validate(all_vars, backup_vars)
+        self.assertIn("valid manifest id", str(caught.exception))
 
 
 if __name__ == "__main__":

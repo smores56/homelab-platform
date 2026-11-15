@@ -56,7 +56,7 @@ class PublishError(DataPlaneError):
 
 
 class ManifestError(DataPlaneError):
-    """A backup generation manifest is incomplete or incompatible."""
+    """A generated recovery manifest or backup plan is incomplete."""
 
 
 class BackupConfigError(DataPlaneError):

@@ -78,23 +78,33 @@ PLAN = {
 }
 
 
-def write_plan(tmp: str) -> Path:
+def write_plan(tmp: str, snapshot_root: str | None = None) -> Path:
+    document = dict(PLAN)
+    if snapshot_root is not None:
+        document["snapshot_root"] = snapshot_root
     path = Path(tmp) / "backup.json"
-    path.write_text(json.dumps(PLAN), encoding="utf-8")
+    path.write_text(json.dumps(document), encoding="utf-8")
     return path
 
 
 class ScriptedRunner:
-    def __init__(self, result: CommandResult) -> None:
+    def __init__(self, result: CommandResult, snapshots: CommandResult | None = None) -> None:
         self.result = result
+        self.snapshots = snapshots
         self.commands: list[tuple[str, ...]] = []
 
     def run(self, command):
         self.commands.append(command.argv)
+        if self.snapshots is not None and "snapshots" in command.argv:
+            return self.snapshots
         return self.result
 
 
-def snapshots_result(at: datetime) -> CommandResult:
+def snapshots_result(
+    at: datetime,
+    paths: tuple[str, ...] = ("/run/data-plane/current",),
+    hostname: str = "data-plane",
+) -> CommandResult:
     return CommandResult(
         0,
         json.dumps(
@@ -102,8 +112,8 @@ def snapshots_result(at: datetime) -> CommandResult:
                 {
                     "id": "snap-1",
                     "time": at.strftime("%Y-%m-%dT%H:%M:%S.%f000Z"),
-                    "paths": ["/run/data-plane/current"],
-                    "hostname": "data-plane",
+                    "paths": list(paths),
+                    "hostname": hostname,
                 }
             ]
         ),
@@ -142,48 +152,6 @@ class CliTests(unittest.TestCase):
         self.assertIn("affected count: 1", out)
         self.assertIn("hash: ", out)
 
-    def test_backup_manifest_prints_and_writes(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            plan = write_plan(tmp)
-            code, out, _ = run("backup-manifest", "--plan", str(plan))
-            self.assertEqual(code, 0)
-            manifest = json.loads(out)
-            self.assertEqual(
-                manifest["groups"],
-                [
-                    {
-                        "id": "photos",
-                        "label": "photos",
-                        "repo": "s3:https://account.r2.cloudflarestorage.com/"
-                        "homelab-restic/photos",
-                        "data_root": "/photos",
-                    }
-                ],
-            )
-
-            target = Path(tmp) / "recovery.json"
-            code, out, _ = run(
-                "backup-manifest", "--plan", str(plan), "--out", str(target)
-            )
-            self.assertEqual(code, 0)
-            self.assertEqual(json.loads(out)["groups"], 1)
-            self.assertTrue(target.exists())
-
-            code, _, err = run(
-                "backup-manifest", "--plan", str(plan), "--out", str(target)
-            )
-            self.assertEqual(code, 2)
-            self.assertIn("refusing to overwrite", err)
-
-            code, _, _ = run(
-                "backup-manifest",
-                "--plan",
-                str(plan),
-                "--out",
-                str(target),
-                "--overwrite",
-            )
-            self.assertEqual(code, 0)
 
     def test_backup_freshness_reports_and_exits_one_when_stale(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -197,6 +165,8 @@ class CliTests(unittest.TestCase):
         self.assertEqual(payload["groups"][0]["group_id"], "photos")
 
     def test_backup_freshness_exits_zero_when_every_tier_is_fresh(self):
+        # The snapshot hostname must match the host running the check now, so
+        # the CLI names that host explicitly.
         with tempfile.TemporaryDirectory() as tmp:
             plan = write_plan(tmp)
             runner = ScriptedRunner(
@@ -205,7 +175,14 @@ class CliTests(unittest.TestCase):
             with mock.patch(
                 "data_plane.cli._backup_runner", return_value=runner
             ):
-                code, out, _ = run("backup-freshness", "--plan", str(plan), "--json")
+                code, out, _ = run(
+                    "backup-freshness",
+                    "--plan",
+                    str(plan),
+                    "--host",
+                    "data-plane",
+                    "--json",
+                )
         self.assertEqual(code, 0)
         self.assertTrue(json.loads(out)["all_ok"])
 
@@ -221,11 +198,21 @@ class CliTests(unittest.TestCase):
             self.assertEqual(json.loads(out)["groups"][0]["group_id"], "photos")
 
     def test_backup_run_snapshots_once_and_copies(self):
-        runner = ScriptedRunner(
-            CommandResult(0, json.dumps({"snapshot_id": "abc123"}) + "\n", "")
-        )
+        # A run now refuses an empty stage and confirms each copy, so the plan
+        # points at a populated temporary tree and the runner answers snapshot
+        # queries with the snapshot the backup just wrote.
         with tempfile.TemporaryDirectory() as tmp:
-            plan = write_plan(tmp)
+            staged = Path(tmp) / "staged"
+            (staged / "photos").mkdir(parents=True)
+            (staged / "photos" / "one.jpg").write_text("x", encoding="utf-8")
+            plan = write_plan(tmp, snapshot_root=staged.as_posix())
+            runner = ScriptedRunner(
+                CommandResult(0, json.dumps({"snapshot_id": "abc123"}) + "\n", ""),
+                snapshots=snapshots_result(
+                    datetime.now(tz=timezone.utc),
+                    paths=((staged / "photos").as_posix(),),
+                ),
+            )
             with mock.patch(
                 "data_plane.cli._backup_runner", return_value=runner
             ):

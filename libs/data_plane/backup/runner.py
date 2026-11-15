@@ -3,9 +3,10 @@
 The shape is deliberately small. A run takes one recursive ZFS snapshot of the
 declared dataset, each group is backed up from its staged path into the
 group's primary repository, every other tier receives a ``restic copy`` of that
-repository, and every tier is pruned after the copies land. Freshness asks each
-repository for the newest snapshot under the group's path and compares its age
-with the cadence-derived limit.
+repository and is read back to confirm the copy landed, and every tier is pruned
+after the copies land. Freshness asks each repository for the newest snapshot
+under the group's path, ignoring future-dated ones, and compares its age with
+the cadence-derived limit.
 
 Every command is built from the plan and executed through the injectable
 ``Runner``. A missing repository never auto-initializes: only ``init_group``
@@ -14,10 +15,11 @@ creates one, because that is an operator decision.
 
 from __future__ import annotations
 
+import os
 import socket
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Sequence
 
 from ..errors import BackupConfigError, BackupError
@@ -27,6 +29,7 @@ from .restic import (
     CommandResult,
     DryRunRunner,
     Runner,
+    Snapshot,
     backup_command,
     check_command,
     copy_command,
@@ -34,10 +37,20 @@ from .restic import (
     init_command,
     parse_snapshot_id,
     parse_snapshots,
+    restic_binary,
     snapshots_command,
 )
 
 SNAPSHOT_PREFIX = "data-plane"
+
+#: Tiers freshness knows about; anything else is a plan bug, never fresh.
+KNOWN_TIERS = ("nvme", "hdd", "r2")
+
+#: A snapshot dated this far ahead is clock skew; further ahead it is bogus.
+FUTURE_TOLERANCE_SECONDS = 300
+
+#: A copied snapshot keeps the primary's time; allow for clock rounding only.
+COPY_TOLERANCE_SECONDS = 2.0
 
 #: Hours a tier may lag behind for each cadence.
 FRESHNESS_HOURS: dict[str, dict[str, float]] = {
@@ -177,15 +190,24 @@ def run_group(
     group = plan.group(group_id)
     active = runner or DryRunRunner()
     hostname = host or socket.gethostname()
+    binary = restic_binary()
     created_at = time.time() if now is None else float(now)
     path = plan.snapshot_path(group_id)
     primary = group.primary_tier
     primary_repository = plan.repository(group_id, primary)
 
+    # Freshness only proves a snapshot exists; it cannot prove the mount held
+    # content. An unmounted or empty stage must fail before restic reads it.
+    _require_group_tree(path)
+
     backed_up = _require_success(
         active.run(
             backup_command(
-                primary_repository, plan.password_file, hostname, path
+                primary_repository,
+                plan.password_file,
+                hostname,
+                path,
+                binary=binary,
             )
         ),
         action=f"restic backup of group {group_id!r}",
@@ -198,6 +220,22 @@ def run_group(
         raise BackupError(
             f"restic backup of group {group_id!r} reported no snapshot id"
         )
+
+    # Only copies need the primary snapshot's time; a single-tier group never
+    # copies, so it never pays for the extra read.
+    primary_snapshot = (
+        None
+        if isinstance(active, DryRunRunner) or len(group.tiers) == 1
+        else _primary_snapshot(
+            active,
+            primary_repository,
+            plan.password_file,
+            path,
+            group_id=group_id,
+            tier=primary,
+            binary=binary,
+        )
+    )
 
     tiers: list[dict[str, object]] = [
         {
@@ -217,6 +255,7 @@ def run_group(
                     plan.password_file,
                     repository,
                     plan.password_file,
+                    binary=binary,
                 )
             ),
             action=f"restic copy into group {group_id!r} tier {tier_name!r}",
@@ -224,6 +263,18 @@ def run_group(
             tier=tier_name,
             repository=repository,
         )
+        if primary_snapshot is not None:
+            _confirm_copy(
+                active,
+                repository,
+                plan.password_file,
+                path,
+                primary=primary_snapshot,
+                hostname=hostname,
+                group_id=group_id,
+                tier=tier_name,
+                binary=binary,
+            )
         tiers.append(
             {
                 "tier": tier_name,
@@ -240,7 +291,9 @@ def run_group(
         tier_name = str(entry["tier"])
         repository = str(entry["repository"])
         _require_success(
-            active.run(forget_command(repository, plan.password_file)),
+            active.run(
+                forget_command(repository, plan.password_file, binary=binary)
+            ),
             action=f"restic forget/prune of group {group_id!r} tier {tier_name!r}",
             group_id=group_id,
             tier=tier_name,
@@ -273,10 +326,13 @@ def init_group(
 
     group = plan.group(group_id)
     active = runner or DryRunRunner()
+    binary = restic_binary()
     tiers: list[TierInit] = []
     for tier_name in group.tiers:
         repository = plan.repository(group_id, tier_name)
-        probe = active.run(snapshots_command(repository, plan.password_file))
+        probe = active.run(
+            snapshots_command(repository, plan.password_file, binary=binary)
+        )
         if probe.returncode == 0:
             tiers.append(
                 TierInit(tier=tier_name, repository=repository, created=False)
@@ -289,7 +345,9 @@ def init_group(
                 f"{probe.stderr.strip()[:400]}"
             )
         _require_success(
-            active.run(init_command(repository, plan.password_file)),
+            active.run(
+                init_command(repository, plan.password_file, binary=binary)
+            ),
             action=f"restic init for group {group_id!r} tier {tier_name!r}",
             group_id=group_id,
             tier=tier_name,
@@ -300,18 +358,25 @@ def init_group(
 
 
 def freshness(
-    plan: BackupPlan, now: float | None = None, *, runner: Runner | None = None
+    plan: BackupPlan,
+    now: float | None = None,
+    *,
+    runner: Runner | None = None,
+    host: str | None = None,
 ) -> FreshnessReport:
     """Report per group and tier whether a recent snapshot covers the group."""
 
     generated_at = time.time() if now is None else float(now)
     current = datetime.fromtimestamp(generated_at, tz=timezone.utc)
     active = runner or DryRunRunner()
+    hostname = host or socket.gethostname()
     groups = []
     for group in plan.groups:
         limits = FRESHNESS_HOURS[group.cadence]
         tiers = tuple(
-            _tier_freshness(plan, group, tier_name, limits.get(tier_name), current, active)
+            _tier_freshness(
+                plan, group, tier_name, limits.get(tier_name), current, active, hostname
+            )
             for tier_name in group.tiers
         )
         groups.append(GroupFreshness(group_id=group.id, tiers=tiers))
@@ -329,11 +394,14 @@ def check(
 
     group = plan.group(group_id)
     active = runner or DryRunRunner()
+    binary = restic_binary()
     results = []
     for tier_name in group.tiers:
         repository = plan.repository(group_id, tier_name)
         result = active.run(
-            check_command(repository, plan.password_file, read_data=read_data)
+            check_command(
+                repository, plan.password_file, read_data=read_data, binary=binary
+            )
         )
         if result.returncode == 0:
             results.append(
@@ -362,18 +430,31 @@ def _tier_freshness(
     limit_hours: float | None,
     current: datetime,
     runner: Runner,
+    hostname: str,
 ) -> TierFreshness:
     repository = plan.repository(group.id, tier_name)
     if limit_hours is None:
+        # Never sit at a permanent NOT OK with a vague reason: an unknown tier
+        # name is a plan bug, and the operator needs to see that.
+        unknown = tier_name not in KNOWN_TIERS
+        reason = (
+            f"unknown tier {tier_name!r}; freshness cannot be judged"
+            if unknown
+            else f"no freshness limit is defined for tier {tier_name!r}"
+        )
         return TierFreshness(
             group_id=group.id,
             tier=tier_name,
             repository=repository,
             ok=False,
-            reason=f"no freshness limit is defined for tier {tier_name!r}",
+            reason=reason,
         )
     path = plan.snapshot_path(group.id)
-    result = runner.run(snapshots_command(repository, plan.password_file, path=path))
+    result = runner.run(
+        snapshots_command(
+            repository, plan.password_file, path=path, binary=restic_binary()
+        )
+    )
     if result.returncode != 0:
         reason = (
             "repository is not initialized"
@@ -409,14 +490,30 @@ def _tier_freshness(
             reason=f"no snapshots under {path}",
             limit_hours=limit_hours,
         )
-    newest = max(snapshots, key=lambda snap: snap.time)
-    age_hours = (current - newest.time).total_seconds() / 3600
+    # A snapshot dated ahead of now proves nothing: its age would be negative
+    # and it would pass forever. Ignore it past a small clock-skew tolerance.
+    latest = current + timedelta(seconds=FUTURE_TOLERANCE_SECONDS)
+    eligible = [snap for snap in snapshots if snap.time <= latest]
+    if not eligible:
+        return TierFreshness(
+            group_id=group.id,
+            tier=tier_name,
+            repository=repository,
+            ok=False,
+            reason="newest snapshot is dated in the future",
+            limit_hours=limit_hours,
+        )
+    newest = max(eligible, key=lambda snap: snap.time)
+    age_hours = max(0.0, (current - newest.time).total_seconds() / 3600)
     missing = [
         expected
         for expected in _expected_paths(plan, group)
         if not _covers(newest.paths, expected)
     ]
-    if missing:
+    if newest.hostname != hostname:
+        reason = f"newest snapshot was written by {newest.hostname!r}"
+        ok = False
+    elif missing:
         reason = "newest snapshot does not cover " + ", ".join(missing)
         ok = False
     elif age_hours > limit_hours:
@@ -441,6 +538,132 @@ def _tier_freshness(
 
 def _expected_paths(plan: BackupPlan, group: Group) -> tuple[str, ...]:
     return (plan.snapshot_path(group.id),)
+
+
+def _require_group_tree(path: str) -> None:
+    """A group path must be a mounted directory with content.
+
+    Freshness only proves a snapshot exists; it cannot prove the staged tree
+    held anything. An unmounted or empty mount would otherwise be backed up as
+    an empty snapshot that looks perfectly fresh.
+    """
+
+    try:
+        with os.scandir(path) as entries:
+            populated = next(entries, None) is not None
+    except FileNotFoundError as exc:
+        raise BackupError(
+            f"group path {path!r} does not exist; refusing to back up"
+        ) from exc
+    except NotADirectoryError as exc:
+        raise BackupError(f"group path {path!r} is not a directory") from exc
+    except OSError as exc:
+        raise BackupError(f"cannot read group path {path!r}: {exc}") from exc
+    if not populated:
+        raise BackupError(
+            f"group path {path!r} is empty; refusing to back up an empty mount"
+        )
+
+
+def _query_snapshots(
+    runner: Runner,
+    repository: str,
+    password_file: str,
+    path: str,
+    *,
+    binary: str,
+    action: str,
+    group_id: str,
+    tier: str,
+) -> tuple[Snapshot, ...]:
+    result = _require_success(
+        runner.run(
+            snapshots_command(
+                repository, password_file, path=path, binary=binary
+            )
+        ),
+        action=action,
+        group_id=group_id,
+        tier=tier,
+        repository=repository,
+    )
+    try:
+        return parse_snapshots(result.stdout)
+    except BackupError as exc:
+        raise BackupError(f"{action} returned unreadable snapshots: {exc}") from exc
+
+
+def _primary_snapshot(
+    runner: Runner,
+    repository: str,
+    password_file: str,
+    path: str,
+    *,
+    group_id: str,
+    tier: str,
+    binary: str,
+) -> Snapshot:
+    """The snapshot this run just wrote; copies are confirmed against its time."""
+
+    snapshots = _query_snapshots(
+        runner,
+        repository,
+        password_file,
+        path,
+        binary=binary,
+        action=f"snapshot query of group {group_id!r} tier {tier!r}",
+        group_id=group_id,
+        tier=tier,
+    )
+    if not snapshots:
+        raise BackupError(
+            f"restic backup of group {group_id!r} left no snapshot under {path}"
+        )
+    return max(snapshots, key=lambda snap: snap.time)
+
+
+def _confirm_copy(
+    runner: Runner,
+    repository: str,
+    password_file: str,
+    path: str,
+    *,
+    primary: Snapshot,
+    hostname: str,
+    group_id: str,
+    tier: str,
+    binary: str,
+) -> None:
+    """A copy that did not land is a silent loss; read the target back."""
+
+    snapshots = _query_snapshots(
+        runner,
+        repository,
+        password_file,
+        path,
+        binary=binary,
+        action=f"snapshot query of group {group_id!r} tier {tier!r}",
+        group_id=group_id,
+        tier=tier,
+    )
+    landing = [
+        snap
+        for snap in snapshots
+        if _covers(snap.paths, path)
+        and abs((snap.time - primary.time).total_seconds()) <= COPY_TOLERANCE_SECONDS
+    ]
+    if not landing:
+        raise BackupError(
+            f"copy of group {group_id!r} into tier {tier!r} ({repository!r}) "
+            f"did not land: no snapshot under {path} within "
+            f"{COPY_TOLERANCE_SECONDS:g}s of the primary snapshot"
+        )
+    newest = max(landing, key=lambda snap: snap.time)
+    if newest.hostname != hostname:
+        raise BackupError(
+            f"copy of group {group_id!r} into tier {tier!r} ({repository!r}) "
+            f"did not land: newest snapshot was written by {newest.hostname!r}"
+        )
 
 
 def _covers(paths: Sequence[str], expected: str) -> bool:

@@ -34,7 +34,6 @@ from .model import (
     Visibility,
     validate_many,
 )
-from .recovery.manifest import build_manifest, write_manifest
 
 DEFAULT_PLAN = "/etc/homelab/backup.json"
 
@@ -181,7 +180,7 @@ def _cmd_backup_init(args: argparse.Namespace) -> int:
 
 def _cmd_backup_freshness(args: argparse.Namespace) -> int:
     plan = load_plan(args.plan)
-    report = freshness(plan, runner=_backup_runner(args))
+    report = freshness(plan, runner=_backup_runner(args), host=args.host)
     if args.json:
         payload = {
             "generated_at": report.generated_at,
@@ -215,16 +214,6 @@ def _cmd_backup_check(args: argparse.Namespace) -> int:
         results.append({"group_id": group.id, "tiers": [asdict(t) for t in tiers]})
     print(json.dumps({"all_ok": all_ok, "groups": results}, indent=2))
     return 0 if all_ok else 1
-
-
-def _cmd_backup_manifest(args: argparse.Namespace) -> int:
-    plan = load_plan(args.plan)
-    if args.out:
-        target = write_manifest(args.out, plan, overwrite=args.overwrite)
-        print(json.dumps({"path": str(target), "groups": len(plan.groups)}))
-    else:
-        print(json.dumps(build_manifest(plan), indent=2))
-    return 0
 
 
 def _cmd_memory_search(args: argparse.Namespace) -> int:
@@ -296,6 +285,7 @@ def _parser() -> argparse.ArgumentParser:
         "backup-freshness", help="check per-group, per-tier snapshot freshness"
     )
     _add_backup_plan(fresh)
+    fresh.add_argument("--host", help="restic host name to expect (default: this host)")
     fresh.add_argument("--json", action="store_true")
     fresh.add_argument("--dry-run", action="store_true")
     fresh.set_defaults(handler=_cmd_backup_freshness)
@@ -306,14 +296,6 @@ def _parser() -> argparse.ArgumentParser:
     verify.add_argument("--read-data", action="store_true")
     verify.add_argument("--dry-run", action="store_true")
     verify.set_defaults(handler=_cmd_backup_check)
-
-    manifest = sub.add_parser(
-        "backup-manifest", help="build the public recovery manifest"
-    )
-    _add_backup_plan(manifest)
-    manifest.add_argument("--out")
-    manifest.add_argument("--overwrite", action="store_true")
-    manifest.set_defaults(handler=_cmd_backup_manifest)
 
     memory = sub.add_parser("memory-search", help="search portable file memory")
     memory.add_argument("root")

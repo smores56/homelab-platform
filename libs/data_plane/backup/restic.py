@@ -5,7 +5,8 @@ shell is ever involved. The default runner records commands instead of running
 them, so importing or testing this module never touches a repository.
 
 There are no tags and no generation ids: a repository holds one snapshot per
-run, grouped by the restic host name, and freshness is answered by path.
+run and retention is grouped by host and path, so paths that share a repository
+never share one prune budget.
 """
 
 from __future__ import annotations
@@ -18,6 +19,16 @@ from datetime import datetime, timezone
 from typing import Any, Mapping, Protocol, Sequence
 
 from ..errors import BackupError
+
+#: The role installs restic at /usr/local/bin/restic and exports this variable.
+RESTIC_ENV = "DATA_PLANE_RESTIC"
+DEFAULT_RESTIC = "restic"
+
+
+def restic_binary() -> str:
+    """The restic executable to invoke; the role pins it via the environment."""
+
+    return os.environ.get(RESTIC_ENV) or DEFAULT_RESTIC
 
 
 @dataclass(frozen=True)
@@ -49,14 +60,22 @@ class SubprocessRunner:
     """Runs an argv list without a shell and with a timeout."""
 
     def run(self, command: Command) -> CommandResult:
-        completed = subprocess.run(
-            list(command.argv),
-            capture_output=True,
-            text=True,
-            timeout=command.timeout,
-            check=False,
-            env=command.environment(),
-        )
+        name = command.argv[0] if command.argv else "<empty argv>"
+        try:
+            completed = subprocess.run(
+                list(command.argv),
+                capture_output=True,
+                text=True,
+                timeout=command.timeout,
+                check=False,
+                env=command.environment(),
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise BackupError(
+                f"{name} timed out after {command.timeout}s"
+            ) from exc
+        except OSError as exc:
+            raise BackupError(f"{name} could not be executed: {exc}") from exc
         return CommandResult(
             returncode=completed.returncode,
             stdout=completed.stdout,
@@ -95,23 +114,37 @@ class Snapshot:
     hostname: str = ""
 
 
-def repository_args(repository: str, password_file: str) -> list[str]:
-    return ["restic", "--repo", repository, "--password-file", password_file]
+def repository_args(
+    repository: str, password_file: str, *, binary: str = DEFAULT_RESTIC
+) -> list[str]:
+    return [binary, "--repo", repository, "--password-file", password_file]
 
 
 def snapshots_command(
-    repository: str, password_file: str, path: str | None = None
+    repository: str,
+    password_file: str,
+    path: str | None = None,
+    *,
+    binary: str = DEFAULT_RESTIC,
 ) -> Command:
-    argv = repository_args(repository, password_file) + ["snapshots", "--json"]
+    argv = repository_args(repository, password_file, binary=binary) + [
+        "snapshots",
+        "--json",
+    ]
     if path:
         argv += ["--path", path]
     return Command(tuple(argv), timeout=600)
 
 
 def backup_command(
-    repository: str, password_file: str, host: str, path: str
+    repository: str,
+    password_file: str,
+    host: str,
+    path: str,
+    *,
+    binary: str = DEFAULT_RESTIC,
 ) -> Command:
-    argv = repository_args(repository, password_file) + [
+    argv = repository_args(repository, password_file, binary=binary) + [
         "backup",
         "--host",
         host,
@@ -126,8 +159,10 @@ def copy_command(
     source_password_file: str,
     repository: str,
     password_file: str,
+    *,
+    binary: str = DEFAULT_RESTIC,
 ) -> Command:
-    argv = ["restic", "copy"] + [
+    argv = [binary, "copy"] + [
         "--from-repo",
         source_repository,
         "--from-password-file",
@@ -144,8 +179,10 @@ def forget_command(
     repository: str,
     password_file: str,
     retention: Retention = Retention(),
+    *,
+    binary: str = DEFAULT_RESTIC,
 ) -> Command:
-    argv = repository_args(repository, password_file) + [
+    argv = repository_args(repository, password_file, binary=binary) + [
         "forget",
         "--keep-daily",
         str(retention.daily),
@@ -153,22 +190,34 @@ def forget_command(
         str(retention.weekly),
         "--keep-monthly",
         str(retention.monthly),
+        # One repository may hold several paths or hosts; a policy shared across
+        # them would let one group's snapshots consume another's budget.
         "--group-by",
-        "host",
+        "host,paths",
     ]
     if retention.prune:
         argv.append("--prune")
     return Command(tuple(argv), timeout=6 * 3600)
 
 
-def init_command(repository: str, password_file: str) -> Command:
-    return Command(tuple(repository_args(repository, password_file) + ["init"]))
+def init_command(
+    repository: str, password_file: str, *, binary: str = DEFAULT_RESTIC
+) -> Command:
+    return Command(
+        tuple(
+            repository_args(repository, password_file, binary=binary) + ["init"]
+        )
+    )
 
 
 def check_command(
-    repository: str, password_file: str, read_data: bool = False
+    repository: str,
+    password_file: str,
+    read_data: bool = False,
+    *,
+    binary: str = DEFAULT_RESTIC,
 ) -> Command:
-    argv = repository_args(repository, password_file) + ["check"]
+    argv = repository_args(repository, password_file, binary=binary) + ["check"]
     if read_data:
         argv.append("--read-data")
     return Command(tuple(argv), timeout=24 * 3600)
