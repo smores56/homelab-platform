@@ -1,0 +1,67 @@
+#cloud-config
+# smortress autoinstall — the 980 only (nvme0n1). Never commit a rendered copy:
+# build-seed.sh substitutes the placeholders into a 0700 temporary directory and
+# the seed is destroyed after the install. See README.md.
+autoinstall:
+  version: 1
+  locale: en_US.UTF-8
+  keyboard:
+    layout: us
+  timezone: America/New_York
+  refresh-installer:
+    update: false
+  identity:
+    username: smores
+    realname: Sam
+    hostname: smortress
+    # crypt(3) hash reused from nix-config/secrets/common.yaml.
+    password: @ADMIN_PASSWORD_HASH@
+    groups: [adm, sudo]
+  ssh:
+    install-server: true
+    allow-pw: false
+    authorized-keys:
+      - @ADMIN_KEY@
+  packages:
+    - linux-modules-zfs-generic
+    - zfsutils-linux
+    - zfs-zed
+    - openssh-server
+    - python3
+    - cryptsetup
+    - clevis
+    - clevis-initramfs
+    - curl
+    - ca-certificates
+  # The data keyfile exists in the installer environment before curtin formats
+  # luks-data, and is copied into the target after the install. curtin writes
+  # the keyfile path into crypttab but never copies the file itself.
+  early-commands:
+    - ["sh", "-c", "install -d -m 0700 /etc/luks && head -c 64 /dev/urandom > /etc/luks/data.key && chmod 0400 /etc/luks/data.key"]
+  storage:
+    config:
+      # Only one ESP: the 970 keeps its own layout for the rollback system.
+      - {type: disk, id: disk-980, ptable: gpt, wipe: superblock, grub_device: true, match: {path: /dev/nvme0n1}}
+      - {type: partition, id: part-esp, device: disk-980, number: 1, size: 1G, flag: boot}
+      - {type: partition, id: part-root, device: disk-980, number: 2, size: 150G}
+      - {type: partition, id: part-data, device: disk-980, number: 3, size: 300G}
+      - {type: format, id: fmt-esp, volume: part-esp, fstype: fat32, label: ESP}
+      # luks-root uses the passphrase slot, so crypttab says `none` and boot
+      # prompts until Clevis/TPM is enrolled. luks-data stays a bare mapper:
+      # no format and no mount action may reference it.
+      - {type: dm_crypt, id: crypt-root, dm_name: luks-root, volume: part-root, key: @ROOT_PASSPHRASE@}
+      - {type: dm_crypt, id: crypt-data, dm_name: luks-data, volume: part-data, keyfile: /etc/luks/data.key}
+      - {type: format, id: fmt-root, volume: crypt-root, fstype: ext4, label: root}
+      - {type: mount, id: mount-esp, device: fmt-esp, path: /boot/efi}
+      - {type: mount, id: mount-root, device: fmt-root, path: /}
+  late-commands:
+    - ["sh", "-c", "install -d -m 0700 -o root -g root /target/etc/luks && install -m 0400 -o root -g root /etc/luks/data.key /target/etc/luks/data.key"]
+    # build-seed.sh substitutes the host keys, the first-boot units and their
+    # enablement here; every entry is generated from files in this directory.
+@LATE_COMMANDS@
+    - ["curtin", "in-target", "--", "install", "-d", "-m", "0755", "/var/lib/smortress"]
+    - ["curtin", "in-target", "--", "touch", "/var/lib/smortress/install-ok"]
+  error-commands:
+    - ["curtin", "in-target", "--", "install", "-d", "-m", "0755", "/var/lib/smortress"]
+    - ["curtin", "in-target", "--", "touch", "/var/lib/smortress/install-failed"]
+  shutdown: reboot

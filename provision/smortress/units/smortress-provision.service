@@ -1,0 +1,13 @@
+[Unit]
+Description=Create the smortress ZFS pool on the encrypted data volume
+Requires=systemd-cryptsetup@luks-data.service
+After=systemd-cryptsetup@luks-data.service dev-mapper-luks\x2ddata.device
+ConditionPathExists=!/var/lib/smortress/pool-created
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/smortress-provision
+
+[Install]
+WantedBy=multi-user.target

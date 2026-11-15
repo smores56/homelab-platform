@@ -1,0 +1,13 @@
+[Unit]
+Description=Import the smortress ZFS pool on later boots
+Requires=systemd-cryptsetup@luks-data.service
+After=systemd-cryptsetup@luks-data.service dev-mapper-luks\x2ddata.device smortress-provision.service
+ConditionPathExists=/dev/mapper/luks-data
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/zpool-import-tank
+
+[Install]
+WantedBy=multi-user.target

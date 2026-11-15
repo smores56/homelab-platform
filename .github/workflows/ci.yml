@@ -177,8 +177,20 @@ jobs:
           shellcheck scripts/*.sh tests/policies/*.sh tests/tofu/*.sh \
             tests/access/*.sh tests/backup/*.sh tests/digest/*.sh \
             tests/observability/*.sh tests/agent-control/*.sh \
+            provision/smortress/*.sh tests/provision/*.sh \
             clusters/homelab/flux-system/bootstrap.sh \
             clusters/homelab/platform/backup/*.sh
+
+  provision:
+    name: autoinstall static checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      - name: static checks
+        run: tests/provision/check.sh
 
   action-pins:
     name: action SHA pins

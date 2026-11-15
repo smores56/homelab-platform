@@ -1,0 +1,6 @@
+# The rendered user-data is machine-generated: installer late-commands carry
+# base64 payloads and are longer than the repository line limit. Every other
+# rule from the root config still applies.
+extends: ../../.yamllint.yaml
+rules:
+  line-length: disable
