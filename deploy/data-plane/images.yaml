@@ -11,8 +11,9 @@
 # path is stable.
 #
 # One image serves every service; the Deployment's `args` selects the
-# subcommand (`event`, `broker`, `relay`, `backup`, and the forward contracts
-# `collector`, `confirmation`, `portal`).
+# subcommand (`event`, `broker`, `relay`, `confirmation`, `collector`).
+# Backups are host systemd units and the recovery page is a static Cloudflare
+# Pages app, so neither is an image subcommand.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 

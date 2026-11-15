@@ -18,7 +18,4 @@ resources:
   - event-service.yaml
   - write-broker.yaml
   - confirmation-surface.yaml
-  - backup-controller.yaml
   - collector-relay.yaml
-  - recovery-portal.yaml
-  - kubernetes-api-egress.yaml

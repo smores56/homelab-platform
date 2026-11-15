@@ -28,23 +28,20 @@ resources:
   - write-broker/service.yaml
   - confirmation-surface/deployment.yaml
   - confirmation-surface/service.yaml
-  - backup-controller/deployment.yaml
-  - backup-controller/pvc.yaml
   - collector-relay/brave.yaml
   - collector-relay/finance.yaml
   - collector-relay/tuta.yaml
   - collector-relay/immich.yaml
-  - recovery-portal/deployment.yaml
-  - recovery-portal/service.yaml
 
 # The only image reference allowed. The registry path is the documented
 # placeholder, not a live repository; the all-zero digest is the pre-publish
 # placeholder used by the webhook image. Replace the digest with the publish
 # workflow's @sha256 value before an apply. Never a tag, never `latest`.
 #
-# One image serves every subcommand (`event`, `broker`, `relay`, `backup`, and
-# the forward contracts `collector`, `confirmation`, `portal`); each Deployment
-# selects its service with `args`.
+# One image serves every subcommand (`event`, `broker`, `relay`, `confirmation`
+# and `collector`); each Deployment selects its service with `args`. Backups and
+# the recovery page are not cluster workloads: host systemd units run the backup
+# pipeline, and Cloudflare Pages serves the recovery page.
 #
 # tests/check.sh asserts this block and ../../images.yaml agree and that the
 # rendered output contains only digest-pinned references.

@@ -1,10 +1,11 @@
-# The event log has exactly three writers and one reader:
+# The event log has exactly two in-cluster writers and one reader:
 #   write-broker         appends intents and effects
 #   confirmation-surface records approvals and uses the same epoch
-#   backup-controller    reads cursors and appends group-dirty events
-# Nothing else in the cluster may open the log. Collectors are not on this list:
-# a relay holds a per-source HMAC secret, never the event-service token, and does
-# not append here. The log itself opens no egress: SQLite is local to its claim.
+# Nothing else in the cluster may open the log. The host backup units append
+# cursors and group-dirty events too, but they run outside the cluster and no
+# NetworkPolicy here governs them. Collectors are not on this list: a relay holds
+# a per-source HMAC secret, never the event-service token, and does not append
+# here. The log itself opens no egress: SQLite is local to its claim.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -27,9 +28,6 @@ spec:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: confirmation-surface
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/name: backup-controller
       ports:
         - protocol: TCP
           port: 8080

@@ -68,7 +68,7 @@ if command -v jq >/dev/null 2>&1; then
   done
 
   if jq -e --slurpfile groups "$plane/config/recovery-groups.json" \
-    '([.sources[].recovery_group] - [$groups[0].groups[].group_id]) | length == 0' \
+    '([.sources[].recovery_group] - [$groups[0].groups[].id]) | length == 0' \
     "$plane/config/source-catalog.json" >/dev/null 2>&1; then
     ok "every source references a declared recovery group"
   else
@@ -82,35 +82,42 @@ if command -v jq >/dev/null 2>&1; then
     bad "source ids are not unique"
   fi
 
-  if jq -e '([.groups[].group_id] | length) == ([.groups[].group_id] | unique | length)' \
+  if jq -e '.schema_version == 1 and (.groups | length) == 12' \
+    "$plane/config/recovery-groups.json" >/dev/null 2>&1; then
+    ok "the public manifest is schema 1 with the reviewed 12 groups"
+  else
+    bad "recovery-groups.json is not schema 1 with 12 groups"
+  fi
+
+  if jq -e '([.groups[].id] | length) == ([.groups[].id] | unique | length)' \
     "$plane/config/recovery-groups.json" >/dev/null 2>&1; then
     ok "recovery group ids are unique"
   else
     bad "recovery group ids are not unique"
   fi
 
-  if jq -e '[.groups[] | .parent_dataset as $p | .members[] |
-    select((.dataset != $p) and ((.dataset | startswith($p + "/")) | not))] | length == 0' \
+  if jq -e 'all(.groups[]; (.label | type == "string" and length > 0))' \
     "$plane/config/recovery-groups.json" >/dev/null 2>&1; then
-    ok "every recovery member dataset sits under its group parent"
+    ok "every recovery group has a non-empty label"
   else
-    bad "a recovery member dataset escapes its group parent"
+    bad "a recovery group has an empty label"
   fi
 
-  if jq -e '[.groups[] | ([.members[].mount] | length) ==
-    ([.members[].mount] | unique | length)] | all' \
+  # The page builds a restore path from data_root, so it must never climb out.
+  if jq -e 'all(.groups[]; (.data_root | type == "string" and startswith("/")
+    and (test("(^|/)\\.\\.(/|$)") | not)))' \
     "$plane/config/recovery-groups.json" >/dev/null 2>&1; then
-    ok "recovery group mounts are unique"
+    ok "every data_root is absolute with no parent segment"
   else
-    bad "a recovery group repeats a mount"
+    bad "a data_root is relative or escapes with .."
   fi
 
-  groups_env=$(grep -A1 'name: DATA_PLANE_GROUPS' "$render" | sed -n 's/.*value: //p' | head -n 1)
-  groups_json=$(jq -r '[.groups[].group_id] | join(",")' "$plane/config/recovery-groups.json")
-  if [[ $groups_env == "$groups_json" ]]; then
-    ok "backup-controller group list matches the inventory"
+  # The public page restores from the offsite copy, so every repo is r2.
+  if jq -e 'all(.groups[]; (.repo | startswith("s3:")))' \
+    "$plane/config/recovery-groups.json" >/dev/null 2>&1; then
+    ok "every recovery repository is the offsite r2 tier"
   else
-    bad "backup-controller group list drifted from the inventory"
+    bad "a recovery group repo is not an s3: r2 repository"
   fi
 
   schemas_bad=0
@@ -235,13 +242,11 @@ else
   bad "a Deployment leaves service links enabled"
 fi
 
-# The one projected token is mode 0400 (decimal 256).
-if ! grep -q 'serviceAccountToken' "$render"; then
-  bad "no projected service-account token is rendered"
-elif grep -B4 serviceAccountToken "$render" | grep -q "defaultMode: 256"; then
-  ok "the projected token is mounted 0400"
+# No pod in this tree has an API client, so no projected token may be rendered.
+if grep -q 'serviceAccountToken' "$render"; then
+  bad "a projected service-account token is rendered"
 else
-  bad "the projected token is not mounted 0400"
+  ok "no projected service-account token"
 fi
 
 if grep -q 'pod-security.kubernetes.io/enforce: restricted' "$render"; then
@@ -258,28 +263,15 @@ else
 fi
 
 # --------------------------------------------------------------- network
-if [[ $(grep -c '^kind: NetworkPolicy$' "$render") -ge 12 ]]; then
+if [[ $(grep -c '^kind: NetworkPolicy$' "$render") -ge 9 ]]; then
   ok "default-deny, DNS and every explicit flow rendered"
 else
-  bad "NetworkPolicy count is below the reviewed set (12)"
+  bad "NetworkPolicy count is below the reviewed set (9)"
 fi
 if grep -q 'name: default-deny' "$render"; then
   ok "default-deny is present"
 else
   bad "default-deny is missing"
-fi
-
-# API egress is one address, not the service range.
-if grep -q 'cidr: 10.43.0.1/32' "$render"; then
-  ok "API egress targets the apiserver endpoint"
-else
-  bad "API egress does not target 10.43.0.1/32"
-fi
-if grep -q 'cidr: 10.43.0.0/16' "$render" ||
-  grep -q 'cidr: 10.77.1.0/30' "$render"; then
-  bad "API egress still names a whole range"
-else
-  ok "API egress names no service or node range"
 fi
 
 # DNS resolves through CoreDNS only.
@@ -307,31 +299,6 @@ if grep -q 'EVENT_SERVICE_URL' "$plane"/base/collector-relay/*.yaml; then
 else
   ok "no collector has an event-service route"
 fi
-
-# --------------------------------------------------------------- RBAC
-if grep -q '^kind: ClusterRole$' "$render"; then
-  bad "a ClusterRole is rendered; the tree needs no cluster-scoped RBAC"
-else
-  ok "no ClusterRole"
-fi
-
-# Restore execution is an operator action: the Role grants no Job verbs.
-if grep -Eq '^[[:space:]]*- (batch|jobs)$|resources:.*"jobs"|^[[:space:]]*resources: \[jobs\]' "$render"; then
-  bad "RBAC grants Job access"
-else
-  ok "RBAC grants no Job access"
-fi
-
-# One assertion per forbidden resource: a match in the mount path or an env
-# value must not mask (or mask a pass of) the RBAC rule check.
-rbac_resources=$(grep -E '^[[:space:]]*resources:' "$render" || true)
-for resource in secrets pods/exec pods/log pods/attach; do
-  if grep -q "$resource" <<<"$rbac_resources"; then
-    bad "RBAC names $resource"
-  else
-    ok "RBAC names no $resource"
-  fi
-done
 
 # ------------------------------------------------------------- storage
 if grep -q 'storageClassName: local-path' "$render"; then
