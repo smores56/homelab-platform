@@ -25,6 +25,7 @@
       ansible.builtin.stat:
         path: "{{ item }}"
       loop:
+        - /etc/homelab/backup.json
         - /var/lib/homelab/recovery/sentinel.json
         - /usr/local/sbin/homelab-clean-room-restore
         - /usr/local/sbin/homelab-recovery-check

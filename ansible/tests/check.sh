@@ -234,6 +234,78 @@ else
 fi
 
 # --------------------------------------------------------------------------
+# One backup model
+# --------------------------------------------------------------------------
+
+for required in \
+  roles/backup/defaults/main.yml \
+  roles/backup/tasks/main.yml \
+  roles/backup/templates/backup.json.j2 \
+  roles/backup/templates/backup-runner.py.j2 \
+  roles/backup/templates/backup.service.j2 \
+  roles/backup/tests/check.sh; do
+  if [[ -f $required ]]; then
+    ok "backup file $required"
+  else
+    bad "backup file $required"
+  fi
+done
+if [[ -d roles/restic ]]; then
+  bad "roles/restic is retired" "the restic content belongs to roles/backup"
+else
+  ok "one merged backup role"
+fi
+if grep -qF '    - backup' playbooks/site.yml &&
+  ! grep -qE '^[[:space:]]+- restic$' playbooks/site.yml; then
+  ok "site.yml applies the one backup role"
+else
+  bad "site.yml still references the retired restic role"
+fi
+for needle in \
+  backup_snapshot_dataset \
+  backup_snapshot_root \
+  backup_password_file \
+  host-keys \
+  'path: var/lib/sbctl'; do
+  if grep -qF "$needle" group_vars/backup.yml; then
+    ok "backup plan: $needle"
+  else
+    bad "backup plan missing: $needle"
+  fi
+done
+if grep -qF '  - name: r2' group_vars/backup.yml &&
+  grep -qF 'repository_root: "{{ backup_r2_repository_root }}"' group_vars/backup.yml; then
+  ok "backup tiers are nvme, hdd, and r2"
+else
+  bad "backup.yml does not declare the nvme/hdd/r2 tiers"
+fi
+output=$(grep -rnE 'backup_(domains|destinations|repositories|pending_host_groups)|destination_tiers|backup_manifest_dir|backup_request_dir' \
+  group_vars roles playbooks 2>/dev/null | grep -vF 'is not defined' || true)
+if [[ -n $output ]]; then
+  bad "retired per-domain backup vars are still referenced" "$output"
+else
+  ok "retired per-domain backup vars are gone"
+fi
+if grep -qF 'from data_plane.backup.runner import run_group, snapshot' \
+  roles/backup/templates/backup-runner.py.j2 &&
+  grep -qF 'sys.path.insert(0, "/opt/data-plane/lib")' \
+  roles/backup/templates/backup-runner.py.j2 &&
+  ! grep -qF '"restic"' roles/backup/templates/backup-runner.py.j2 &&
+  ! grep -qF -- '--password-file' roles/backup/templates/backup-runner.py.j2; then
+  ok "the host unit runs the data-plane library, not its own restic argv"
+else
+  bad "the host unit duplicates restic argv instead of importing the library"
+fi
+if grep -qF 'libs/data_plane' roles/backup/tasks/main.yml &&
+  grep -qF 'dest: /opt/data-plane/lib/data_plane' roles/backup/tasks/main.yml &&
+  grep -qF 'Environment=PYTHONPATH=/opt/data-plane/lib' \
+  roles/backup/templates/backup.service.j2; then
+  ok "the role installs the library and the unit imports it"
+else
+  bad "the library is not installed or the unit has no PYTHONPATH"
+fi
+
+# --------------------------------------------------------------------------
 # Destructive gate
 # --------------------------------------------------------------------------
 
@@ -268,18 +340,17 @@ else
   bad "a disk task can run without --tags destructive"
 fi
 
-# The evidence file is re-run through the shared migration module.
+# The host plan is re-run through the shared migration module on the host.
 for needle in \
-  'homelab_migration_evidence' \
+  'homelab_backup_plan' \
   'data_plane.migration' \
-  'backup_freshness' \
-  'restore_verification' \
-  'rollback_disk_boot_tested' \
-  'ssh_paths_independent'; do
-  if grep -rqF "$needle" playbooks/tasks/migration-gate.yml; then
-    ok "migration evidence gate: $needle"
+  'preflight' \
+  '--plan' \
+  'gate_ready'; do
+  if grep -rqF -- "$needle" playbooks/tasks/migration-gate.yml; then
+    ok "migration preflight gate: $needle"
   else
-    bad "migration evidence gate missing: $needle"
+    bad "migration preflight gate missing: $needle"
   fi
 done
 if grep -qF 'tasks/migration-gate.yml' playbooks/site.yml; then
@@ -330,13 +401,12 @@ else
   bad "the pool import is not tied to the device allow-list"
 fi
 
-# Writers and the backup timer are not started by ordinary convergence.
+# Writers are not started by ordinary convergence.
 if grep -qF 'writer: true' roles/data_plane/defaults/main.yml &&
-  grep -qF 'not (item.writer | default(false))' roles/data_plane/tasks/main.yml &&
-  grep -qF "item.short != 'backup-controller'" roles/data_plane/tasks/main.yml; then
-  ok "write-broker and the backup timer stay stopped by default"
+  grep -qF 'not (item.writer | default(false))' roles/data_plane/tasks/main.yml; then
+  ok "the write broker stays stopped by default"
 else
-  bad "a writer or the backup timer starts by default"
+  bad "a writer starts by default"
 fi
 if grep -qF 'tags: [writers]' playbooks/site.yml &&
   grep -qF 'tags: [backup]' playbooks/site.yml; then
@@ -389,32 +459,34 @@ fi
 # --------------------------------------------------------------------------
 
 for needle in \
-  'manifest_hash' \
-  'content hash' \
   '--allow-live' \
-  'zfs receive' \
   'findmnt' \
-  'writer marker'; do
+  'writer marker' \
+  'restic snapshots' \
+  'required tier' \
+  '--verify'; do
   if grep -qF -- "$needle" roles/recovery/templates/clean-room-restore.sh.j2; then
     ok "restore safety: $needle"
   else
     bad "restore safety missing: $needle"
   fi
 done
-if grep -qF 'flags=(-u)' roles/recovery/templates/clean-room-restore.sh.j2 &&
-  grep -qF 'flags=(-F -u)' roles/recovery/templates/clean-room-restore.sh.j2; then
-  ok "zfs receive only uses -F behind the explicit allow-live flag"
+if grep -qF 'newest snapshot' roles/recovery/templates/clean-room-restore.sh.j2 &&
+  ! grep -qF 'manifest_hash' roles/recovery/templates/clean-room-restore.sh.j2 &&
+  ! grep -qF 'HOMELAB_GENERATION_MANIFEST' roles/recovery/templates/clean-room-restore.sh.j2; then
+  ok "restore reads the newest group snapshots, not a generation manifest"
 else
-  bad "zfs receive -F is not gated by --allow-live"
+  bad "restore still depends on a generation manifest"
 fi
-if grep -qF 'restore does not require the portal' roles/recovery/templates/recovery-check.sh.j2; then
-  ok "a stopped portal only warns; it is not a restore prerequisite"
+if ! grep -qF 'portal' roles/recovery/templates/recovery-check.sh.j2 &&
+  ! grep -qF 'portal' roles/recovery/templates/sentinel.json.j2; then
+  ok "the recovery check has no portal dependency (the page is static)"
 else
-  bad "the recovery portal is still a hard prerequisite"
+  bad "the recovery check still references a host portal"
 fi
 if grep -qF 'homelab_recovery_scratch_target' playbooks/recover.yml &&
   grep -qF 'HOMELAB_RESTORE_ROOT' playbooks/recover.yml &&
-  grep -qF 'Re-enable the writers only after a verified scratch restore' playbooks/recover.yml; then
+  grep -qF 'Re-enable the writers only after a verified restore' playbooks/recover.yml; then
   ok "recover fences writers, restores to scratch, then re-enables"
 else
   bad "recover.yml does not restore to scratch before re-enabling writers"

@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
-"""Render the deploy recovery-group inventory from the Ansible backup vars.
+"""Render the backup plan from the Ansible group vars.
 
-The host inventory (``ansible/group_vars/all.yml``) is the only source of ZFS
-dataset names; ``ansible/group_vars/backup.yml`` adds backup policy. This script
-joins them into ``deploy/data-plane/config/recovery-groups.json`` and can also
-build the host backup plan so tests can validate both against one set of vars.
+One model: every recovery group owns one restic repository per tier
+(``<repository_root>/<group id>``) and one subtree of the single recursive ZFS
+snapshot. ``ansible/group_vars/all.yml`` remains the only source of dataset
+names and mount points; ``ansible/group_vars/backup.yml`` adds display paths,
+cadences, and tiers.
 
-    scripts/render-recovery-groups.py            # write the JSON
+The script writes the public page manifest
+``deploy/data-plane/config/recovery-groups.json``, can print the host plan that
+roles/backup renders to ``/etc/homelab/backup.json``, and fails on drift:
+
+    scripts/render-recovery-groups.py            # write the public manifest
     scripts/render-recovery-groups.py --check    # fail when it drifted
+    scripts/render-recovery-groups.py --host-plan
 
 Stdlib only: the data-plane test suite runs on a bare ``python3`` with no
 PyYAML, so a small, strict YAML-subset reader handles these two files. It
@@ -27,6 +33,20 @@ ROOT = Path(__file__).resolve().parent.parent
 ALL_VARS = ROOT / "ansible" / "group_vars" / "all.yml"
 BACKUP_VARS = ROOT / "ansible" / "group_vars" / "backup.yml"
 TARGET = ROOT / "deploy" / "data-plane" / "config" / "recovery-groups.json"
+
+TIER_NAMES = ["nvme", "hdd", "r2"]
+CADENCES = {"fast", "media"}
+GROUP_SPEC_KEYS = {"label", "path", "cadence", "tiers"}
+RETIRED_BACKUP_VARS = {
+    "backup_domains",
+    "backup_destinations",
+    "backup_manifest_dir",
+    "backup_pending_host_groups",
+    "backup_repositories",
+    "backup_request_archive",
+    "backup_request_dir",
+}
+RETIRED_GROUP_KEYS = {"databases", "fence", "checkpoint", "resume", "writer"}
 
 
 class YamlSubsetError(ValueError):
@@ -249,9 +269,7 @@ def _parse_sequence(
             elif value_text:
                 item[key] = _scalar(value_text)
             elif index < len(lines) and lines[index][0] > indent + 1:
-                item[key], index = _parse_block(
-                    lines, index, lines[index][0]
-                )
+                item[key], index = _parse_block(lines, index, lines[index][0])
             else:
                 item[key] = None
             while index < len(lines) and lines[index][0] > indent:
@@ -299,9 +317,10 @@ def resolve_templates(value: Any, variables: dict[str, Any]) -> Any:
 
 
 def load_group_vars() -> tuple[dict[str, Any], dict[str, Any]]:
-    raw = load_yaml(ALL_VARS)
-    all_vars = resolve_templates(raw, raw)
-    backup_vars = resolve_templates(load_yaml(BACKUP_VARS), {**all_vars, **raw})
+    all_raw = load_yaml(ALL_VARS)
+    all_vars = resolve_templates(all_raw, all_raw)
+    backup_raw = load_yaml(BACKUP_VARS)
+    backup_vars = resolve_templates(backup_raw, {**all_vars, **backup_raw})
     return all_vars, backup_vars
 
 
@@ -313,177 +332,164 @@ def expected_group_ids(
     all_vars: dict[str, Any], backup_vars: dict[str, Any]
 ) -> list[str]:
     host = [canonical_id(name) for name in all_vars["recovery_inventory"]]
-    return host + list(backup_vars["backup_pending_host_groups"])
+    host_paths = [row["id"] for row in all_vars.get("backup_host_paths", [])]
+    return host + host_paths
 
 
-def _common_parent(datasets: list[str]) -> str:
-    parts = [dataset.split("/") for dataset in datasets]
-    shared = [part for part in zip(*parts) if len(set(part)) == 1]
-    return "/".join(piece[0] for piece in shared)
+def tier_roots(backup_vars: dict[str, Any]) -> dict[str, str]:
+    tiers = backup_vars["backup_tiers"]
+    if not isinstance(tiers, list):
+        raise SystemExit("backup_tiers must be a list")
+    roots = {}
+    for tier in tiers:
+        name = tier.get("name")
+        root = tier.get("repository_root")
+        if name in roots:
+            raise SystemExit(f"backup_tiers repeats tier {name!r}")
+        if not name or not root:
+            raise SystemExit("every backup tier needs a name and repository_root")
+        roots[name] = root
+    if list(roots) != TIER_NAMES:
+        raise SystemExit("backup_tiers must be exactly nvme, hdd, r2 in order")
+    for name, root in roots.items():
+        if name != "r2" and not root.startswith("/"):
+            raise SystemExit(f"local tier {name!r} needs an absolute repository_root")
+        if name == "r2" and not root.startswith("s3:"):
+            raise SystemExit("the r2 tier needs an s3: repository_root")
+    return roots
 
 
-def group_details(
-    group_id: str, all_vars: dict[str, Any], backup_vars: dict[str, Any]
-) -> tuple[dict[str, Any], list[dict[str, Any]], str]:
-    """Return (spec, members, parent_dataset) for one group."""
-
-    specs = backup_vars["backup_group_specs"]
-    if group_id not in specs:
-        raise SystemExit(f"backup_group_specs is missing group {group_id!r}")
-    spec = specs[group_id]
-    pending = list(backup_vars["backup_pending_host_groups"])
+def group_rows(all_vars: dict[str, Any], group_id: str) -> list[dict[str, Any]]:
     inventory_key = group_id.replace("-", "_")
-    inventory = all_vars["recovery_inventory"]
-    if group_id in pending:
-        if inventory_key in inventory:
-            raise SystemExit(
-                f"{group_id!r} is pending but recovery_inventory already "
-                "classifies it; remove it from backup_pending_host_groups"
-            )
-        if "members" not in spec:
-            raise SystemExit(f"pending group {group_id!r} has no members")
-        members = [dict(member) for member in spec["members"]]
-        parent = spec.get("parent_dataset") or _common_parent(
-            [member["dataset"] for member in members]
-        )
-    else:
-        if inventory_key not in inventory:
-            raise SystemExit(
-                f"{group_id!r} is not in recovery_inventory and is not pending"
-            )
-        rows = [
-            row
-            for row in all_vars["zfs_datasets"]
-            if row.get("recovery_group") == inventory_key
-        ]
-        if not rows:
-            raise SystemExit(
-                f"recovery_inventory group {inventory_key!r} has no zfs_datasets rows"
-            )
-        writer = spec.get("writer")
-        if not writer:
-            raise SystemExit(f"group {group_id!r} has no writer")
-        members = [
-            {
-                "name": row["name"].split("/")[-1],
-                "dataset": row["name"],
-                "mount": row["mountpoint"],
-                "writer": writer,
-            }
-            for row in rows
-        ]
-        parent = spec.get("parent_dataset") or _common_parent(
-            [member["dataset"] for member in members]
-        )
-
-    if inventory_key in inventory:
-        visibility = inventory[inventory_key]["visibility"]
-        declared = spec.get("visibility")
-        if declared is not None and declared != visibility:
-            raise SystemExit(
-                f"group {group_id!r} visibility {declared!r} disagrees with "
-                f"recovery_inventory ({visibility!r})"
-            )
-    else:
-        visibility = spec.get("visibility")
-    if not visibility:
-        raise SystemExit(f"group {group_id!r} has no visibility")
-    spec = dict(spec)
-    spec["visibility"] = visibility
-    return spec, members, parent
+    return [
+        row
+        for row in all_vars["zfs_datasets"]
+        if row.get("recovery_group") == inventory_key
+    ]
 
 
-def group_destinations(spec: dict[str, Any]) -> list[str]:
-    tiers = spec.get("destination_tiers")
-    if not tiers:
-        raise SystemExit(f"group {spec.get('id', '?')!r} has no destination tiers")
-    return [f"{tier}-{spec['visibility']}" for tier in tiers]
+def safe_path(path: Any) -> str:
+    text = str(path or "")
+    if not text or text.startswith("/"):
+        raise SystemExit(f"group path {text!r} must be relative")
+    parts = text.split("/")
+    if any(part in {"", ".", ".."} for part in parts):
+        raise SystemExit(f"group path {text!r} is not a clean relative path")
+    return text
 
 
-def validate(
-    all_vars: dict[str, Any], backup_vars: dict[str, Any]
-) -> list[str]:
+def validate(all_vars: dict[str, Any], backup_vars: dict[str, Any]) -> list[str]:
     """Validate the shared plan; return the ordered group ids."""
 
+    retired = sorted(RETIRED_BACKUP_VARS & set(backup_vars))
+    if retired:
+        raise SystemExit("backup.yml still declares retired vars: " + ", ".join(retired))
     order = expected_group_ids(all_vars, backup_vars)
     if len(order) != len(set(order)):
         raise SystemExit("backup group ids are not unique")
+
+    roots = tier_roots(backup_vars)
     specs = backup_vars["backup_group_specs"]
-    extra = sorted(set(specs) - set(order))
-    if extra:
+    if sorted(specs) != sorted(order):
+        extra = sorted(set(specs) - set(order))
+        missing = sorted(set(order) - set(specs))
         raise SystemExit(
-            "backup_group_specs declares unknown groups: " + ", ".join(extra)
+            "backup_group_specs does not match the inventory"
+            + (f"; unknown {', '.join(extra)}" if extra else "")
+            + (f"; missing {', '.join(missing)}" if missing else "")
         )
-    repositories = backup_vars["backup_repositories"]
-    names = [repository["name"] for repository in repositories]
-    if len(names) != len(set(names)):
-        raise SystemExit("backup_repositories repeat a name")
-    destinations = set(names)
-    declared = backup_vars.get("backup_destinations")
-    if isinstance(declared, list) and set(declared) != destinations:
-        raise SystemExit(
-            "backup_destinations must be exactly the repository names"
-        )
-    paths = backup_vars["backup_dataset_paths"]
-    seen_datasets: set[str] = set()
+    cadences = backup_vars["backup_cadences"]
+    if set(cadences) != CADENCES:
+        raise SystemExit("backup_cadences must be exactly fast and media")
+
+    host_paths = {row["id"]: row["path"] for row in all_vars.get("backup_host_paths", [])}
     for group_id in order:
-        spec, members, _ = group_details(group_id, all_vars, backup_vars)
-        if not members:
-            raise SystemExit(f"group {group_id!r} has no members")
-        for destination in group_destinations(spec):
-            if destination not in destinations:
-                raise SystemExit(
-                    f"group {group_id!r} names unknown destination "
-                    f"{destination!r}"
-                )
-        mounts = [member["mount"] for member in members]
-        if len(mounts) != len(set(mounts)):
-            raise SystemExit(f"group {group_id!r} repeats a mount")
-        for member in members:
-            dataset = member["dataset"]
-            if dataset in seen_datasets:
-                raise SystemExit(f"dataset {dataset!r} is claimed twice")
-            seen_datasets.add(dataset)
-            path = paths.get(dataset)
-            if not path or not path.startswith("/"):
-                raise SystemExit(f"dataset {dataset!r} has no absolute path")
-            if "{snapshot}" not in path:
-                raise SystemExit(
-                    f"dataset {dataset!r} path must use {{snapshot}}"
-                )
-    for repository in repositories:
-        if not repository.get("password_file", "").startswith("/"):
+        spec = specs[group_id]
+        if not isinstance(spec, dict):
+            raise SystemExit(f"backup_group_specs.{group_id} must be a mapping")
+        unknown = set(spec) - GROUP_SPEC_KEYS
+        if unknown:
             raise SystemExit(
-                f"repository {repository['name']!r} needs a password file path"
+                f"backup_group_specs.{group_id} declares retired keys: "
+                + ", ".join(sorted(unknown))
             )
-    missing_paths = sorted(set(paths) - seen_datasets)
-    if missing_paths:
+        retired_keys = RETIRED_GROUP_KEYS & set(spec)
+        if retired_keys:
+            raise SystemExit(
+                f"backup_group_specs.{group_id} declares retired keys: "
+                + ", ".join(sorted(retired_keys))
+            )
+        path = safe_path(spec.get("path"))
+        if spec.get("cadence") not in CADENCES:
+            raise SystemExit(f"backup_group_specs.{group_id} cadence must be fast or media")
+        tiers = spec.get("tiers")
+        if not isinstance(tiers, list) or not tiers:
+            raise SystemExit(f"backup_group_specs.{group_id} has no tiers")
+        if [tier for tier in tiers if tier not in roots]:
+            raise SystemExit(
+                f"backup_group_specs.{group_id} names an unknown tier"
+            )
+        if group_id in host_paths:
+            if path != host_paths[group_id].lstrip("/"):
+                raise SystemExit(
+                    f"backup_group_specs.{group_id} path must show {host_paths[group_id]}"
+                )
+            continue
+        rows = group_rows(all_vars, group_id)
+        if not rows:
+            raise SystemExit(
+                f"recovery_inventory group {group_id!r} has no zfs_datasets rows; "
+                "declare the dataset in all.yml"
+            )
+        for row in rows:
+            mountpoint = row["mountpoint"]
+            if mountpoint != "/" + path and not mountpoint.startswith("/" + path + "/"):
+                raise SystemExit(
+                    f"{mountpoint} is outside the {group_id} subtree /{path}"
+                )
+
+    for inventory_key in all_vars["recovery_inventory"]:
+        if not group_rows(all_vars, canonical_id(inventory_key)):
+            raise SystemExit(
+                f"recovery_inventory group {inventory_key!r} has no zfs_datasets rows"
+            )
+
+    password_file = str(backup_vars["backup_password_file"])
+    password_root = str(backup_vars["backup_password_root"]).rstrip("/")
+    if not re.fullmatch(re.escape(password_root) + r"/[a-z0-9-]+\.password", password_file):
         raise SystemExit(
-            "backup_dataset_paths declares unused datasets: "
-            + ", ".join(missing_paths)
+            f"one shared password file must live under {password_root}: {password_file}"
         )
+    if not str(backup_vars["backup_snapshot_dataset"]).strip():
+        raise SystemExit("backup_snapshot_dataset must name the data pool root")
+    if not str(backup_vars["backup_snapshot_root"]).startswith("/run/"):
+        raise SystemExit("backup_snapshot_root must be a stable /run path")
     return order
+
+
+def group_label(group_id: str, spec: dict[str, Any]) -> str:
+    if spec.get("label"):
+        return str(spec["label"])
+    return group_id.replace("-", " ").replace("_", " ").capitalize()
 
 
 def build_recovery_groups(
     all_vars: dict[str, Any], backup_vars: dict[str, Any]
 ) -> dict[str, Any]:
+    """The public, credential-free manifest the recovery page reads."""
+
     order = validate(all_vars, backup_vars)
+    roots = tier_roots(backup_vars)
+    specs = backup_vars["backup_group_specs"]
     groups = []
     for group_id in order:
-        spec, members, parent = group_details(group_id, all_vars, backup_vars)
+        spec = specs[group_id]
         groups.append(
             {
-                "group_id": group_id,
-                "pool": parent.split("/")[0],
-                "parent_dataset": parent,
-                "members": members,
-                "required_config": ["/etc/data-plane/recovery-groups.json"],
-                "destination_tiers": list(spec["destination_tiers"]),
-                "destinations": group_destinations(spec),
-                "cadence": spec["cadence"],
-                "databases": list(spec.get("databases", [])),
-                "notes": spec.get("notes", ""),
+                "id": group_id,
+                "label": group_label(group_id, spec),
+                "repo": f"{roots['r2'].rstrip('/')}/{group_id}",
+                "data_root": "/" + str(spec["path"]),
             }
         )
     return {"schema_version": 1, "groups": groups}
@@ -492,39 +498,28 @@ def build_recovery_groups(
 def build_host_plan(
     all_vars: dict[str, Any], backup_vars: dict[str, Any]
 ) -> dict[str, Any]:
-    """The same plan as the host oneshot reads from /etc/homelab/backup.json."""
+    """The plan roles/backup renders to /etc/homelab/backup.json."""
 
     order = validate(all_vars, backup_vars)
-    paths = backup_vars["backup_dataset_paths"]
-    groups = []
-    for group_id in order:
-        spec, members, _ = group_details(group_id, all_vars, backup_vars)
-        datasets = [member["dataset"] for member in members]
-        groups.append(
+    specs = backup_vars["backup_group_specs"]
+    tiers = [
+        {"name": tier["name"], "repository_root": tier["repository_root"]}
+        for tier in backup_vars["backup_tiers"]
+    ]
+    return {
+        "schema_version": int(backup_vars["backup_schema_version"]),
+        "snapshot_dataset": str(backup_vars["backup_snapshot_dataset"]),
+        "snapshot_root": str(backup_vars["backup_snapshot_root"]),
+        "password_file": str(backup_vars["backup_password_file"]),
+        "tiers": tiers,
+        "groups": [
             {
                 "id": group_id,
-                "datasets": datasets,
-                "destinations": group_destinations(spec),
-                "dataset_paths": {dataset: paths[dataset] for dataset in datasets},
-                "fence": [list(argv) for argv in spec.get("fence", [])],
-                "checkpoint": [
-                    list(argv) for argv in spec.get("checkpoint", [])
-                ],
-                "resume": [list(argv) for argv in spec.get("resume", [])],
-                "databases": list(spec.get("databases", [])),
-                "cadence": spec["cadence"],
+                "path": str(specs[group_id]["path"]),
+                "cadence": specs[group_id]["cadence"],
+                "tiers": list(specs[group_id]["tiers"]),
             }
-        )
-    return {
-        "schema_version": 1,
-        "manifest_dir": backup_vars["backup_manifest_dir"],
-        "groups": groups,
-        "repositories": [
-            {
-                key: repository[key]
-                for key in ("name", "repository", "password_file", "host", "tag")
-            }
-            for repository in backup_vars["backup_repositories"]
+            for group_id in order
         ],
     }
 
@@ -535,15 +530,29 @@ def rendered_text() -> str:
     return json.dumps(payload, indent=2) + "\n"
 
 
+def host_plan_text() -> str:
+    all_vars, backup_vars = load_group_vars()
+    return json.dumps(build_host_plan(all_vars, backup_vars), indent=2) + "\n"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
         "--check",
         action="store_true",
         help="fail if the checked-in file differs instead of writing it",
     )
+    mode.add_argument(
+        "--host-plan",
+        action="store_true",
+        help="print the host /etc/homelab/backup.json instead of writing the manifest",
+    )
     args = parser.parse_args(argv)
     try:
+        if args.host_plan:
+            sys.stdout.write(host_plan_text())
+            return 0
         text = rendered_text()
     except (OSError, YamlSubsetError) as exc:
         print(f"render-recovery-groups: {exc}", file=sys.stderr)

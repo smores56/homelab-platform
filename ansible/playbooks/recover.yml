@@ -5,13 +5,14 @@
 #
 #   ansible-playbook -i inventory/hosts.yml playbooks/recover.yml \
 #     --tags destructive \
-#     -e homelab_recovery_confirm=true \
-#     -e homelab_recovery_generation_manifest=/root/generation.json
+#     -e homelab_recovery_confirm=true
 #
-# The order is the safety property: fence every writer, open storage, restore a
-# signed generation into a scratch target, verify its content hashes, and only
-# then re-enable the writers. A dry run (no -e homelab_recovery_apply=true)
-# touches nothing. The recovery portal is never a prerequisite.
+# The order is the safety property: fence every writer, open storage, restore
+# the newest snapshot of every selected group into a scratch target, verify that
+# every required tier holds a covering snapshot, and only then re-enable the
+# writers. There is no generation manifest. A dry run (no
+# -e homelab_recovery_apply=true) touches nothing. The recovery portal is never
+# a prerequisite.
 
 - name: Fence the data-plane writers before any restore
   hosts: data_plane_hosts
@@ -23,12 +24,10 @@
         that:
           - "'destructive' in ansible_run_tags"
           - homelab_recovery_confirm | bool
-          - homelab_recovery_generation_manifest | length > 0
           - homelab_recovery_scratch_target is match('^/')
         fail_msg: >-
           Refusing to recover without --tags destructive,
-          -e homelab_recovery_confirm=true,
-          -e homelab_recovery_generation_manifest=<path>, and an absolute
+          -e homelab_recovery_confirm=true, and an absolute
           homelab_recovery_scratch_target.
 
     - name: Check which writer units are installed
@@ -49,13 +48,13 @@
         - homelab_recovery_apply | bool
         - item.stat.exists
 
-    - name: Check which backup timers are installed
+    - name: Check which backup units are installed
       ansible.builtin.stat:
         path: "/etc/systemd/system/{{ item }}"
       loop: "{{ homelab_backup_timer_units }}"
       register: recovery_backup_timer_files
 
-    - name: Fence every backup timer and path unit
+    - name: Fence every backup timer
       ansible.builtin.systemd_service:
         name: "{{ item.item }}"
         enabled: false
@@ -94,8 +93,7 @@
       ansible.builtin.assert:
         that:
           - homelab_recovery_confirm | bool
-          - homelab_recovery_generation_manifest | length > 0
-        fail_msg: "Pass homelab_recovery_confirm=true and a generation manifest"
+        fail_msg: "Pass homelab_recovery_confirm=true"
 
     - name: Open every encrypted volume with its operator-provisioned keyfile
       community.crypto.luks_device:
@@ -159,7 +157,7 @@
         label: "{{ item.path }}"
       when: homelab_recovery_apply | bool
 
-- name: Restore a verified generation into a scratch target
+- name: Restore the newest group snapshots into a scratch target
   hosts: data_plane_hosts
   gather_facts: false
   tags: [destructive]
@@ -179,10 +177,10 @@
       ansible.builtin.command:
         argv: [/usr/local/sbin/homelab-clean-room-restore]
       environment:
-        HOMELAB_GENERATION_MANIFEST: "{{ homelab_recovery_generation_manifest }}"
         HOMELAB_RESTORE_CONFIRM: restore
         HOMELAB_RESTORE_ROOT: "{{ homelab_recovery_scratch_target }}"
-        HOMELAB_REQUIRED_DESTINATIONS: "{{ homelab_recovery_required_destinations | join(',') }}"
+        HOMELAB_RESTORE_GROUPS: "{{ homelab_recovery_groups }}"
+        HOMELAB_REQUIRED_TIERS: "{{ homelab_recovery_required_tiers | join(',') }}"
         HOMELAB_ALLOW_LIVE: "{{ '1' if homelab_recovery_allow_live | bool else '0' }}"
       register: recovery_plan
       changed_when: false
@@ -194,32 +192,33 @@
         var: recovery_plan.stdout_lines
       when: not (homelab_recovery_apply | bool)
 
-    - name: Apply the verified generation to the scratch target
+    - name: Restore the newest snapshot of every selected group
       ansible.builtin.command:
         argv: [/usr/local/sbin/homelab-clean-room-restore]
       environment:
-        HOMELAB_GENERATION_MANIFEST: "{{ homelab_recovery_generation_manifest }}"
         HOMELAB_RESTORE_CONFIRM: restore
         HOMELAB_RESTORE_ROOT: "{{ homelab_recovery_scratch_target }}"
-        HOMELAB_REQUIRED_DESTINATIONS: "{{ homelab_recovery_required_destinations | join(',') }}"
+        HOMELAB_RESTORE_GROUPS: "{{ homelab_recovery_groups }}"
+        HOMELAB_REQUIRED_TIERS: "{{ homelab_recovery_required_tiers | join(',') }}"
         HOMELAB_ALLOW_LIVE: "{{ '1' if homelab_recovery_allow_live | bool else '0' }}"
         HOMELAB_RESTORE_APPLY: "1"
       when: homelab_recovery_apply | bool
       changed_when: true
       check_mode: false
 
-    - name: Verify the restored content hashes
+    - name: Verify every required tier holds a covering snapshot
       ansible.builtin.command:
         argv: [/usr/local/sbin/homelab-clean-room-restore, --verify-only]
       environment:
-        HOMELAB_GENERATION_MANIFEST: "{{ homelab_recovery_generation_manifest }}"
+        HOMELAB_RESTORE_CONFIRM: restore
         HOMELAB_RESTORE_ROOT: "{{ homelab_recovery_scratch_target }}"
-        HOMELAB_REQUIRED_DESTINATIONS: "{{ homelab_recovery_required_destinations | join(',') }}"
+        HOMELAB_RESTORE_GROUPS: "{{ homelab_recovery_groups }}"
+        HOMELAB_REQUIRED_TIERS: "{{ homelab_recovery_required_tiers | join(',') }}"
       changed_when: false
       check_mode: false
       when: homelab_recovery_apply | bool
 
-- name: Re-enable the writers only after a verified scratch restore
+- name: Re-enable the writers only after a verified restore
   hosts: data_plane_hosts
   gather_facts: false
   tags: [destructive]
@@ -237,7 +236,7 @@
         - homelab_recovery_resume_writers | bool
         - item.stat.exists
 
-    - name: Restart every installed backup timer
+    - name: Restart every installed backup unit
       ansible.builtin.systemd_service:
         name: "{{ item.item }}"
         enabled: true

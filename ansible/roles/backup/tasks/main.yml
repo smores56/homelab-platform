@@ -1,151 +1,215 @@
 ---
-# Host-side backup ownership: copy the factory libraries, render the plan, and
-# install the fenced snapshot oneshot, timers, and request path. No pod, no
-# container, and no cluster credential participates in the snapshot itself.
+# Host-side backup ownership: one pinned restic binary, one plan, one shared
+# password file, one recursive snapshot, and one unit per cadence. No pod, no
+# generation manifest, and no cluster credential participates in a backup.
 #
-# A group without a repository, a repository without a password file path, or a
-# dataset without a snapshot path stops the apply before any unit is written.
+# A group without a path, a tier outside the plan, a dataset outside its group
+# subtree, or a password file that is not root-only stops the apply before any
+# unit is written.
 
-- name: Require a complete, non-fixture backup inventory
+- name: Require the one backup plan
   ansible.builtin.assert:
     that:
-      - backup_groups | length > 0
-      - backup_destinations | length > 0
-      - backup_repositories | length > 0
-      - backup_repositories | map(attribute='name') | unique | length == (backup_repositories | length)
-      - backup_destinations | sort == backup_repositories | map(attribute='name') | sort
-      - backup_destinations | sort == (backup_tiers | product(backup_domains) | map('join', '-') | list) | sort
-      - backup_repositories | selectattr('password_file', 'undefined') | list | length == 0
-      - backup_repositories | selectattr('repository', 'undefined') | list | length == 0
-      - backup_repositories | selectattr('password', 'defined') | list | length == 0
-      - "'fixture' not in (backup_repositories | to_json | lower)"
-      - "'inmemorydestination' not in (backup_group_specs | to_json | lower)"
-      - "'dryrunrunner' not in (backup_group_specs | to_json | lower)"
+      - backup_schema_version | int == 1
+      - backup_snapshot_dataset | length > 0
+      - backup_snapshot_root is match('^/run/')
+      - backup_config_file is match('^/')
+      - backup_password_file is match('^' ~ (backup_password_root | regex_escape) ~ '/[a-z0-9-]+\.password$')
+      - backup_tiers | map(attribute='name') | list == ['nvme', 'hdd', 'r2']
+      - backup_tiers | selectattr('repository_root', 'undefined') | list | length == 0
+      - backup_cadences.keys() | list | sort == ['fast', 'media']
+      - backup_group_ids | length > 0
+      - backup_group_ids | unique | length == (backup_group_ids | length)
     fail_msg: >-
-      backup.yml is incomplete: every group needs a repository, every
-      repository a password file path, and no group may fall back to a fixture.
+      backup.yml must declare one snapshot dataset, /run/data-plane/current,
+      one shared password file under {{ backup_password_root }}, the nvme/hdd/r2
+      tiers, and fast/media cadences.
     quiet: true
 
-- name: Require every repository password file under the root-only secret root
+- name: Refuse the retired per-domain backup inventory
   ansible.builtin.assert:
     that:
-      - item.password_file is match('^' ~ (backup_password_root | regex_escape) ~ '/[a-z0-9-]+\.password$')
-    fail_msg: "{{ item.password_file }} must live under {{ backup_password_root }}"
+      - backup_domains is not defined
+      - backup_repositories is not defined
+      - backup_destinations is not defined
+      - backup_pending_host_groups is not defined
+      - backup_manifest_dir is not defined
+      - backup_request_dir is not defined
+      - backup_request_archive is not defined
+      - backup_group_specs | dict2items | selectattr('value.writer', 'defined') | list | length == 0
+      - backup_group_specs | dict2items | selectattr('value.databases', 'defined') | list | length == 0
+      - backup_group_specs | dict2items | selectattr('value.fence', 'defined') | list | length == 0
+      - backup_group_specs | dict2items | selectattr('value.checkpoint', 'defined') | list | length == 0
+      - backup_group_specs | dict2items | selectattr('value.resume', 'defined') | list | length == 0
+    fail_msg: >-
+      The per-domain repositories, pending groups, writers, databases, fences,
+      checkpoints, and resume hooks are retired; one group is one repository per
+      tier and one subtree of the recursive snapshot.
     quiet: true
-  loop: "{{ backup_repositories }}"
-  loop_control:
-    label: "{{ item.name }}"
 
-- name: Require every recovery group to declare repositories and a cadence
+- name: Require every backup group to declare a path, cadence, and tiers
   ansible.builtin.assert:
     that:
+      - backup_group_specs.keys() | list | sort == backup_group_ids | sort
       - item in backup_group_specs
-      - backup_group_specs[item].destination_tiers | length > 0
-      - backup_group_specs[item].destination_tiers | difference(backup_tiers) | length == 0
+      - backup_group_specs[item].path is string
+      - backup_group_specs[item].path is not match('^/')
+      - backup_group_specs[item].path is not search('(^|/)\.\.(/|$)')
       - backup_group_specs[item].cadence in backup_cadences
-    fail_msg: "backup_group_specs.{{ item }} is missing destinations or a cadence"
+      - backup_group_specs[item].tiers | length > 0
+      - backup_group_specs[item].tiers | difference(backup_tiers | map(attribute='name') | list) | length == 0
+    fail_msg: "backup_group_specs.{{ item }} needs a relative path, a fast/media cadence, and known tiers"
     quiet: true
-  loop: "{{ backup_groups }}"
+  loop: "{{ backup_group_ids }}"
 
-- name: Keep pending groups honest until the host inventory models them
+- name: Require every recovery group to own at least one dataset
   ansible.builtin.assert:
     that:
-      - item | replace('-', '_') not in recovery_inventory
-      - backup_group_specs[item].members | length > 0
+      - zfs_datasets | selectattr('recovery_group', 'equalto', item) | list | length > 0
     fail_msg: >-
-      {{ item }} is already in recovery_inventory or has no members; remove it
-      from backup_pending_host_groups and let the inventory derive it
+      recovery_inventory group {{ item }} has no zfs_datasets row; add the
+      dataset to all.yml instead of declaring a pending group
     quiet: true
-  loop: "{{ backup_pending_host_groups }}"
+  loop: "{{ recovery_inventory.keys() | list }}"
 
-- name: Require every derived group to exist in the host inventory
+- name: Require every dataset to sit inside its group subtree
   ansible.builtin.assert:
     that:
-      - item | replace('-', '_') in recovery_inventory
-    fail_msg: "{{ item }} is neither in recovery_inventory nor pending"
+      - item.mountpoint == '/' ~ group_path or item.mountpoint.startswith('/' ~ group_path ~ '/')
+    fail_msg: >-
+      {{ item.mountpoint }} is outside the {{ item.recovery_group }} group
+      subtree /{{ group_path }}; the page and the repository would disagree
     quiet: true
-  loop: "{{ backup_groups | difference(backup_pending_host_groups) }}"
+  vars:
+    group_path: "{{ backup_group_specs[item.recovery_group | replace('_', '-')].path }}"
+  loop: "{{ zfs_datasets }}"
 
-- name: Require every dataset path to target the frozen snapshot directory
+- name: Require every declared host path to match its group
   ansible.builtin.assert:
     that:
-      - item.value.startswith('/')
-      - "'{snapshot}' in item.value"
-    fail_msg: "backup_dataset_paths.{{ item.key }} must be absolute and use {snapshot}"
+      - backup_group_specs[item.id].path == item.path | regex_replace('^/', '')
+    fail_msg: "backup_group_specs.{{ item.id }} must show {{ item.path }}"
     quiet: true
-  loop: "{{ backup_dataset_paths | dict2items }}"
-  loop_control:
-    label: "{{ item.key }}"
+  loop: "{{ backup_host_paths }}"
 
-- name: Require both data and backup mount inventories
+- name: Require a pinned version, a known architecture and a checksum
   ansible.builtin.assert:
     that:
-      - zfs_datasets | length > 0
-      - backup_mounts | length > 0
-    fail_msg: "zfs_datasets and backup_mounts must be defined; both are asserted by the unit"
+      - restic_version is match('^[0-9]+\.[0-9]+\.[0-9]+$')
+      - ansible_architecture in restic_architectures
+      - restic_architectures[ansible_architecture] in restic_checksums
+      - restic_checksums[restic_architectures[ansible_architecture]] is match('^[0-9a-f]{64}$')
+    fail_msg: "Pin restic_version and a sha256 for {{ ansible_architecture }}"
     quiet: true
 
-- name: Derive the backup cryptsetup units
+- name: Derive the restic architecture
   ansible.builtin.set_fact:
-    backup_crypt_units: >-
-      {{ backup_mounts | map(attribute='source')
-         | map('regex_replace', '^/dev/mapper/', 'systemd-cryptsetup@')
-         | map('regex_replace', '$', '.service') | list }}
+    restic_arch: "{{ restic_architectures[ansible_architecture] }}"
+    restic_archive: >-
+      /tmp/restic_{{ restic_version }}_linux_{{ restic_architectures[ansible_architecture] }}.bz2
+    restic_decompressed: >-
+      /tmp/restic_{{ restic_version }}_linux_{{ restic_architectures[ansible_architecture] }}
 
-- name: Create the backup and library directories
+- name: Stat the installed restic binary
+  ansible.builtin.stat:
+    path: "{{ restic_binary }}"
+  register: restic_binary_stat
+
+- name: Read the installed restic version
+  ansible.builtin.command:
+    argv: ["{{ restic_binary }}", version]
+  register: restic_installed_version
+  changed_when: false
+  failed_when: false
+  when: restic_binary_stat.stat.exists
+
+- name: Decide whether restic needs installing
+  ansible.builtin.set_fact:
+    restic_needs_install: >-
+      {{ not restic_binary_stat.stat.exists or
+         restic_version not in (restic_installed_version.stdout | default('')) }}
+
+- name: Download the pinned restic archive
+  ansible.builtin.get_url:
+    url: >-
+      https://github.com/restic/restic/releases/download/v{{ restic_version }}/restic_{{ restic_version }}_linux_{{ restic_arch }}.bz2
+    dest: "{{ restic_archive }}"
+    checksum: "sha256:{{ restic_checksums[restic_arch] }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when: restic_needs_install
+
+- name: Decompress the pinned restic binary
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/python3
+      - -c
+      - "import bz2, shutil, sys; shutil.copyfileobj(bz2.open(sys.argv[1]), open(sys.argv[2], 'wb'))"
+      - "{{ restic_archive }}"
+      - "{{ restic_decompressed }}"
+  when: restic_needs_install
+  changed_when: true
+
+- name: Install restic at the declared path
+  ansible.builtin.copy:
+    src: "{{ restic_decompressed }}"
+    dest: "{{ restic_binary }}"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0755"
+  when: restic_needs_install
+
+- name: Remove the decompressed copy
+  ansible.builtin.file:
+    path: "{{ restic_decompressed }}"
+    state: absent
+  when: restic_needs_install
+
+- name: Remove the downloaded archive
+  ansible.builtin.file:
+    path: "{{ restic_archive }}"
+    state: absent
+  when: restic_needs_install
+
+- name: Verify the pinned restic version
+  ansible.builtin.command:
+    argv: ["{{ restic_binary }}", version]
+  register: restic_version_check
+  changed_when: false
+  failed_when: restic_version not in restic_version_check.stdout
+
+- name: Create the root-only secret and cache directories
   ansible.builtin.file:
     path: "{{ item.path }}"
     state: directory
     owner: "{{ backup_owner }}"
-    group: "{{ item.group | default(backup_group) }}"
+    group: "{{ backup_group }}"
     mode: "{{ item.mode }}"
   loop:
-    - { path: /opt/data-plane, mode: "0755" }
-    - { path: "{{ backup_libs_dir }}", mode: "{{ backup_libs_mode }}" }
+    - { path: "{{ backup_password_root }}", mode: "0700" }
     - { path: /etc/homelab, mode: "0755" }
-    - { path: "{{ backup_manifest_dir }}", mode: "0750", group: "{{ backup_state_gid }}" }
-    - { path: "{{ backup_request_dir }}", mode: "0770", group: "{{ backup_state_gid }}" }
-    - { path: "{{ backup_request_archive }}", mode: "0770", group: "{{ backup_state_gid }}" }
-    - { path: /var/cache/restic-backup, mode: "0700" }
+    - { path: "{{ backup_cache_dir }}", mode: "0700" }
   loop_control:
     label: "{{ item.path }}"
 
-- name: Install the data-plane Python libraries
-  ansible.builtin.command:
-    argv:
-      - rsync
-      - --archive
-      - --delete
-      - --exclude=__pycache__
-      - --exclude=*.pyc
-      - "{{ role_path }}/../../../libs/"
-      - "{{ backup_libs_dir }}/"
-  register: backup_libs_sync
-  changed_when: backup_libs_sync.stdout | length > 0
+- name: Stat the shared restic password file
+  ansible.builtin.stat:
+    path: "{{ backup_password_file }}"
+  register: backup_password_stat
 
-- name: Install the snapshotter launcher
-  ansible.builtin.template:
-    src: snapshotter.py.j2
-    dest: "{{ backup_snapshotter }}"
-    owner: "{{ backup_owner }}"
-    group: "{{ backup_group }}"
-    mode: "0755"
-
-- name: Install the request consumer
-  ansible.builtin.template:
-    src: snapshot-request.py.j2
-    dest: "{{ backup_request_consumer }}"
-    owner: "{{ backup_owner }}"
-    group: "{{ backup_group }}"
-    mode: "0750"
-
-- name: Install the SQLite checkpoint helper
-  ansible.builtin.copy:
-    src: checkpoint-sqlite.py
-    dest: /usr/local/sbin/homelab-checkpoint-sqlite
-    owner: "{{ backup_owner }}"
-    group: "{{ backup_group }}"
-    mode: "0750"
+- name: Require one shared password file, root-owned and 0600
+  ansible.builtin.assert:
+    that:
+      - backup_password_stat.stat.exists
+      - backup_password_stat.stat.pw_name == 'root'
+      - backup_password_stat.stat.mode == '0600'
+      - backup_password_stat.stat.size > 0
+    fail_msg: >-
+      {{ backup_password_file }} must exist, be root-owned 0600 and non-empty;
+      provision the one shared restic password from Bitwarden/SOPS before applying
+    quiet: true
 
 - name: Render the non-secret host backup plan
   ansible.builtin.template:
@@ -155,98 +219,205 @@
     group: "{{ backup_group }}"
     mode: "{{ backup_config_mode }}"
 
-- name: Install the all-group snapshot unit
-  ansible.builtin.template:
-    src: snapshot.service.j2
-    dest: /etc/systemd/system/homelab-snapshot.service
-    owner: "{{ backup_owner }}"
-    group: "{{ backup_group }}"
-    mode: "{{ backup_unit_mode }}"
-  vars:
-    snapshot_description: "Fenced ZFS snapshot fan-out (all groups)"
-    snapshot_exec_args: ""
-  notify: Reload systemd
+- name: Derive the local tier roots and the backup cryptsetup units
+  ansible.builtin.set_fact:
+    backup_local_roots: >-
+      {{ backup_tiers | map(attribute='repository_root') | select('match', '^/')
+         | unique | list }}
+    backup_crypt_units: >-
+      {{ backup_mounts | map(attribute='source')
+         | map('regex_replace', '^/dev/mapper/', 'systemd-cryptsetup@')
+         | map('regex_replace', '$', '.service') | list }}
 
-- name: Install the scoped snapshot unit template
-  ansible.builtin.template:
-    src: snapshot.service.j2
-    dest: /etc/systemd/system/homelab-snapshot@.service
-    owner: "{{ backup_owner }}"
-    group: "{{ backup_group }}"
-    mode: "{{ backup_unit_mode }}"
-  vars:
-    snapshot_description: "Fenced ZFS snapshot fan-out (group %i)"
-    snapshot_exec_args: " --group %i"
-  notify: Reload systemd
-
-- name: Install one snapshot service per cadence
-  ansible.builtin.template:
-    src: snapshot.service.j2
-    dest: "/etc/systemd/system/homelab-snapshot-{{ item.key }}.service"
-    owner: "{{ backup_owner }}"
-    group: "{{ backup_group }}"
-    mode: "{{ backup_unit_mode }}"
-  vars:
-    snapshot_description: "Fenced ZFS snapshot fan-out ({{ item.key }} cadence)"
-    snapshot_exec_args: " --cadence {{ item.key }}"
-  loop: "{{ backup_cadences | dict2items }}"
+- name: Check each local tier root
+  ansible.builtin.command:
+    argv: [findmnt, -rn, -o, TARGET, --target, "{{ item }}"]
+  loop: "{{ backup_local_roots }}"
   loop_control:
-    label: "{{ item.key }}"
-  notify: Reload systemd
+    label: "{{ item }}"
+  register: backup_root_checks
+  changed_when: false
+  failed_when: false
+  check_mode: false
 
-- name: Install the daily safety sweep timer
+- name: Refuse to initialise a repository on the root filesystem
+  ansible.builtin.assert:
+    that:
+      - item.rc == 0
+      - item.stdout | length > 0
+      - item.stdout != '/'
+      - item.item == item.stdout or item.item.startswith(item.stdout.rstrip('/') ~ '/')
+    fail_msg: >-
+      {{ item.item }} is not backed by its own mount ({{ item.stdout | default('/') }});
+      mount the backup disk before applying, or a repository would land on the
+      root filesystem
+    quiet: true
+  loop: "{{ backup_root_checks.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Create the local repository roots on the mounted backup disks
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ backup_owner }}"
+    group: "{{ backup_group }}"
+    mode: "0700"
+  loop: "{{ backup_local_roots }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Check whether each per-group repository exists
+  ansible.builtin.command:
+    argv:
+      - "{{ restic_binary }}"
+      - cat
+      - config
+      - --repo
+      - "{{ item.0.repository_root }}/{{ item.1 }}"
+      - --password-file
+      - "{{ backup_password_file }}"
+  loop: "{{ backup_tiers | product(backup_group_ids) | list }}"
+  loop_control:
+    label: "{{ item.0.name }}/{{ item.1 }}"
+  when: item.0.name in backup_group_specs[item.1].tiers
+  register: backup_repository_probe
+  changed_when: false
+  failed_when: false
+
+- name: Initialise only the repositories that are missing
+  ansible.builtin.command:
+    argv:
+      - "{{ restic_binary }}"
+      - init
+      - --repo
+      - "{{ item.item.0.repository_root }}/{{ item.item.1 }}"
+      - --password-file
+      - "{{ backup_password_file }}"
+  loop: "{{ backup_repository_probe.results }}"
+  loop_control:
+    label: "{{ item.item.0.name }}/{{ item.item.1 }}"
+  when:
+    - not (item.skipped | default(false))
+    - item.rc != 0
+  changed_when: true
+
+- name: Confirm every repository is readable with the shared key
+  ansible.builtin.command:
+    argv:
+      - "{{ restic_binary }}"
+      - cat
+      - config
+      - --repo
+      - "{{ item.0.repository_root }}/{{ item.1 }}"
+      - --password-file
+      - "{{ backup_password_file }}"
+  loop: "{{ backup_tiers | product(backup_group_ids) | list }}"
+  loop_control:
+    label: "{{ item.0.name }}/{{ item.1 }}"
+  when: item.0.name in backup_group_specs[item.1].tiers
+  changed_when: false
+
+- name: Create the library root the host unit imports from
+  ansible.builtin.file:
+    path: /opt/data-plane/lib
+    state: directory
+    owner: "{{ backup_owner }}"
+    group: "{{ backup_group }}"
+    mode: "0755"
+
+- name: Install the tested data-plane library onto the host
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../libs/data_plane"
+    dest: /opt/data-plane/lib/data_plane
+    owner: "{{ backup_owner }}"
+    group: "{{ backup_group }}"
+    mode: "0755"
+    directory_mode: "0755"
+
+- name: Install the snapshot-and-copy runner
   ansible.builtin.template:
-    src: snapshot.timer.j2
-    dest: /etc/systemd/system/homelab-snapshot.timer
+    src: backup-runner.py.j2
+    dest: "{{ backup_program }}"
+    owner: "{{ backup_owner }}"
+    group: "{{ backup_group }}"
+    mode: "0750"
+
+- name: Install the retention command
+  ansible.builtin.template:
+    src: restic-retention.py.j2
+    dest: "{{ backup_retention_program }}"
+    owner: "{{ backup_owner }}"
+    group: "{{ backup_group }}"
+    mode: "0750"
+
+- name: Install the lock drill
+  ansible.builtin.copy:
+    src: lock-drill.sh
+    dest: /usr/local/sbin/restic-lock-drill
+    owner: "{{ backup_owner }}"
+    group: "{{ backup_group }}"
+    mode: "0750"
+
+- name: Install the cadence-scoped backup unit
+  ansible.builtin.template:
+    src: backup.service.j2
+    dest: /etc/systemd/system/homelab-backup@.service
     owner: "{{ backup_owner }}"
     group: "{{ backup_group }}"
     mode: "{{ backup_unit_mode }}"
-  vars:
-    snapshot_description: "Daily fenced snapshot sweep"
-    snapshot_calendar: "{{ backup_full_sweep_calendar }}"
-    snapshot_delay: 600
-    snapshot_unit: homelab-snapshot.service
   notify: Reload systemd
 
 - name: Install one timer per cadence
   ansible.builtin.template:
-    src: snapshot.timer.j2
-    dest: "/etc/systemd/system/homelab-snapshot-{{ item.key }}.timer"
+    src: backup.timer.j2
+    dest: "/etc/systemd/system/homelab-backup-{{ item.key }}.timer"
     owner: "{{ backup_owner }}"
     group: "{{ backup_group }}"
     mode: "{{ backup_unit_mode }}"
   vars:
-    snapshot_description: "Snapshot cadence {{ item.key }}"
-    snapshot_calendar: "{{ item.value.calendar }}"
-    snapshot_delay: "{{ item.value.delay }}"
-    snapshot_unit: "homelab-snapshot-{{ item.key }}.service"
+    backup_cadence: "{{ item.key }}"
+    backup_calendar: "{{ item.value.calendar }}"
+    backup_delay: "{{ item.value.delay }}"
   loop: "{{ backup_cadences | dict2items }}"
   loop_control:
     label: "{{ item.key }}"
   notify: Reload systemd
 
-- name: Install the request path and consumer
+- name: Install the retention unit and timer
   ansible.builtin.template:
     src: "{{ item.src }}"
-    dest: "{{ item.dest }}"
+    dest: /etc/systemd/system/{{ item.dest }}
     owner: "{{ backup_owner }}"
     group: "{{ backup_group }}"
     mode: "{{ backup_unit_mode }}"
   loop:
-    - { src: snapshot.path.j2, dest: /etc/systemd/system/homelab-snapshot.path }
-    - { src: snapshot-request.service.j2, dest: /etc/systemd/system/homelab-snapshot-request.service }
+    - { src: restic-retention.service.j2, dest: restic-retention.service }
+    - { src: restic-retention.timer.j2, dest: restic-retention.timer }
   loop_control:
     label: "{{ item.dest }}"
   notify: Reload systemd
 
-- name: Enable the snapshot timers and the request path
+- name: Enable the backup timers only after the migration gate
   ansible.builtin.systemd_service:
     name: "{{ item }}"
     enabled: true
     state: started
     daemon_reload: true
   loop: >-
-    {{ ['homelab-snapshot.timer', 'homelab-snapshot.path']
-       + (backup_cadences.keys() | map('regex_replace', '^', 'homelab-snapshot-')
-          | map('regex_replace', '$', '.timer') | list) }}
+    {{ backup_cadences.keys() | map('regex_replace', '^', 'homelab-backup-')
+       | map('regex_replace', '$', '.timer') | list }}
   when: backup_timers_enabled | bool
+
+- name: Enable the retention timer only when the operator opted in
+  ansible.builtin.systemd_service:
+    name: restic-retention.timer
+    enabled: "{{ restic_retention_enabled | bool }}"
+    state: "{{ 'started' if restic_retention_enabled | bool else 'stopped' }}"
+    daemon_reload: true
+
+- name: Prove stale-lock expiry before retention is enabled
+  ansible.builtin.command:
+    argv: [/usr/local/sbin/restic-lock-drill]
+  when: restic_lock_drill_enabled | bool
+  changed_when: true

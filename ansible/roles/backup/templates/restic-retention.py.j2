@@ -1,0 +1,84 @@
+#!/usr/bin/python3
+"""Apply one retention policy to every per-group repository, argv only.
+
+Installed by roles/backup from the same host plan the backup unit reads. No
+password is ever placed on argv or in the environment: restic opens the shared
+root-only password file itself.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+RESTIC = {{ restic_binary | to_json }}
+RETENTION = {{ restic_retention | to_json }}
+
+
+def forget_argv(repository: str, password_file: str) -> list[str]:
+    """Build the exact retention argv. Kept pure so it is easy to inspect."""
+
+    return [
+        RESTIC,
+        "forget",
+        "--prune",
+        "--repo",
+        repository,
+        "--password-file",
+        password_file,
+        "--keep-daily",
+        str(RETENTION["daily"]),
+        "--keep-weekly",
+        str(RETENTION["weekly"]),
+        "--keep-monthly",
+        str(RETENTION["monthly"]),
+    ]
+
+
+def repositories(plan: dict) -> list[str]:
+    roots = {tier["name"]: tier["repository_root"] for tier in plan["tiers"]}
+    repos = []
+    for group in plan["groups"]:
+        for tier_name in group["tiers"]:
+            repos.append(f"{roots[tier_name].rstrip('/')}/{group['id']}")
+    return repos
+
+
+def run(argv: list[str]) -> int:
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"RESTIC_PASSWORD", "RESTIC_REPOSITORY", "RESTIC_PASSWORD_FILE"}
+    }
+    completed = subprocess.run(
+        argv, capture_output=True, text=True, check=False, env=environment
+    )
+    if completed.returncode != 0:
+        print(
+            f"restic-retention: {argv[3]}: {completed.stderr.strip()[:400]}",
+            file=sys.stderr,
+        )
+    return completed.returncode
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--config", required=True)
+    args = parser.parse_args(argv)
+    try:
+        plan = json.loads(Path(args.config).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"restic-retention: {exc}", file=sys.stderr)
+        return 2
+    failures = 0
+    for repository in repositories(plan):
+        failures += 1 if run(forget_argv(repository, plan["password_file"])) else 0
+    return 1 if failures else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

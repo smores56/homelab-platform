@@ -1,72 +1,103 @@
 ---
 # The shared destructive/writer gate. Imported by preflight.yml for a
-# destructive run and by the site.yml `writers`/`backup` steps. It never trusts
-# a hand-typed boolean: it re-runs `libs/data_plane/migration` over the raw
-# evidence file and requires the protection facts the module computes.
+# destructive run and by the site.yml `writers`/`backup` steps. It trusts no
+# evidence file and no hand-typed boolean: it re-runs the plan-driven
+# `data_plane.migration preflight` on the host that holds the repositories and
+# the restic password, against the host backup plan the backup role installed.
 #
-# The evidence must prove fresh verified backups on every required destination,
-# a scratch restore, a boot-tested and non-wiped 970, and two independent
-# verified SSH paths. Operator confirmations are carried by the evidence but are
-# enforced by the phase gates, not by this disk-level gate.
+# The gate re-proves freshness and full path coverage on every required tier, a
+# structural `restic check` on every repository, and — unless the operator asks
+# for it with -e homelab_migration_read_data=true — `restic check --read-data`
+# on each group's primary. Operator confirmations stay with the phase gates.
 
-- name: Require a raw migration evidence path
+- name: Require an absolute host backup plan
   ansible.builtin.assert:
     that:
-      - homelab_migration_evidence is defined
-      - homelab_migration_evidence | length > 0
-      - homelab_migration_evidence is match('^/')
+      - homelab_backup_plan is defined
+      - homelab_backup_plan | length > 0
+      - homelab_backup_plan is match('^/')
     fail_msg: >-
-      Pass -e homelab_migration_evidence=/abs/path/evidence.json produced from
-      `python3 -m data_plane.migration preflight evidence.json`.
+      Set homelab_backup_plan to the absolute host plan the backup role
+      installs (it defaults to backup_config_file, /etc/homelab/backup.json).
     quiet: true
   tags: [always]
 
-- name: Run the shared migration preflight over the evidence file
+- name: Run the plan-driven migration preflight on the host
   ansible.builtin.command:
     argv:
       - python3
       - -m
       - data_plane.migration
       - preflight
-      - "{{ homelab_migration_evidence }}"
+      - --plan
+      - "{{ homelab_backup_plan }}"
+      - --json
+      - --no-read-data
   environment:
-    PYTHONPATH: "{{ homelab_migration_libs_dir }}"
-  delegate_to: localhost
+    PYTHONPATH: /opt/data-plane/lib
+  when: not (homelab_migration_read_data | default(false) | bool)
+  delegate_to: "{{ inventory_hostname }}"
   changed_when: false
   check_mode: false
   failed_when: false
   register: homelab_migration_preflight
   tags: [always]
 
-- name: Require the migration protection facts to hold
-  vars:
-    report: "{{ (homelab_migration_preflight.stdout or '{}') | from_json }}"
+- name: Run the plan-driven migration preflight with a full read-data pass
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -m
+      - data_plane.migration
+      - preflight
+      - --plan
+      - "{{ homelab_backup_plan }}"
+      - --json
+  environment:
+    PYTHONPATH: /opt/data-plane/lib
+  when: homelab_migration_read_data | default(false) | bool
+  delegate_to: "{{ inventory_hostname }}"
+  changed_when: false
+  check_mode: false
+  failed_when: false
+  register: homelab_migration_preflight
+  tags: [always]
+
+- name: Require the preflight to return a verdict
   ansible.builtin.assert:
     that:
-      - report is mapping
-      - report.get('checked', []) is sequence
-      - "'backup_freshness' in report.get('checked', [])"
-      - "'restore_verification' in report.get('checked', [])"
-      - "'rollback_disk' in report.get('checked', [])"
-      - "'ssh_paths' in report.get('checked', [])"
-      - report.get('evidence', {}).get('fresh_backup', false) | bool
-      - report.get('evidence', {}).get('restore_verified', false) | bool
-      - report.get('evidence', {}).get('rollback_disk_boot_tested', false) | bool
-      - report.get('evidence', {}).get('ssh_paths_independent', false) | bool
+      - homelab_migration_preflight.stdout | default('') | trim | length > 0
     fail_msg: >-
-      The migration evidence does not prove fresh verified backups on every
-      required destination, a scratch restore, a boot-tested non-wiped 970, and
-      two independent SSH paths. Fix every preflight failure before touching a
-      disk or enabling a writer. {{ homelab_migration_preflight.stderr | default('') }}
+      `python3 -m data_plane.migration preflight --plan
+      {{ homelab_backup_plan }}` returned no report on
+      {{ inventory_hostname }}:
+      {{ homelab_migration_preflight.stderr | default('') | trim }}
     quiet: true
   tags: [always]
 
-- name: Record the rollback-disk decision from the evidence
+- name: Require the plan-driven gate report to hold
   vars:
-    evidence_doc: "{{ lookup('file', homelab_migration_evidence) | from_json }}"
+    report: "{{ homelab_migration_preflight.stdout | trim | from_json }}"
+  ansible.builtin.assert:
+    that:
+      - report is mapping
+      - report.get('ok', false) | bool
+      - report.get('gate_ready', true) | bool
+    fail_msg: >-
+      The backup gate at {{ homelab_backup_plan }} did not hold: every group and
+      tier must be fresh and path-covered, every repository must pass a
+      structural restic check, and each primary must pass --read-data when
+      requested. Fix every preflight failure before touching a disk or
+      enabling a writer.
+      {{ (report.get('failures', report.get('failure_details', [])) | join('; '))
+         or homelab_migration_preflight.stderr | default('') | trim }}
+    quiet: true
+  tags: [always]
+
+- name: Record the rollback-disk decision from the request
   ansible.builtin.set_fact:
     homelab_migration_rollback_device: >-
-      {{ evidence_doc.get('rollback_disk', {}).get('device', '') }}
+      {{ homelab_rollback_disk_device | default('') }}
     homelab_migration_rollback_released: >-
-      {{ evidence_doc.get('rollback_disk', {}).get('released', false) | bool }}
+      {{ homelab_rollback_disk_released | default(false) | bool }}
   tags: [always]

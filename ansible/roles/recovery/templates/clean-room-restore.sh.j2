@@ -1,51 +1,31 @@
 #!/usr/bin/env bash
-# Clean-room restore entrypoint. Restores one *complete, verified* generation
-# from a signed generation manifest into a scratch target. It never uses
-# `latest`, never prints a password, and does nothing destructive without
-# HOMELAB_RESTORE_APPLY=1.
-#
-# Manifest shape: the JSON written by data_plane.backup.generations.write_manifest
-# (all manifest fields plus `manifest_hash`), with one extra top-level `restore`
-# list that names the repositories and targets:
-# {
-#   "version": 1, "generation_id": "...", "group_id": "...", "created_at": 0,
-#   "datasets": [["tank/notes", "<zfs snapshot>"]], "sqlite": [],
-#   "app_versions": [], "content_hashes": [["/srv/notes/x", "<sha256>"]],
-#   "dependencies": [], "destinations": [
-#     {"destination": "primary", "snapshot_id": "<id>", "created_at": 0,
-#      "group_id": "notes", "dataset": "tank/notes", "parent": null, "verified": true}
-#   ],
-#   "complete": true, "schema_version": 1, "release": "", "manifest_hash": "<sha256>",
-#   "restore": [
-#     {"kind": "restic", "repository": "/var/backups/primary/personal",
-#      "password_file": "/etc/restic/personal.key",
-#      "snapshot": "<manifest snapshot id>", "target": "/srv"}
-#   ]
-# }
+# Clean-room restore entrypoint. Restores the newest snapshot of every selected
+# recovery group from its restic repositories into a scratch target. There is no
+# generation manifest: the ZFS snapshot name is the generation id, completeness
+# is the newest snapshot in every required tier, and restic's authenticated
+# repository format is the integrity boundary.
 #
 # Usage:
-#   homelab-clean-room-restore [--allow-live] [--verify-only] [--target PATH]
+#   homelab-clean-room-restore [--allow-live] [--verify-only] [--target PATH] [--groups a,b]
 # Environment:
-#   HOMELAB_GENERATION_MANIFEST  path to the signed manifest
 #   HOMELAB_RESTORE_CONFIRM=restore
 #   HOMELAB_RESTORE_APPLY=1      actually write
 #   HOMELAB_RESTORE_ROOT         scratch target (required unless --allow-live)
 #   HOMELAB_ALLOW_LIVE=1         explicit --allow-live equivalent
-#   HOMELAB_REQUIRED_DESTINATIONS comma-separated, every one must be present
-#   HOMELAB_REQUIRED_DATASETS     comma-separated, optional
-#   HOMELAB_MANIFEST_SCHEMA_VERSION  expected schema (default {{ recovery_manifest_schema_version }})
+#   HOMELAB_RESTORE_GROUPS       comma-separated group ids (default: every group)
+#   HOMELAB_REQUIRED_TIERS       comma-separated tiers, every one must hold a snapshot
 set -euo pipefail
 
 sentinel="{{ recovery_sentinel }}"
 check_script="{{ recovery_check_script }}"
+plan_file="{{ backup_config_file }}"
 writer_marker="{{ recovery_writer_marker_name }}"
-manifest=${HOMELAB_GENERATION_MANIFEST:-}
 target_root=${HOMELAB_RESTORE_ROOT:-}
 apply=${HOMELAB_RESTORE_APPLY:-0}
 confirm=${HOMELAB_RESTORE_CONFIRM:-}
-required_destinations=${HOMELAB_REQUIRED_DESTINATIONS:-"{{ recovery_required_destinations | join(',') }}"}
-required_datasets=${HOMELAB_REQUIRED_DATASETS:-}
-schema_version=${HOMELAB_MANIFEST_SCHEMA_VERSION:-"{{ recovery_manifest_schema_version }}"}
+groups=${HOMELAB_RESTORE_GROUPS:-}
+required_tiers=${HOMELAB_REQUIRED_TIERS:-"{{ recovery_required_tiers | join(',') }}"}
+schema_version=${HOMELAB_PLAN_SCHEMA_VERSION:-"{{ recovery_plan_schema_version }}"}
 allow_live=${HOMELAB_ALLOW_LIVE:-0}
 verify_only=0
 
@@ -61,6 +41,11 @@ while [[ $# -gt 0 ]]; do
       target_root=$2
       shift
       ;;
+    --groups)
+      [[ $# -ge 2 ]] || die "--groups needs a list"
+      groups=$2
+      shift
+      ;;
     *) die "unknown argument: $1" ;;
   esac
   shift
@@ -68,7 +53,7 @@ done
 
 [[ $EUID -eq 0 ]] || die "run as root"
 [[ -r $sentinel ]] || die "missing recovery sentinel $sentinel"
-[[ -n $manifest && -r $manifest ]] || die "set HOMELAB_GENERATION_MANIFEST to a readable manifest"
+[[ -r $plan_file ]] || die "missing host backup plan $plan_file"
 [[ $confirm == "restore" ]] || die "set HOMELAB_RESTORE_CONFIRM=restore after reading the runbook"
 
 # A scratch target is the default. Restoring into a live mount is only possible
@@ -92,205 +77,122 @@ fi
 
 # The sentinel is informational for a restore: a missing backup mount or a
 # stopped portal is a warning, never a prerequisite.
-"$check_script" --quiet || warn "recovery sentinel is not satisfied; continuing with the manifest gate"
+"$check_script" --quiet || warn "recovery sentinel is not satisfied; continuing with the repository gate"
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-if ! python3 - "$manifest" "$schema_version" "$required_destinations" "$required_datasets" >"$work/plan" 2>"$work/error" <<'PY'
-import hashlib
+python3 - "$plan_file" "$schema_version" "$required_tiers" "$groups" >"$work/groups" <<'PY'
 import json
 import sys
 
-MANIFEST_KEYS = {
-    "version",
-    "generation_id",
-    "group_id",
-    "created_at",
-    "datasets",
-    "sqlite",
-    "app_versions",
-    "content_hashes",
-    "dependencies",
-    "destinations",
-    "complete",
-    "schema_version",
-    "release",
-}
-HEX = set("0123456789abcdef")
-
-
-def die(message: str) -> "None":
-    print(message, file=sys.stderr)
-    raise SystemExit(1)
-
-
-def absolute(value: object, label: str) -> str:
-    if not isinstance(value, str) or not value.startswith("/"):
-        die(f"{label} must be an absolute path")
-    return value
-
-
-def sha256(value: object, label: str) -> str:
-    if not isinstance(value, str) or len(value) != 64 or not set(value) <= HEX:
-        die(f"{label} must be a lowercase hex sha256")
-    return value
-
-
-path, schema_version, destinations, datasets = (
-    sys.argv[1],
-    int(sys.argv[2]),
-    [item for item in sys.argv[3].split(",") if item],
-    [item for item in sys.argv[4].split(",") if item],
-)
-
+path, schema_version, tiers_csv, groups_csv = sys.argv[1:5]
+tiers = [item for item in tiers_csv.split(",") if item]
 try:
     with open(path, encoding="utf-8") as handle:
-        doc = json.load(handle)
+        plan = json.load(handle)
 except (OSError, json.JSONDecodeError) as exc:
-    die(f"cannot read manifest: {exc}")
-
-if not isinstance(doc, dict):
-    die("manifest is not a JSON object")
-
-restore = doc.pop("restore", None)
-claimed = doc.pop("manifest_hash", None)
-missing = MANIFEST_KEYS - set(doc)
-extra = set(doc) - MANIFEST_KEYS
+    raise SystemExit(f"cannot read host plan: {exc}")
+if plan.get("schema_version") != int(schema_version):
+    raise SystemExit("host plan schema_version does not match")
+roots = {tier["name"]: tier["repository_root"] for tier in plan.get("tiers", [])}
+missing = set(tiers) - set(roots)
 if missing:
-    die(f"manifest is missing fields: {', '.join(sorted(missing))}")
-if extra:
-    die(f"manifest has unknown fields: {', '.join(sorted(extra))}")
-canonical = json.dumps(
-    doc, sort_keys=True, separators=(",", ":"), ensure_ascii=True
-).encode("utf-8")
-if not isinstance(claimed, str) or claimed != hashlib.sha256(canonical).hexdigest():
-    die("manifest fails its content hash; only a signed generation manifest is accepted")
-
-if doc.get("complete") is not True:
-    die("generation manifest is not marked complete")
-if int(doc.get("version", 0)) < 1:
-    die("generation manifest has no version")
-if not str(doc.get("generation_id", "")).strip():
-    die("generation manifest has no generation id")
-if not str(doc.get("group_id", "")).strip():
-    die("generation manifest has no group")
-if int(doc.get("schema_version", 0)) != schema_version:
-    die(f"generation schema is {doc.get('schema_version')}, expected {schema_version}")
-
-refs = doc.get("destinations") or []
-if not isinstance(refs, list) or not refs:
-    die("generation manifest lists no destinations")
-names = [str(ref.get("destination", "")) for ref in refs]
-if any(not name for name in names):
-    die("generation manifest has an empty destination")
-if len(names) != len(set(names)):
-    die("generation manifest repeats a destination")
-for ref in refs:
-    if not str(ref.get("snapshot_id", "")).strip():
-        die(f"destination {ref.get('destination')} has no snapshot id")
-missing_destinations = set(destinations) - set(names)
-if missing_destinations:
-    die(f"generation is missing required destinations: {', '.join(sorted(missing_destinations))}")
-
-dataset_pairs = doc.get("datasets") or []
-dataset_names = []
-snapshots = {str(ref.get("snapshot_id")) for ref in refs}
-for pair in dataset_pairs:
-    if not isinstance(pair, list) or len(pair) != 2:
-        die("generation datasets are malformed")
-    dataset_names.append(str(pair[0]))
-    if not str(pair[1]).strip():
-        die(f"dataset {pair[0]} has no snapshot id")
-    snapshots.add(str(pair[1]))
-if len(dataset_names) != len(set(dataset_names)):
-    die("generation manifest repeats a dataset")
-missing_datasets = set(datasets) - set(dataset_names)
-if missing_datasets:
-    die(f"generation is missing required datasets: {', '.join(sorted(missing_datasets))}")
-
-print(
-    "\t".join(
-        ["#", doc["generation_id"], doc["group_id"], str(doc["created_at"])]
-    )
-)
-
-if not isinstance(restore, list) or not restore:
-    die("manifest has no restore mapping")
-
-for entry in restore:
-    if not isinstance(entry, dict):
-        die("restore entry is not an object")
-    kind = str(entry.get("kind", "restic"))
-    if kind not in ("restic", "zfs"):
-        die(f"unknown restore kind: {kind}")
-    repository = str(entry.get("repository", "")) or "-"
-    password_file = str(entry.get("password_file", "")) or "-"
-    snapshot = str(entry.get("snapshot", ""))
-    target = absolute(entry.get("target"), "restore target")
-    source = str(entry.get("source", "")) or "-"
-    dataset = str(entry.get("dataset", "")) or "-"
-    if kind == "restic" and repository == "-":
-        die("restic restore entry has no repository")
-    if kind == "restic" and password_file == "-":
-        die("restic restore entry has no password file")
-    if not snapshot.strip() or snapshot == "latest":
-        die("a generation must name its snapshot; latest is not allowed")
-    if snapshot not in snapshots:
-        die(f"restore snapshot {snapshot} is not part of this generation")
-    if kind == "zfs":
-        if source == "-":
-            die("zfs restore entry has no source snapshot")
-        if dataset == "-" or dataset.startswith("/") or " " in dataset:
-            die("zfs restore entry needs a relative dataset name")
-    print("\t".join([kind, repository, password_file, snapshot, target, source, dataset]))
+    raise SystemExit(f"host plan has no tier {', '.join(sorted(missing))}")
+known = [group["id"] for group in plan.get("groups", [])]
+selected = [item for item in groups_csv.split(",") if item] or known
+unknown = set(selected) - set(known)
+if unknown:
+    raise SystemExit(f"unknown groups: {', '.join(sorted(unknown))}")
+for group in plan["groups"]:
+    if group["id"] not in selected:
+        continue
+    missing_group_tiers = set(tiers) - set(group["tiers"])
+    if missing_group_tiers:
+        raise SystemExit(
+            f"group {group['id']} does not target "
+            + ", ".join(sorted(missing_group_tiers))
+        )
+    for tier_name in tiers:
+        repository = f"{roots[tier_name].rstrip('/')}/{group['id']}"
+        print(
+            "\t".join(
+                [
+                    group["id"],
+                    group["path"],
+                    plan["snapshot_root"],
+                    tier_name,
+                    repository,
+                    plan["password_file"],
+                ]
+            )
+        )
 PY
-then
-  cat "$work/error" >&2
-  exit 1
-fi
-[[ -s $work/plan ]] || die "generation manifest produced an empty plan"
+[[ -s $work/groups ]] || die "the host plan selected no groups"
 
-# The first line is the selected generation; the rest is the restore map.
-read -r generation_line <"$work/plan"
-generation_id=$(printf '%s' "$generation_line" | cut -f2)
-printf 'generation: %s\n' "$generation_id" >&2
-sed '1d' "$work/plan" >"$work/steps"
-
-python3 - "$manifest" >"$work/hashes" <<'PY'
+# Print the newest snapshot id that covers the group's subtree, or fail.
+newest_snapshot() {
+  local repo=$1 path=$2 snapshot_root=$3 password_file=$4
+  restic snapshots --json --latest 1 --repo "$repo" --password-file "$password_file" \
+    | python3 -c '
 import json
 import sys
 
-with open(sys.argv[1], encoding="utf-8") as handle:
-    doc = json.load(handle)
-for path, digest in doc.get("content_hashes") or []:
-    print("\t".join([path, digest]))
-PY
-
-verify_content() {
-  local root=$1
-  [[ -s $work/hashes ]] || return 0
-  local path expected file actual
-  while IFS=$'\t' read -r path expected; do
-    file="$root/${path#/}"
-    [[ -f $file ]] || die "restored content is missing: $file"
-    actual=$(sha256sum "$file" | awk '{print $1}')
-    [[ $actual == "$expected" ]] || die "content hash mismatch: $file"
-  done <"$work/hashes"
-  printf 'verified %s content hash(es) under %s\n' "$(wc -l <"$work/hashes")" "$root"
+path, snapshot_root = sys.argv[1:3]
+snapshots = json.load(sys.stdin)
+if not snapshots:
+    raise SystemExit("repository has no snapshot")
+expected = {snapshot_root.rstrip("/") + "/" + path, "/" + path}
+paths = snapshots[0].get("paths") or []
+if not any(
+    path in expected or path.startswith(candidate.rstrip("/") + "/")
+    for path in paths
+    for candidate in expected
+):
+    raise SystemExit("newest snapshot does not cover the group subtree")
+print(snapshots[0]["short_id"])
+' "$path" "$snapshot_root"
 }
 
+# Every required tier must hold a snapshot that covers the group; the first tier
+# in plan order that has one is the restore source.
+while IFS=$'\t' read -r group_id path snapshot_root tier repository password_file; do
+  [[ $verify_only -eq 1 ]] && break
+  snapshot=$(newest_snapshot "$repository" "$path" "$snapshot_root" "$password_file") \
+    || die "$tier/$group_id could not be verified"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$group_id" "$path" "$tier" "$repository" "$snapshot" "$password_file" >>"$work/restore"
+done <"$work/groups"
+
 if [[ $verify_only -eq 1 ]]; then
-  verify_content "$target_root"
+  while IFS=$'\t' read -r group_id path snapshot_root tier repository password_file; do
+    newest_snapshot "$repository" "$path" "$snapshot_root" "$password_file" >/dev/null \
+      || die "$tier/$group_id is missing a covering snapshot"
+    printf 'verified %s in %s\n' "$group_id" "$tier"
+  done <"$work/groups"
   exit 0
 fi
 
+# Keep one restore line per group: the first tier that proved it has a snapshot.
+python3 - "$work/restore" >"$work/steps" <<'PY'
+import sys
+
+seen = set()
+with open(sys.argv[1], encoding="utf-8") as handle:
+    for line in handle:
+        group_id = line.split("\t", 1)[0]
+        if group_id in seen:
+            continue
+        seen.add(group_id)
+        sys.stdout.write(line)
+PY
+
 if [[ $apply -ne 1 ]]; then
   printf 'plan (target root %s):\n' "$target_root"
-  while IFS=$'\t' read -r kind repository _password_file snapshot target _source _dataset; do
-    printf '  %s %s %s -> %s\n' "$kind" "$repository" "$snapshot" "$target_root/${target#/}"
+  while IFS=$'\t' read -r group_id path tier repository snapshot _password_file; do
+    printf '  %s: %s snapshot %s -> %s\n' "$group_id" "$tier" "$snapshot" "$target_root"
   done <"$work/steps"
-  printf 'dry run: set HOMELAB_RESTORE_APPLY=1 to restore this generation\n'
+  printf 'dry run: set HOMELAB_RESTORE_APPLY=1 to restore these groups\n'
   exit 0
 fi
 
@@ -305,37 +207,12 @@ check_restore_target() {
   [[ $mounted != "$dest" ]] || die "$dest is a live mount; fence writers and pass --allow-live to override"
 }
 
-while IFS=$'\t' read -r kind repository password_file snapshot target source dataset; do
-  [[ $repository == '-' ]] && repository=""
-  [[ $password_file == '-' ]] && password_file=""
-  [[ $source == '-' ]] && source=""
-  [[ $dataset == '-' ]] && dataset=""
-  dest="$target_root/${target#/}"
-  [[ $dest == "$target_root"/* ]] || die "restore target escapes $target_root: $target"
-  case "$dest" in
-    *..*) die "restore target must not contain ..: $dest" ;;
-  esac
-  check_restore_target "$dest"
-  mkdir -p "$(dirname "$dest")"
-  case "$kind" in
-    restic)
-      restic -r "$repository" --password-file "$password_file" snapshots "$snapshot" >/dev/null
-      # restic strips the leading slash itself, so the snapshot's /srv/notes
-      # lands at $target_root/srv/notes and every content hash still resolves.
-      restic -r "$repository" --password-file "$password_file" restore \
-        "$snapshot" --target "$target_root" --verify
-      ;;
-    zfs)
-      # Never -F by default: a receive must not destroy a newer dataset that
-      # already exists at the target. -F only behind the explicit fenced flag.
-      flags=(-u)
-      if [[ $allow_live -eq 1 ]]; then
-        flags=(-F -u)
-      fi
-      zfs send -p "$source" | zfs receive "${flags[@]}" "$dataset"
-      ;;
-  esac
-done <"$work/steps"
+while IFS=$'\t' read -r group_id _path _tier repository snapshot password_file; do
+  check_restore_target "$target_root"
+  # restic strips the leading slash itself, so /srv/books lands at
+  # $target_root/srv/books and the group root stays reconstructible.
+  restic --repo "$repository" --password-file "$password_file" restore \
+    "$snapshot" --target "$target_root" --verify
+done <"$work/restore"
 
-verify_content "$target_root"
 printf 'restore complete; writers stay fenced until the old writer is revoked and the new epoch is verified\n'

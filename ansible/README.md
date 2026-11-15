@@ -15,7 +15,7 @@ arrive from the operator or the private inventory.
 | `group_vars/all.yml` | Documented knobs and safe defaults: LUKS, ZFS recovery groups, k3s pins, image keys |
 | `playbooks/site.yml` | Full convergence, role by role |
 | `playbooks/check.yml` | Inventory validation plus `site.yml` in check mode; refuses a mutating run |
-| `playbooks/recover.yml` | Clean-room storage import and verified-generation restore outline |
+| `playbooks/recover.yml` | Clean-room storage import and newest-snapshot restore outline |
 | `playbooks/rescue.yml` | Applies independent rescue access, then refuses to pass until two SSH paths authenticate |
 | `roles/base` | Packages, timezone, sysctl, users, SSH, unattended-upgrades, journald |
 | `roles/luks` | LUKS2 keyfile slots and crypttab; disk initialisation only under `--tags destructive` |
@@ -25,6 +25,7 @@ arrive from the operator or the private inventory.
 | `roles/nvidia` | Driver and container-toolkit branch pins; device plugin owns no host config |
 | `roles/kata` | Kata/QEMU packages and the `kata-qemu` RuntimeClass |
 | `roles/data_plane` | Five containerised units, env files, hardening, timers |
+| `roles/backup` | Pinned restic, `/etc/homelab/backup.json`, the recursive-snapshot unit, per-group repositories, retention |
 | `roles/recovery` | Sentinel, portal constraints, clean-room entrypoint |
 | `roles/rescue` | Independent sshd, optional break-glass account, Cloudflare rescue tunnel, optional Tailscale/WireGuard |
 
@@ -87,12 +88,11 @@ $EDITOR inventory/hosts.yml
 ```sh
 # 3. First boot only: initialise the LUKS2 containers. A destructive run needs
 #    all three of: --tags destructive, a per-host device allow-list, and a
-#    reviewed migration evidence file. There is no global boolean.
+#    passing plan-driven backup gate. There is no global boolean.
 #    (Review the inventory first; --check cannot review a pool that does not
 #    exist yet.)
 ansible-playbook -i inventory/hosts.yml playbooks/site.yml \
-  --tags destructive \
-  -e homelab_migration_evidence=/abs/path/evidence.json
+  --tags destructive
 
 # 4. Apply every non-destructive role: crypttab, volume open, pool import,
 #    datasets, /srv layout, k3s, data-plane units. Writers and the backup timer
@@ -106,20 +106,20 @@ ansible-playbook -i inventory/hosts.yml playbooks/check.yml --check --diff
 # 6. Same drift report for a single host while iterating.
 ansible-playbook -i inventory/hosts.yml playbooks/site.yml --check --diff --limit smortress
 
-# 7. Start the writers and the backup timer only after the evidence gate, one
-#    explicit step at a time.
-ansible-playbook -i inventory/hosts.yml playbooks/site.yml \
-  --tags writers -e homelab_migration_evidence=/abs/path/evidence.json
-ansible-playbook -i inventory/hosts.yml playbooks/site.yml \
-  --tags backup -e homelab_migration_evidence=/abs/path/evidence.json
+# 7. Start the writers and the backup timers only after the migration gate,
+#    one explicit step at a time.
+ansible-playbook -i inventory/hosts.yml playbooks/site.yml --tags writers
+ansible-playbook -i inventory/hosts.yml playbooks/site.yml --tags backup
 ```
 
 No playbook performs a destructive disk operation without **all** of
 `--tags destructive`, a device in that host's `homelab_destructive_device_ids`,
-and a passing migration evidence gate. The evidence file is the raw input to
-`python3 -m data_plane.migration preflight`; Ansible re-runs the shared module
-and requires fresh verified backups on every required destination, a scratch
-restore, a boot-tested non-wiped 970, and two independent verified SSH paths.
+and a passing plan-driven backup gate. The gate runs
+`python3 -m data_plane.migration preflight --plan /etc/homelab/backup.json` on
+the host, against the plan the backup role installs, and requires a fresh,
+fully path-covered snapshot on every tier, a structural `restic check` on every
+repository, and — with `-e homelab_migration_read_data=true` — a `--read-data`
+pass on each group's primary. There is no evidence file to produce or pass.
 `destructive` covers LUKS container creation, inner-filesystem creation, and
 `zpool create`; formatting backup filesystems uses the same gate and never runs
 untagged.
@@ -130,9 +130,10 @@ untagged.
 contains stable `/dev/disk/by-id/` paths. The by-id name carries the serial or
 WWN; each `luks_volumes` entry additionally declares `serial` or `wwn` and the
 expected `size_bytes`. The LUKS role resolves every target to one canonical
-disk, refuses the running root disk, refuses the 970 rollback disk unless the
-evidence marks `rollback_disk.released: true`, and refuses a device with an
-existing filesystem or pool unless the entry sets `allow_existing: true`.
+disk, refuses the running root disk, refuses the 970 rollback disk unless
+`homelab_rollback_disk_device` names it and `homelab_rollback_disk_released` is
+true, and refuses a device with an existing filesystem or pool unless the entry
+sets `allow_existing: true`.
 Before any inner filesystem or pool is created, the container must carry a
 second keyslot (the offline passphrase) and a root-only header backup at
 `<luks_keyfile_dir>/<name>.header`.
@@ -184,18 +185,18 @@ when `ssh.service` is not running and enabled on the host. Keep the LAN path
 and the independent rescue path working at all times; a cutover, reboot, or
 970 conversion is not started while either one is unverified.
 
-The Python preflight records the same facts and refuses the `protect_old` and
-`cutover` gates without them:
+The plan-driven backup gate is separate and publishes `gate_ready`, which
+`protect_old` and `cutover` also require:
 
 ```sh
 cd ..
 export PYTHONPATH="$PWD/libs"
-python3 -m data_plane.migration preflight evidence.json
+python3 -m data_plane.migration preflight --plan /etc/homelab/backup.json \
+  --json
 ```
 
-Both checks are required: Ansible proves the paths from the controller, and
-the preflight records fresh, structured evidence that `protect_old` and
-`cutover` can consume.
+Both checks are required: Ansible proves the SSH paths from the controller, and
+the backup gate proves the repositories from the host plan.
 
 ## What a host run produces
 
@@ -210,9 +211,25 @@ the preflight records fresh, structured evidence that `protect_old` and
   with `zpool import -N -d <pinned mapper>`, and only when that device is in the
   host's allow-list.
 - Datasets: `tank/photos`, `tank/music`, `tank/books`, `tank/notes`,
-  `tank/wallpapers`, `tank/memory/local`, `tank/memory/external`. The
-  `tank/memory` parent is `canmount=off`; `compression=zstd`, `atime=off`, and
-  per-group `recordsize` are enforced on every run.
+  `tank/wallpapers`, `tank/memory/local`, `tank/memory/external`, plus the
+  browsing, finance, mail, and data-plane control-state groups. Parent datasets
+  are `canmount=off`; `compression=zstd`, `atime=off`, and per-group
+  `recordsize` are enforced on every run.
+- `/etc/homelab/backup.json` is the one non-secret host plan: one recursive
+  snapshot dataset (`tank`), the stable snapshot root
+  `/run/data-plane/current`, one shared password file, the nvme/hdd/r2 tiers,
+  and one entry per group (`id`, `path`, `cadence`, `tiers`).
+  `scripts/render-recovery-groups.py --host-plan` prints the same document for
+  tests. There is no generation manifest and no per-snapshot tag.
+- `/var/backups/primary/restic/<group>` and
+  `/var/backups/secondary/restic/<group>` are the local per-group repositories;
+  `s3:https://<account>.r2.cloudflarestorage.com/homelab-restic/<group>` is the
+  off-site copy. One root-only `data-plane.password` opens all of them.
+- `homelab-backup@fast.service` and `homelab-backup@media.service` take one
+  recursive snapshot, bind-mount it once, write each due group to its NVMe
+  repository, and `restic copy` the encrypted repository to HDD and R2. The
+  unit reads `/var/lib/sbctl` (the `host-keys` group) from the live path because
+  it is not on the pool.
 - `/var/backups/primary` and `/var/backups/secondary` are fstab entries with
   `noauto,nodev,nosuid,noexec`. Backup units carry `RequiresMountsFor` and the
   matching `systemd-cryptsetup@…` requirements; a missing repository fails the
@@ -232,75 +249,36 @@ the preflight records fresh, structured evidence that `protect_old` and
 
 `recover.yml` assumes `site.yml` has already run on the clean host, so crypttab,
 fstab, the zfs units, and the restore scripts exist. It fences every writer
-(and the backup timer) first, restores into a scratch target, verifies the
-restored content hashes, and only then re-enables the writers. A dry run touches
-nothing. The recovery portal is never a prerequisite.
+(and the backup timers) first, restores the newest snapshot of every selected
+group into a scratch target, verifies that every required tier holds a covering
+snapshot, and only then re-enables the writers. A dry run touches nothing. The
+recovery portal is never a prerequisite.
 
-The manifest is the JSON written by
-`data_plane.backup.generations.write_manifest` (all manifest fields plus
-`manifest_hash`) with one extra top-level `restore` list. `complete: true` alone
-is not accepted: the entrypoint recomputes the content hash, requires the schema
-and every required destination, and refuses a `latest` snapshot.
-
-```json
-{
-  "version": 1,
-  "generation_id": "notes-20261114T0530",
-  "group_id": "notes",
-  "created_at": 1800000000.0,
-  "datasets": [["tank/notes", "tank/notes@notes-20261114T0530"]],
-  "sqlite": [],
-  "app_versions": [],
-  "content_hashes": [["/srv/notes/index.db", "<64-hex sha256>"]],
-  "dependencies": [],
-  "destinations": [
-    {
-      "destination": "primary",
-      "snapshot_id": "<restic snapshot id>",
-      "created_at": 1800000000.0,
-      "group_id": "notes",
-      "dataset": "tank/notes",
-      "parent": null,
-      "verified": true
-    }
-  ],
-  "complete": true,
-  "schema_version": 1,
-  "release": "",
-  "manifest_hash": "<64-hex sha256>",
-  "restore": [
-    {
-      "kind": "restic",
-      "repository": "/var/backups/primary/personal",
-      "password_file": "/etc/restic/personal.key",
-      "snapshot": "<manifest snapshot id>",
-      "target": "/srv"
-    }
-  ]
-}
-```
+There is no generation manifest. The ZFS snapshot name is the generation id,
+completeness is the newest snapshot of `<repository_root>/<group>` in every
+required tier whose `paths` cover the group subtree, and restic's authenticated
+repository format is the integrity boundary. The entrypoint restores into a
+scratch root and never accepts `latest` by accident: it queries
+`restic snapshots --json --latest 1`.
 
 ```sh
 # Dry run: opens storage, prints the plan. It does not fence writers.
 ansible-playbook -i inventory/hosts.yml playbooks/recover.yml \
   --tags destructive \
-  -e homelab_recovery_confirm=true \
-  -e homelab_recovery_generation_manifest=/root/generation.json
+  -e homelab_recovery_confirm=true
 
-# Apply only after the plan is reviewed. `latest` is rejected by the entrypoint.
+# Apply only after the plan is reviewed. Optionally narrow the groups:
 ansible-playbook -i inventory/hosts.yml playbooks/recover.yml \
   --tags destructive \
   -e homelab_recovery_confirm=true \
   -e homelab_recovery_apply=true \
-  -e homelab_recovery_generation_manifest=/root/generation.json
+  -e homelab_recovery_groups=notes,host-keys
 ```
 
 The restore target must be a scratch directory: the entrypoint refuses a live
 mount or a target holding `.homelab-writer-active` unless
-`homelab_recovery_allow_live=true` is passed after fencing. `zfs receive` never
-uses `-F` in the default path; the fenced override is the only way to enable
-it. The sentinel check warns, but does not fail, on a missing backup mount or a
-stopped portal.
+`homelab_recovery_allow_live=true` is passed after fencing. The sentinel check
+warns, but does not fail, on a missing backup mount or a stopped portal.
 
 Writers stay disabled after restore until the old writer is fenced or revoked,
 a new epoch exists, old approvals are canceled, and anti-entropy completes. Set

@@ -44,12 +44,11 @@
   roles:
     - storage
 
-- name: Install the pinned restic repositories and the host snapshot units
+- name: Install the backup unit, host plan, and per-group restic repositories
   hosts: storage_hosts
   vars_files:
     - ../group_vars/backup.yml
   roles:
-    - restic
     - backup
 
 - name: Install the pinned k3s node
@@ -95,20 +94,12 @@
     - name: Require the migration evidence before enabling backups
       ansible.builtin.include_tasks: tasks/migration-gate.yml
 
-    - name: Start the backup controller timer
-      ansible.builtin.systemd_service:
-        name: homelab-backup-controller.timer
-        enabled: true
-        state: started
-        daemon_reload: true
-
-    - name: Start the host snapshot timers and request path
+    - name: Start the host backup timers
       ansible.builtin.systemd_service:
         name: "{{ item }}"
         enabled: true
         state: started
         daemon_reload: true
       loop: >-
-        {{ ['homelab-snapshot.timer', 'homelab-snapshot.path']
-           + (backup_cadences.keys() | map('regex_replace', '^', 'homelab-snapshot-')
-              | map('regex_replace', '$', '.timer') | list) }}
+        {{ backup_cadences.keys() | map('regex_replace', '^', 'homelab-backup-')
+           | map('regex_replace', '$', '.timer') | list }}

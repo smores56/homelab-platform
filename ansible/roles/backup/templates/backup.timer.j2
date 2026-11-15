@@ -1,0 +1,11 @@
+[Unit]
+Description=Backup cadence {{ backup_cadence }}
+
+[Timer]
+OnCalendar={{ backup_calendar }}
+RandomizedDelaySec={{ backup_delay }}
+Persistent=true
+Unit=homelab-backup@{{ backup_cadence }}.service
+
+[Install]
+WantedBy=timers.target

@@ -2,353 +2,76 @@
   "schema_version": 1,
   "groups": [
     {
-      "group_id": "books",
-      "pool": "tank",
-      "parent_dataset": "tank/books",
-      "members": [
-        {
-          "name": "books",
-          "dataset": "tank/books",
-          "mount": "/srv/books",
-          "writer": "opdshelf"
-        }
-      ],
-      "required_config": [
-        "/etc/data-plane/recovery-groups.json"
-      ],
-      "destination_tiers": [
-        "nvme",
-        "hdd",
-        "r2"
-      ],
-      "destinations": [
-        "nvme-general",
-        "hdd-general",
-        "r2-general"
-      ],
-      "cadence": "media",
-      "databases": [],
-      "notes": ""
+      "id": "books",
+      "label": "Books",
+      "repo": "s3:https://ACCOUNT.r2.cloudflarestorage.com/homelab-restic/books",
+      "data_root": "/srv/books"
     },
     {
-      "group_id": "memory-external",
-      "pool": "tank",
-      "parent_dataset": "tank/memory/external",
-      "members": [
-        {
-          "name": "external",
-          "dataset": "tank/memory/external",
-          "mount": "/srv/memory/external",
-          "writer": "external-profile"
-        }
-      ],
-      "required_config": [
-        "/etc/data-plane/recovery-groups.json"
-      ],
-      "destination_tiers": [
-        "nvme",
-        "hdd",
-        "r2"
-      ],
-      "destinations": [
-        "nvme-personal",
-        "hdd-personal",
-        "r2-personal"
-      ],
-      "cadence": "small",
-      "databases": [],
-      "notes": ""
+      "id": "memory-external",
+      "label": "Memory external",
+      "repo": "s3:https://ACCOUNT.r2.cloudflarestorage.com/homelab-restic/memory-external",
+      "data_root": "/srv/memory/external"
     },
     {
-      "group_id": "memory-local",
-      "pool": "tank",
-      "parent_dataset": "tank/memory/local",
-      "members": [
-        {
-          "name": "local",
-          "dataset": "tank/memory/local",
-          "mount": "/srv/memory/local",
-          "writer": "local-profile"
-        }
-      ],
-      "required_config": [
-        "/etc/data-plane/recovery-groups.json"
-      ],
-      "destination_tiers": [
-        "nvme",
-        "hdd",
-        "r2"
-      ],
-      "destinations": [
-        "nvme-personal",
-        "hdd-personal",
-        "r2-personal"
-      ],
-      "cadence": "small",
-      "databases": [],
-      "notes": ""
+      "id": "memory-local",
+      "label": "Memory local",
+      "repo": "s3:https://ACCOUNT.r2.cloudflarestorage.com/homelab-restic/memory-local",
+      "data_root": "/srv/memory/local"
     },
     {
-      "group_id": "music",
-      "pool": "tank",
-      "parent_dataset": "tank/music",
-      "members": [
-        {
-          "name": "music",
-          "dataset": "tank/music",
-          "mount": "/srv/music",
-          "writer": "navidrome"
-        }
-      ],
-      "required_config": [
-        "/etc/data-plane/recovery-groups.json"
-      ],
-      "destination_tiers": [
-        "nvme",
-        "hdd",
-        "r2"
-      ],
-      "destinations": [
-        "nvme-personal",
-        "hdd-personal",
-        "r2-personal"
-      ],
-      "cadence": "media",
-      "databases": [],
-      "notes": ""
+      "id": "music",
+      "label": "Music",
+      "repo": "s3:https://ACCOUNT.r2.cloudflarestorage.com/homelab-restic/music",
+      "data_root": "/srv/music"
     },
     {
-      "group_id": "notes",
-      "pool": "tank",
-      "parent_dataset": "tank/notes",
-      "members": [
-        {
-          "name": "notes",
-          "dataset": "tank/notes",
-          "mount": "/srv/notes",
-          "writer": "syncthing"
-        }
-      ],
-      "required_config": [
-        "/etc/data-plane/recovery-groups.json"
-      ],
-      "destination_tiers": [
-        "nvme",
-        "hdd",
-        "r2"
-      ],
-      "destinations": [
-        "nvme-personal",
-        "hdd-personal",
-        "r2-personal"
-      ],
-      "cadence": "small",
-      "databases": [],
-      "notes": ""
+      "id": "notes",
+      "label": "Notes",
+      "repo": "s3:https://ACCOUNT.r2.cloudflarestorage.com/homelab-restic/notes",
+      "data_root": "/srv/notes"
     },
     {
-      "group_id": "photos",
-      "pool": "tank",
-      "parent_dataset": "tank/photos",
-      "members": [
-        {
-          "name": "photos",
-          "dataset": "tank/photos",
-          "mount": "/srv/photos",
-          "writer": "immich-server"
-        }
-      ],
-      "required_config": [
-        "/etc/data-plane/recovery-groups.json"
-      ],
-      "destination_tiers": [
-        "nvme",
-        "hdd",
-        "r2"
-      ],
-      "destinations": [
-        "nvme-personal",
-        "hdd-personal",
-        "r2-personal"
-      ],
-      "cadence": "media",
-      "databases": [],
-      "notes": ""
+      "id": "photos",
+      "label": "Photos",
+      "repo": "s3:https://ACCOUNT.r2.cloudflarestorage.com/homelab-restic/photos",
+      "data_root": "/srv/photos"
     },
     {
-      "group_id": "wallpapers",
-      "pool": "tank",
-      "parent_dataset": "tank/wallpapers",
-      "members": [
-        {
-          "name": "wallpapers",
-          "dataset": "tank/wallpapers",
-          "mount": "/srv/wallpapers",
-          "writer": "syncthing"
-        }
-      ],
-      "required_config": [
-        "/etc/data-plane/recovery-groups.json"
-      ],
-      "destination_tiers": [
-        "nvme",
-        "hdd",
-        "r2"
-      ],
-      "destinations": [
-        "nvme-personal",
-        "hdd-personal",
-        "r2-personal"
-      ],
-      "cadence": "media",
-      "databases": [],
-      "notes": ""
+      "id": "wallpapers",
+      "label": "Wallpapers",
+      "repo": "s3:https://ACCOUNT.r2.cloudflarestorage.com/homelab-restic/wallpapers",
+      "data_root": "/srv/wallpapers"
     },
     {
-      "group_id": "data-plane-state",
-      "pool": "tank",
-      "parent_dataset": "tank/data-plane",
-      "members": [
-        {
-          "name": "events",
-          "dataset": "tank/data-plane/events",
-          "mount": "/var/lib/data-plane/events",
-          "writer": "event-service"
-        },
-        {
-          "name": "intents",
-          "dataset": "tank/data-plane/intents",
-          "mount": "/var/lib/data-plane/intents",
-          "writer": "event-service"
-        },
-        {
-          "name": "manifests",
-          "dataset": "tank/data-plane/manifests",
-          "mount": "/var/lib/data-plane/manifests",
-          "writer": "event-service"
-        }
-      ],
-      "required_config": [
-        "/etc/data-plane/recovery-groups.json"
-      ],
-      "destination_tiers": [
-        "nvme",
-        "hdd",
-        "r2"
-      ],
-      "destinations": [
-        "nvme-infrastructure",
-        "hdd-infrastructure",
-        "r2-infrastructure"
-      ],
-      "cadence": "small",
-      "databases": [],
-      "notes": ""
+      "id": "data-plane-state",
+      "label": "Data plane state",
+      "repo": "s3:https://ACCOUNT.r2.cloudflarestorage.com/homelab-restic/data-plane-state",
+      "data_root": "/var/lib/data-plane"
     },
     {
-      "group_id": "browsing",
-      "pool": "tank",
-      "parent_dataset": "tank/browsing",
-      "members": [
-        {
-          "name": "catalog",
-          "dataset": "tank/browsing/catalog",
-          "mount": "/var/lib/data-plane/browsing",
-          "writer": "collector-brave"
-        },
-        {
-          "name": "raw",
-          "dataset": "tank/browsing/raw",
-          "mount": "/srv/browsing",
-          "writer": "collector-brave"
-        }
-      ],
-      "required_config": [
-        "/etc/data-plane/recovery-groups.json"
-      ],
-      "destination_tiers": [
-        "nvme",
-        "hdd",
-        "r2"
-      ],
-      "destinations": [
-        "nvme-personal",
-        "hdd-personal",
-        "r2-personal"
-      ],
-      "cadence": "small",
-      "databases": [],
-      "notes": ""
+      "id": "browsing",
+      "label": "Browsing",
+      "repo": "s3:https://ACCOUNT.r2.cloudflarestorage.com/homelab-restic/browsing",
+      "data_root": "/srv/browsing"
     },
     {
-      "group_id": "finance",
-      "pool": "tank",
-      "parent_dataset": "tank/finance",
-      "members": [
-        {
-          "name": "ledger",
-          "dataset": "tank/finance/ledger",
-          "mount": "/srv/finance",
-          "writer": "collector-finance"
-        },
-        {
-          "name": "hledger",
-          "dataset": "tank/finance/hledger",
-          "mount": "/var/lib/data-plane/hledger",
-          "writer": "finance-projection"
-        }
-      ],
-      "required_config": [
-        "/etc/data-plane/recovery-groups.json"
-      ],
-      "destination_tiers": [
-        "nvme",
-        "hdd",
-        "r2"
-      ],
-      "destinations": [
-        "nvme-personal",
-        "hdd-personal",
-        "r2-personal"
-      ],
-      "cadence": "small",
-      "databases": [],
-      "notes": ""
+      "id": "finance",
+      "label": "Finance",
+      "repo": "s3:https://ACCOUNT.r2.cloudflarestorage.com/homelab-restic/finance",
+      "data_root": "/srv/finance"
     },
     {
-      "group_id": "mail",
-      "pool": "tank",
-      "parent_dataset": "tank/mail",
-      "members": [
-        {
-          "name": "messages",
-          "dataset": "tank/mail/messages",
-          "mount": "/srv/mail",
-          "writer": "collector-tuta"
-        },
-        {
-          "name": "index",
-          "dataset": "tank/mail/index",
-          "mount": "/var/cache/mail-index",
-          "writer": "mail-indexer"
-        }
-      ],
-      "required_config": [
-        "/etc/data-plane/recovery-groups.json"
-      ],
-      "destination_tiers": [
-        "nvme",
-        "hdd",
-        "r2"
-      ],
-      "destinations": [
-        "nvme-personal",
-        "hdd-personal",
-        "r2-personal"
-      ],
-      "cadence": "small",
-      "databases": [],
-      "notes": ""
+      "id": "mail",
+      "label": "Mail",
+      "repo": "s3:https://ACCOUNT.r2.cloudflarestorage.com/homelab-restic/mail",
+      "data_root": "/srv/mail"
+    },
+    {
+      "id": "host-keys",
+      "label": "Host keys",
+      "repo": "s3:https://ACCOUNT.r2.cloudflarestorage.com/homelab-restic/host-keys",
+      "data_root": "/var/lib/sbctl"
     }
   ]
 }

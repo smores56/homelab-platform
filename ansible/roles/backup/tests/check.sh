@@ -14,51 +14,132 @@ bad() { fail=$((fail + 1)); printf 'FAIL %s\n' "$1"; }
 check() { if "$@" >/dev/null 2>&1; then ok "$*"; else bad "$*"; fi; }
 refute() { if "$@" >/dev/null 2>&1; then bad "$*"; else ok "not: $*"; fi; }
 
-check grep -q 'AssertPathIsMountPoint={{ mount }}' "$role/templates/snapshot.service.j2"
-check grep -q 'backup_pending_host_groups' "$role/templates/snapshot.service.j2"
-check grep -q 'RequiresMountsFor=' "$role/templates/snapshot.service.j2"
-check grep -q 'zfs_datasets' "$role/templates/snapshot.service.j2"
-check grep -q 'backup_mounts' "$role/templates/snapshot.service.j2"
-check grep -q 'homelab-snapshot@' "$role/templates/snapshot-request.py.j2"
-check grep -q 'homelab-snapshot-request.service' "$role/templates/snapshot.path.j2"
+check test -f "$role/templates/backup.json.j2"
+check test -f "$role/templates/backup-runner.py.j2"
+check test -f "$role/templates/backup.service.j2"
+check test -f "$role/templates/backup.timer.j2"
+check test -f "$role/templates/restic-retention.py.j2"
+check test -f "$role/files/lock-drill.sh"
+refute test -d "$root/ansible/roles/restic"
+refute test -e "$role/templates/snapshot.service.j2"
+refute test -e "$role/files/checkpoint-sqlite.py"
 
-refute grep -rniE 'inmemorydestination|dryrunrunner|fixturesnapshotter' \
-  "$role/templates" "$role/defaults"
-refute grep -rnE -- '--password([^a-z-]|$)' "$role/templates" "$role/tasks"
-refute grep -rnE 'RESTIC_PASSWORD=|password:[[:space:]]+[A-Za-z0-9]' \
-  "$role/templates" "$role/tasks" "$role/defaults"
+check grep -qE '^restic_version: "[0-9]+\.[0-9]+\.[0-9]+"$' "$role/defaults/main.yml"
+check grep -qE '^[[:space:]]+(amd64|arm64): [0-9a-f]{64}$' "$role/defaults/main.yml"
+check grep -q 'checksum: "sha256:{{ restic_checksums\[restic_arch\] }}"' "$role/tasks/main.yml"
+check grep -q 'restic_version not in' "$role/tasks/main.yml"
+
+# The plan is exactly one snapshot dataset, one password, three tiers, groups.
+for needle in backup_snapshot_dataset backup_snapshot_root backup_password_file \
+  backup_tiers backup_group_specs backup_group_ids backup_cadences; do
+  check grep -q "$needle" "$role/templates/backup.json.j2" "$role/tasks/main.yml"
+done
+check grep -q "'snapshot_dataset'" "$role/templates/backup.json.j2"
+check grep -q "'password_file'" "$role/templates/backup.json.j2"
+check grep -q "'repository_root'" "$role/templates/backup.json.j2"
+
+# The host entry point executes the tested library; restic argv lives there.
+check grep -q 'sys.path.insert(0, "/opt/data-plane/lib")' "$role/templates/backup-runner.py.j2"
+check grep -q 'from data_plane.backup.plan import' "$role/templates/backup-runner.py.j2"
+check grep -q 'from data_plane.backup.runner import run_group, snapshot' "$role/templates/backup-runner.py.j2"
+check grep -q 'run_group(plan' "$role/templates/backup-runner.py.j2"
+check grep -q 'snapshot(plan' "$role/templates/backup-runner.py.j2"
+refute grep -qE '"(restic|copy|backup|forget|snapshots|init)"' "$role/templates/backup-runner.py.j2"
+refute grep -q -- '--password-file' "$role/templates/backup-runner.py.j2"
+refute grep -q 'RESTIC_PASSWORD' "$role/templates/backup-runner.py.j2"
+check grep -q 'fcntl.flock' "$role/templates/backup-runner.py.j2"
+check grep -q '"mount", "--bind"' "$role/templates/backup-runner.py.j2"
+check grep -q '"umount"' "$role/templates/backup-runner.py.j2"
+check grep -q '"zfs", "destroy"' "$role/templates/backup-runner.py.j2"
+
+# The role installs that library and the unit puts it on PYTHONPATH.
+check grep -q 'libs/data_plane' "$role/tasks/main.yml"
+check grep -q 'dest: /opt/data-plane/lib/data_plane' "$role/tasks/main.yml"
+check grep -q 'directory_mode: "0755"' "$role/tasks/main.yml"
+check grep -q 'Environment=PYTHONPATH=/opt/data-plane/lib' "$role/templates/backup.service.j2"
+check grep -q 'ReadOnlyPaths=/opt/data-plane/lib' "$role/templates/backup.service.j2"
+check grep -qE '^backup_zfs_keep_days: 7$' "$role/defaults/main.yml"
+
+check grep -q 'RequiresMountsFor=' "$role/templates/backup.service.j2"
+check grep -q 'AssertPathIsMountPoint={{ mount }}' "$role/templates/backup.service.j2"
+check grep -q -- '--cadence %i' "$role/templates/backup.service.j2"
+
+# Retention is per group repository and argv-only.
+check grep -q -- '--keep-daily' "$role/templates/restic-retention.py.j2"
+check grep -q -- '--keep-weekly' "$role/templates/restic-retention.py.j2"
+check grep -q -- '--keep-monthly' "$role/templates/restic-retention.py.j2"
+check grep -q -- '"--prune"' "$role/templates/restic-retention.py.j2"
+check grep -q -- '"--password-file"' "$role/templates/restic-retention.py.j2"
+
+check grep -q 'unlock' "$role/files/lock-drill.sh"
+check grep -q 'fresh lock was removed' "$role/files/lock-drill.sh"
+check grep -q 'expired lock survived' "$role/files/lock-drill.sh"
+refute grep -qE 'unlock[^#]*--remove-all' "$role/files/lock-drill.sh"
+
+check grep -q "stat.mode == '0600'" "$role/tasks/main.yml"
+check grep -q "stat.pw_name == 'root'" "$role/tasks/main.yml"
+check grep -q 'mode: "0700"' "$role/tasks/main.yml"
+
+# No secret on argv, no password in the tree, no retired script or helper.
+refute grep -rnE -- '--password([^a-z-]|$)' "$role/tasks" "$role/templates" "$role/files"
+refute grep -rnE 'RESTIC_PASSWORD=' "$role/tasks" "$role/templates" "$role/files"
+output=$(grep -rnE 'backup_(domains|destinations|repositories|pending_host_groups)' \
+  "$role" "$root/ansible/playbooks" "$root/ansible/group_vars/backup.yml" 2>/dev/null \
+  | grep -vF 'is not defined' || true)
+if [[ -n $output ]]; then
+  bad "retired per-domain vars are still referenced" "$output"
+else
+  ok "retired per-domain vars are not referenced"
+fi
+refute grep -rnE 'checkpoint-sqlite|manifest_hash|generation_id' \
+  "$role/tasks" "$role/templates" "$role/files"
 
 if command -v python3 >/dev/null 2>&1; then
   if python3 - "$root" <<'PY'
 import importlib.util
 import json
+import subprocess
 import sys
 from pathlib import Path
 
 root = Path(sys.argv[1])
-spec = importlib.util.spec_from_file_location(
-    "render", root / "scripts" / "render-recovery-groups.py"
-)
+renderer = root / "scripts" / "render-recovery-groups.py"
+spec = importlib.util.spec_from_file_location("render", renderer)
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 all_vars, backup_vars = module.load_group_vars()
 plan = module.build_host_plan(all_vars, backup_vars)
-repositories = {repository["name"]: repository for repository in plan["repositories"]}
-assert plan["groups"], "no backup groups"
+assert set(plan) == {
+    "schema_version",
+    "snapshot_dataset",
+    "snapshot_root",
+    "password_file",
+    "tiers",
+    "groups",
+}, set(plan)
+assert plan["schema_version"] == 1
+assert plan["snapshot_root"] == "/run/data-plane/current"
+assert [tier["name"] for tier in plan["tiers"]] == ["nvme", "hdd", "r2"]
+assert plan["password_file"].startswith("/etc/homelab/secrets/restic/")
+assert json.dumps(plan).count(".password") == 1
+groups = {group["id"]: group for group in plan["groups"]}
+assert groups, "no backup groups"
+assert groups["host-keys"]["path"] == "var/lib/sbctl"
+assert groups["host-keys"]["cadence"] == "media"
+assert groups["host-keys"]["tiers"] == ["nvme", "hdd", "r2"]
 for group in plan["groups"]:
-    assert group["destinations"], f"{group['id']} has no repository"
-    assert set(group["destinations"]) <= set(repositories), group["id"]
-    for path in group["dataset_paths"].values():
-        assert path.startswith("/") and "{snapshot}" in path, path
-for repository in repositories.values():
-    assert repository["password_file"].startswith("/etc/homelab/secrets/")
-forbidden = ("fixture", "inmemorydestination", "dryrunrunner")
-text = json.dumps(plan).lower()
-assert not any(word in text for word in forbidden), "fixture backend in plan"
+    assert group["cadence"] in {"fast", "media"}, group
+    assert group["tiers"], group
+    assert not group["path"].startswith("/"), group
+host = subprocess.run(
+    [sys.executable, str(renderer), "--host-plan"], capture_output=True, text=True
+)
+assert host.returncode == 0, host.stderr
+assert json.loads(host.stdout) == plan
 print("plan ok")
 PY
   then
-    ok "every group has a repository, every path is snapshot-scoped"
+    ok "one plan: recursive snapshot, shared password, per-group repositories"
   else
     bad "backup plan failed static validation"
   fi
@@ -68,12 +149,12 @@ fi
 
 if command -v python3 >/dev/null 2>&1; then
   if python3 "$root/scripts/render-recovery-groups.py" --check >/dev/null 2>&1; then
-    ok "deploy inventory matches the Ansible vars"
+    ok "deploy manifest matches the Ansible vars"
   else
-    bad "deploy inventory is stale; run scripts/render-recovery-groups.py"
+    bad "deploy manifest is stale; run scripts/render-recovery-groups.py"
   fi
 else
-  printf 'skip python3 missing; inventory drift check not run\n'
+  printf 'skip python3 missing; manifest drift check not run\n'
 fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

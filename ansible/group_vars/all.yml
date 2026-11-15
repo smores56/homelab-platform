@@ -93,23 +93,26 @@ homelab_unattended_package_blacklist:
 # Destructive disk gate
 # --------------------------------------------------------------------------
 # There is no global boolean. A host may only touch the specific devices its
-# own allow-list names, and only under `--tags destructive` with a reviewed
-# migration evidence file. Each entry is a stable /dev/disk/by-id path, whose
+# own allow-list names, and only under `--tags destructive` with a passing
+# plan-driven backup gate. Each entry is a stable /dev/disk/by-id path, whose
 # name already encodes the serial or WWN; LUKS volume entries additionally
 # declare the expected serial/WWN and size.
 homelab_destructive_device_ids: []
 
-# Raw evidence file for `python3 -m data_plane.migration preflight`, on the
-# controller. The Ansible gate re-runs the shared preflight over it and requires
-# fresh verified backups on every required destination, a scratch restore, a
-# boot-tested non-wiped 970, and two independent verified SSH paths. Pass it
-# with -e homelab_migration_evidence=/abs/path/evidence.json.
-homelab_migration_evidence: ""
-homelab_migration_libs_dir: "{{ (playbook_dir | dirname | dirname) ~ '/libs' }}"
+# The host plan `playbooks/tasks/migration-gate.yml` feeds to
+# `python3 -m data_plane.migration preflight --plan`. The gate runs on the
+# data-plane host against the plan the backup role installs, so there is no
+# evidence file to pass. Full read-data is opt-in: the default sweep proves
+# freshness, path coverage, and repository structure; set
+# -e homelab_migration_read_data=true to add `restic check --read-data` on every
+# group's primary before a cutover.
+homelab_backup_plan: "{{ backup_config_file | default('/etc/homelab/backup.json') }}"
+homelab_migration_read_data: false
 
-# The 970 rollback disk. Never a target while it is the rollback path; the
-# evidence must mark it released before it can appear in the allow-list.
+# The 970 rollback disk. Never a target while it is the rollback path; set
+# homelab_rollback_disk_released once it no longer serves as the rollback path.
 homelab_rollback_disk_device: ""
+homelab_rollback_disk_released: false
 
 # Units the recovery playbook fences and only re-enables after a verified
 # restore. The backup timer is fenced with them so no writer touches a target
@@ -118,15 +121,12 @@ homelab_writer_units:
   - homelab-write-broker.service
   - homelab-event-service.service
   - homelab-collector-relay.service
-homelab_backup_timer: homelab-backup-controller.timer
-# Every scheduled backup writer the recovery playbook fences. Missing units
-# are skipped, so this list can name a timer a host has not adopted yet.
+homelab_backup_timer: homelab-backup-fast.timer
+# Every scheduled backup unit the recovery playbook fences. Missing units are
+# skipped, so this list can name a timer a host has not adopted yet.
 homelab_backup_timer_units:
-  - homelab-backup-controller.timer
-  - homelab-snapshot.timer
-  - homelab-snapshot.path
-  - homelab-snapshot-small.timer
-  - homelab-snapshot-media.timer
+  - homelab-backup-fast.timer
+  - homelab-backup-media.timer
 homelab_writer_fence: "{{ data_plane_run_root }}/writers-fenced"
 
 # Recovery playbook knobs. Restores always go to a scratch directory; the live
@@ -135,9 +135,9 @@ homelab_writer_fence: "{{ data_plane_run_root }}/writers-fenced"
 homelab_recovery_allow_live: false
 homelab_recovery_resume_writers: true
 homelab_recovery_scratch_target: /mnt/recovery-scratch
-homelab_recovery_required_destinations:
-  - primary
-  - secondary
+homelab_recovery_required_tiers:
+  - nvme
+  - hdd
   - r2
 
 # --------------------------------------------------------------------------
@@ -186,38 +186,54 @@ zfs_ashift: 12
 zfs_compression: zstd
 zfs_atime: "off"
 
-# One parent dataset per recovery group. A new dataset without an entry here is
-# rejected at apply time (roles/storage) and by playbooks/check.yml.
+# One recovery group per parent dataset. A new dataset without an entry here is
+# rejected at apply time (roles/storage) and by playbooks/check.yml. Backup
+# policy (cadence, tiers, display path) lives in group_vars/backup.yml; this file
+# remains the only source of dataset names and mount points.
 recovery_inventory:
   books:
     visibility: general
-    destination_tiers: [primary, secondary, r2]
   memory_external:
     visibility: personal
-    destination_tiers: [primary, secondary, r2]
   memory_local:
     visibility: personal
-    destination_tiers: [primary, secondary, r2]
   music:
     visibility: personal
-    destination_tiers: [primary, secondary, r2]
   notes:
     visibility: personal
-    destination_tiers: [primary, secondary, r2]
   photos:
     visibility: personal
-    destination_tiers: [primary, secondary, r2]
   wallpapers:
     visibility: personal
-    destination_tiers: [primary, secondary, r2]
   data_plane_state:
     visibility: infrastructure
-    destination_tiers: [primary, secondary, r2]
+  browsing:
+    visibility: personal
+  finance:
+    visibility: personal
+  mail:
+    visibility: personal
+
+# Host paths outside the ZFS pool that still form a recovery group. One
+# recursive snapshot cannot capture them, so the backup unit reads the live
+# path; the group is declared here so no inventory-less group can exist.
+backup_host_paths:
+  - id: host-keys
+    path: /var/lib/sbctl
 
 # Structural parents hold no data and are never mounted themselves.
 zfs_container_datasets:
   - name: "{{ zfs_pool }}/memory"
     mountpoint: /srv/memory
+    canmount: "off"
+  - name: "{{ zfs_pool }}/browsing"
+    mountpoint: /srv/browsing
+    canmount: "off"
+  - name: "{{ zfs_pool }}/finance"
+    mountpoint: /srv/finance
+    canmount: "off"
+  - name: "{{ zfs_pool }}/mail"
+    mountpoint: /srv/mail
     canmount: "off"
   - name: "{{ zfs_pool }}/data-plane"
     mountpoint: /var/lib/data-plane
@@ -274,6 +290,36 @@ zfs_datasets:
     recovery_group: data_plane_state
     recordsize: 16K
     mode: "0700"
+  - name: "{{ zfs_pool }}/browsing/catalog"
+    mountpoint: /srv/browsing/catalog
+    recovery_group: browsing
+    recordsize: 32K
+    mode: "0750"
+  - name: "{{ zfs_pool }}/browsing/raw"
+    mountpoint: /srv/browsing/raw
+    recovery_group: browsing
+    recordsize: 64K
+    mode: "0750"
+  - name: "{{ zfs_pool }}/finance/ledger"
+    mountpoint: /srv/finance/ledger
+    recovery_group: finance
+    recordsize: 16K
+    mode: "0750"
+  - name: "{{ zfs_pool }}/finance/hledger"
+    mountpoint: /srv/finance/hledger
+    recovery_group: finance
+    recordsize: 16K
+    mode: "0750"
+  - name: "{{ zfs_pool }}/mail/messages"
+    mountpoint: /srv/mail/messages
+    recovery_group: mail
+    recordsize: 64K
+    mode: "0750"
+  - name: "{{ zfs_pool }}/mail/index"
+    mountpoint: /srv/mail/index
+    recovery_group: mail
+    recordsize: 16K
+    mode: "0750"
 
 # Restic repositories only. Mounted on demand by the backup units, never at
 # boot, and never executed from or written setuid.
@@ -345,5 +391,6 @@ data_plane_state_gid: 65532
 # --------------------------------------------------------------------------
 # Set on the command line for recover.yml; never store a credential here.
 homelab_recovery_confirm: false
-homelab_recovery_generation_manifest: ""
+# Empty restores every group in the host plan; otherwise a comma-separated list.
+homelab_recovery_groups: ""
 homelab_recovery_apply: false

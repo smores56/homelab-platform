@@ -1,20 +1,40 @@
 ---
-# Host unit that owns ZFS and the restic repositories. Data-plane pods request a
-# generation; they never receive the pool, the snapshot tooling, or a backup
-# key. Everything here is path-based or argv-based, never shell-interpolated.
+# Host unit that owns ZFS and the restic repositories. Data-plane pods request
+# nothing and receive no backup key; the host takes one recursive snapshot,
+# writes each due group's primary repository, and copies it outward.
+#
+# The restic version and checksums are exact pins, never a channel. Every
+# repository opens the one shared, root-only password file through
+# --password-file; nothing here prints or passes a password.
+restic_version: "0.19.1"
+restic_binary: /usr/local/bin/restic
+restic_checksums:
+  amd64: f415415624dcc452f2a02b8c33641791a8c6d6d3b65bbb3543fcf9a25151585c
+  arm64: a5f64aaab53d51e311fa3829124c5b703f2d14cf187d8640b6be3b2b49376465
+restic_architectures:
+  x86_64: amd64
+  aarch64: arm64
+restic_retention:
+  daily: 14
+  weekly: 8
+  monthly: 12
+# Retention is destructive. The argv and the schedule are installed and tested,
+# but the operator enables them after the first complete replication.
+restic_retention_enabled: false
+restic_retention_calendar: "Sun *-*-* 04:15:00"
+restic_lock_drill_enabled: false
+
 backup_python: /usr/bin/python3
-backup_snapshotter: /usr/local/sbin/snapshotter.py
-backup_request_consumer: /usr/local/sbin/homelab-snapshot-request
+backup_program: /usr/local/sbin/homelab-backup
+backup_retention_program: /usr/local/sbin/homelab-restic-retention
+backup_cache_dir: /var/cache/restic-backup
+# One recursive snapshot covers every group, so ZFS snapshots share one window.
+backup_zfs_keep_days: 7
 backup_owner: root
 backup_group: root
-backup_libs_mode: "0755"
 backup_config_mode: "0640"
 backup_unit_mode: "0644"
 backup_service_timeout: 12h
 # Install does not start a backup timer on a plain convergence; the
 # `--tags backup` play starts them only after the migration gate passes.
 backup_timers_enabled: false
-# Manifests are written by this root unit and read by the unprivileged portal.
-# Request files are written by the in-cluster controller, so that directory is
-# group-writable for the data-plane service account and no wider.
-backup_state_gid: "{{ data_plane_state_gid | default(65532) }}"

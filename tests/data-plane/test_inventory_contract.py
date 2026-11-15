@@ -1,23 +1,36 @@
-"""The deploy inventory and the Ansible backup vars cannot drift.
+"""The deploy manifest and the Ansible backup vars cannot drift.
 
-Both are rendered from the same group vars: host dataset names come from
-``recovery_inventory``/``zfs_datasets`` in ``all.yml`` and backup policy from
-``backup.yml``. This test fails if the checked-in JSON is stale or if the host
-plan would be rejected by the factory.
+One backup model: every recovery group owns one restic repository per tier and
+one subtree of the single recursive ZFS snapshot. Host dataset names come from
+``recovery_inventory``/``zfs_datasets``/``backup_host_paths`` in ``all.yml`` and
+policy from ``backup.yml``. This test fails when the checked-in public manifest
+is stale, when the host plan has the wrong shape, or when a retired per-domain
+variable survives.
 """
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import json
 import unittest
 from pathlib import Path
 
-from data_plane.backup.factory import BackupConfig
-
 ROOT = Path(__file__).resolve().parents[2]
 RENDERER = ROOT / "scripts" / "render-recovery-groups.py"
 INVENTORY = ROOT / "deploy" / "data-plane" / "config" / "recovery-groups.json"
+
+RETIRED_VARS = {
+    "backup_domains",
+    "backup_destinations",
+    "backup_manifest_dir",
+    "backup_pending_host_groups",
+    "backup_repositories",
+    "backup_request_archive",
+    "backup_request_dir",
+}
+RETIRED_GROUP_KEYS = {"writer", "databases", "fence", "checkpoint", "resume"}
 
 
 def load_renderer():
@@ -36,6 +49,7 @@ class InventoryContractTests(unittest.TestCase):
     def setUp(self):
         self.groups = render.build_recovery_groups(ALL_VARS, BACKUP_VARS)
         self.host_plan = render.build_host_plan(ALL_VARS, BACKUP_VARS)
+        self.by_id = {group["id"]: group for group in self.groups["groups"]}
 
     def test_checked_in_json_is_current(self):
         expected = json.dumps(self.groups, indent=2) + "\n"
@@ -44,81 +58,141 @@ class InventoryContractTests(unittest.TestCase):
     def test_renderer_check_mode_accepts_the_checked_in_file(self):
         self.assertEqual(render.main(["--check"]), 0)
 
-    def test_group_ids_match_the_ansible_backup_groups_var(self):
+    def test_public_manifest_shape(self):
+        self.assertEqual(set(self.groups), {"schema_version", "groups"})
+        self.assertEqual(self.groups["schema_version"], 1)
+        for group in self.groups["groups"]:
+            self.assertEqual(set(group), {"id", "label", "repo", "data_root"})
+            self.assertTrue(group["label"])
+
+    def test_host_plan_shape(self):
+        self.assertEqual(
+            set(self.host_plan),
+            {
+                "schema_version",
+                "snapshot_dataset",
+                "snapshot_root",
+                "password_file",
+                "tiers",
+                "groups",
+            },
+        )
+        self.assertEqual(self.host_plan["schema_version"], 1)
+        self.assertEqual(self.host_plan["snapshot_dataset"], ALL_VARS["zfs_pool"])
+        self.assertEqual(self.host_plan["snapshot_root"], "/run/data-plane/current")
+        for group in self.host_plan["groups"]:
+            self.assertEqual(set(group), {"id", "path", "cadence", "tiers"})
+
+    def test_tiers_are_nvme_hdd_r2(self):
+        tiers = self.host_plan["tiers"]
+        self.assertEqual([tier["name"] for tier in tiers], ["nvme", "hdd", "r2"])
+        self.assertEqual(
+            [tier["repository_root"] for tier in tiers],
+            [
+                "/var/backups/primary/restic",
+                "/var/backups/secondary/restic",
+                BACKUP_VARS["backup_r2_repository_root"],
+            ],
+        )
+
+    def test_one_shared_password_file(self):
+        password = self.host_plan["password_file"]
+        self.assertTrue(password.startswith("/"))
+        self.assertEqual(password, BACKUP_VARS["backup_password_file"])
+        self.assertTrue(password.endswith(".password"))
+        self.assertIn("/restic/", password)
+        text = json.dumps(self.host_plan)
+        self.assertEqual(text.count(".password"), 1)
+
+    def test_cadence_values_are_fast_or_media(self):
+        for group in self.host_plan["groups"]:
+            self.assertIn(group["cadence"], {"fast", "media"})
+
+    def test_group_ids_match_the_inventory(self):
         expected = render.expected_group_ids(ALL_VARS, BACKUP_VARS)
-        self.assertEqual(
-            [group["group_id"] for group in self.groups["groups"]], expected
+        self.assertEqual([group["id"] for group in self.groups["groups"]], expected)
+        self.assertEqual([group["id"] for group in self.host_plan["groups"]], expected)
+        self.assertEqual(len(expected), len(set(expected)))
+
+    def test_every_inventory_group_and_host_path_is_present(self):
+        ids = {group["id"] for group in self.host_plan["groups"]}
+        for key in ALL_VARS["recovery_inventory"]:
+            self.assertIn(key.replace("_", "-"), ids)
+        for row in ALL_VARS["backup_host_paths"]:
+            self.assertIn(row["id"], ids)
+
+    def test_repo_and_data_root_follow_the_tier_and_path(self):
+        r2_root = BACKUP_VARS["backup_r2_repository_root"].rstrip("/")
+        plan_paths = {group["id"]: group["path"] for group in self.host_plan["groups"]}
+        for group in self.groups["groups"]:
+            self.assertEqual(group["repo"], f"{r2_root}/{group['id']}")
+            self.assertEqual(group["data_root"], "/" + plan_paths[group["id"]])
+
+    def test_host_keys_group(self):
+        group = self.by_id["host-keys"]
+        self.assertEqual(group["data_root"], "/var/lib/sbctl")
+        self.assertEqual(group["repo"], BACKUP_VARS["backup_r2_repository_root"] + "/host-keys")
+        plan_group = next(
+            item for item in self.host_plan["groups"] if item["id"] == "host-keys"
+        )
+        self.assertEqual(plan_group["path"], "var/lib/sbctl")
+        self.assertEqual(plan_group["cadence"], "media")
+        self.assertEqual(plan_group["tiers"], ["nvme", "hdd", "r2"])
+        self.assertIn(
+            {"id": "host-keys", "path": "/var/lib/sbctl"},
+            ALL_VARS["backup_host_paths"],
         )
 
-    def test_every_group_has_a_declared_repository(self):
-        names = {repository["name"] for repository in BACKUP_VARS["backup_repositories"]}
-        for group in self.groups["groups"]:
-            self.assertTrue(group["destinations"], group["group_id"])
-            self.assertLessEqual(set(group["destinations"]), names)
-
-    def test_host_plan_is_a_valid_factory_config(self):
-        config = BackupConfig.from_dict(self.host_plan)
-        self.assertEqual(
-            [group.id for group in config.groups],
-            [group["group_id"] for group in self.groups["groups"]],
-        )
-        for group in config.groups:
-            for path in group.dataset_paths.values():
-                self.assertIn("{snapshot}", path)
-
-    def test_dataset_names_come_from_zfs_datasets(self):
-        pending = set(BACKUP_VARS["backup_pending_host_groups"])
-        for group in self.groups["groups"]:
-            if group["group_id"] in pending:
-                continue
-            key = group["group_id"].replace("-", "_")
-            self.assertIn(key, ALL_VARS["recovery_inventory"])
-            expected = [
-                row["name"]
-                for row in ALL_VARS["zfs_datasets"]
-                if row["recovery_group"] == key
-            ]
-            self.assertEqual(
-                sorted(member["dataset"] for member in group["members"]),
-                sorted(expected),
+    def test_every_dataset_sits_inside_its_group_subtree(self):
+        plan_paths = {group["id"]: group["path"] for group in self.host_plan["groups"]}
+        for row in ALL_VARS["zfs_datasets"]:
+            group_id = row["recovery_group"].replace("_", "-")
+            self.assertIn(group_id, plan_paths)
+            root = "/" + plan_paths[group_id]
+            self.assertTrue(
+                row["mountpoint"] == root
+                or row["mountpoint"].startswith(root + "/"),
+                row["mountpoint"],
             )
-            mounts = {row["name"]: row["mountpoint"] for row in ALL_VARS["zfs_datasets"]}
-            for member in group["members"]:
-                self.assertEqual(member["mount"], mounts[member["dataset"]])
 
-    def test_pending_groups_are_not_in_the_host_inventory_yet(self):
-        pending = list(BACKUP_VARS["backup_pending_host_groups"])
-        self.assertTrue(pending)
-        for group_id in pending:
-            self.assertIn(group_id, [group["group_id"] for group in self.groups["groups"]])
-            # The moment all.yml classifies it, the renderer refuses the stale
-            # pending entry; this documents the migration path.
-            self.assertNotIn(group_id.replace("-", "_"), ALL_VARS["recovery_inventory"])
+    def test_every_group_has_a_dataset_or_a_host_path(self):
+        host_paths = {row["id"] for row in ALL_VARS["backup_host_paths"]}
+        for key in ALL_VARS["recovery_inventory"]:
+            self.assertTrue(
+                [
+                    row
+                    for row in ALL_VARS["zfs_datasets"]
+                    if row["recovery_group"] == key
+                ],
+                key,
+            )
+        for group in self.host_plan["groups"]:
+            self.assertTrue(
+                render.group_rows(ALL_VARS, group["id"]) or group["id"] in host_paths,
+                group["id"],
+            )
 
-    def test_every_mount_has_a_snapshot_path(self):
-        paths = BACKUP_VARS["backup_dataset_paths"]
-        for group in self.groups["groups"]:
-            for member in group["members"]:
-                path = paths[member["dataset"]]
-                self.assertTrue(path.startswith("/"))
-                self.assertIn("{snapshot}", path)
+    def test_retired_per_domain_vars_are_gone(self):
+        self.assertEqual(RETIRED_VARS & set(BACKUP_VARS), set())
+        for group_id, spec in BACKUP_VARS["backup_group_specs"].items():
+            self.assertEqual(RETIRED_GROUP_KEYS & set(spec), set(), group_id)
+            self.assertEqual(set(spec) - {"label", "path", "cadence", "tiers"}, set())
 
     def test_no_fixture_or_dry_run_backend_in_the_plan(self):
-        text = json.dumps(self.host_plan) + json.dumps(self.groups)
-        for forbidden in ("fixture", "InMemoryDestination", "DryRunRunner", "example.invalid"):
+        text = (json.dumps(self.host_plan) + json.dumps(self.groups)).lower()
+        for forbidden in (
+            "fixture",
+            "inmemorydestination",
+            "dryrunrunner",
+            "example.invalid",
+        ):
             self.assertNotIn(forbidden, text)
-        for repository in self.host_plan["repositories"]:
-            self.assertNotIn("--password", repository["password_file"])
-            self.assertTrue(repository["password_file"].startswith("/"))
 
-    def test_personal_and_general_data_never_share_a_repository(self):
-        by_domain: dict[str, set[str]] = {}
-        for repository in BACKUP_VARS["backup_repositories"]:
-            by_domain.setdefault(repository["domain"], set()).add(repository["name"])
-        domains = list(by_domain)
-        for index, left in enumerate(domains):
-            for right in domains[index + 1 :]:
-                self.assertFalse(by_domain[left] & by_domain[right])
+    def test_host_plan_cli_matches_the_builder(self):
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            self.assertEqual(render.main(["--host-plan"]), 0)
+        self.assertEqual(json.loads(buffer.getvalue()), self.host_plan)
 
 
 if __name__ == "__main__":

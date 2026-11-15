@@ -107,7 +107,6 @@
   loop_control:
     label: "{{ item.name }}"
   # The backup timer is a writer too; it starts only under `--tags backup`.
-  when: item.short != 'backup-controller'
 
 - name: Verify every long-running service stayed up after start
   ansible.builtin.command: systemctl is-active --quiet {{ item.name }}.service
@@ -131,4 +130,3 @@
   loop: "{{ data_plane_services | selectattr('timer', 'defined') | list }}"
   loop_control:
     label: "{{ item.name }}"
-  when: item.short != 'backup-controller'

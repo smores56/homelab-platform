@@ -1,8 +1,8 @@
 ---
 # Recovery-side content for the data-plane host: the sentinel that describes
-# what a healthy host must look like, the read-only portal constraints, and the
-# clean-room restore entrypoint. The portal unit itself is owned by
-# roles/data_plane; this role only tightens it.
+# what a healthy host must look like and the clean-room restore entrypoint. The
+# public recovery page is a static Cloudflare Pages app, not a host unit, so
+# there is no portal service to tighten here.
 
 - name: Create the recovery state directory
   ansible.builtin.file:
@@ -42,37 +42,6 @@
       {{ backup_mounts | map(attribute='source')
          | map('regex_replace', '^/dev/mapper/', 'systemd-cryptsetup@')
          | map('regex_replace', '$', '.service') | list }}
-
-- name: Check the portal unit installed by roles/data_plane
-  ansible.builtin.stat:
-    path: "/etc/systemd/system/{{ recovery_portal_unit }}"
-  register: recovery_portal_unit_file
-  when: not ansible_check_mode
-
-# The portal is a read-only view over generations, never a prerequisite for a
-# restore. Tighten it when it exists; skip it when the data-plane role has not
-# installed one yet.
-- name: Tighten the recovery portal when it is installed
-  when:
-    - not ansible_check_mode
-    - recovery_portal_unit_file.stat.exists | default(false) | bool
-  block:
-    - name: Create the portal drop-in directory
-      ansible.builtin.file:
-        path: "/etc/systemd/system/{{ recovery_portal_unit }}.d"
-        state: directory
-        owner: root
-        group: root
-        mode: "0755"
-
-    - name: Make the portal fail closed on missing backup repositories
-      ansible.builtin.template:
-        src: portal-dropin.conf.j2
-        dest: "/etc/systemd/system/{{ recovery_portal_unit }}.d/20-recovery.conf"
-        owner: root
-        group: root
-        mode: "0644"
-      notify: Reload systemd after recovery changes
 
 - name: Install the recovery check unit
   ansible.builtin.template:

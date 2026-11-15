@@ -1,10 +1,10 @@
 ---
 data_plane_default_container_user: "65532:65532"
 
-# The five host services. Every image is selected by key from data_plane_images
-# and must be digest-pinned. Units run rootful podman with a read-only container
-# root, all capabilities dropped, and no-new-privileges; the host unit itself is
-# hardened below and in templates/unit.service.j2.
+# The three host services. Every image is selected by key from
+# data_plane_images and must be digest-pinned. Units run rootful podman with a
+# read-only container root, all capabilities dropped, and no-new-privileges; the
+# host unit itself is hardened below and in templates/unit.service.j2.
 data_plane_services:
   - name: homelab-event-service
     short: event-service
@@ -34,7 +34,7 @@ data_plane_services:
     image_key: write_broker
     type: simple
     # Writers are never started by a plain convergence run. site.yml starts this
-    # unit only under `--tags writers` after the migration evidence gate.
+    # unit only under `--tags writers` after the migration gate.
     writer: true
     args: ["broker"]
     ports:
@@ -58,36 +58,6 @@ data_plane_services:
       - /srv/books
     backup_mounts: false
 
-  - name: homelab-backup-controller
-    short: backup-controller
-    description: Fan-out Restic backup controller
-    image_key: backup_controller
-    type: oneshot
-    args: ["backup"]
-    ports: []
-    environment:
-      DATA_PLANE_MANIFEST_DIR: "{{ data_plane_state_root }}/manifests"
-      DATA_PLANE_GROUPS: "{{ backup_groups | default([]) | join(',') }}"
-      DATA_PLANE_DESTINATIONS: "{{ backup_destinations | default([]) | join(',') }}"
-      DATA_PLANE_SECRET_FILE: "{{ data_plane_secret_root }}/backup-controller.env"
-    state_dir: "{{ data_plane_state_root }}/backup-controller"
-    container_user: "65532:65532"
-    volumes:
-      - "{{ data_plane_state_root }}/manifests:/var/lib/data-plane/manifests:rw"
-      - "/srv:/srv:ro"
-      - "/var/backups/primary:/var/backups/primary:rw"
-      - "/var/backups/secondary:/var/backups/secondary:rw"
-    read_write_paths:
-      - "{{ data_plane_state_root }}/backup-controller"
-      - "{{ data_plane_run_root }}/backup-controller"
-      - /var/backups/primary
-      - /var/backups/secondary
-    assert_mounts: "{{ zfs_datasets | map(attribute='mountpoint') | list }}"
-    backup_mounts: true
-    timer:
-      calendar: hourly
-      delay: 120
-
   - name: homelab-collector-relay
     short: collector-relay
     description: Scheduled reconciliation pass for collector replicas
@@ -109,28 +79,3 @@ data_plane_services:
       - "{{ data_plane_run_root }}/collector-relay"
     assert_mounts: []
     backup_mounts: false
-
-  - name: homelab-recovery-portal
-    short: recovery-portal
-    description: Read-only recovery portal over verified generations
-    image_key: recovery_portal
-    type: simple
-    args: ["portal"]
-    ports:
-      - "127.0.0.1:7103:7103"
-    environment:
-      DATA_PLANE_PORTAL_DIR: "{{ data_plane_state_root }}/recovery-portal/site"
-      DATA_PLANE_MANIFEST_DIR: "{{ data_plane_state_root }}/manifests"
-      DATA_PLANE_HOST: "0.0.0.0"
-      DATA_PLANE_PORT: "7103"
-    state_dir: "{{ data_plane_state_root }}/recovery-portal"
-    container_user: "65532:65532"
-    volumes:
-      - "{{ data_plane_state_root }}/recovery-portal:/var/lib/homelab/recovery-portal:rw"
-      - "/var/backups/primary:/var/backups/primary:ro"
-      - "/var/backups/secondary:/var/backups/secondary:ro"
-    read_write_paths:
-      - "{{ data_plane_state_root }}/recovery-portal"
-      - "{{ data_plane_run_root }}/recovery-portal"
-    assert_mounts: []
-    backup_mounts: true

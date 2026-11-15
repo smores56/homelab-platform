@@ -1,0 +1,31 @@
+[Unit]
+Description=Apply restic retention (forget --prune) to every group repository
+Documentation=file:{{ backup_config_file }}
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+Environment=RESTIC_CACHE_DIR={{ backup_cache_dir }}
+EnvironmentFile=-{{ backup_r2_environment_file }}
+ExecStart={{ backup_python }} {{ backup_retention_program }} --config {{ backup_config_file }}
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+ReadWritePaths={{ backup_cache_dir }}
+{% for tier in backup_tiers %}
+{% if tier.repository_root is match('^/') %}
+ReadWritePaths={{ tier.repository_root }}
+{% endif %}
+{% endfor %}
+StandardOutput=journal
+StandardError=journal
