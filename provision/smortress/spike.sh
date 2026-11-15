@@ -81,6 +81,19 @@ fi
 kern=${SMORTRESS_SPIKE_KERNEL:-"$here/spike-vmlinuz"}
 initrd=${SMORTRESS_SPIKE_INITRD:-"$here/spike-initrd"}
 
+# SMORTRESS_SPIKE_TPM=1 attaches an emulated TPM2 so the tpm2 pin can be tested.
+if [ "${SMORTRESS_SPIKE_TPM:-0}" = "1" ]; then
+  command -v swtpm >/dev/null 2>&1 || die "swtpm is required for SMORTRESS_SPIKE_TPM=1"
+  tpm_dir=${SMORTRESS_SPIKE_TPM_DIR:-"$here/spike-tpm"}
+  mkdir -p "$tpm_dir"
+  rm -f "$tpm_dir/swtpm.sock" "$tpm_dir/swtpm.ctrl"
+  swtpm socket --tpm2 --tpmstate "dir=$tpm_dir" \
+    --server "type=unixio,path=$tpm_dir/swtpm.sock" \
+    --ctrl "type=unixio,path=$tpm_dir/swtpm.ctrl" --flags not-need-init,startup-clear --daemon
+  for _ in $(seq 1 50); do [ -S "$tpm_dir/swtpm.sock" ] && break; sleep 0.1; done
+  [ -S "$tpm_dir/swtpm.sock" ] || die "swtpm did not create its control socket"
+fi
+
 set -- -machine q35 \
   -accel "$accel" \
   -m 8192 \
@@ -91,6 +104,13 @@ set -- -machine q35 \
   -device virtio-blk-pci,drive=disk0,serial=SMORTRESS980 \
   -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:$ssh_port-:22" \
   -device virtio-net-pci,netdev=net0
+
+if [ "${SMORTRESS_SPIKE_TPM:-0}" = "1" ]; then
+  set -- "$@" \
+    -chardev "socket,id=chrtpm,path=$tpm_dir/swtpm.sock" \
+    -tpmdev "emulator,id=tpm0,chardev=chrtpm" \
+    -device tpm-tis,tpmdev=tpm0
+fi
 
 # disk: boot the installed system only, for verification after an install.
 if [ "$boot_mode" != disk ]; then

@@ -163,4 +163,30 @@ autoinstall:
         echo '--- SMORTRESS-DIAG luks'
         ls -l /target/etc/luks || true
       } > /dev/console 2>&1
+    - |
+      set -eu
+      printf 'add_dracutmodules+=" network clevis "\n' > /target/etc/dracut.conf.d/90-clevis.conf
+      sed -i 's|^GRUB_CMDLINE_LINUX_DEFAULT="\(.*\)"|GRUB_CMDLINE_LINUX_DEFAULT="\1 ip=dhcp"|' /target/etc/default/grub
+    - |
+      set -eu
+      cat > /target/usr/local/sbin/smortress-clevis-bind <<'CLEVIS'
+      #!/bin/sh
+      # Bind Clevis to the root volume: sss (Tang + TPM2, both required) plus a
+      # bare TPM2 token so a host can still boot when Tang is unreachable.
+      # Usage: smortress-clevis-bind <tang-url> <passphrase-file>
+      set -eu
+      url=${1:?usage: smortress-clevis-bind <tang-url> <passphrase-file>}
+      key=${2:?usage: smortress-clevis-bind <tang-url> <passphrase-file>}
+      root_dev=$(cryptsetup status "$(findmnt -no SOURCE /)" | awk '/device:/{print $2}')
+      adv=$(curl -fsS "$url/adv")
+      cfg=$(printf '{"t":2,"pins":{"tang":[{"url":"%s","adv":%s}],"tpm2":{"pcr_ids":"7"}}}' "$url" "$adv")
+      clevis luks bind -d "$root_dev" sss "$cfg" -y -k "$key"
+      if [ -e /dev/tpmrm0 ] || [ -e /dev/tpm0 ]; then
+        clevis luks bind -d "$root_dev" tpm2 '{"pcr_ids":"7"}' -y -k "$key"
+      fi
+      dracut -f
+      CLEVIS
+      chmod 0755 /target/usr/local/sbin/smortress-clevis-bind
+    - curtin in-target -- update-grub
+    - curtin in-target -- sh -c 'dracut -f' || true
     - curtin in-target -- systemctl enable smortress-provision.service
