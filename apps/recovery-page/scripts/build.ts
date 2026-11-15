@@ -9,9 +9,22 @@ const dist = new URL("../dist/", import.meta.url);
 
 // Fail the build on a manifest the page would reject at unlock. The renderer
 // owns the file; this only catches a bad render or a hand edit before it ships.
-const manifest = parseManifest(
-  JSON.parse(await Deno.readTextFile(new URL("../public/manifest.json", import.meta.url))),
+// In the monorepo the deploy manifest is the source of truth; the checked-in
+// public/manifest.json is a synthetic example for standalone builds.
+const deployManifest = new URL(
+  "../../../deploy/data-plane/config/recovery-groups.json",
+  import.meta.url,
 );
+let manifestSource = new URL("../public/manifest.json", import.meta.url);
+try {
+  await Deno.stat(deployManifest);
+  manifestSource = deployManifest;
+} catch (error) {
+  if ((error as { code?: string }).code !== "ENOENT") throw error;
+  console.log("no deploy manifest; using the example public/manifest.json");
+}
+const manifestText = await Deno.readTextFile(manifestSource);
+const manifest = parseManifest(JSON.parse(manifestText));
 
 await rm(dist, { recursive: true, force: true });
 await mkdir(dist, { recursive: true });
@@ -42,7 +55,6 @@ for (
   const [from, to] of [
     ["index.html", "index.html"],
     ["src/style.css", "style.css"],
-    ["public/manifest.json", "manifest.json"],
     ["public/manifest.webmanifest", "manifest.webmanifest"],
     ["public/sw.js", "sw.js"],
     ["public/_headers", "_headers"],
@@ -52,5 +64,7 @@ for (
 ) {
   await cp(new URL(`../${from}`, import.meta.url), new URL(to, dist));
 }
+
+await Deno.writeTextFile(new URL("manifest.json", dist), manifestText);
 
 console.log(`built ${dist.pathname} with ${manifest.groups.length} group(s)`);

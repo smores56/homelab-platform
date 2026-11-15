@@ -18,7 +18,6 @@ configMapGenerator:
   - name: data-plane-config
     files:
       - source-catalog.json
-      - recovery-groups.json
   - name: collector-brave-schema
     files:
       - schema.json=sources/brave.json

@@ -84,9 +84,8 @@ workflow before any apply. `tests/check.sh` rejects a tag, a floating reference
 and `latest`.
 
 The image's entrypoint is `python -m apps.data_plane.run`; the Deployment `args`
-is the service name. `apps/data_plane/run.py` implements `event`, `broker` and
-`relay` today; `collector` and `confirmation` are the forward contracts this base
-expects (see [Assumptions](#assumptions)). The fixture broker keeps a local
+is the service name. `apps/data_plane/run.py` implements `event`, `broker`, `relay`,
+`confirmation` and `collector`; every one of them is wired by this base (see [Assumptions](#assumptions)). The fixture broker keeps a local
 SQLite journal, but the deployment contract here is the event-service-backed
 broker: the base sets `EVENT_SERVICE_URL` and no local claim.
 
@@ -94,7 +93,8 @@ broker: the base sets `EVENT_SERVICE_URL` and no local claim.
   `{"status": "ok", "service": ...}` only, never an epoch, a group or a
   destination, because the probe is unauthenticated;
 - `DATA_PLANE_HOST`, `DATA_PLANE_PORT`, `DATA_PLANE_DB`, `DATA_PLANE_CATALOG`,
-  `DATA_PLANE_SCHEMA` and `DATA_PLANE_SECRET_FILE` are the configuration surface;
+  `DATA_PLANE_SCHEMA`, `DATA_PLANE_MAX_BODY_BYTES` and
+  `DATA_PLANE_SECRET_FILE` are the configuration surface;
 - `collector-relay` selects its source with `SOURCE_ID`, its schema with
   `DATA_PLANE_SCHEMA` and its only external destination with `SOURCE_PROXY_URL`;
 - `DATA_PLANE_SECRET_FILE` names a path, not a value. The base mounts nothing

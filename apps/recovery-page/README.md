@@ -66,14 +66,15 @@ The platform renderer writes `public/manifest.json`:
   The directory is resolved exactly or as the shallowest directory whose trailing segments match, so
   the renderer's `/photos` finds a snapshot backed up from `/run/data-plane/current/photos`.
 
-The checked-in `public/manifest.json` mirrors the platform renderer's output shape; the real file is
-written by `libs/data_plane/recovery/manifest.py` during deploy. `scripts/build.ts` refuses to build
-an invalid one. The app must be served on the same origin as the manifest.
+In the monorepo `scripts/build.ts` builds from `deploy/data-plane/config/recovery-groups.json`,
+which `scripts/render-recovery-groups.py` writes from the host inventory; that renderer is the only
+manifest producer it must agree with. The checked-in `public/manifest.json` is a synthetic example
+used when the deploy manifest is absent, and the build validates whichever file it picks before
+shipping it.
 
-When a group has no R2 copy the renderer falls back to a local path such as
-`/var/backups/secondary/restic/music`. That document is well-formed and the page still unlocks, but
-the group is listed as unavailable because a browser cannot read a host filesystem. The deploy must
-publish the R2 tier for every group that should be restorable from this page.
+The renderer refuses a group whose tiers omit R2, and its public output always points at the R2
+repository, so every listed group is restorable from a browser. The app must be served on the same
+origin as the manifest.
 
 ### Store pinning
 
