@@ -30,9 +30,10 @@ check grep -q 'restic_version not in' "$role/tasks/main.yml"
 
 # The plan is exactly one snapshot dataset, one password, three tiers, groups.
 for needle in backup_snapshot_dataset backup_snapshot_root backup_password_file \
-  backup_tiers backup_group_specs backup_group_ids backup_cadences; do
-  check grep -q "$needle" "$role/templates/backup.json.j2" "$role/tasks/main.yml"
+  backup_tiers backup_group_specs backup_group_ids; do
+  check grep -q "$needle" "$role/templates/backup.json.j2"
 done
+check grep -q "backup_cadences" "$role/tasks/main.yml"
 check grep -q "'snapshot_dataset'" "$role/templates/backup.json.j2"
 check grep -q "'password_file'" "$role/templates/backup.json.j2"
 check grep -q "'repository_root'" "$role/templates/backup.json.j2"

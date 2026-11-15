@@ -240,7 +240,6 @@ class RecoveryGroup:
     parent_dataset: str
     members: tuple[DatasetMount, ...]
     required_config: tuple[str, ...] = ()
-    destination_tiers: tuple[str, ...] = ()
     notes: str = ""
 
     def validate(self) -> None:

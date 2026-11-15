@@ -467,7 +467,7 @@ for needle in \
   'restic snapshots' \
   'required tier' \
   '--capacity-bytes' \
-  '--verify'; do
+  '--verify-only'; do
   if grep -qF -- "$needle" roles/recovery/templates/clean-room-restore.sh.j2; then
     ok "restore safety: $needle"
   else

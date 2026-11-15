@@ -105,9 +105,6 @@ def _recovery_group(raw: Mapping[str, Any]) -> RecoveryGroup:
             for item in raw.get("members", ())
         ),
         required_config=tuple(str(item) for item in raw.get("required_config", ())),
-        destination_tiers=tuple(
-            str(item) for item in raw.get("destination_tiers", ())
-        ),
         notes=str(raw.get("notes", "")),
     )
 
