@@ -26,7 +26,7 @@ The script runs exactly this command (nothing weakening is added):
 ```sh
 flux bootstrap github \
   --owner=smores56 \
-  --repository=homelabs-platform \
+  --repository=homelab-platform \
   --branch=main \
   --path=clusters/homelab \
   --personal \
@@ -125,9 +125,9 @@ not regenerate:
 
 | Object | Namespace | Contract |
 | --- | --- | --- |
-| `ImageRepository nanobot` | flux-system | watches `ghcr.io/smores56/homelabs-platform/nanobot` |
+| `ImageRepository nanobot` | flux-system | watches `ghcr.io/smores56/homelab-platform/nanobot` |
 | `ImagePolicy nanobot` | flux-system | `^build-(?P<run>[0-9]+)$` → numerical, ascending |
-| `GitRepository homelabs-apps` | flux-system | SSH 443, `homelabs-apps-write` (SOPS-managed) |
+| `GitRepository homelab-apps` | flux-system | SSH 443, `homelab-apps-write` (SOPS-managed) |
 | `ImageUpdateAutomation nanobot` | flux-system | Setters, `./`, pushes `main` |
 
 ## Flux's own alerting
@@ -147,15 +147,15 @@ The relay formats the generic payload and publishes it to ntfy topic `alerts`
 
 `publish-nanobot.yml` tags every build `build-<run_number>`, so the policy picks
 the highest run number and Flux commits the resolved digest to
-`smores56/homelabs-apps`. The tenant side carries the marker:
+`smores56/homelab-apps`. The tenant side carries the marker:
 
 ```yaml
-image: ghcr.io/smores56/homelabs-platform/nanobot@sha256:<digest>
+image: ghcr.io/smores56/homelab-platform/nanobot@sha256:<digest>
   # {"$imagepolicy": "flux-system:nanobot"}
 ```
 
 The write credential never enters git: it is a SOPS-encrypted deploy key turned
-into the `homelabs-apps-write` Secret (docs/manual-steps.md, "nanobot image
+into the `homelab-apps-write` Secret (docs/manual-steps.md, "nanobot image
 automation"). Until it exists the GitRepository is NotReady and nothing is
 pushed — fail closed, like every other credential here. The tenant's own
 GitRepository keeps its read-only key; the two secrets are in different
@@ -167,7 +167,7 @@ agent-control triggers a build through the Actions API; it holds a platform
 token with `Actions: write` on this repository and never passes it on.
 
 ```text
-POST /repos/smores56/homelabs-platform/actions/workflows/publish-nanobot.yml/dispatches
+POST /repos/smores56/homelab-platform/actions/workflows/publish-nanobot.yml/dispatches
 {"ref": "main"}
 ```
 
@@ -275,8 +275,8 @@ outages: the gateway still started.
 ## Root namespace labels
 
 The bootstrap manifests create `flux-system` without tenancy labels. The
-`flux-system-namespace.json` patch adds `homelabs.dev/tier=platform`,
-`homelabs.dev/tenant=platform`, `homelabs.dev/managed-by=platform` and
+`flux-system-namespace.json` patch adds `homelab.dev/tier=platform`,
+`homelab.dev/tenant=platform`, `homelab.dev/managed-by=platform` and
 `pod-security.kubernetes.io/enforce=baseline` (audit/warn `restricted`), so the
 policy bindings treat it like the rest of the platform tier.
 

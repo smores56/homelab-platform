@@ -11,7 +11,7 @@ metadata:
   name: broker-credentials-contract
   labels:
     app.kubernetes.io/name: broker
-    homelabs.dev/tier: broker
+    homelab.dev/tier: broker
 data:
   secretName: broker-credentials
   namespace: broker

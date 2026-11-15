@@ -16,8 +16,8 @@ metadata:
   namespace: observability
   labels:
     app.kubernetes.io/name: prometheus
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: observability
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: observability
 spec:
   podSelector:
     matchLabels:
@@ -61,8 +61,8 @@ metadata:
   namespace: observability
   labels:
     app.kubernetes.io/name: vector
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: observability
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: observability
 spec:
   podSelector:
     matchLabels:
@@ -86,8 +86,8 @@ metadata:
   namespace: observability
   labels:
     app.kubernetes.io/name: status-exporter
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: observability
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: observability
 spec:
   podSelector:
     matchLabels:

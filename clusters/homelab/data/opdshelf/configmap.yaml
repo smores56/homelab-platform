@@ -11,8 +11,8 @@ metadata:
   name: opdshelf-env
   namespace: opdshelf
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: data
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: data
 data:
   # The tier contract names 8083 for this namespace (NetworkPolicy, Service and
   # the Ingress object all use it), so the app listens there rather than making

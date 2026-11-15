@@ -20,7 +20,7 @@
       "allow_private": false,
       "github_app": {
         "installation": "github-installation-id",
-        "repositories": ["homelabs-apps"],
+        "repositories": ["homelab-apps"],
         "permissions": {
           "contents": "write"
         }
@@ -37,7 +37,7 @@
       "allow_private": false,
       "github_app": {
         "installation": "github-installation-id",
-        "repositories": ["homelabs-platform"],
+        "repositories": ["homelab-platform"],
         "permissions": {
           "contents": "write"
         }
@@ -54,7 +54,7 @@
       "allow_private": false,
       "github_app": {
         "installation": "github-installation-id",
-        "repositories": ["homelabs-platform"],
+        "repositories": ["homelab-platform"],
         "permissions": {
           "contents": "write",
           "pull_requests": "write"
@@ -140,7 +140,7 @@
       "allow_private": false,
       "github_app": {
         "installation": "github-installation-id",
-        "repositories": ["sdlc", "homelabs-apps"],
+        "repositories": ["sdlc", "homelab-apps"],
         "permissions": {
           "repository_hooks": "write",
           "metadata": "read"

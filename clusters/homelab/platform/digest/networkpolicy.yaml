@@ -14,8 +14,8 @@ metadata:
   namespace: observability
   labels:
     app.kubernetes.io/name: cluster-digest
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: platform
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: platform
 spec:
   podSelector:
     matchLabels:
@@ -60,8 +60,8 @@ metadata:
   namespace: observability
   labels:
     app.kubernetes.io/name: cluster-digest
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: platform
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: platform
 spec:
   podSelector:
     matchLabels:
@@ -83,8 +83,8 @@ metadata:
   namespace: observability
   labels:
     app.kubernetes.io/name: cluster-digest
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: platform
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: platform
 spec:
   podSelector:
     matchLabels:

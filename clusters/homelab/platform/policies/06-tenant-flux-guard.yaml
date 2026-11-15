@@ -1,5 +1,5 @@
 # A Kustomization in the tenant tier may only reconcile with the tenant
-# service account, into its own namespace, from the homelabs-apps repository
+# service account, into its own namespace, from the homelab-apps repository
 # and with a same-namespace age key. That closes the three escalation paths a
 # second reconciler would otherwise open: impersonate the platform identity,
 # write into data namespaces, or fetch manifests from an attacker's repository.
@@ -8,8 +8,8 @@ kind: ValidatingAdmissionPolicy
 metadata:
   name: tenant-flux-guard
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: platform
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: platform
 spec:
   failurePolicy: Fail
   matchConstraints:
@@ -25,9 +25,9 @@ spec:
       message: "tenant Kustomizations must target their own namespace"
     - expression: >-
         object.spec.sourceRef.kind == 'GitRepository'
-        && object.spec.sourceRef.name == 'homelabs-apps'
+        && object.spec.sourceRef.name == 'homelab-apps'
         && !has(object.spec.sourceRef.namespace)
-      message: "tenant Kustomizations must read the same-namespace homelabs-apps GitRepository"
+      message: "tenant Kustomizations must read the same-namespace homelab-apps GitRepository"
     - expression: "!has(object.spec.kubeConfig)"
       message: "tenant Kustomizations must not carry a kubeConfig"
     - expression: "!has(object.spec.decryption) || (object.spec.decryption.provider == 'sops' && object.spec.decryption.secretRef.name == 'sops-age')"
@@ -38,14 +38,14 @@ kind: ValidatingAdmissionPolicyBinding
 metadata:
   name: tenant-flux-guard
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: platform
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: platform
 spec:
   policyName: tenant-flux-guard
   validationActions: [Deny]
   matchResources:
     namespaceSelector:
       matchExpressions:
-        - key: homelabs.dev/tier
+        - key: homelab.dev/tier
           operator: In
           values: ["tenant"]

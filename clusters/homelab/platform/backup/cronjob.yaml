@@ -17,8 +17,8 @@ metadata:
   namespace: platform
   labels:
     app.kubernetes.io/name: github-backup
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: platform
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: platform
 spec:
   schedule: "15 4 * * *"
   timeZone: Europe/Berlin
@@ -35,9 +35,9 @@ spec:
         metadata:
           labels:
             app.kubernetes.io/name: github-backup
-            app.kubernetes.io/part-of: homelabs
-            homelabs.dev/tier: platform
-            homelabs.dev/managed-by: platform
+            app.kubernetes.io/part-of: homelab
+            homelab.dev/tier: platform
+            homelab.dev/managed-by: platform
         spec:
           serviceAccountName: github-backup
           automountServiceAccountToken: false
@@ -60,8 +60,8 @@ spec:
                 - |
                   set -eu
                   script=/opt/github-backup/github-backup.sh
-                  "$script" --owner smores56 --repo homelabs-platform --out /backup
-                  "$script" --owner smores56 --repo homelabs-apps --out /backup
+                  "$script" --owner smores56 --repo homelab-platform --out /backup
+                  "$script" --owner smores56 --repo homelab-apps --out /backup
               env:
                 - name: TZ
                   value: UTC

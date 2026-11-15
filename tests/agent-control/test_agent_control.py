@@ -232,7 +232,7 @@ class RouteTest(unittest.TestCase):
             "/cluster/pods/",
             "/cluster/Pods",
             "/self/build/",
-            "/repos/smores56/homelabs-platform/actions/workflows/publish-nanobot.yml/dispatches",
+            "/repos/smores56/homelab-platform/actions/workflows/publish-nanobot.yml/dispatches",
             "/self/logs/",
             "/self",
             "/secrets",
@@ -508,7 +508,7 @@ class CurationTest(unittest.TestCase):
                 "creationTimestamp": "2026-11-01T00:00:00Z",
                 "labels": {
                     "app.kubernetes.io/name": "immich",
-                    "homelabs.dev/managed-by": "platform",
+                    "homelab.dev/managed-by": "platform",
                 },
             },
             "spec": {"template": {"spec": {"containers": [{"env": [{"name": "DB_PASSWORD"}]}]}}},
@@ -528,7 +528,7 @@ class CurationTest(unittest.TestCase):
 
     def test_kustomization_curation_keeps_only_readiness(self) -> None:
         kustomization = {
-            "metadata": {"name": "homelabs-apps", "namespace": "flux-system"},
+            "metadata": {"name": "homelab-apps", "namespace": "flux-system"},
             "spec": {
                 "interval": "10m",
                 "suspended": False,
@@ -542,7 +542,7 @@ class CurationTest(unittest.TestCase):
         }
         payload = agent_control.curate_kustomization(kustomization)
         self.assertNotIn("s3cr3t", repr(payload))
-        self.assertEqual(payload["name"], "homelabs-apps")
+        self.assertEqual(payload["name"], "homelab-apps")
         self.assertEqual(payload["ready"], True)
 
     def test_node_curation_reports_readiness_only(self) -> None:
@@ -723,7 +723,7 @@ class BuildTest(unittest.TestCase):
         self.assertEqual(seen["method"], "POST")
         self.assertEqual(
             seen["path"],
-            "/repos/smores56/homelabs-platform/actions/workflows/publish-nanobot.yml/dispatches",
+            "/repos/smores56/homelab-platform/actions/workflows/publish-nanobot.yml/dispatches",
         )
         self.assertEqual(json.loads(seen["body"]), {"ref": "main"})
         self.assertEqual(seen["headers"]["authorization"], "Bearer ghs_testtoken")
@@ -795,7 +795,7 @@ class BuildConfigTest(unittest.TestCase):
         self.assertEqual(client.base_url, "https://api.github.com")
         self.assertEqual(
             agent_control.BUILD_DISPATCH_PATH,
-            "/repos/smores56/homelabs-platform/actions/workflows/publish-nanobot.yml/dispatches",
+            "/repos/smores56/homelab-platform/actions/workflows/publish-nanobot.yml/dispatches",
         )
 
     def test_missing_token_file_raises_build_unavailable(self) -> None:

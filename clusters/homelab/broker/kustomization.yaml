@@ -9,8 +9,8 @@ namespace: broker
 labels:
   - includeSelectors: false
     pairs:
-      app.kubernetes.io/part-of: homelabs
-      homelabs.dev/tier: broker
+      app.kubernetes.io/part-of: homelab
+      homelab.dev/tier: broker
 resources:
   - serviceaccount.yaml
   - deployment.yaml

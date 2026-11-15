@@ -75,15 +75,15 @@ class JwtTests(unittest.TestCase):
 class ScopeTests(unittest.TestCase):
     def test_the_request_names_the_installation_and_the_exact_scope(self):
         tokens, transport, _ = build()
-        self.assertEqual(tokens.token(INSTALLATION, ("homelabs-apps",), {"contents": "write"}), "ghs_minted")
+        self.assertEqual(tokens.token(INSTALLATION, ("homelab-apps",), {"contents": "write"}), "ghs_minted")
         (url, _, body), = transport.calls
         self.assertEqual(url, f"https://api.github.com/app/installations/{INSTALLATION}/access_tokens")
-        self.assertEqual(body, {"permissions": {"contents": "write"}, "repositories": ["homelabs-apps"]})
+        self.assertEqual(body, {"permissions": {"contents": "write"}, "repositories": ["homelab-apps"]})
 
     def test_different_scopes_are_different_tokens(self):
         tokens, transport, _ = build()
-        tokens.token(INSTALLATION, ("homelabs-apps",), {"contents": "write"})
-        tokens.token(INSTALLATION, ("homelabs-platform",), {"contents": "read"})
+        tokens.token(INSTALLATION, ("homelab-apps",), {"contents": "write"})
+        tokens.token(INSTALLATION, ("homelab-platform",), {"contents": "read"})
         self.assertEqual(len(transport.calls), 2)
 
     def test_a_token_is_reused_inside_its_lifetime(self):

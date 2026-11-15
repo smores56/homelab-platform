@@ -9,7 +9,7 @@ metadata:
   namespace: immich
   labels:
     app.kubernetes.io/name: immich-dump
-    homelabs.dev/managed-by: platform
+    homelab.dev/managed-by: platform
 spec:
   serviceAccountName: data-workload
   automountServiceAccountToken: false

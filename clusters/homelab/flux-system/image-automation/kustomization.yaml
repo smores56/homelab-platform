@@ -6,12 +6,12 @@ kind: Kustomization
 # gotk-sync.yaml, but never this directory. The root Kustomization applies it, so
 # the CRDs and these objects land in the same reconcile (CRDs first).
 #
-# The Git write credential is not in git: `homelabs-apps-write` is a SOPS-encrypted
+# The Git write credential is not in git: `homelab-apps-write` is a SOPS-encrypted
 # Secret created by the operator (docs/manual-steps.md, nanobot image automation
 # step). Until it exists the GitRepository stays NotReady and nothing is pushed —
 # fail closed, like every other credential in this repository.
 resources:
-  - homelabs-apps-git.yaml
+  - homelab-apps-git.yaml
   - nanobot-image.yaml
   - nanobot-update.yaml
   - write-contract.yaml

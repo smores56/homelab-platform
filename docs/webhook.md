@@ -124,12 +124,12 @@ continuity into a previous one.
 
 - **The token is generated, not injected.** The image's `docker_bootstrap`
   writes `channels.websocket.tokenIssueSecret` from `NANOBOT_WEB_TOKEN`, or a
-  random value when that variable is absent. `homelabs-apps` does not set it, so
+  random value when that variable is absent. `homelab-apps` does not set it, so
   today the operator reads the value from the pod's rendered config
   (`$HOME/.nanobot/config.json`). If the scratch PVC is ever reset, the gateway
   mints a new secret and every enqueue 502s until `enqueue-token` is updated.
   The durable fix is a tenant-side `NANOBOT_WEB_TOKEN` from a SOPS/ESO secret;
-  that is a `homelabs-apps` change, not this repository's.
+  that is a `homelab-apps` change, not this repository's.
 - **The envelope is a WebUI protocol, not a public API.** nanobot's
   `webui/client_contract.py` versions it (`WEBUI_PROTOCOL = 1`), but a future
   release can change the frame. The unit tests pin the exact frames against a

@@ -16,7 +16,7 @@ metadata:
   namespace: tenant-apps
   labels:
     app.kubernetes.io/name: agent-control
-    homelabs.dev/tier: tenant
+    homelab.dev/tier: tenant
 automountServiceAccountToken: true
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -26,7 +26,7 @@ metadata:
   namespace: tenant-apps
   labels:
     app.kubernetes.io/name: agent-control
-    homelabs.dev/tier: tenant
+    homelab.dev/tier: tenant
 rules:
   # The agent's own pods: state, logs and events. Ownership is narrowed in the
   # service (pods owned by the nanobot Deployment's ReplicaSets), which is a
@@ -55,7 +55,7 @@ metadata:
   namespace: tenant-apps
   labels:
     app.kubernetes.io/name: agent-control
-    homelabs.dev/tier: tenant
+    homelab.dev/tier: tenant
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role

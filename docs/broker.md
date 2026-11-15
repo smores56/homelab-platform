@@ -69,14 +69,14 @@ each request's logical host (see "GitHub App identity" below).
 | Logical host | Real endpoint | Injection | Credential | Private allowed |
 | --- | --- | --- | --- | --- |
 | `neuralwatt` | `https://api.neuralwatt.com:443` | `Authorization: Bearer` | `neuralwatt-api-key` | no |
-| `github-apps` | `https://github.com:443` | `Authorization: Basic x-access-token:<token>` | app: `homelabs-apps`, `contents: write` | no |
-| `github-platform-push` | `https://github.com:443` | `Authorization: Basic x-access-token:<token>` | app: `homelabs-platform`, `contents: write` | no |
-| `github-platform` | `https://api.github.com:443` | `Authorization: Bearer` | app: `homelabs-platform`, `contents: write`, `pull_requests: write` | no |
+| `github-apps` | `https://github.com:443` | `Authorization: Basic x-access-token:<token>` | app: `homelab-apps`, `contents: write` | no |
+| `github-platform-push` | `https://github.com:443` | `Authorization: Basic x-access-token:<token>` | app: `homelab-platform`, `contents: write` | no |
+| `github-platform` | `https://api.github.com:443` | `Authorization: Bearer` | app: `homelab-platform`, `contents: write`, `pull_requests: write` | no |
 | `github-agent-push` | `https://github.com:443` | `Authorization: Basic x-access-token:<token>` | app: `nix-config`, `kanbei`, `contents: write`, `workflows: write` | no |
 | `github-agent` | `https://api.github.com:443` | `Authorization: Bearer` | app: `nix-config`, `kanbei`, `contents: read`, `pull_requests: write` | no |
 | `github-sdlc-git` | `https://github.com:443` | `Authorization: Basic x-access-token:<token>` | app: `sdlc`, `contents: write` | no |
 | `github-sdlc` | `https://api.github.com:443` | `Authorization: Bearer` | app: `sdlc`, `issues: write`, `metadata: read` | no |
-| `github-hooks` | `https://api.github.com:443` | `Authorization: Bearer` | app: `sdlc`, `homelabs-apps`, `repository_hooks: write`, `metadata: read` | no |
+| `github-hooks` | `https://api.github.com:443` | `Authorization: Bearer` | app: `sdlc`, `homelab-apps`, `repository_hooks: write`, `metadata: read` | no |
 | `tinyfish` | `https://api.search.tinyfish.ai:443` | `X-Api-Key: <token>` | `tinyfish-api-key` | no |
 | `loki` | `http://loki-gateway.observability.svc.cluster.local:3100` | `Authorization: Bearer`, fixed `X-Scope-OrgID: data` | `loki-gateway-token` | yes |
 | `memory` | `http://memory-mcp.graphiti.svc.cluster.local:8182` | `Authorization: Bearer` | `memory-mcp-token` (optional) | yes |
@@ -93,7 +93,7 @@ the service sees `/self/status`; `BROKER_URL/cluster/pods` becomes
 `github-platform-push` is the git transport half of the `github-platform`
 capability: GitHub serves git smart HTTP only on `github.com`, while PR calls
 are REST on `api.github.com`. The agent pushes `agent/*` branches to
-`homelabs-platform` and opens same-repo pull requests; there is no fork (a
+`homelab-platform` and opens same-repo pull requests; there is no fork (a
 GitHub App cannot fork, and GitHub refuses a fork of your own private
 repository), so branch rulesets, not the fork boundary, keep the identity off
 every other branch (docs/manual-steps.md step 1).
@@ -108,7 +108,7 @@ and nothing else.
 
 `github-agent-push` and `github-agent` are the same pair for the agent's own
 repositories: `nix-config` and `kanbei`. They exist so the agent can propose
-changes there the way it does for `homelabs-platform` — push an `agent/*`
+changes there the way it does for `homelab-platform` — push an `agent/*`
 branch, open a pull request — without a second credential. The repositories are
 listed on both hosts and the installation token is minted per request, so the
 scope is exactly those two repos. Write access is still governed per repository
@@ -138,7 +138,7 @@ a 422.
 agent registers repository hooks that GitHub delivers to
 `https://agent-hooks.sammohr.dev/`, so this host only ever creates one. The
 enrollment holds `repository_hooks: write` plus `metadata: read` on `sdlc` and
-`homelabs-apps`, admits only `POST /repos/<owner>/<repo>/hooks`, and a body
+`homelab-apps`, admits only `POST /repos/<owner>/<repo>/hooks`, and a body
 guard requires `config.url` to start with `https://agent-hooks.sammohr.dev/`.
 The narrow shape is the point: `PATCH`/`DELETE` (`method_denied`) would retarget
 or delete a hook the human installed, and without the body guard the agent could
@@ -330,7 +330,7 @@ redirect refusal, no credential stripping, no redaction.
 - DNS: `kube-system` on 53 (`platform/network/dns-egress.yaml`).
 - Tunnel: `ingress/cloudflared` to `tenant-apps/nanobot` on 8080 only
   (`platform/network/agent-ingress.yaml`), paired with the tenant-side rule in
-  `homelabs-apps`.
+  `homelab-apps`.
 
 ## Agent identity and debug RBAC
 
@@ -431,7 +431,7 @@ read` on the two repositories and is not the agent's identity.
 
 ### GitHub App identity
 
-The broker holds `homelabs-agent`'s private key and mints installation
+The broker holds `homelab-agent`'s private key and mints installation
 tokens on demand (`apps/broker/broker/github_app.py`): an RS256 JWT
 (`iat` −60 s, `exp` +540 s, `iss` = app id) is exchanged at
 `POST /app/installations/{id}/access_tokens` with the enrollment's

@@ -1,9 +1,9 @@
-# Agent rules for homelabs-platform
+# Agent rules for homelab-platform
 
 ## Hard rules
 
 - This repository is human-merge only. Agents (nanobot) push to
-  `smores56/homelabs-apps`; platform changes arrive as pull requests from a
+  `smores56/homelab-apps`; platform changes arrive as pull requests from a
   fork, which never receive the `cloudflare` environment or any secret.
 - No secrets in git, in manifests, or in workflow files. Cluster secrets are
   SOPS+age ciphertext or ESO-generated; CI references none.
@@ -56,7 +56,7 @@ no formatter beyond `tofu fmt` (`nix run nixpkgs#opentofu -- fmt -check -recursi
   source-watcher differ in which flags exist at the pinned versions). Per-tenant
   `decryption.secretRef` for age keys; the `--sops-age-secret` global stays
   unset. Never the two insecure kubeconfig flags.
-- Namespaces carry `homelabs.dev/tenant` and `homelabs.dev/tier` labels plus PSA
+- Namespaces carry `homelab.dev/tenant` and `homelab.dev/tier` labels plus PSA
   labels; non-platform namespaces enforce `restricted`. See `docs/tenancy.md`.
 - Kustomization directories are self-contained; CI builds each one directly.
 - Provider pin: Cloudflare v5 (`cloudflare_zero_trust_access_application`,

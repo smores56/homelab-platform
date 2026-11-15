@@ -130,7 +130,7 @@ def cluster_health(samples: list[dict[str, Any]]) -> dict[str, Any]:
     nodes = sorted(
         (
             {"name": sample["labels"].get("node", ""), "ready": sample["value"] >= 1}
-            for sample in _by_name(samples, "homelabs_cluster_node_ready")
+            for sample in _by_name(samples, "homelab_cluster_node_ready")
         ),
         key=lambda node: node["name"],
     )
@@ -143,19 +143,19 @@ def cluster_health(samples: list[dict[str, Any]]) -> dict[str, Any]:
                 "ready": False,
                 "restarts": _int_value(sample["value"]),
             }
-            for sample in _by_name(samples, "homelabs_data_pod_restart_count")
+            for sample in _by_name(samples, "homelab_data_pod_restart_count")
         ),
         key=lambda pod: (pod["namespace"], pod["pod"]),
     )
     ready_by_pod = {
         (sample["labels"].get("namespace", ""), sample["labels"].get("pod", "")): sample["value"] >= 1
-        for sample in _by_name(samples, "homelabs_data_pod_ready")
+        for sample in _by_name(samples, "homelab_data_pod_ready")
     }
     for pod in pods:
         pod["ready"] = ready_by_pod.get((pod["namespace"], pod["pod"]), pod["ready"])
 
     workloads: dict[tuple[str, str, str], dict[str, Any]] = {}
-    for sample in _by_name(samples, "homelabs_data_workload_ready"):
+    for sample in _by_name(samples, "homelab_data_workload_ready"):
         labels = sample["labels"]
         key = (labels.get("namespace", ""), labels.get("kind", ""), labels.get("name", ""))
         workloads[key] = {
@@ -166,7 +166,7 @@ def cluster_health(samples: list[dict[str, Any]]) -> dict[str, Any]:
             "restarts": 0,
             "images": [],
         }
-    for sample in _by_name(samples, "homelabs_data_workload_image"):
+    for sample in _by_name(samples, "homelab_data_workload_image"):
         labels = sample["labels"]
         key = (labels.get("namespace", ""), labels.get("kind", ""), labels.get("name", ""))
         workload = workloads.setdefault(
@@ -298,8 +298,8 @@ def freshness_report(
     (Vector -> Loki) is broken, and is an alert rather than a failed run.
     """
     loki_bound = loki_stale_seconds if loki_stale_seconds is not None else _window_seconds(window)
-    success = _sample_value(samples, "homelabs_data_status_exporter_last_scrape_success")
-    stamped = _sample_value(samples, "homelabs_data_status_exporter_last_scrape_timestamp_seconds")
+    success = _sample_value(samples, "homelab_data_status_exporter_last_scrape_success")
+    stamped = _sample_value(samples, "homelab_data_status_exporter_last_scrape_timestamp_seconds")
     exporter_age: int | None = None
     if exporter_ok and stamped is not None and stamped > 0:
         exporter_age = max(0, int(generated_at.timestamp() - stamped))

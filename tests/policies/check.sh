@@ -384,22 +384,22 @@ kustomize build clusters/homelab/flux-system >"$work/flux-system.yaml"
 json_of "$work/flux-system.yaml" >"$work/flux-system.json"
 
 eq "$(jq -r '.[] | select(.kind == "ImageRepository" and .metadata.name == "nanobot") | [.metadata.namespace, .spec.image, .spec.interval] | join(":")' "$work/flux-system.json")" \
-  "flux-system:ghcr.io/smores56/homelabs-platform/nanobot:5m" \
+  "flux-system:ghcr.io/smores56/homelab-platform/nanobot:5m" \
   "ImageRepository nanobot watches the platform registry path in flux-system"
 eq "$(jq -r '.[] | select(.kind == "ImagePolicy" and .metadata.name == "nanobot") | [.metadata.namespace, .spec.imageRepositoryRef.name, .spec.filterTags.pattern, .spec.filterTags.extract, (.spec.policy.numerical.order // "")] | join(":")' "$work/flux-system.json")" \
   "flux-system:nanobot:^build-(?P<run>[0-9]+)$:\$run:asc" \
   "ImagePolicy nanobot orders the workflow's build-<n> tags numerically"
 eq "$(jq -r '.[] | select(.kind == "ImageUpdateAutomation" and .metadata.name == "nanobot") | [.metadata.namespace, .spec.sourceRef.kind, .spec.sourceRef.name, .spec.git.checkout.ref.branch, .spec.git.push.branch, .spec.update.strategy, .spec.update.path] | join(":")' "$work/flux-system.json")" \
-  "flux-system:GitRepository:homelabs-apps:main:main:Setters:./" \
-  "ImageUpdateAutomation pushes to homelabs-apps main with the Setters strategy"
+  "flux-system:GitRepository:homelab-apps:main:main:Setters:./" \
+  "ImageUpdateAutomation pushes to homelab-apps main with the Setters strategy"
 eq "$(jq -r '.[] | select(.kind == "ImagePolicy" and .metadata.name == "nanobot") | [.spec.digestReflectionPolicy, .spec.interval] | join(":")' "$work/flux-system.json")" \
   "Always:5m" "the nanobot policy reflects digests on its own interval"
-eq "$(jq -r '.[] | select(.kind == "GitRepository" and .metadata.namespace == "flux-system" and .metadata.name == "homelabs-apps") | [.spec.url, .spec.ref.branch, .spec.secretRef.name] | join(":")' "$work/flux-system.json")" \
-  "ssh://git@ssh.github.com:443/smores56/homelabs-apps:main:homelabs-apps-write" \
-  "the image automation source is homelabs-apps over SSH 443 with the write secret"
+eq "$(jq -r '.[] | select(.kind == "GitRepository" and .metadata.namespace == "flux-system" and .metadata.name == "homelab-apps") | [.spec.url, .spec.ref.branch, .spec.secretRef.name] | join(":")' "$work/flux-system.json")" \
+  "ssh://git@ssh.github.com:443/smores56/homelab-apps:main:homelab-apps-write" \
+  "the image automation source is homelab-apps over SSH 443 with the write secret"
 eq "$(jq -r '[.[] | select(.kind == "Secret")] | length' "$work/flux-system.json")" \
   "0" "the write credential is not in git (SOPS-managed Secret)"
-if jq -r '.[] | select(.kind == "ConfigMap" and .metadata.name == "homelabs-apps-write-contract") | .data.marker' "$work/flux-system.json" |
+if jq -r '.[] | select(.kind == "ConfigMap" and .metadata.name == "homelab-apps-write-contract") | .data.marker' "$work/flux-system.json" |
   grep -Fq "{\"\$imagepolicy\": \"flux-system:nanobot:digest\"}"; then
   ok "the write contract records the tenant-side setter marker"
 else
@@ -471,9 +471,9 @@ for ns in tenant-apps broker ingress "${data_namespaces[@]}"; do
   eq "$dns" "kube-system" "DNS egress in $ns targets kube-system only"
 done
 
-eq "$(jq -r 'select(.metadata.namespace == "tenant-apps" and .metadata.name == "egress-broker-only") | [.spec.egress[0].to[0].namespaceSelector.matchLabels["homelabs.dev/tier"], .spec.egress[0].ports[0].port] | join(":")' "$network_json")" \
+eq "$(jq -r 'select(.metadata.namespace == "tenant-apps" and .metadata.name == "egress-broker-only") | [.spec.egress[0].to[0].namespaceSelector.matchLabels["homelab.dev/tier"], .spec.egress[0].ports[0].port] | join(":")' "$network_json")" \
   "broker:8080" "tenant egress is broker-only on 8080"
-eq "$(jq -r 'select(.metadata.namespace == "broker" and .metadata.name == "ingress-tenant-only") | [.spec.ingress[0].from[0].namespaceSelector.matchLabels["homelabs.dev/tier"], .spec.ingress[0].ports[0].port] | join(":")' "$network_json")" \
+eq "$(jq -r 'select(.metadata.namespace == "broker" and .metadata.name == "ingress-tenant-only") | [.spec.ingress[0].from[0].namespaceSelector.matchLabels["homelab.dev/tier"], .spec.ingress[0].ports[0].port] | join(":")' "$network_json")" \
   "tenant:8080" "broker ingress accepts tenants on 8080"
 
 # The tenant's direct public path (#625). The `except` lists are the contract:
@@ -753,8 +753,8 @@ jq_workloads='
 '
 eq "$(jq -r "$jq_workloads | podspec.serviceAccountName // \"none\"" "$work/data-apps.json" | sort -u)" \
   "data-workload" "every data workload runs as the data-workload service account"
-eq "$(jq -r "$jq_workloads | podmeta.labels[\"homelabs.dev/managed-by\"] // \"none\"" "$work/data-apps.json" | sort -u)" \
-  "platform" "every data workload carries homelabs.dev/managed-by=platform"
+eq "$(jq -r "$jq_workloads | podmeta.labels[\"homelab.dev/managed-by\"] // \"none\"" "$work/data-apps.json" | sort -u)" \
+  "platform" "every data workload carries homelab.dev/managed-by=platform"
 eq "$(jq -r "$jq_workloads | select((podspec.volumes // []) | any(.persistentVolumeClaim != null)) | select(podspec.securityContext.runAsUser != 1000) | .metadata.name" "$work/data-apps.json")" \
   "" "every data pod that mounts a share runs as uid 1000 (the share's host owner through the guest translation)"
 # Graphiti mounts no share (FalkorDB owns the graph volume) and its image runs `uv`
@@ -857,7 +857,7 @@ eq "$(jq -r '.[] | select(.kind == "Service" and .metadata.name == "broker") | [
 
 bimage=$(jq -r "$podspec | .containers[0].image" "$work/broker.json")
 case $bimage in
-  ghcr.io/smores56/homelabs-platform/broker@sha256:*) ok "broker image is the platform repository" ;;
+  ghcr.io/smores56/homelab-platform/broker@sha256:*) ok "broker image is the platform repository" ;;
   *) bad "broker image is not the platform repository ($bimage)" ;;
 esac
 if [[ $bimage =~ @sha256:[0-9a-f]{64}$ ]]; then
@@ -914,7 +914,7 @@ eq "$(jq -r "$enrollment | .logical_hosts[\"github-agent\"].github_app.permissio
 eq "$(jq -r "$enrollment | .logical_hosts[\"github-agent-push\"].github_app.permissions | keys | sort | join(\",\")" "$work/broker.json")" \
   "contents,workflows" "github-agent-push asks only for contents and workflows"
 eq "$(jq -r "$enrollment | .logical_hosts[\"github-hooks\"] | [.host, .allow_private, .inject.kind, (.allow_methods | join(\",\")), (.allow_paths | join(\";\")), (.github_app.permissions | keys | sort | join(\",\")), (.github_app.repositories | sort | join(\",\"))] | join(\":\")" "$work/broker.json")" \
-  "api.github.com:false:bearer:POST:^/repos/[^/]+/[^/]+/hooks$:metadata,repository_hooks:homelabs-apps,sdlc" \
+  "api.github.com:false:bearer:POST:^/repos/[^/]+/[^/]+/hooks$:metadata,repository_hooks:homelab-apps,sdlc" \
   "github-hooks is POST-only hook creation with hooks plus metadata on the two agent repositories"
 eq "$(jq -r "$enrollment | .logical_hosts[\"github-hooks\"].body_guards[0] | [.field, (.methods | join(\",\")), (.paths | join(\";\")), .allow] | join(\":\")" "$work/broker.json")" \
   "config.url:POST:^/repos/[^/]+/[^/]+/hooks$:^https://agent-hooks\\.sammohr\\.dev/" \
@@ -980,7 +980,7 @@ eq "$(jq -r '.[] | select(.kind == "PersistentVolumeClaim" and .metadata.name ==
 
 wimage=$(jq -r "$wpod | .containers[0].image" "$work/webhook.json")
 case $wimage in
-  ghcr.io/smores56/homelabs-platform/webhook@sha256:*) ok "webhook image is the platform repository" ;;
+  ghcr.io/smores56/homelab-platform/webhook@sha256:*) ok "webhook image is the platform repository" ;;
   *) bad "webhook image is not the platform repository ($wimage)" ;;
 esac
 if [[ $wimage =~ @sha256:[0-9a-f]{64}$ ]]; then
@@ -1057,7 +1057,7 @@ if jq -e "$backup_pod | .volumes[] | select(.name == \"script\") | .configMap.na
 else
   bad "the backup script is mounted from the generated ConfigMap"
 fi
-if jq -r "$backup_pod | .containers[0].args[0]" "$work/backup.json" | grep -q -- '--repo homelabs-apps'; then
+if jq -r "$backup_pod | .containers[0].args[0]" "$work/backup.json" | grep -q -- '--repo homelab-apps'; then
   ok "the job mirrors both repositories"
 else
   bad "the job mirrors both repositories"
@@ -1209,7 +1209,7 @@ while IFS=$'\t' read -r flag value; do
   fi
 done <<'FLAGS'
 --owner	smores56
---repository	homelabs-platform
+--repository	homelab-platform
 --branch	main
 --path	clusters/homelab
 --components-extra	source-watcher
@@ -1224,9 +1224,9 @@ eq "$(jq -r '[.[] | select(.kind == "Kustomization")][0].spec.serviceAccountName
 eq "$(jq -r '[.[] | select(.kind == "Kustomization")][0].spec.path' <<<"$sync_json")" \
   "./clusters/homelab" "root Kustomization path is the cluster directory"
 
-tenant_json=$(json_of clusters/homelab/platform/tenants/homelabs-apps.yaml)
+tenant_json=$(json_of clusters/homelab/platform/tenants/homelab-apps.yaml)
 eq "$(jq -r '[.[] | select(.kind == "GitRepository")][0].spec.url' <<<"$tenant_json")" \
-  "ssh://git@ssh.github.com:443/smores56/homelabs-apps" \
+  "ssh://git@ssh.github.com:443/smores56/homelab-apps" \
   "tenant source uses GitHub SSH on 443 (the tap forwards only 80/443)"
 eq "$(jq -r '[.[] | select(.kind == "Kustomization")][0].spec.serviceAccountName' <<<"$tenant_json")" \
   "tenant-apps-reconciler" "tenant Kustomization uses the tenant service account"
@@ -1235,7 +1235,7 @@ eq "$(jq -r '[.[] | select(.kind == "Kustomization")][0].spec.decryption.secretR
 eq "$(jq -r '[.[] | select(.kind == "Kustomization")][0].spec.targetNamespace' <<<"$tenant_json")" \
   "tenant-apps" "tenant Kustomization targets its own namespace"
 if grep -Fq "tenant-apps-reconciler" "$policies_dir/06-tenant-flux-guard.yaml" &&
-  grep -Fq "homelabs-apps" "$policies_dir/06-tenant-flux-guard.yaml"; then
+  grep -Fq "homelab-apps" "$policies_dir/06-tenant-flux-guard.yaml"; then
   ok "tenant-flux-guard pins the same service account and source"
 else
   bad "tenant-flux-guard does not pin the reconciled values"

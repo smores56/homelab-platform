@@ -4,7 +4,7 @@ metadata:
   name: ntfy
   labels:
     app.kubernetes.io/name: ntfy
-    homelabs.dev/tier: notify
+    homelab.dev/tier: notify
 spec:
   type: ClusterIP
   selector:

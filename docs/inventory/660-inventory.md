@@ -9,8 +9,8 @@ user `smores`, plus GitHub and the four implementation repositories. Items marke
 - Date: 2026-11-14
 - Method: three read-only lanes (smorespro home, smortress user-readable state,
   GitHub/repo artifacts); filesystem and `gh` reads only
-- Repo tips at survey time: `nix-config 42fbd956`, `homelabs-platform affe42d`,
-  `homelabs-apps f987665`, `dotfiles 8f09ddd`
+- Repo tips at survey time: `nix-config 42fbd956`, `homelab-platform affe42d`,
+  `homelab-apps f987665`, `dotfiles 8f09ddd`
 
 ## 1. Machines and control planes
 
@@ -75,16 +75,16 @@ Every checkout and worktree must be accounted for before ghq migration.
 
 | Repo | Branch | Dirty | Stash | Ahead/behind | Extra worktrees |
 | --- | --- | --- | --- | --- | --- |
-| `homelabs-apps` | main | 0 | 0 | 0/3 | — |
-| `homelabs-platform` | main | **1 file** | 0 | 0/0 | — |
+| `homelab-apps` | main | 0 | 0 | 0/3 | — |
+| `homelab-platform` | main | **1 file** | 0 | 0/0 | — |
 | `kanbei` | main | 0 | 0 | 0/1 | 5: `deterministic-append`, `implementation`, `quarantine-log`, `tuta-origin`, `single-process-workers` |
 | `nix-config` | main | 0 | 0 | 0/0 | 2: `kanbei-streams`, `private-k3s-eval` (same tip `d8f6f546`, stale duplicate) |
 | `sdlc` | main | 0 | 0 | 0/0 | — |
 
 ### smorespro — `~/repos/github.com/smores56/`
 
-All four checkouts (`dotfiles`, `homelabs-platform`, `nix-config`,
-`homelabs-apps`) are clean and in sync with `origin/main`.
+All four checkouts (`dotfiles`, `homelab-platform`, `nix-config`,
+`homelab-apps`) are clean and in sync with `origin/main`.
 
 - Orphan worktree pointer:
   `nix-config/.worktrees/smores-smoreswork-sops` points at a deleted
@@ -97,19 +97,19 @@ All four checkouts (`dotfiles`, `homelabs-platform`, `nix-config`,
 
 ## 5. Images
 
-- Self-built GHCR: `nix-config/memory-mcp`, `homelabs-platform/nanobot`,
-  `homelabs-platform/broker`, `homelabs-platform/webhook`.
-  References: `homelabs-platform/clusters/homelab/data/graphiti/memory-mcp.yaml:71`,
+- Self-built GHCR: `nix-config/memory-mcp`, `homelab-platform/nanobot`,
+  `homelab-platform/broker`, `homelab-platform/webhook`.
+  References: `homelab-platform/clusters/homelab/data/graphiti/memory-mcp.yaml:71`,
   `.../broker/deployment.yaml:40`, `.../webhook/deployment.yaml:47`,
-  `homelabs-apps/apps/nanobot/deployment.yaml:48`.
+  `homelab-apps/apps/nanobot/deployment.yaml:48`.
 - Upstream pins worth preserving: `immich-server:v3.0.3`,
   `immich-machine-learning:v3.0.3`,
   `postgres:17-vectorchord0.4.3-pgvector0.8.1`, `navidrome:0.63.2`,
   `falkordb-server:v4.22.2`,
   `zepai/knowledge-graph-mcp:1.1.3-graphiti-0.31.2-standalone`,
   `restic:0.18.1`, `cloudflared:2026.10.2`, `ntfy:v2.37.2`.
-- Full value/version pin list: `homelabs-platform/docs/data-migration.md` plus
-  `clusters/homelab/**` and `homelabs-apps/apps/nanobot/**`.
+- Full value/version pin list: `homelab-platform/docs/data-migration.md` plus
+  `clusters/homelab/**` and `homelab-apps/apps/nanobot/**`.
 - GHCR package existence/tags/visibility: `BLOCKED` (token lacks
   `read:packages`). No GitHub releases or Actions artifacts on any of the four
   repos.
@@ -117,9 +117,9 @@ All four checkouts (`dotfiles`, `homelabs-platform`, `nix-config`,
 ## 6. Secrets and recovery dependencies
 
 - SOPS files: `nix-config/secrets/{common,smorespro,smoreswork,smortress,cloudflare}.yaml`
-  and `homelabs-platform/secrets/cloudflare.yaml`. Four host/client age
+  and `homelab-platform/secrets/cloudflare.yaml`. Four host/client age
   recipients plus Cloudflare. Key→consumer map lives in
-  `nix-config/docs/secrets.md` and `homelabs-platform/docs/secrets.md`.
+  `nix-config/docs/secrets.md` and `homelab-platform/docs/secrets.md`.
 - Decryption is **unavailable to this session**: the age key command
   (`SOPS_AGE_KEY_CMD`) exits 1 and no local age identity exists. No values were
   printed.
@@ -158,7 +158,7 @@ All four checkouts (`dotfiles`, `homelabs-platform`, `nix-config`,
 
 ## 8. Decisions needed
 
-1. Keep the inventory artifact here (`homelabs-platform/docs/inventory/`) or move
+1. Keep the inventory artifact here (`homelab-platform/docs/inventory/`) or move
    it to the registry/issue.
 2. `dotfiles`: unarchive and rebuild, or create a new repository.
 3. Discard or keep: `~/.local/state/syncthing-versions` (37G), Steam/proton

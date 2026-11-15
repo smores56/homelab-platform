@@ -8,7 +8,7 @@ metadata:
   namespace: tenant-apps
   labels:
     app.kubernetes.io/name: agent-control
-    homelabs.dev/tier: tenant
+    homelab.dev/tier: tenant
 spec:
   type: ClusterIP
   selector:

@@ -10,8 +10,8 @@ kind: ValidatingAdmissionPolicy
 metadata:
   name: data-pvc-scope
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: platform
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: platform
 spec:
   failurePolicy: Fail
   matchConstraints:
@@ -36,14 +36,14 @@ kind: ValidatingAdmissionPolicyBinding
 metadata:
   name: data-pvc-scope
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: platform
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: platform
 spec:
   policyName: data-pvc-scope
   validationActions: [Deny]
   matchResources:
     namespaceSelector:
       matchExpressions:
-        - key: homelabs.dev/tier
+        - key: homelab.dev/tier
           operator: In
           values: ["data"]
