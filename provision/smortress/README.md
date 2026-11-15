@@ -70,8 +70,9 @@ sudo tar -C / -cf host-keys.tar etc/ssh/ssh_host_*
 | Partition | Size | Contents |
 | --- | --- | --- |
 | `nvme0n1p1` | 1G | vfat ESP at `/boot/efi` |
-| `nvme0n1p2` | 150G | `luks-root` → ext4 `/` |
-| `nvme0n1p3` | 300G | `luks-data` (bare LUKS2, no filesystem) |
+| `nvme0n1p2` | 2G | ext4 `/boot` (unencrypted: GRUB cannot read LUKS without cryptodisk) |
+| `nvme0n1p3` | 148G | `luks-root` → ext4 `/` |
+| `nvme0n1p4` | 300G | `luks-data` (bare LUKS2, no filesystem) |
 | remainder | ~479G | unallocated reserve |
 
 `luks-root` opens with the passphrase (`none` in `/etc/crypttab`), so boot
@@ -79,6 +80,18 @@ prompts at the console until Clevis or TPM2 is enrolled. `luks-data` opens from
 `/etc/luks/data.key` (64 bytes, `0400 root:root`), generated in the installer's
 `early-commands` and copied into the target in `late-commands` — curtin writes
 the path into crypttab but never copies the file itself.
+
+Curtin writes the root line correctly as `luks-root UUID=… none luks`, but it
+records `none` as the key column for `luks-data` too: its `crypttab_keyfile`
+only changes for `/dev/random` and `/dev/urandom`, so `keyfile:` never reaches
+`/etc/crypttab` and boot would prompt for a passphrase for the bare mapper. A
+late-command rewrites the file to `luks-data UUID=… /etc/luks/data.key luks` and
+asserts both lines, plus `cryptsetup-initramfs` in the target, so a regression
+fails the install instead of the first reboot.
+
+The initramfs only reads that file because `cryptsetup-initramfs` is installed:
+`cryptsetup` alone ships no `cryptroot` hook, and without it the kernel panics
+down to an initramfs shell on `root=UUID=… does not exist`.
 
 The account `smores` is created with the reused password hash, in `sudo` and
 `adm`, with the operator's key in `authorized-keys` and `allow-pw: false`.
@@ -101,11 +114,13 @@ blocking boot; every data consumer must fail closed on its own.
 ## QEMU spike
 
 ```sh
-nix-shell -p qemu cloud-utils openssh gnupg curl python3 tar --run \
+nix-shell -p qemu cloud-utils xorriso openssh openssl gnupg curl python3 gnutar --run \
   'provision/smortress/qemu-spike.sh --iso ./ubuntu-26.04.1-live-server-amd64.iso --keep'
 ```
 
-It generates throwaway secrets, installs into a sparse 600G NVMe image, boots
+It boots UEFI through OVMF (``nix-build -A OVMF.fd``, or pass ``--ovmf-dir``), because
+SeaBIOS makes curtin install grub-pc and fail on the GPT layout. It generates
+throwaway secrets, installs into a sparse 600G NVMe image, boots
 it twice, types the root passphrase on the serial console, and asserts the
 layout, crypttab lines, keyfile mode and size, the untouched data mapper, the
 pool properties and unit enablement. `--keep` preserves the logs and the image

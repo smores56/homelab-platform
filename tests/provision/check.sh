@@ -40,7 +40,8 @@ if [[ -f $ud ]]; then
                 'path: /boot/efi' 'path: /' 'install-server: true' \
                 'allow-pw: false' 'authorized-keys:' '@ADMIN_KEY@' \
                 'shutdown: reboot' 'error-commands:' \
-                '@LATE_COMMANDS@' 'grub_device: true' 'wipe: superblock'; do
+                '@LATE_COMMANDS@' 'grub_device: true' 'wipe: superblock' \
+                'luks-root UUID=' 'luks-data UUID=' 'cryptsetup-initramfs'; do
     grep -qF -- "$needle" "$ud" && ok "user-data has ${needle}" \
       || bad "user-data is missing ${needle}"
   done
@@ -53,7 +54,7 @@ if [[ -f $ud ]]; then
   fi
 
   for pkg in linux-modules-zfs-generic zfsutils-linux zfs-zed openssh-server \
-             python3 clevis clevis-initramfs cryptsetup; do
+             python3 clevis clevis-initramfs cryptsetup cryptsetup-initramfs; do
     grep -qE "^[[:space:]]+- ${pkg}\$" "$ud" && ok "packages include $pkg" \
       || bad "packages are missing $pkg"
   done
@@ -104,10 +105,10 @@ fi
 for unit in smortress-provision zpool-import-tank; do
   f=$d/units/$unit.service
   [[ -f $f ]] || { skipped "$unit unit assertions (file missing)"; continue; }
-  grep -qF 'systemd-cryptsetup@luks-data.service' "$f" \
+  grep -qF 'systemd-cryptsetup@luks\x2ddata.service' "$f" \
     && ok "$unit waits for the data mapper" \
-    || bad "$unit does not order after systemd-cryptsetup@luks-data.service"
-  grep -qF 'dev-mapper-luks\x2ddata.device' "$f" \
+    || bad "$unit does not order after systemd-cryptsetup@luks\x2ddata.service"
+  grep -qF 'systemd-cryptsetup@luks\x2ddata.service' "$f" \
     && ok "$unit waits for the mapper device" \
     || bad "$unit does not order after the mapper device"
 done

@@ -29,23 +29,33 @@ autoinstall:
     - openssh-server
     - python3
     - cryptsetup
+    # The cryptroot hook lives in this package, not in cryptsetup: without it
+    # the initramfs never reads /etc/crypttab and root=UUID is unresolvable.
+    - cryptsetup-initramfs
     - clevis
     - clevis-initramfs
     - curl
     - ca-certificates
   # The data keyfile exists in the installer environment before curtin formats
   # luks-data, and is copied into the target after the install. curtin writes
-  # the keyfile path into crypttab but never copies the file itself.
+  # crypttab itself but never copies the keyfile, and it records the key column
+  # as `none` for keyfile volumes (see the late-command below).
   early-commands:
     - ["sh", "-c", "install -d -m 0700 /etc/luks && head -c 64 /dev/urandom > /etc/luks/data.key && chmod 0400 /etc/luks/data.key"]
   storage:
     config:
       # Only one ESP: the 970 keeps its own layout for the rollback system.
-      - {type: disk, id: disk-980, ptable: gpt, wipe: superblock, grub_device: true, match: {path: /dev/nvme0n1}}
-      - {type: partition, id: part-esp, device: disk-980, number: 1, size: 1G, flag: boot}
-      - {type: partition, id: part-root, device: disk-980, number: 2, size: 150G}
-      - {type: partition, id: part-data, device: disk-980, number: 3, size: 300G}
+      # UEFI: subiquity looks for `grub_device` on the PARTITION, not the disk.
+      # /boot is plain ext4: with /boot inside the LUKS root, grub-install needs
+      # GRUB_ENABLE_CRYPTODISK=y, which moves the unlock into GRUB where
+      # Clevis/TPM cannot run. Root stays LUKS and unlocks in the initramfs.
+      - {type: disk, id: disk-980, ptable: gpt, wipe: superblock, match: {path: /dev/nvme0n1}}
+      - {type: partition, id: part-esp, device: disk-980, number: 1, size: 1G, flag: boot, grub_device: true}
+      - {type: partition, id: part-boot, device: disk-980, number: 2, size: 2G}
+      - {type: partition, id: part-root, device: disk-980, number: 3, size: 148G}
+      - {type: partition, id: part-data, device: disk-980, number: 4, size: 300G}
       - {type: format, id: fmt-esp, volume: part-esp, fstype: fat32, label: ESP}
+      - {type: format, id: fmt-boot, volume: part-boot, fstype: ext4, label: boot}
       # luks-root uses the passphrase slot, so crypttab says `none` and boot
       # prompts until Clevis/TPM is enrolled. luks-data stays a bare mapper:
       # no format and no mount action may reference it.
@@ -53,9 +63,16 @@ autoinstall:
       - {type: dm_crypt, id: crypt-data, dm_name: luks-data, volume: part-data, keyfile: /etc/luks/data.key}
       - {type: format, id: fmt-root, volume: crypt-root, fstype: ext4, label: root}
       - {type: mount, id: mount-esp, device: fmt-esp, path: /boot/efi}
+      - {type: mount, id: mount-boot, device: fmt-boot, path: /boot}
       - {type: mount, id: mount-root, device: fmt-root, path: /}
   late-commands:
     - ["sh", "-c", "install -d -m 0700 -o root -g root /target/etc/luks && install -m 0400 -o root -g root /etc/luks/data.key /target/etc/luks/data.key"]
+    # curtin writes the root line correctly but uses `none` for the data keyfile:
+    # crypttab_keyfile only changes for /dev/random and /dev/urandom keyfiles, so
+    # the path in `keyfile:` never reaches crypttab and boot would prompt for a
+    # passphrase for the bare mapper. Rewrite the file with the real path, then
+    # fail the install (not the boot) if anything is still off.
+    - ["sh", "-c", "set -eu; root_line=$(grep -m1 '^luks-root ' /target/etc/crypttab); data_uuid=$(blkid -s UUID -o value /dev/nvme0n1p4); printf '%s\\nluks-data UUID=%s /etc/luks/data.key luks\\n' \"$root_line\" \"$data_uuid\" > /target/etc/crypttab; chmod 0644 /target/etc/crypttab; grep -qE '^luks-root UUID=[0-9a-f-]+ none luks$' /target/etc/crypttab; grep -qxE '^luks-data UUID=[0-9a-f-]+ /etc/luks/data.key luks$' /target/etc/crypttab; curtin in-target -- dpkg-query -W cryptsetup-initramfs >/dev/null"]
     # build-seed.sh substitutes the host keys, the first-boot units and their
     # enablement here; every entry is generated from files in this directory.
 @LATE_COMMANDS@

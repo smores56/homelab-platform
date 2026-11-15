@@ -1,7 +1,7 @@
 [Unit]
 Description=Create the smortress ZFS pool on the encrypted data volume
-Requires=systemd-cryptsetup@luks-data.service
-After=systemd-cryptsetup@luks-data.service dev-mapper-luks\x2ddata.device
+Requires=systemd-cryptsetup@luks\x2ddata.service
+After=systemd-cryptsetup@luks\x2ddata.service
 ConditionPathExists=!/var/lib/smortress/pool-created
 
 [Service]

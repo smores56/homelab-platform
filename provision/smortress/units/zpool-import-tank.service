@@ -1,7 +1,7 @@
 [Unit]
 Description=Import the smortress ZFS pool on later boots
-Requires=systemd-cryptsetup@luks-data.service
-After=systemd-cryptsetup@luks-data.service dev-mapper-luks\x2ddata.device smortress-provision.service
+Requires=systemd-cryptsetup@luks\x2ddata.service
+After=systemd-cryptsetup@luks\x2ddata.service smortress-provision.service
 ConditionPathExists=/dev/mapper/luks-data
 
 [Service]
