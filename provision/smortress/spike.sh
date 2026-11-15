@@ -7,6 +7,7 @@
 # pool before the real machine is touched.
 
 set -eu
+boot_mode=${SMORTRESS_SPIKE_BOOT:-serial}
 
 here=$(cd -- "$(dirname -- "$0")" && pwd)
 seed=${SMORTRESS_SEED:-"$here/seed.iso"}
@@ -23,8 +24,10 @@ die() {
 
 command -v qemu-system-x86_64 >/dev/null 2>&1 || die "qemu-system-x86_64 is required"
 command -v qemu-img >/dev/null 2>&1 || die "qemu-img is required"
-[ -f "$seed" ] || die "seed not found: $seed (run build-seed.sh)"
-[ -f "$iso" ] || die "installer ISO not found: $iso (run build-seed.sh)"
+if [ "$boot_mode" != disk ]; then
+  [ -f "$seed" ] || die "seed not found: $seed (run build-seed.sh)"
+  [ -f "$iso" ] || die "installer ISO not found: $iso (run build-seed.sh)"
+fi
 
 find_firmware() {
   for candidate in "$@"; do
@@ -75,7 +78,6 @@ fi
 # installer UI disappears. Booting /casper/vmlinuz directly with console=ttyS0
 # keeps the whole install visible. SMORTRESS_SPIKE_BOOT=iso falls back to the
 # ISO's own bootloader; SMORTRESS_SPIKE_CURSES=1 renders the VGA console.
-boot_mode=${SMORTRESS_SPIKE_BOOT:-serial}
 kern=${SMORTRESS_SPIKE_KERNEL:-"$here/spike-vmlinuz"}
 initrd=${SMORTRESS_SPIKE_INITRD:-"$here/spike-initrd"}
 
@@ -87,11 +89,16 @@ set -- -machine q35 \
   -drive if=pflash,format=raw,file="$vars" \
   -drive if=none,id=disk0,format=qcow2,file="$disk" \
   -device virtio-blk-pci,drive=disk0,serial=SMORTRESS980 \
-  -drive if=none,id=seed0,format=raw,file="$seed" \
-  -device virtio-blk-pci,drive=seed0 \
-  -cdrom "$iso" \
   -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:$ssh_port-:22" \
   -device virtio-net-pci,netdev=net0
+
+# disk: boot the installed system only, for verification after an install.
+if [ "$boot_mode" != disk ]; then
+  set -- "$@" \
+    -drive if=none,id=seed0,format=raw,file="$seed" \
+    -device virtio-blk-pci,drive=seed0 \
+    -cdrom "$iso"
+fi
 
 if [ "$boot_mode" = serial ]; then
   if [ ! -f "$kern" ] || [ ! -f "$initrd" ]; then

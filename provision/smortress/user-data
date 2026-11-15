@@ -146,4 +146,12 @@ autoinstall:
       [Install]
       WantedBy=multi-user.target
       UNIT
+    - |
+      set -eu
+      {
+        echo '--- SMORTRESS-DIAG crypttab'
+        cat /target/etc/crypttab || true
+        echo '--- SMORTRESS-DIAG luks'
+        ls -l /target/etc/luks || true
+      } > /dev/console 2>&1
     - curtin in-target -- systemctl enable smortress-provision.service
