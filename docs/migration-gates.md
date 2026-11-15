@@ -58,9 +58,17 @@ is the only input, and the report is the record of what restic answered.
 
 ```sh
 export PYTHONPATH="$PWD/libs"
+python3 -m data_plane.migration inventory --out /tmp/inventory.json
 python3 -m data_plane.migration preflight --plan /etc/homelab/backup.json
 python3 -m data_plane.migration preflight --plan /etc/homelab/backup.json --json
 ```
+
+`inventory` is the read-only T0 collector. It queries the machine, block
+devices, source-tree sizes, credential metadata and local Git state, and writes
+one JSON document. It never opens a credential, never writes to the host, and
+records an unreadable path or missing tool under `gaps` instead of failing. Run
+it once as the login user and once with `sudo` for the ZFS and private-tree
+sections; the two reports are meant to be compared.
 
 The Ansible gate runs the same command on the data-plane host, where the backup
 role installs the library at `/opt/data-plane/lib` and the plan at

@@ -69,11 +69,13 @@ tests/data-plane/check.sh
 PYTHONPATH=libs python3 -m data_plane validate-catalog catalog.json
 PYTHONPATH=libs python3 -m data_plane render-confirmation operation.json
 PYTHONPATH=libs python3 -m data_plane backup-freshness --plan /etc/homelab/backup.json --host "$(hostname)" --json
+PYTHONPATH=libs python3 -m data_plane.migration inventory --out /tmp/inventory.json
 PYTHONPATH=libs python3 -m data_plane.migration preflight --plan /etc/homelab/backup.json --json
 ```
 
-Everything except the `backup-*` commands and `migration preflight` is
-fixture-only. `migration preflight` only reads each repository (`restic snapshots` and
+Everything except the `backup-*` commands, `migration preflight` and
+`migration inventory` is fixture-only. `migration preflight` only reads each
+repository (`restic snapshots` and
 `restic check`); `backup-run`, `backup-init`, `backup-freshness`, and
 `backup-check` shell out to `zfs`/`restic` through the subprocess runner unless
 `--dry-run` records the argv instead.

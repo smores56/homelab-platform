@@ -1,10 +1,12 @@
-"""Command line for the migration gates: preflight, verify, rollback-plan.
+"""Command line for the migration gates: inventory, preflight, verify, rollback-plan.
 
 ``preflight`` runs the plan-driven backup gate through restic: freshness and
 path coverage per group and tier, a structural ``restic check`` on every
-repository, and ``--read-data`` on each group's primary. ``verify`` and
-``rollback-plan`` stay offline: they read one JSON evidence file and print
-JSON.
+repository, and ``--read-data`` on each group's primary. ``inventory`` is the
+read-only T0 collector: it queries the machine, disks, source trees,
+credential metadata and local Git state and never writes to the host.
+``verify`` and ``rollback-plan`` stay offline: they read one JSON evidence file
+and print JSON.
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ from typing import Any, Mapping, Sequence
 from ..backup.plan import load_plan
 from ..backup.restic import SubprocessRunner
 from ..errors import DataPlaneError
+from . import inventory
 from .phases import MigrationError
 from .preflight import GateReport, ResticGateRunner, run_gate
 from .rollback import plan_rollback
@@ -65,6 +68,21 @@ def _cmd_preflight(args: argparse.Namespace) -> int:
     return 0 if report.ok else 1
 
 
+def _cmd_inventory(args: argparse.Namespace) -> int:
+    report = inventory.build_report(
+        inventory.read_facts(),
+        inventory.SubprocessRunner(timeout=args.timeout),
+        git_root=args.git_root,
+    )
+    text = json.dumps(report, indent=2, sort_keys=True) + "\n"
+    if args.out:
+        Path(args.out).write_text(text, encoding="utf-8")
+        print(args.out)
+    else:
+        sys.stdout.write(text)
+    return 0
+
+
 def _cmd_verify(args: argparse.Namespace) -> int:
     comparison = compare_evidence(_load(args.evidence))
     _print(comparison.to_dict())
@@ -97,6 +115,21 @@ def _parser() -> argparse.ArgumentParser:
         help="skip restic check --read-data on each group's primary",
     )
     preflight.set_defaults(handler=_cmd_preflight)
+
+    inventor = sub.add_parser(
+        "inventory", help="collect the read-only T0 migration inventory"
+    )
+    inventor.add_argument("--out", help="write the report here")
+    inventor.add_argument(
+        "--json", action="store_true", help="print the report (default)"
+    )
+    inventor.add_argument(
+        "--git-root", default=str(Path.home() / "ghq"), help="ghq checkout root"
+    )
+    inventor.add_argument(
+        "--timeout", type=float, default=60.0, help="per-command timeout"
+    )
+    inventor.set_defaults(handler=_cmd_inventory)
 
     verify = sub.add_parser(
         "verify", help="compare source and replica snapshots for data loss"
