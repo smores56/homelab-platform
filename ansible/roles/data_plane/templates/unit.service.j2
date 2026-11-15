@@ -26,8 +26,6 @@ Type={{ 'oneshot' if service.type | default('simple') == 'oneshot' else 'exec' }
 Restart=on-failure
 RestartSec=10s
 {% endif %}
-EnvironmentFile={{ data_plane_config_root }}/{{ service.short }}.env
-EnvironmentFile=-{{ data_plane_secret_root }}/{{ service.short }}.env
 RuntimeDirectory=homelab/{{ service.short }}
 RuntimeDirectoryMode=0700
 ExecStart=/usr/bin/podman run \
@@ -39,6 +37,7 @@ ExecStart=/usr/bin/podman run \
   --read-only \
   --cap-drop=all \
   --security-opt=no-new-privileges \
+  --env-file {{ data_plane_config_root }}/{{ service.short }}.env \
   --user {{ service.container_user | default('65532:65532') }} \
   --tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m \
 {% for port in service.ports | default([]) %}

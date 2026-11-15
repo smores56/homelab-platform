@@ -9,6 +9,7 @@ decrypt it".
 | Operator tooling in this repository (`tofu`, scripts) | `secrets/*.yaml` | the admin identity only | the operator, via `sops -d` |
 | A workload this cluster runs | `clusters/**/*.sops.yaml` | the `flux-system` `sops-age` identity | Flux, with `spec.decryption` on the owning Kustomization |
 | A host unit in `smores56/nix-config` | `nix-config/secrets/smortress.yaml` | the admin and host identities | sops-nix at boot |
+| A host unit on the Nix-free plane | `/etc/homelab/secrets` | the operator bundle only, never in git | the `secrets` role from a decrypted directory |
 
 The admin identity is the operator's passphrase-wrapped age key. Trusting it in
 both repository stores is deliberate: everything here is maintained by one
@@ -66,16 +67,20 @@ gone. These are the holdovers, each with the task that ends it:
 | Read-only R2 key pair | `/etc/homelab/secrets/restic/r2.env` (`AWS_*`), root-only | `restic copy` to R2, the page blob source | cannot read, delete or change bucket policy; the write credential is not on the host |
 | Page blob keys | `secrets/recovery.yaml` in this repository, SOPS to the admin identity | `deno task blob` only | `restic-password` and the `r2-*-readonly` pair; the blob itself is public and encrypted |
 | Event append/read tokens | `/etc/homelab/secrets/event-service/` on the host, cluster Secret `event-service-secrets` in the cluster | `event` only | must differ; the service refuses equal values, and a relay holds neither |
-| Broker identity and approval key | `/etc/homelab/secrets/write-broker/` on the host, Secret `write-broker-secrets` in the cluster | `broker` only | the approval key is not the identity; no workload receives both |
+| Broker identity and approval key | `/etc/homelab/secrets/write-broker/` on the host, Secret `write-broker-secrets` in the cluster | `broker` only | the broker mounts both; no other workload receives either |
 | Relay tokens | one Secret per source (`relay-brave`, …) | that collector only | never shared between sources; the host runs no relay |
 
 Host secret files are installed by the `secrets` play (`--tags secrets`, one
-decrypted directory) at `0600 root:root` under `0700` directories. The unit
-that mounts one raises exactly that file to `0640 root:65532` for the container
-uid and mounts it read-only; the numeric gid is not a host group. The host
-backup units run as root and read `/etc/homelab/secrets/restic` directly. The
-cluster Secrets are created by the operator from `deploy/data-plane/README.md`,
-because this tree creates no Secret.
+decrypted directory) at `0600 root:root` under `0700` directories, on the
+storage and data-plane hosts only. The `data_plane` role is the single owner of
+the container-readable mode: it raises exactly the files a unit mounts to `0640
+root:65532` and mounts them read-only; the numeric gid is not a host group. That
+raise runs in the untagged data-plane play, so after a rotation re-run the full
+converge before restarting a unit; `--tags secrets` alone leaves the new file
+`0600`, and a running unit keeps its old inode until restart. The host backup
+units run as root and read `/etc/homelab/secrets/restic` directly. The cluster
+Secrets are created by the operator from `deploy/data-plane/README.md`, because
+this tree creates no Secret.
 
 Until each row moves, the same value may exist in two stores. The host copy stays
 authoritative for the host reader; the platform copy is written with the host

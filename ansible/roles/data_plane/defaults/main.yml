@@ -8,6 +8,12 @@ data_plane_secret_owner: root
 data_plane_secret_group: "65532"
 data_plane_secret_mode: "0640"
 
+# Units this role used to install. A converge stops, disables and removes them
+# so an upgraded host cannot keep running a retired writer off the recovery
+# fence.
+data_plane_retired_units:
+  - homelab-collector-relay
+
 # The two host services. Every image is selected by key from
 # data_plane_images and must be digest-pinned. Units run rootful podman with a
 # read-only container root, all capabilities dropped, and no-new-privileges; the

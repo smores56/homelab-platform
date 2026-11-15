@@ -229,9 +229,11 @@ kubectl -n data-plane exec deploy/collector-brave -- \
   they exist, those Deployments exit with a usage error rather than serving a
   half-configured endpoint.
 - **Credential paths, not values.** No Secret object and no credential value is
-  created. The base sets `DATA_PLANE_SECRET_FILE` for event-service,
-  write-broker, confirmation-surface and the collectors, but mounts nothing at
-  that path; a profile overlay adds the operator-provisioned Secret. Those
+  created. The base names the file paths each service reads: the three event
+  token files for `event-service`, `/run/secrets/broker/{identity,operator-key}`
+  for `write-broker`, `/run/secrets/confirmation/{token,key}` for the surface and
+  `/run/secrets/relay/<source>/token` for each collector. It mounts nothing at
+  those paths; a profile overlay adds the operator-provisioned Secret. Those
   processes fail closed until it exists. Source credentials stay with the
   collector runtime's LUKS-backed host files, and R2 access is supplied by the
   operator's restore tooling.

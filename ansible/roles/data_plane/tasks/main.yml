@@ -50,6 +50,45 @@
   loop_control:
     label: "{{ item.short }}"
 
+# ReadWritePaths aborts namespace setup when a path does not exist, and podman
+# cannot create the directory it is about to be granted.
+- name: Create each service's podman storage root
+  ansible.builtin.file:
+    path: "{{ data_plane_podman_root }}/{{ item.short }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  loop: "{{ data_plane_services }}"
+  loop_control:
+    label: "{{ item.short }}"
+
+- name: Check for retired unit files
+  ansible.builtin.stat:
+    path: "/etc/systemd/system/{{ item }}.service"
+  loop: "{{ data_plane_retired_units }}"
+  register: data_plane_retired_unit_files
+
+- name: Stop and disable a retired unit
+  ansible.builtin.systemd_service:
+    name: "{{ item.item }}.service"
+    enabled: false
+    state: stopped
+  loop: "{{ data_plane_retired_unit_files.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: item.stat.exists
+
+- name: Remove a retired unit file
+  ansible.builtin.file:
+    path: "/etc/systemd/system/{{ item.item }}.service"
+    state: absent
+  loop: "{{ data_plane_retired_unit_files.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: item.stat.exists
+  notify: Reload systemd
+
 - name: Write the non-secret environment for each service
   ansible.builtin.template:
     src: env.j2
@@ -152,7 +191,7 @@
     label: "{{ item.name }}"
   when: not (item.writer | default(false))
 
-- name: Verify every backup/relay timer is active
+- name: Verify every scheduled timer is active
   ansible.builtin.command: systemctl is-active --quiet {{ item.name }}.timer
   register: data_plane_timer_active
   retries: 5

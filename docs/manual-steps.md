@@ -2089,8 +2089,9 @@ prunes. A missing repository is reported by name, not created.
 
    The data-plane units read their own files from subdirectories of the same
    root. Stage the decrypted bundle outside the repository and install it with
-   the secrets play; the play is a no-op when the variable is unset, and the
-   data-plane role asserts every declared file before it starts a unit:
+   the secrets play; the play targets the storage and data-plane hosts and is a
+   no-op while `secrets_source_dir` is empty, and the data-plane role asserts
+   every declared file before it starts a unit:
 
    ```sh
    ansible-playbook -i inventory/hosts.yml playbooks/site.yml --tags secrets \
@@ -2104,8 +2105,11 @@ prunes. A missing repository is reported by name, not created.
    The role creates each parent directory at `0700`, copies at `0600
    root:root`, and wipes nothing: the decrypted directory is the operator's to
    remove. `homelab-event-service` and `homelab-write-broker` then mount their
-   files read-only and the role raises exactly those files to `0640
-   root:65532` for the container uid. The host runs no relay; relays and
+   files read-only, and the untagged data-plane play raises exactly those files
+   to `0640 root:65532` for the container uid. A rotation therefore needs the
+   full converge before the unit restarts (`--tags secrets` alone leaves the new
+   file at `0600`, and a running unit keeps its old inode). The host runs no
+   relay; relays and
    collectors live in the cluster tree.
 
 4. Create every repository, one group at a time. `backup-init` is idempotent and

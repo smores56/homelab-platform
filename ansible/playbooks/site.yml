@@ -25,13 +25,14 @@
     - base
 
 - name: Install operator-provided secret files before any unit starts
-  hosts: all
+  hosts: storage_hosts:data_plane_hosts
   tags: [secrets]
   roles:
-    # A no-op without a decrypted bundle; a converge that starts a unit still
-    # needs the files, so the data_plane role asserts them itself.
+    # Only the hosts whose roles read these files get them. The guard is a
+    # length check, not `is defined`: the role default is an empty string, so
+    # `is defined` would be true on every run and the role would abort.
     - role: secrets
-      when: secrets_source_dir is defined
+      when: secrets_source_dir | length > 0
 
 - name: Install the NVIDIA driver and container toolkit
   hosts: gpu_hosts

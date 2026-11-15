@@ -93,14 +93,33 @@ class DataPlaneSecretMountTests(unittest.TestCase):
         self.assertIn("subelements", json.dumps(converged[0].get("loop", "")))
 
     def test_a_missing_secret_file_fails_the_converge(self):
-        stats = [task for task in TASKS if "secret_files" in json.dumps(task.get("loop", ""))]
-        self.assertTrue(stats, "no task iterates the declared secret files")
-        self.assertTrue(
-            any(
-                "stat" in json.dumps(task) or "assert" in json.dumps(task)
-                for task in stats
-            )
+        asserts = [task for task in TASKS if "ansible.builtin.assert" in task]
+        failing = [
+            task
+            for task in asserts
+            if any("item.stat.exists" in str(term)
+                   for term in task["ansible.builtin.assert"].get("that", []))
+        ]
+        self.assertEqual(len(failing), 1, "no fail-closed assert over the stat results")
+        self.assertEqual(
+            failing[0]["loop"], "{{ data_plane_secret_stats.results }}"
         )
+
+    def test_unit_receives_the_rendered_environment(self):
+        self.assertIn(
+            "--env-file {{ data_plane_config_root }}/{{ service.short }}.env",
+            UNIT_TEMPLATE,
+        )
+        self.assertNotIn("EnvironmentFile=", UNIT_TEMPLATE)
+
+    def test_retired_unit_is_removed_and_not_fenced_elsewhere(self):
+        self.assertIn("homelab-collector-relay", DEFAULTS["data_plane_retired_units"])
+        removal = [
+            task
+            for task in TASKS
+            if task.get("ansible.builtin.file", {}).get("state") == "absent"
+        ]
+        self.assertTrue(removal, "nothing removes the retired unit file")
 
     def test_retired_relay_unit_is_gone(self):
         self.assertNotIn("collector-relay", {s["short"] for s in SERVICES})
@@ -118,6 +137,19 @@ class UnitSandboxTests(unittest.TestCase):
             UNIT_TEMPLATE,
         )
 
+    def test_podman_storage_root_is_created_first(self):
+        creators = []
+        for task in TASKS:
+            spec = task.get("ansible.builtin.file", {})
+            path = str(spec.get("path", ""))
+            if (
+                spec.get("state") == "directory"
+                and "data_plane_podman_root" in path
+                and "item.short" in path
+            ):
+                creators.append(task)
+        self.assertTrue(creators, "ReadWritePaths would name a missing directory")
+
 
 class SecretsPlayTests(unittest.TestCase):
     def test_secrets_install_before_the_data_plane_play(self):
@@ -125,11 +157,17 @@ class SecretsPlayTests(unittest.TestCase):
         data_play = next(p for p in SITE if "data_plane" in _roles_of(p))
         self.assertLess(SITE.index(secrets_play), SITE.index(data_play))
         entry = next(e for e in secrets_play["roles"] if isinstance(e, dict))
-        self.assertIn("secrets_source_dir is defined", entry["when"])
+        self.assertIn("secrets_source_dir | length > 0", entry["when"])
         self.assertIn("secrets", secrets_play["tags"])
-
+        self.assertEqual(secrets_play["hosts"], "storage_hosts:data_plane_hosts")
     def test_secrets_role_creates_parent_directories(self):
         self.assertTrue(
             any("dirname" in json.dumps(task) for task in SECRETS_TASKS),
             "a nested secrets_files entry cannot be copied without its parent",
         )
+
+    def test_secrets_role_rejects_traversal_and_symlink_escapes(self):
+        flat = json.dumps(SECRETS_TASKS)
+        self.assertIn("search(", flat)
+        self.assertIn("realpath", flat)
+        self.assertNotIn("is not match('(^|/)\\\\.\\\\\\.(/|$)')", flat)
