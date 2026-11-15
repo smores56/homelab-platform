@@ -821,13 +821,13 @@ the origin is a failure. Re-run it after any Access change; run it with
 a deliberate all-zero digest placeholder. From a machine with registry access:
 
 ```sh
-docker build -t ghcr.io/smores56/homelabs-platform/broker:<git-sha> apps/broker
-docker push ghcr.io/smores56/homelabs-platform/broker:<git-sha>
-nix run nixpkgs#crane -- digest ghcr.io/smores56/homelabs-platform/broker:<git-sha>
+docker build -t ghcr.io/smores56/homelab-platform/broker:<git-sha> apps/broker
+docker push ghcr.io/smores56/homelab-platform/broker:<git-sha>
+nix run nixpkgs#crane -- digest ghcr.io/smores56/homelab-platform/broker:<git-sha>
 ```
 
 Replace the `image:` line with
-`ghcr.io/smores56/homelabs-platform/broker@sha256:<digest>`, delete the
+`ghcr.io/smores56/homelab-platform/broker@sha256:<digest>`, delete the
 `PLACEHOLDER DIGEST` comment, and run `scripts/kustomize-build-all.sh` and
 `tests/policies/check.sh` before pushing. The Dockerfile's base tag
 (`python:3.13-slim`) should be replaced with its digest in the same change. Normally `.github/workflows/publish-broker.yml` does all of this on a push to
@@ -1406,13 +1406,13 @@ construction: there is no Access login for GitHub.
    the digest in the run summary. By hand:
 
    ```sh
-   docker build -t ghcr.io/smores56/homelabs-platform/webhook:<git-sha> apps/webhook
-   docker push ghcr.io/smores56/homelabs-platform/webhook:<git-sha>
-   nix run nixpkgs#crane -- digest ghcr.io/smores56/homelabs-platform/webhook:<git-sha>
+   docker build -t ghcr.io/smores56/homelab-platform/webhook:<git-sha> apps/webhook
+   docker push ghcr.io/smores56/homelab-platform/webhook:<git-sha>
+   nix run nixpkgs#crane -- digest ghcr.io/smores56/homelab-platform/webhook:<git-sha>
    ```
 
    Replace the `image:` line in `deployment.yaml` with
-   `ghcr.io/smores56/homelabs-platform/webhook@sha256:<digest>`. Pin the
+   `ghcr.io/smores56/homelab-platform/webhook@sha256:<digest>`. Pin the
    Dockerfile's base digest (`python:3.13-slim`) in the same change.
 
 2. Create the token Secret. `admin-token` is fresh randomness; `enqueue-token`
@@ -1698,7 +1698,7 @@ after this passes.
 The agent image is built in this repository (`images/nanobot/`). A merge to
 `main` that touches it, or a `workflow_dispatch` from agent-control's
 `POST /self/build`, runs the `publish-nanobot` workflow, which pushes
-`ghcr.io/smores56/homelabs-platform/nanobot:build-<run_number>` and prints the
+`ghcr.io/smores56/homelab-platform/nanobot:build-<run_number>` and prints the
 digest in the run summary. The tenant can trigger that workflow and nothing
 else: it never sees the dispatch token, the job's `GITHUB_TOKEN` is scoped to
 the run, and the source changes only by human merge here.
@@ -1720,7 +1720,7 @@ the run, and the source changes only by human merge here.
    → Change visibility → Public. Verify anonymously:
 
    ```sh
-   crane digest ghcr.io/smores56/homelabs-platform/nanobot:build-1
+   crane digest ghcr.io/smores56/homelab-platform/nanobot:build-1
    ```
 
 3. Run the workflow once and record the digest the summary prints:
@@ -1771,7 +1771,7 @@ the run, and the source changes only by human merge here.
    (`clusters/homelab/flux-system/image-automation/write-contract.yaml`):
 
    ```yaml
-   image: ghcr.io/smores56/homelabs-platform/nanobot@sha256:<digest>
+   image: ghcr.io/smores56/homelab-platform/nanobot@sha256:<digest>
      # {"$imagepolicy": "flux-system:nanobot"}
    ```
 

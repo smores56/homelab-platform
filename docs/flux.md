@@ -125,7 +125,7 @@ not regenerate:
 
 | Object | Namespace | Contract |
 | --- | --- | --- |
-| `ImageRepository nanobot` | flux-system | watches `ghcr.io/smores56/homelabs-platform/nanobot` |
+| `ImageRepository nanobot` | flux-system | watches `ghcr.io/smores56/homelab-platform/nanobot` |
 | `ImagePolicy nanobot` | flux-system | `^build-(?P<run>[0-9]+)$` → numerical, ascending |
 | `GitRepository homelab-apps` | flux-system | SSH 443, `homelab-apps-write` (SOPS-managed) |
 | `ImageUpdateAutomation nanobot` | flux-system | Setters, `./`, pushes `main` |
@@ -150,7 +150,7 @@ the highest run number and Flux commits the resolved digest to
 `smores56/homelab-apps`. The tenant side carries the marker:
 
 ```yaml
-image: ghcr.io/smores56/homelabs-platform/nanobot@sha256:<digest>
+image: ghcr.io/smores56/homelab-platform/nanobot@sha256:<digest>
   # {"$imagepolicy": "flux-system:nanobot"}
 ```
 

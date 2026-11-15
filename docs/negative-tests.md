@@ -475,7 +475,7 @@ the previous table in this document describes the #578 families; #582 adds:
   and `NANOBOT_CONFIG_DIR=/etc/nanobot`, the second keeps the ConfigMap writable
   only by the platform reconciler;
 - the `tenant-images` prefix is the platform registry path
-  (`ghcr.io/smores56/homelabs-platform/nanobot@sha256:`);
+  (`ghcr.io/smores56/homelab-platform/nanobot@sha256:`);
 - `ImageRepository`/`ImagePolicy nanobot` order `^build-<n>$` numerically in
   `flux-system`, and `ImageUpdateAutomation` pushes `main` of `homelab-apps`
   through the `homelab-apps-write` Secret; the flux-system build holds no

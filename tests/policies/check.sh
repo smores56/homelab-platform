@@ -384,7 +384,7 @@ kustomize build clusters/homelab/flux-system >"$work/flux-system.yaml"
 json_of "$work/flux-system.yaml" >"$work/flux-system.json"
 
 eq "$(jq -r '.[] | select(.kind == "ImageRepository" and .metadata.name == "nanobot") | [.metadata.namespace, .spec.image, .spec.interval] | join(":")' "$work/flux-system.json")" \
-  "flux-system:ghcr.io/smores56/homelabs-platform/nanobot:5m" \
+  "flux-system:ghcr.io/smores56/homelab-platform/nanobot:5m" \
   "ImageRepository nanobot watches the platform registry path in flux-system"
 eq "$(jq -r '.[] | select(.kind == "ImagePolicy" and .metadata.name == "nanobot") | [.metadata.namespace, .spec.imageRepositoryRef.name, .spec.filterTags.pattern, .spec.filterTags.extract, (.spec.policy.numerical.order // "")] | join(":")' "$work/flux-system.json")" \
   "flux-system:nanobot:^build-(?P<run>[0-9]+)$:\$run:asc" \
@@ -857,7 +857,7 @@ eq "$(jq -r '.[] | select(.kind == "Service" and .metadata.name == "broker") | [
 
 bimage=$(jq -r "$podspec | .containers[0].image" "$work/broker.json")
 case $bimage in
-  ghcr.io/smores56/homelabs-platform/broker@sha256:*) ok "broker image is the platform repository" ;;
+  ghcr.io/smores56/homelab-platform/broker@sha256:*) ok "broker image is the platform repository" ;;
   *) bad "broker image is not the platform repository ($bimage)" ;;
 esac
 if [[ $bimage =~ @sha256:[0-9a-f]{64}$ ]]; then
@@ -980,7 +980,7 @@ eq "$(jq -r '.[] | select(.kind == "PersistentVolumeClaim" and .metadata.name ==
 
 wimage=$(jq -r "$wpod | .containers[0].image" "$work/webhook.json")
 case $wimage in
-  ghcr.io/smores56/homelabs-platform/webhook@sha256:*) ok "webhook image is the platform repository" ;;
+  ghcr.io/smores56/homelab-platform/webhook@sha256:*) ok "webhook image is the platform repository" ;;
   *) bad "webhook image is not the platform repository ($wimage)" ;;
 esac
 if [[ $wimage =~ @sha256:[0-9a-f]{64}$ ]]; then

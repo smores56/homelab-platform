@@ -55,7 +55,7 @@ Seventeen policies, each in its own file with the binding that scopes it
 | --- | --- | --- |
 | `no-host-access` | `tenant`, `broker`, `data` (all four namespaces), `webhook`, `notify` | `hostNetwork`, `hostPID`, `hostIPC`, `hostPath`, privileged containers, `hostPort`, added capabilities, `allowPrivilegeEscalation` |
 | `tenant-gvisor` | `tenant` | any pod without `spec.runtimeClassName: gvisor` |
-| `tenant-images` | `tenant` | images not pinned by `@sha256:`, floating tags, nanobot from outside `ghcr.io/smores56/homelabs-platform/nanobot@sha256:` |
+| `tenant-images` | `tenant` | images not pinned by `@sha256:`, floating tags, nanobot from outside `ghcr.io/smores56/homelab-platform/nanobot@sha256:` |
 | `tenant-scratch-pvc` | `tenant` | pod volumes whose PVC name does not start with the pod's `app.kubernetes.io/name` |
 | `tenant-pvc-naming` | `tenant` | PVCs without an `app.kubernetes.io/name` label or not named `<name>-*` |
 | `tenant-flux-guard` | `tenant` | Kustomizations that use another service account, target another namespace, read another GitRepository, carry a `kubeConfig`, or decrypt with another age key |
