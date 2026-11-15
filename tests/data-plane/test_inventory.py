@@ -125,6 +125,26 @@ class InventoryTests(unittest.TestCase):
             any("no pools available" in gap for gap in report["gaps"]), report["gaps"]
         )
 
+    def test_a_host_without_zfs_names_it_missing_instead_of_root_only(self):
+        report = inventory.build_report(
+            self.facts,
+            self.runner(),
+            source_roots=[],
+            credential_paths=[],
+            git_roots=[],
+            tools={
+                "du": "du",
+                "git": "git",
+                "lsblk": "lsblk",
+                "zfs": None,
+                "zpool": None,
+            },
+        )
+        joined = " ".join(report["gaps"])
+        self.assertIn("zfs is not installed on this host", joined)
+        self.assertIn("zpool is not installed on this host", joined)
+        self.assertNotIn("re-run as root", joined)
+
     def test_the_report_is_deterministic(self):
         first = json.dumps(self.build(self.runner()), sort_keys=True)
         second = json.dumps(self.build(self.runner()), sort_keys=True)

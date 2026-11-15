@@ -157,9 +157,9 @@ def collect_disks(
     zfs = tools.get("zfs")
     lsblk = tools.get("lsblk") or "lsblk"
     if zpool is None:
-        gaps.append("zpool is not available to this user; re-run as root for pool data")
+        gaps.append("zpool is not installed on this host; no pool data collected")
     if zfs is None:
-        gaps.append("zfs is not available to this user; re-run as root for dataset data")
+        gaps.append("zfs is not installed on this host; no dataset data collected")
     return {
         "block_devices": _json(
             runner,
