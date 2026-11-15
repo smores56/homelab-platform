@@ -253,7 +253,7 @@ fails at that point.
 
 The entrypoint exports the environment the pod relies on; the Deployment must
 provide `HOME=/data/home`, `BROKER_URL`, and the tools PVC mounted at
-`/data/home/tools` (writable, and `TMPDIR` lands on it so a large download is
+`/data/tools` (writable, and `TMPDIR` lands on it so a large download is
 not squeezed into `emptyDir` or the container layer). It then puts
 `$HOME/tools/bin` first on `PATH` and defaults `TMPDIR=$HOME/tmp`,
 `UV_TOOL_DIR=$HOME/tools/uv` and `UV_TOOL_BIN_DIR=$HOME/tools/bin` when the pod
@@ -264,7 +264,7 @@ The last line of the bootstrap names the state:
 ```sh
 cluster-kubectl -n tenant-apps logs deploy/nanobot | grep nanobot-bootstrap
 # nanobot-bootstrap: sdlc=<short rev|none> tools=<n> skills=<n>
-cluster-kubectl -n tenant-apps exec deploy/nanobot -- git -C /data/home/tools/sdlc-src rev-parse --short HEAD
+cluster-kubectl -n tenant-apps exec deploy/nanobot -- git -C /data/tools/sdlc-src rev-parse --short HEAD
 ```
 
 `sdlc=none` means no tree is on the PVC (the first start could not clone), so
