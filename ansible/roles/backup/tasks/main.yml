@@ -343,14 +343,6 @@
     group: "{{ backup_group }}"
     mode: "0750"
 
-- name: Install the retention command
-  ansible.builtin.template:
-    src: restic-retention.py.j2
-    dest: "{{ backup_retention_program }}"
-    owner: "{{ backup_owner }}"
-    group: "{{ backup_group }}"
-    mode: "0750"
-
 - name: Install the lock drill
   ansible.builtin.copy:
     src: lock-drill.sh
@@ -384,20 +376,6 @@
     label: "{{ item.key }}"
   notify: Reload systemd
 
-- name: Install the retention unit and timer
-  ansible.builtin.template:
-    src: "{{ item.src }}"
-    dest: /etc/systemd/system/{{ item.dest }}
-    owner: "{{ backup_owner }}"
-    group: "{{ backup_group }}"
-    mode: "{{ backup_unit_mode }}"
-  loop:
-    - { src: restic-retention.service.j2, dest: restic-retention.service }
-    - { src: restic-retention.timer.j2, dest: restic-retention.timer }
-  loop_control:
-    label: "{{ item.dest }}"
-  notify: Reload systemd
-
 - name: Enable the backup timers only after the migration gate
   ansible.builtin.systemd_service:
     name: "{{ item }}"
@@ -409,14 +387,7 @@
        | map('regex_replace', '$', '.timer') | list }}
   when: backup_timers_enabled | bool
 
-- name: Enable the retention timer only when the operator opted in
-  ansible.builtin.systemd_service:
-    name: restic-retention.timer
-    enabled: "{{ restic_retention_enabled | bool }}"
-    state: "{{ 'started' if restic_retention_enabled | bool else 'stopped' }}"
-    daemon_reload: true
-
-- name: Prove stale-lock expiry before retention is enabled
+- name: Prove stale-lock expiry before the backup timers are enabled
   ansible.builtin.command:
     argv: [/usr/local/sbin/restic-lock-drill]
   when: restic_lock_drill_enabled | bool

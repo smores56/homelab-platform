@@ -14,19 +14,10 @@ restic_checksums:
 restic_architectures:
   x86_64: amd64
   aarch64: arm64
-restic_retention:
-  daily: 14
-  weekly: 8
-  monthly: 12
-# Retention is destructive. The argv and the schedule are installed and tested,
-# but the operator enables them after the first complete replication.
-restic_retention_enabled: false
-restic_retention_calendar: "Sun *-*-* 04:15:00"
 restic_lock_drill_enabled: false
 
 backup_python: /usr/bin/python3
 backup_program: /usr/local/sbin/homelab-backup
-backup_retention_program: /usr/local/sbin/homelab-restic-retention
 backup_cache_dir: /var/cache/restic-backup
 # One recursive snapshot covers every group, so ZFS snapshots share one window.
 backup_zfs_keep_days: 7
