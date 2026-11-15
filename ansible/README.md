@@ -224,7 +224,7 @@ the backup gate proves the repositories from the host plan.
   tests. There is no generation manifest and no per-snapshot tag.
 - `/var/backups/primary/restic/<group>` and
   `/var/backups/secondary/restic/<group>` are the local per-group repositories;
-  `s3:https://<account>.r2.cloudflarestorage.com/homelab-restic/<group>` is the
+  `s3:https://<account>.r2.cloudflarestorage.com/homelabs-restic/<group>` is the
   off-site copy. One root-only `data-plane.password` opens all of them.
 - `homelab-backup@fast.service` and `homelab-backup@media.service` take one
   recursive snapshot, bind-mount it once, write each due group to its NVMe

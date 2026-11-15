@@ -2066,10 +2066,15 @@ prunes. A missing repository is reported by name, not created.
    the service tokens; add the read-only R2 pair once Cloudflare has issued it:
 
    ```sh
-   sops secrets/660-host.yaml       # set r2_access_key_id / r2_secret_access_key
-   sops -d --extract '["restic_password"]' secrets/660-host.yaml | base64 -d
-   # copy that value into the password manager now; it opens every new repository
+   sops secrets/660-host.yaml       # raw 32/64-char hex pair; consumers_json as JSON
+   sops -d --extract '["restic_password"]' secrets/660-host.yaml
+   # copy that value into the password manager; it is the file content verbatim
    ```
+
+   Every value is the exact file content: the password and tokens verbatim, the
+   R2 pair as raw hex, `consumers_json` as JSON text. The unpacker refuses base64
+   where raw content is required, an equal token pair, or a `consumers_json` that
+   is not JSON, so a mistaken paste fails here instead of at service start.
 
    Unpack it into the directory the install play reads, then wipe the plaintext:
 
@@ -2084,7 +2089,7 @@ prunes. A missing repository is reported by name, not created.
 
    ```sh
    sudo sh -c '. /run/operator-secrets/restic/r2.env && exec restic \
-     --repo "s3:https://<account>.r2.cloudflarestorage.com/homelab-restic/notes" \
+     --repo "s3:https://<account>.r2.cloudflarestorage.com/homelabs-restic/notes" \
      --password-file /run/operator-secrets/restic/data-plane.password snapshots'
    # expect: "repository ... does not exist" — never an authentication error
    ```

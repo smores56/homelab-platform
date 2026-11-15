@@ -25,9 +25,11 @@ restic pair: state decides what the next apply does, so a backup credential must
 not be able to rewrite it.
 
 `secrets/660-host.yaml` is the host-plane bundle: a freshly generated restic
-password, the event and broker tokens, and the R2 read-only pair. Every value is
-base64 so the file stays flat; `scripts/unpack-host-secrets.py` writes exactly
-the paths `host_secret_files` names and never prints a value.
+password, the event and broker tokens, and the R2 read-only pair. Each value is
+the exact content of one file — the password and tokens verbatim, the R2 pair as
+raw hex, `consumers_json` as JSON text — so what the operator stores is what the
+host uses. `scripts/unpack-host-secrets.py` writes exactly the paths
+`host_secret_files` names and never prints a value.
 
 `scripts/tofu-cloudflare.sh` reads that file by default; `CLOUDFLARE_SECRETS_FILE`
 overrides it, and pre-set `AWS_*` / `CLOUDFLARE_API_TOKEN` skip SOPS entirely
