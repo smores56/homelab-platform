@@ -1469,6 +1469,11 @@ construction: there is no Access login for GitHub.
    acknowledged without a second enqueue.
 ## 28. Give each tree its restic Secret, then run the drill
 
+> Pre-#660. These per-tree cluster jobs (#619) are the live scheme until
+> cutover. Step 35 replaces the model with one repository per recovery group,
+> written by the host and replicated with `restic copy`, and retires these
+> CronJobs at cutover; keep this section and the jobs running until then.
+
 Four trees now back themselves up from the cluster (`clusters/homelab/data/*/restic-backup.yaml`,
 SDLC #619): `immich`, `navidrome`, `graphiti` and `opdshelf`, each with its own
 CronJob, its own claim mounted read-only and its own repository at
@@ -2013,3 +2018,250 @@ host with `422`, and hook creation is refused with
 Both repositories are already in the installation (step 1, item 2), so nothing
 else changes. Repeating this step after a permission edit is the only work: no
 secret file, no `broker-credentials` key and no restart are involved.
+
+## 35. Prove the #660 data plane: repositories, drill, and the gate
+
+The backup path is host systemd units plus restic; the recovery page is static
+Cloudflare Pages; the cluster tree is applied by hand. Every test in this
+repository runs a fake restic runner, so this section is the only proof that
+restic actually copies and restores on the host. Steps 1-8 are the proof and
+none of them is destructive; step 9 is the first gated step.
+
+Nothing auto-initializes a repository, and `preflight` never writes, copies or
+prunes. A missing repository is reported by name, not created.
+
+1. Pin the R2 account and re-render both artefacts. One variable feeds the host
+   plan, the public manifest and every repository URL:
+
+   ```sh
+   # replace ACCOUNT with the Cloudflare account id
+   $EDITOR ansible/group_vars/backup.yml        # backup_r2_repository_root
+   scripts/render-recovery-groups.py
+   scripts/render-recovery-groups.py --check    # must pass; CI asserts the file
+   scripts/render-recovery-groups.py --host-plan > /tmp/backup.json
+   ssh smortress sudo cat /etc/homelab/backup.json | diff - /tmp/backup.json
+   ```
+
+   An empty diff is the proof that the host plan and the checked-in manifest
+   came from one source. A stale `recovery-groups.json` also fails
+   `tests/data-plane/check.sh`.
+
+2. Measure capacity before creating a repository. The live pool, the NVMe
+   primary and the HDD secondary hold the same data at once, and the scratch
+   target needs room for the newest covering snapshots:
+
+   ```sh
+   zfs list -o name,used,avail
+   du -sh /var/lib/data/* | sort -h
+   sudo /usr/local/sbin/homelab-clean-room-restore --capacity-bytes
+   ```
+
+   `--capacity-bytes` prints the restore requirement (newest covering snapshot
+   per group, times 1.1, plus `homelab_recovery_min_free_gb` where restic
+   recorded no size). A primary disk that cannot hold the retained 14/8/12 set
+   for every group fails at the first prune, not at the first backup.
+
+3. Unpack the host-secret bundle. `secrets/660-host.yaml` is the one encrypted
+   source (admin recipient only). It already holds a fresh restic password and
+   the service tokens; add the read-only R2 pair once Cloudflare has issued it:
+
+   ```sh
+   sops secrets/660-host.yaml       # raw 32/64-char hex pair; consumers_json as JSON
+   sops -d --extract '["restic_password"]' secrets/660-host.yaml
+   # copy that value into the password manager; it is the file content verbatim
+   ```
+
+   Every value is the exact file content: the password and tokens verbatim, the
+   R2 pair as raw hex, `consumers_json` as JSON text. The unpacker refuses base64
+   where raw content is required, an equal token pair, or a `consumers_json` that
+   is not JSON, so a mistaken paste fails here instead of at service start.
+
+   Unpack it into the directory the install play reads, then wipe the plaintext:
+
+   ```sh
+   sops -d secrets/660-host.yaml > /dev/shm/host-secrets.yaml
+   sudo scripts/unpack-host-secrets.py --bundle /dev/shm/host-secrets.yaml \
+     --dest /run/operator-secrets
+   shred -u /dev/shm/host-secrets.yaml
+   ```
+
+   Prove the pair reaches the bucket without creating anything:
+
+   ```sh
+   sudo sh -c '. /run/operator-secrets/restic/r2.env && exec restic \
+     --repo "s3:https://<account>.r2.cloudflarestorage.com/homelab-restic/notes" \
+     --password-file /run/operator-secrets/restic/data-plane.password snapshots'
+   # expect: "repository ... does not exist" — never an authentication error
+   ```
+
+   Store the same password and read-only pair in `secrets/recovery.yaml` (SOPS,
+   admin identity) for the page blob.
+
+   The data-plane units read their own files from subdirectories of the same
+   root. Stage the decrypted bundle outside the repository and install it with
+   the secrets play; the play targets the storage and data-plane hosts and is a
+   no-op while `secrets_source_dir` is empty:
+
+   ```sh
+   ansible-playbook -i inventory/hosts.yml playbooks/site.yml --tags secrets \
+     -e secrets_source_dir=/run/operator-secrets
+   ```
+
+   The policy is `host_secret_files` in `group_vars/all.yml`: one entry per
+   file, relative to the secret root, with `unit` and `mount` for a file a unit
+   mounts. An entry with a unit installs on `data_plane_hosts` at `0640` with
+   the container gid; an entry without one installs on `storage_hosts` at `0600`
+   root. The role creates each parent directory at `0700` and copies with the
+   final owner and mode, so there is no second writer of that file and a drift
+   is corrected on the next run. A rotation replaces the file and
+   `try-restart`s only a running unit whose content changed; a stopped or
+   recovery-fenced unit stays stopped, so rotate, then run the play again. The
+   host runs no relay; relays and collectors live in the cluster tree.
+
+   A host unit also cannot pull an image. Every `podman run` uses `--pull=never`
+   and its own `--root`, so put a digest-pinned OCI archive on the host and set
+   `data_plane_image_archive` in `group_vars/all.yml`; the role loads it into
+   each per-service store and fails closed while the image is absent. The broker
+   reads `deploy/data-plane/config/source-catalog.json`, which the role installs
+   at `DATA_PLANE_CATALOG`. Only the dedicated `events` and `intents` datasets
+   are handed to the container uid; `/srv/books` stays host-owned, so a
+   general-source write needs an owner match before cutover.
+
+4. Create every repository, one group at a time. `backup-init` is idempotent and
+   creates only the tiers the group lists:
+
+   ```sh
+   sudo sh -c '. /etc/homelab/secrets/restic/r2.env &&
+     PYTHONPATH=/opt/data-plane/lib python3 -m data_plane backup-init \
+       --plan /etc/homelab/backup.json --group notes --dry-run'   # argv only
+   sudo sh -c '. /etc/homelab/secrets/restic/r2.env &&
+     PYTHONPATH=/opt/data-plane/lib python3 -m data_plane backup-init \
+       --plan /etc/homelab/backup.json --group notes'
+   ```
+
+   Repeat per group (books, memory-external, memory-local, music, notes, photos,
+   wallpapers, data-plane-state, browsing, finance, mail, host-keys), or omit
+   `--group` to cover the whole plan.
+
+5. Run one real cadence. Start with the fastest group; the runner takes one
+   recursive ZFS snapshot, writes every due group's primary, copies outward and
+   prunes after the copies land:
+
+   ```sh
+   /usr/local/sbin/homelab-backup --config /etc/homelab/backup.json --cadence fast
+   restic --repo /var/backups/primary/restic/notes \
+     --password-file /etc/homelab/secrets/restic/data-plane.password snapshots
+   ```
+
+   The run fails on an unmounted or empty stage, on a copy that does not land,
+   and on a leftover bind mount; it never backs up the previous tree. A second
+   concurrent run fails on the lock.
+
+6. Prove structure, then payload, then freshness:
+
+   ```sh
+   export PYTHONPATH=/opt/data-plane/lib
+   python3 -m data_plane backup-check --plan /etc/homelab/backup.json --group notes
+   python3 -m data_plane backup-freshness --plan /etc/homelab/backup.json --json
+   python3 -m data_plane.migration preflight --plan /etc/homelab/backup.json --no-read-data
+   python3 -m data_plane.migration preflight --plan /etc/homelab/backup.json
+   ```
+
+   The last command reads every pack on each group's primary; never skip it
+   before cutover. Every failure line names `<group>/<tier>`, so one run shows
+   every gap. `restic check` and `--read-data` do not modify a repository.
+
+7. Restore a group to a dedicated scratch mount. `recover.yml` fences every
+   writer and backup timer first, restores nvme→hdd→r2, and prints the real
+   destination and entry count:
+
+   ```sh
+   sudo install -d -m 0755 /mnt/scratch      # its own mount, not a subdirectory
+   ansible-playbook -i inventory/hosts.yml playbooks/recover.yml \
+     --tags destructive \
+     -e homelab_recovery_confirm=true \
+     -e homelab_recovery_apply=true \
+     -e homelab_recovery_scratch_target=/mnt/scratch \
+     -e homelab_recovery_groups=notes
+   ```
+
+   The drill passes when the printed tree matches the group's staged path and a
+   restored file opens. Restoring into `/` needs `--allow-live`, the
+   `writers-fenced` marker and a non-empty refusal, and is never the drill.
+   Resume writers only after that check:
+
+   ```sh
+   ansible-playbook -i inventory/hosts.yml playbooks/recover.yml \
+     --tags destructive -e homelab_recovery_confirm=true \
+     -e homelab_recovery_apply=true -e homelab_recovery_resume_writers=true
+   ```
+
+8. Drill the browser page against the rendered manifest, then deploy it. The
+   blob must be built against the manifest the site ships:
+
+   ```sh
+   cd apps/recovery-page
+   deno task blob --manifest ../../deploy/data-plane/config/recovery-groups.json \
+     --secrets ../../secrets/recovery.yaml
+   deno task blob --check-only \
+     --manifest ../../deploy/data-plane/config/recovery-groups.json
+   deno task test && deno task build
+   CLOUDFLARE_API_TOKEN=... CLOUDFLARE_ACCOUNT_ID=... \
+     npx wrangler pages deploy dist --project-name <pages-project>
+   ```
+
+   Unlock the deployed page with the printed recovery password, open every
+   group, restore a sample tree and open the files. The legacy page and the
+   legacy repositories stay live until this passes.
+
+9. Apply the cluster tree only after the image exists. Publish the image, pin
+   the digest in `deploy/data-plane/base/kustomization.yaml`,
+   `deploy/data-plane/images.yaml` and `data_plane_images` in
+   `ansible/group_vars/all.yml`, then create the operator Secrets the base
+   mounts. The key names are the contract; the values are generated once and
+   never committed:
+
+   ```sh
+   kubectl -n data-plane create secret generic event-service-secrets \
+     --from-file=append-token --from-file=read-token --from-file=consumers.json
+   kubectl -n data-plane create secret generic write-broker-secrets \
+     --from-file=identity --from-file=operator-key
+   kubectl -n data-plane create secret generic confirmation-surface-secrets \
+     --from-file=token --from-file=key
+   for source in brave finance tuta immich; do
+     kubectl -n data-plane create secret generic "relay-$source" --from-file=token
+   done
+   nix-shell -p kustomize kubeconform --run "deploy/data-plane/tests/check.sh"
+   ```
+
+   The append and read tokens must differ; the service refuses equal tokens,
+   and a relay never receives either. `consumers.json` is a JSON object of
+   consumer name to secret, not a token.
+
+   The host units use the same values under
+   `/etc/homelab/secrets/<service>/` (item 3) and mount them read-only at the
+   paths their environment names; `homelab-collector-relay` is retired, because
+   the host has no collector and the cluster owns one relay per source.
+
+10. Before any destructive step, provision rescue access and re-prove it:
+
+    ```sh
+    cd ansible
+    ansible-playbook -i inventory/hosts.yml playbooks/rescue.yml
+    ```
+
+    The play refuses to pass unless two independent SSH paths authenticate from
+    the controller. Re-run it immediately before a destructive command; `sshd`
+    is independent of k3s, ZFS and every data-plane unit.
+
+11. Order the gates. Inventory → `protect_old` (needs `gate_ready` from step 6)
+    → pilot → scratch stack → shadow backfill → `cutover` (recorded human
+    confirmation) → `retire_old` (irreversible, confirmation). The 970 is never
+    formatted before `retire_old`; the 5 TB HDD is never formatted, and new
+    repositories are namespaced beside the old ones.
+
+    Freeze the superseded HDD/R2 repositories after the gate and the drill
+    pass: stop writing and pruning them, record the date in the recovery kit,
+    and delete them only after 90 days through the reviewed retention process.
+    Until the 970 is converted, rollback is `bootctl set-default` plus a
+    verified old-generation restore to scratch — see `docs/migration-gates.md`.

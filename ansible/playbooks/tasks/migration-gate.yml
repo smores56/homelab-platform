@@ -1,0 +1,106 @@
+---
+# The shared destructive/writer gate. Imported by preflight.yml for a
+# destructive run and by the site.yml `writers`/`backup` steps. It trusts no
+# evidence file and no hand-typed boolean: it re-runs the plan-driven
+# `data_plane.migration preflight` on the host that holds the repositories and
+# the restic password, against the host backup plan the backup role installed.
+#
+# The gate re-proves freshness and full path coverage on every required tier, a
+# structural `restic check` on every repository, and — unless the operator asks
+# for it with -e homelab_migration_read_data=true — `restic check --read-data`
+# on each group's primary. Operator confirmations stay with the phase gates.
+
+- name: Require an absolute host backup plan
+  ansible.builtin.assert:
+    that:
+      - homelab_backup_plan is defined
+      - homelab_backup_plan | length > 0
+      - homelab_backup_plan is match('^/')
+    fail_msg: >-
+      Set homelab_backup_plan to the absolute host plan the backup role
+      installs (it defaults to backup_config_file, /etc/homelab/backup.json).
+    quiet: true
+  tags: [always]
+
+- name: Run the plan-driven migration preflight on the host
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -m
+      - data_plane.migration
+      - preflight
+      - --plan
+      - "{{ homelab_backup_plan }}"
+      - --json
+      - --no-read-data
+  environment:
+    PYTHONPATH: /opt/data-plane/lib
+  when: not (homelab_migration_read_data | default(false) | bool)
+  delegate_to: "{{ inventory_hostname }}"
+  changed_when: false
+  check_mode: false
+  failed_when: false
+  register: homelab_migration_preflight
+  tags: [always]
+
+- name: Run the plan-driven migration preflight with a full read-data pass
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -m
+      - data_plane.migration
+      - preflight
+      - --plan
+      - "{{ homelab_backup_plan }}"
+      - --json
+  environment:
+    PYTHONPATH: /opt/data-plane/lib
+  when: homelab_migration_read_data | default(false) | bool
+  delegate_to: "{{ inventory_hostname }}"
+  changed_when: false
+  check_mode: false
+  failed_when: false
+  register: homelab_migration_preflight
+  tags: [always]
+
+- name: Require the preflight to return a verdict
+  ansible.builtin.assert:
+    that:
+      - homelab_migration_preflight.stdout | default('') | trim | length > 0
+    fail_msg: >-
+      `python3 -m data_plane.migration preflight --plan
+      {{ homelab_backup_plan }}` returned no report on
+      {{ inventory_hostname }}:
+      {{ homelab_migration_preflight.stderr | default('') | trim }}
+    quiet: true
+  tags: [always]
+
+# The preflight's single readiness fact is GateReport.ok. Its --json report
+# emits `ok`, not a separate `gate_ready` key (gate_ready is the evidence name
+# the phase gates consume), so assert report.ok only; a defaulted conjunct would
+# either never be emitted or fail the gate on every host.
+- name: Require the plan-driven gate report to hold
+  vars:
+    report: "{{ homelab_migration_preflight.stdout | trim | from_json }}"
+  ansible.builtin.assert:
+    that:
+      - report is mapping
+      - report.get('ok', false) | bool
+    fail_msg: >-
+      The backup gate at {{ homelab_backup_plan }} did not hold: every group and
+      tier must be fresh and path-covered, every repository must pass a
+      structural restic check, and each primary must pass --read-data when
+      requested. Fix every preflight failure before touching a disk or
+      enabling a writer.
+      {{ (report.get('failures', report.get('failure_details', [])) | join('; '))
+         or homelab_migration_preflight.stderr | default('') | trim }}
+    quiet: true
+  tags: [always]
+
+- name: Record the rollback-disk decision from the request
+  ansible.builtin.set_fact:
+    homelab_migration_rollback_device: >-
+      {{ homelab_rollback_disk_device | default('') }}
+    homelab_migration_rollback_released: >-
+      {{ homelab_rollback_disk_released | default(false) | bool }}
+  tags: [always]

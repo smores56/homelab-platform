@@ -1,0 +1,11 @@
+*.iso
+*.qcow2
+spike-vars.fd
+SHA256SUMS
+SHA256SUMS.gpg
+ubuntu-archive-keyring.gpg
+spike-vmlinuz
+spike-initrd
+spike-tpm/
+*.passphrase
+luks-root.passphrase

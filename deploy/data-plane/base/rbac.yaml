@@ -1,0 +1,11 @@
+# Deliberately empty: the data plane grants no RBAC.
+#
+# No pod in this tree has an API client. Snapshot and restore authority for ZFS
+# stays on the host, where systemd units own the pool, the repositories and the
+# backup pipeline; they talk to the API server with host credentials, not with a
+# pod identity. Every ServiceAccount here is unbound, so a compromised pod cannot
+# read another namespace, a PV, a StorageClass, secrets, logs or Jobs.
+#
+# There is no ClusterRole. A restore is an operator/host action, never a Role
+# verb. The file stays in the base so "no binding" is a reviewable fact rather
+# than a deleted line.

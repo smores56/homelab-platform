@@ -33,12 +33,13 @@ tests/tofu/check.sh                     # Cloudflare config shape, no credential
 tests/backup/check.sh                   # mirror script args/URLs, no network
 tests/observability/check.sh            # vector unit tests, config drift, exporter tests
 tests/digest/check.sh                   # digest builder fixtures, egress and reverse-path contract
+tests/data-plane/check.sh               # data-plane contracts, identity, journal, broker, backup, collectors, memory, CLI
 nix run nixpkgs#yamllint -- .
 nix run nixpkgs#actionlint -- .              # a workflow GitHub cannot parse never runs, silently
 nix run nixpkgs#shellcheck -- scripts/*.sh tests/policies/*.sh tests/tofu/*.sh \
   tests/access/*.sh tests/backup/*.sh tests/digest/*.sh tests/observability/*.sh \
   tests/agent-control/*.sh clusters/homelab/flux-system/bootstrap.sh \
-  clusters/homelab/platform/backup/*.sh
+  clusters/homelab/platform/backup/*.sh provision/*.sh tests/provision/*.sh
 scripts/check-action-pins.sh
 scripts/check-pr-secret-boundary.sh
 scripts/check-codeowners.sh

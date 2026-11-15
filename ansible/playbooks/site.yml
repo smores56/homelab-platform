@@ -1,0 +1,115 @@
+---
+# Bring a host from a signed Ubuntu autoinstall to the data-plane baseline.
+#
+# Order is deliberate: prove SSH first, validate the inventory and the
+# destructive gate second, then touch base, storage, and k3s. A plain run never
+# starts the write broker or the backup timer; those are explicit, evidenced
+# steps (`--tags writers`, `--tags backup`). Run
+# `playbooks/check.yml --check --diff` before a real convergence.
+
+- name: Install and prove the independent rescue paths
+  ansible.builtin.import_playbook: rescue.yml
+  tags: [always]
+
+- name: Validate the inventory and the destructive gate before any role runs
+  hosts: all
+  gather_facts: true
+  tags: [always]
+  tasks:
+    - name: Import the fail-closed preflight assertions
+      ansible.builtin.import_tasks: tasks/preflight.yml
+
+- name: Apply the shared host baseline
+  hosts: all
+  roles:
+    - base
+
+- name: Install operator-provided secret files before any unit starts
+  hosts: storage_hosts:data_plane_hosts
+  tags: [secrets]
+  roles:
+    # Only the hosts whose roles read these files get them. The guard is a
+    # length check, not `is defined`: the role default is an empty string, so
+    # `is defined` would be true on every run and the role would abort.
+    - role: secrets
+      when: secrets_source_dir | length > 0
+
+- name: Install the NVIDIA driver and container toolkit
+  hosts: gpu_hosts
+  roles:
+    - nvidia
+
+- name: Map the encrypted volumes and record the keyfile slots
+  hosts: storage_hosts
+  roles:
+    - luks
+
+- name: Import the pool and mount every recovery-group dataset
+  hosts: storage_hosts
+  roles:
+    - zfs
+
+- name: Lay out served trees and the backup mount points
+  hosts: storage_hosts
+  roles:
+    - storage
+
+- name: Install the backup unit, host plan, and per-group restic repositories
+  hosts: storage_hosts
+  vars_files:
+    - ../group_vars/backup.yml
+  roles:
+    - backup
+
+- name: Install the pinned k3s node
+  hosts: k3s_servers:k3s_agents
+  roles:
+    - k3s
+
+- name: Install the Kata runtime and RuntimeClass
+  hosts: k3s_servers:k3s_agents
+  roles:
+    - kata
+
+- name: Install the data-plane units and timers without starting the writers
+  hosts: data_plane_hosts
+  vars_files:
+    - ../group_vars/backup.yml
+  roles:
+    - data_plane
+    - recovery
+
+- name: Start the data-plane writers behind the migration gate
+  hosts: data_plane_hosts
+  gather_facts: false
+  tags: [writers]
+  tasks:
+    - name: Require the migration evidence before enabling writers
+      ansible.builtin.include_tasks: tasks/migration-gate.yml
+
+    - name: Start the write broker
+      ansible.builtin.systemd_service:
+        name: homelab-write-broker.service
+        enabled: true
+        state: started
+        daemon_reload: true
+
+- name: Start the backup timer behind the migration gate
+  hosts: data_plane_hosts
+  gather_facts: false
+  tags: [backup]
+  vars_files:
+    - ../group_vars/backup.yml
+  tasks:
+    - name: Require the migration evidence before enabling backups
+      ansible.builtin.include_tasks: tasks/migration-gate.yml
+
+    - name: Start the host backup timers
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        enabled: true
+        state: started
+        daemon_reload: true
+      loop: >-
+        {{ backup_cadences.keys() | map('regex_replace', '^', 'homelab-backup-')
+           | map('regex_replace', '$', '.timer') | list }}

@@ -1,0 +1,85 @@
+---
+# The container uid is the one place the numeric id lives; the secret policy in
+# group_vars derives the mount gid from it.
+data_plane_default_container_user: "{{ data_plane_container_gid }}:{{ data_plane_container_gid }}"
+
+# Units this role used to install. A converge stops, disables and removes them
+# so an upgraded host cannot keep running a retired writer off the recovery
+# fence.
+data_plane_retired_units:
+  - homelab-collector-relay
+
+# The broker reads one catalog. The cluster tree's checked-in copy is the source
+# of truth; the role installs it at the path DATA_PLANE_CATALOG names.
+data_plane_source_catalog_src: "{{ playbook_dir }}/../../deploy/data-plane/config/source-catalog.json"
+
+# The two host services. Every image is selected by key from
+# data_plane_images and must be digest-pinned. Units run rootful podman with a
+# read-only container root, all capabilities dropped, and no-new-privileges; the
+# host unit itself is hardened below and in templates/unit.service.j2. Relays
+# and collectors live in the cluster tree, where each has a source and a sink.
+data_plane_services:
+  - name: homelab-event-service
+    short: event-service
+    description: Single-writer event log for the local profile
+    image_key: event_service
+    type: simple
+    args: ["event"]
+    ports:
+      - "127.0.0.1:7101:7101"
+    environment:
+      DATA_PLANE_DB: "{{ data_plane_state_root }}/events/events.sqlite"
+      DATA_PLANE_EVENT_APPEND_TOKEN_FILE: /run/secrets/event/append-token
+      DATA_PLANE_EVENT_READ_TOKEN_FILE: /run/secrets/event/read-token
+      DATA_PLANE_CONSUMER_SECRETS_FILE: /run/secrets/event/consumers.json
+      DATA_PLANE_HOST: "0.0.0.0"
+      DATA_PLANE_PORT: "7101"
+    state_dir: "{{ data_plane_state_root }}/event-service"
+    # Dedicated datasets the container writes; the parent state root stays
+    # root-only and this role hands only these directories to the container uid.
+    writable_dirs:
+      - "{{ data_plane_state_root }}/events"
+    volumes:
+      - "{{ data_plane_state_root }}/events:/var/lib/data-plane/events:rw"
+    read_write_paths:
+      - "{{ data_plane_state_root }}/event-service"
+      - "{{ data_plane_run_root }}/event-service"
+    assert_mounts: []
+    backup_mounts: false
+
+  - name: homelab-write-broker
+    short: write-broker
+    description: Authoritative write broker for general sources
+    image_key: write_broker
+    type: simple
+    # Writers are never started by a plain convergence run. site.yml starts this
+    # unit only under `--tags writers` after the migration gate.
+    writer: true
+    args: ["broker"]
+    ports:
+      - "127.0.0.1:7102:7102"
+    environment:
+      DATA_PLANE_DB: "{{ data_plane_state_root }}/intents/intents.sqlite"
+      DATA_PLANE_SECRET_FILE: /run/secrets/broker/identity
+      DATA_PLANE_OPERATOR_KEY_FILE: /run/secrets/broker/operator-key
+      DATA_PLANE_CATALOG: "{{ data_plane_config_root }}/sources.json"
+      DATA_PLANE_HOST: "0.0.0.0"
+      DATA_PLANE_PORT: "7102"
+      DATA_PLANE_GENERAL_ROOT: /srv/books
+    state_dir: "{{ data_plane_state_root }}/write-broker"
+    writable_dirs:
+      - "{{ data_plane_state_root }}/intents"
+    volumes:
+      - "{{ data_plane_config_root }}/sources.json:{{ data_plane_config_root }}/sources.json:ro"
+      - "{{ data_plane_state_root }}/intents:/var/lib/data-plane/intents:rw"
+      - "/srv/books:/srv/books:rw"
+    read_write_paths:
+      - "{{ data_plane_state_root }}/write-broker"
+      - "{{ data_plane_run_root }}/write-broker"
+      - /srv/books
+    assert_mounts:
+      - /srv/books
+    backup_mounts: false
+    # The shared data group, added as a supplementary group so the setgid tree
+    # is writable without running as the host user.
+    data_group: "{{ homelab_data_group }}"

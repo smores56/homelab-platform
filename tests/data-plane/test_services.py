@@ -1,0 +1,734 @@
+"""Wire tests for the thin data-plane HTTP services.
+
+Each service runs on port 0 in a thread over a temporary database or directory.
+Every request is localhost; nothing reaches the network, a provider, a cluster,
+or a restic repository. The fixtures are plain dicts and in-memory adapters.
+"""
+
+from __future__ import annotations
+
+import json
+import socket
+import sys
+import tempfile
+import threading
+import time
+import unittest
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+for candidate in (str(ROOT), str(ROOT / "libs")):
+    if candidate not in sys.path:
+        sys.path.insert(0, candidate)
+
+from apps.data_plane import (  # noqa: E402 - path setup above
+    broker_service,
+    common,
+    event_service,
+    relay_service,
+)
+from data_plane.broker import Broker, Intent  # noqa: E402
+from data_plane.collectors.relay import RecordSchema, Relay  # noqa: E402
+from data_plane.confirmation import ConfirmationGate  # noqa: E402
+from data_plane.event_log import EventLog  # noqa: E402
+from data_plane.identity import (  # noqa: E402
+    LOCAL_PROFILE,
+    IdentityIssuer,
+)
+from data_plane.model import (  # noqa: E402
+    Authority,
+    Capability,
+    EffectClass,
+    FieldAuthority,
+    SourceContract,
+    Visibility,
+)
+
+NOW = 1_000_000
+
+
+class Harness:
+    """One service on an ephemeral localhost port."""
+
+    def __init__(self, service: object, max_connections: int | None = None) -> None:
+        self.server = common.build_server(
+            "test",
+            common.handler_for(service),
+            port=0,
+            max_connections=max_connections,
+        )
+        self.thread = threading.Thread(
+            target=lambda: self.server.serve_forever(poll_interval=0.02),
+            daemon=True,
+        )
+
+    def __enter__(self) -> "Harness":
+        self.thread.start()
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(5)
+
+    def url(self, path: str) -> str:
+        return f"http://127.0.0.1:{self.server.server_address[1]}{path}"
+
+    def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        body: bytes | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> tuple[int, object]:
+        request = urllib.request.Request(
+            self.url(path), data=body, method=method, headers=dict(headers or {})
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                raw = response.read()
+                return response.status, json.loads(raw) if raw else None
+        except urllib.error.HTTPError as exc:
+            try:
+                raw = exc.read()
+            finally:
+                exc.close()
+            return exc.code, json.loads(raw) if raw else None
+
+
+def event_headers(secret: bytes, method: str, path: str, body: bytes = b"") -> dict[str, str]:
+    return {"X-Event-Token": common.request_token(secret, method, path, body)}
+
+
+class EventServiceTests(unittest.TestCase):
+    APPEND = b"event-test-secret"
+    READ = b"event-read-secret"
+    CONSUMERS = {"worker": b"worker-secret", "other": b"other-secret"}
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.log = EventLog(Path(self.tmp.name) / "events.db")
+        self.addCleanup(self.log.close)
+        self.harness = Harness(
+            event_service.EventService(
+                self.log, self.APPEND, self.READ, consumer_secrets=self.CONSUMERS
+            )
+        )
+        self.harness.__enter__()
+        self.addCleanup(self.harness.__exit__, None, None, None)
+
+    def post_event(
+        self, payload: dict, path: str = "/events", *, key: str = "evt-key"
+    ) -> tuple[int, object]:
+        body_data = dict(payload)
+        body_data.setdefault("idempotency_key", key)
+        body = json.dumps(body_data).encode()
+        return self.harness.request(
+            "POST", path, body=body, headers=event_headers(self.APPEND, "POST", path, body)
+        )
+
+    def get(self, path: str) -> tuple[int, object]:
+        return self.harness.request(
+            "GET", path, headers=event_headers(self.READ, "GET", path)
+        )
+
+    def test_append_read_and_ack(self) -> None:
+        status, event = self.post_event(
+            {"kind": "book.updated", "entity": "book-1", "payload": {"title": "Dune"}}
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(event["position"], 1)
+        self.assertEqual(event["kind"], "book.updated")
+        self.assertEqual(event["payload"], {"title": "Dune"})
+
+        status, listing = self.get("/events?after=0&limit=10")
+        self.assertEqual(status, 200)
+        self.assertEqual(listing["epoch"], 1)
+        self.assertEqual([item["position"] for item in listing["events"]], [1])
+
+        ack_body = json.dumps({"consumer": "worker", "position": 1}).encode()
+        status, acked = self.harness.request(
+            "POST",
+            "/events/ack",
+            body=ack_body,
+            headers=event_headers(
+                self.CONSUMERS["worker"], "POST", "/events/ack", ack_body
+            ),
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(acked, {"consumer": "worker", "position": 1, "epoch": 1})
+        self.assertEqual(self.log.cursor("worker"), (1, 1))
+
+    def test_tail_long_polls_until_an_event_arrives(self) -> None:
+        def append_later() -> None:
+            time.sleep(0.2)
+            self.log.append("book.created", "book-1", {"title": "Dune"})
+
+        threading.Thread(target=append_later, daemon=True).start()
+        path = "/events/tail?consumer=worker&timeout=2"
+        status, payload = self.get(path)
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["event"]["position"], 1)
+        self.assertEqual(payload["event"]["kind"], "book.created")
+        # The tail must not acknowledge; the consumer owns the cursor.
+        self.assertEqual(self.log.cursor("worker"), (0, 1))
+
+    def test_tail_times_out_without_an_event(self) -> None:
+        status, payload = self.get("/events/tail?consumer=idle&timeout=0.05")
+        self.assertEqual(status, 204)
+        self.assertIsNone(payload)
+
+    def test_missing_and_wrong_tokens_are_rejected(self) -> None:
+        body = json.dumps({"kind": "k", "entity": "e"}).encode()
+        status, payload = self.harness.request("POST", "/events", body=body)
+        self.assertEqual(status, 401)
+        self.assertEqual(payload["error"]["code"], "unauthorized")
+
+        wrong = {"X-Event-Token": "sha256=" + "0" * 64}
+        status, payload = self.harness.request(
+            "POST", "/events", body=body, headers=wrong
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(payload["error"]["code"], "forbidden")
+
+    def test_read_token_cannot_append(self) -> None:
+        body = json.dumps(
+            {"kind": "k", "entity": "e", "idempotency_key": "k1"}
+        ).encode()
+        status, payload = self.harness.request(
+            "POST",
+            "/events",
+            body=body,
+            headers=event_headers(self.READ, "POST", "/events", body),
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(payload["error"]["code"], "forbidden")
+
+    def test_append_token_cannot_read(self) -> None:
+        status, payload = self.harness.request(
+            "GET", "/events", headers=event_headers(self.APPEND, "GET", "/events")
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(payload["error"]["code"], "forbidden")
+
+    def test_oversized_body_is_refused_before_parsing(self) -> None:
+        small_log = EventLog(Path(self.tmp.name) / "small.db")
+        self.addCleanup(small_log.close)
+        service = event_service.EventService(
+            small_log, self.APPEND, self.READ, max_body_bytes=32
+        )
+        with Harness(service) as harness:
+            body = json.dumps({"kind": "k", "entity": "e" * 64}).encode()
+            status, payload = harness.request(
+                "POST",
+                "/events",
+                body=body,
+                headers=event_headers(self.APPEND, "POST", "/events", body),
+            )
+        self.assertEqual(status, 413)
+        self.assertEqual(payload["error"]["code"], "payload_too_large")
+
+    def test_missing_field_is_a_validation_error(self) -> None:
+        status, payload = self.post_event({"entity": "book-1"})
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"]["code"], "validation")
+
+    def test_healthz_needs_no_token_and_reveals_no_epoch(self) -> None:
+        status, payload = self.harness.request("GET", "/healthz")
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["service"], "event")
+        self.assertNotIn("epoch", payload)
+
+    def test_replay_is_idempotent_and_client_event_id_is_rejected(self) -> None:
+        first = self.post_event(
+            {"kind": "book.updated", "entity": "book-1", "payload": {"t": 1}},
+            key="replay-1",
+        )
+        second = self.post_event(
+            {"kind": "book.updated", "entity": "book-1", "payload": {"t": 1}},
+            key="replay-1",
+        )
+        self.assertEqual(first[0], 201)
+        self.assertEqual(second[0], 201)
+        self.assertEqual(first[1]["position"], second[1]["position"])
+        self.assertEqual(first[1]["event_id"], second[1]["event_id"])
+        self.assertEqual(len(self.log.read()), 1)
+
+        conflict = self.post_event(
+            {"kind": "book.updated", "entity": "book-1", "payload": {"t": 2}},
+            key="replay-1",
+        )
+        self.assertEqual(conflict[0], 409)
+        self.assertEqual(conflict[1]["error"]["code"], "idempotency_conflict")
+
+        squatted = self.post_event(
+            {"kind": "k", "entity": "e", "event_id": "evt-mine"}, key="squat-1"
+        )
+        self.assertEqual(squatted[0], 400)
+        self.assertEqual(squatted[1]["error"]["code"], "validation")
+
+    def test_ack_is_bound_to_the_consumer(self) -> None:
+        self.post_event({"kind": "k", "entity": "e"})
+        ack_body = json.dumps({"consumer": "worker", "position": 1}).encode()
+
+        status, payload = self.harness.request(
+            "POST",
+            "/events/ack",
+            body=ack_body,
+            headers=event_headers(
+                self.CONSUMERS["other"], "POST", "/events/ack", ack_body
+            ),
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(self.log.cursor("worker"), (0, 1))
+
+        unknown_body = json.dumps({"consumer": "stranger", "position": 1}).encode()
+        status, payload = self.harness.request(
+            "POST",
+            "/events/ack",
+            body=unknown_body,
+            headers=event_headers(self.READ, "POST", "/events/ack", unknown_body),
+        )
+        self.assertEqual(status, 403)
+
+    def test_replayed_and_stale_request_tokens_are_rejected(self) -> None:
+        path = "/events?after=0&limit=10"
+        token = common.request_token(self.READ, "GET", path)
+        headers = {"X-Event-Token": token}
+        first = self.harness.request("GET", path, headers=headers)
+        second = self.harness.request("GET", path, headers=headers)
+        self.assertEqual(first[0], 200)
+        self.assertEqual(second[0], 403)
+
+        stale = common.request_token(
+            self.READ, "GET", path, timestamp=int(time.time()) - 600
+        )
+        status, payload = self.harness.request(
+            "GET", path, headers={"X-Event-Token": stale}
+        )
+        self.assertEqual(status, 403)
+
+        malformed = {"X-Event-Token": "sha256=" + "0" * 64}
+        status, payload = self.harness.request("GET", path, headers=malformed)
+        self.assertEqual(status, 403)
+
+
+class TransportHardeningTests(unittest.TestCase):
+    def test_read_body_times_out(self) -> None:
+        class SlowFile:
+            def read(self, size: int) -> bytes:
+                raise TimeoutError("slow body")
+
+        class FakeSocket:
+            def settimeout(self, value: float) -> None:
+                pass
+
+        class StubRequest:
+            headers = {"Content-Length": "4"}
+            connection = FakeSocket()
+            rfile = SlowFile()
+
+        with self.assertRaises(common.HttpError) as raised:
+            common.read_body(StubRequest())
+        self.assertEqual(raised.exception.status, 408)
+
+    def test_server_refuses_beyond_the_connection_budget(self) -> None:
+        log = EventLog(":memory:")
+        self.addCleanup(log.close)
+        service = event_service.EventService(log, b"secret", b"read-secret", consumer_secrets={})
+        with Harness(service, max_connections=1) as harness:
+            held = socket.create_connection(
+                ("127.0.0.1", harness.server.server_address[1])
+            )
+            try:
+                time.sleep(0.2)
+                status, _payload = harness.request("GET", "/healthz")
+            finally:
+                held.close()
+        self.assertEqual(status, 503)
+
+
+def read_capability() -> Capability:
+    return Capability(name="read", effect=EffectClass.READ)
+
+
+def create_capability() -> Capability:
+    return Capability(name="create", effect=EffectClass.CREATE, reversible=True)
+
+
+def update_capability() -> Capability:
+    return Capability(name="update", effect=EffectClass.UPDATE, reversible=True)
+
+
+def delete_capability() -> Capability:
+    return Capability(
+        name="delete",
+        effect=EffectClass.DELETE,
+        reversible=False,
+        requires_confirmation=True,
+    )
+
+
+def contract(source_id: str = "notes") -> SourceContract:
+    return SourceContract(
+        source_id=source_id,
+        visibility=Visibility.PERSONAL,
+        version=1,
+        recovery_group=source_id,
+        stable_id_fields=("id",),
+        capabilities=(
+            read_capability(),
+            create_capability(),
+            update_capability(),
+            delete_capability(),
+        ),
+        authority=(FieldAuthority(field="title", authority=Authority.PORTABLE_FILE),),
+        revision_field="rev",
+        tombstone_field="deleted_at",
+        epoch=1,
+    )
+
+
+class FakeAdapter:
+    """In-memory adapter with the four operations the broker calls."""
+
+    def __init__(self, records: dict[str, dict] | None = None) -> None:
+        self.records = {key: dict(value) for key, value in (records or {}).items()}
+        self.applies: list[tuple[str, str]] = []
+
+    def revision(self, target: str) -> str | None:
+        return self.records.get(target, {}).get("rev")
+
+    def read(self, target: str) -> dict:
+        return dict(self.records.get(target, {}))
+
+    def search(self, query: str) -> list[dict]:
+        needle = query.lower()
+        return [
+            dict(record)
+            for record in self.records.values()
+            if needle in str(record.get("title", "")).lower()
+        ]
+
+    def apply(self, operation, idempotency_key: str) -> dict:
+        self.applies.append((operation.intent_id, idempotency_key))
+        for target in operation.targets:
+            if operation.capability == "delete":
+                self.records.pop(target, None)
+                continue
+            record = self.records.setdefault(target, {"id": target})
+            for change in operation.field_diff:
+                record[change.field] = change.after
+            record["rev"] = f"rev-{len(self.applies) + 1}"
+        return {"applied": len(operation.targets)}
+
+
+class FakeIntentStore:
+    def __init__(self) -> None:
+        self.by_id: dict[str, Intent] = {}
+        self.by_key: dict[str, Intent] = {}
+
+    def get(self, intent_id: str) -> Intent | None:
+        return self.by_id.get(intent_id)
+
+    def find(self, idempotency_key: str) -> Intent | None:
+        return self.by_key.get(idempotency_key)
+
+    def save(self, intent: Intent) -> None:
+        self.by_id[intent.intent_id] = intent
+        self.by_key[intent.idempotency_key] = intent
+
+
+class FakeRecorder:
+    def __init__(self) -> None:
+        self.events: list[dict] = []
+
+    def record(self, event: dict) -> None:
+        self.events.append(dict(event))
+
+
+class BrokerServiceTests(unittest.TestCase):
+    KEY = b"broker-test-key"
+
+    def setUp(self) -> None:
+        self.sources = {"notes": contract()}
+        self.adapter = FakeAdapter(
+            {"note-1": {"id": "note-1", "title": "Old", "rev": "rev-1"}}
+        )
+        self.issuer = IdentityIssuer(self.sources, self.KEY, clock=lambda: NOW)
+        self.gate = ConfirmationGate(ttl_seconds=60, clock=lambda: NOW)
+        self.store = FakeIntentStore()
+        self.recorder = FakeRecorder()
+        self.broker = Broker(
+            self.sources,
+            {"notes": self.adapter},
+            self.issuer,
+            self.gate,
+            self.store,
+            self.recorder,
+            clock=lambda: NOW,
+        )
+        self.service = broker_service.BrokerService(self.broker, self.issuer)
+        self.harness = Harness(self.service)
+        self.harness.__enter__()
+        self.addCleanup(self.harness.__exit__, None, None, None)
+        token = self.issuer.issue(
+            LOCAL_PROFILE,
+            "agent",
+            (("notes", "delete"), ("notes", "update"), ("notes", "create")),
+        )
+        self.headers = {"X-Workload-Token": token}
+
+    def write(self, **overrides) -> dict:
+        values = {
+            "source_id": "notes",
+            "capability": "delete",
+            "targets": ["note-1"],
+            "idempotency_key": "del-1",
+            "field_diff": [],
+            "base_revision": "rev-1",
+        }
+        values.update(overrides)
+        return values
+
+    def post(self, path: str, payload: dict, headers: dict | None = None) -> tuple[int, object]:
+        return self.harness.request(
+            "POST",
+            path,
+            body=json.dumps(payload).encode(),
+            headers=self.headers if headers is None else headers,
+        )
+
+    def test_propose_confirm_and_apply_with_the_external_operator_token(self) -> None:
+        status, proposed = self.post("/propose", self.write())
+        self.assertEqual(status, 201)
+        self.assertEqual(proposed["intent"]["state"], "awaiting_confirmation")
+        self.assertTrue(proposed["intent"]["requires_confirmation"])
+        self.assertEqual(proposed["operation"]["capability"], "delete")
+
+        # No operator token yet: the service refuses rather than issuing one.
+        status, refused = self.post("/apply", self.write())
+        self.assertEqual(status, 403)
+        self.assertEqual(refused["error"]["code"], "confirmation_required")
+
+        # The operator surface is outside this service; the test stands in for it.
+        stored = self.store.find("del-1")
+        _, operator_token = self.gate.issue(stored.operation, "operator")
+
+        status, confirmed = self.post(
+            "/confirm", self.write(confirmation_token=operator_token)
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(confirmed["intent"]["state"], "approved")
+
+        status, applied = self.post("/apply", self.write())
+        self.assertEqual(status, 200)
+        self.assertEqual(applied["effect"], {"applied": 1})
+        self.assertNotIn("note-1", self.adapter.records)
+        self.assertEqual(len(self.recorder.events), 1)
+
+    def test_update_is_proposed_and_applied(self) -> None:
+        write = self.write(
+            capability="update",
+            idempotency_key="update-1",
+            field_diff=[["title", "Old", "New"]],
+            base_revision="rev-1",
+        )
+        self.assertEqual(self.post("/propose", write)[0], 201)
+        status, applied = self.post("/apply", write)
+        self.assertEqual(status, 200)
+        self.assertEqual(self.adapter.records["note-1"]["title"], "New")
+
+    def test_missing_workload_token_is_unauthorized(self) -> None:
+        status, payload = self.harness.request(
+            "POST", "/propose", body=json.dumps(self.write()).encode()
+        )
+        self.assertEqual(status, 401)
+        self.assertEqual(payload["error"]["code"], "unauthorized")
+
+    def test_missing_idempotency_key_is_a_validation_error(self) -> None:
+        write = self.write()
+        del write["idempotency_key"]
+        status, payload = self.post("/propose", write)
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"]["code"], "validation")
+
+    def test_reconcile_unknown_intent_is_a_validation_error(self) -> None:
+        status, payload = self.post("/reconcile", {"intent_id": "missing"})
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"]["code"], "validation")
+
+    def test_reconcile_requires_the_intent_capability(self) -> None:
+        write = self.write(
+            capability="update",
+            idempotency_key="recon-1",
+            field_diff=[["title", "Old", "New"]],
+            base_revision="rev-1",
+        )
+        self.assertEqual(self.post("/propose", write)[0], 201)
+        intent_id = self.store.find("recon-1").intent_id
+
+        create_only = self.issuer.issue(
+            LOCAL_PROFILE, "agent", (("notes", "create"),)
+        )
+        status, payload = self.post(
+            "/reconcile",
+            {"intent_id": intent_id},
+            headers={"X-Workload-Token": create_only},
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(payload["error"]["code"], "forbidden")
+
+    def test_malformed_workload_token_is_unauthorized(self) -> None:
+        status, payload = self.harness.request(
+            "POST",
+            "/propose",
+            body=json.dumps(self.write()).encode(),
+            headers={"X-Workload-Token": "abc.!!!"},
+        )
+        self.assertEqual(status, 401)
+        self.assertEqual(payload["error"]["code"], "unauthorized")
+
+
+class RelayServiceTests(unittest.TestCase):
+    SECRET = b"relay-test-secret"
+
+    def setUp(self) -> None:
+        self.sunk: list[dict] = []
+        self.relay = Relay(self.SECRET, self.schema(), self.sunk.append, source_id="mail")
+        self.harness = Harness(relay_service.RelayService(self.relay))
+        self.harness.__enter__()
+        self.addCleanup(self.harness.__exit__, None, None, None)
+
+    @staticmethod
+    def schema(**overrides) -> RecordSchema:
+        values = {
+            "required_fields": ("source_id", "object_id", "tombstone"),
+            "field_types": {
+                "source_id": str,
+                "object_id": str,
+                "tombstone": bool,
+            },
+            "max_bytes": 1024,
+            "max_records_per_second": 10,
+        }
+        values.update(overrides)
+        return RecordSchema(**values)
+
+    @staticmethod
+    def record(**overrides) -> dict:
+        values = {"source_id": "mail", "object_id": "message-1", "tombstone": False}
+        values.update(overrides)
+        return values
+
+    def ingest(
+        self,
+        payload: dict,
+        *,
+        key: str = "key-1",
+        cursor: int = 1,
+        signature: str | None = None,
+        raw: bytes | None = None,
+    ) -> tuple[int, object]:
+        body = raw if raw is not None else json.dumps(payload).encode()
+        signed = self.relay.sign(body, key) if signature is None else signature
+        headers = {
+            "X-Idempotency-Key": key,
+            "X-Relay-Signature": f"sha256={signed}",
+        }
+        return self.harness.request(
+            "POST", f"/ingest?cursor={cursor}", body=body, headers=headers
+        )
+
+    def test_ingest_is_idempotent_for_the_same_key_and_body(self) -> None:
+        status, first = self.ingest(self.record())
+        self.assertEqual(status, 202)
+        self.assertEqual(first["accepted"], True)
+        self.assertEqual(first["cursor"], 1)
+        self.assertEqual(len(self.sunk), 1)
+
+        status, again = self.ingest(self.record())
+        self.assertEqual(status, 202)
+        self.assertEqual(again, first)
+        self.assertEqual(len(self.sunk), 1)
+
+        status, conflict = self.ingest(self.record(object_id="message-2"))
+        self.assertEqual(status, 409)
+        self.assertEqual(conflict["error"]["code"], "idempotency_conflict")
+        self.assertEqual(len(self.sunk), 1)
+
+    def test_bad_signature_is_rejected(self) -> None:
+        status, payload = self.ingest(self.record(), signature="0" * 64)
+        self.assertEqual(status, 403)
+        self.assertEqual(payload["error"]["code"], "forbidden")
+        self.assertEqual(self.sunk, [])
+
+    def test_schema_violation_is_a_validation_error(self) -> None:
+        status, payload = self.ingest(self.record(tombstone="no"))
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"]["code"], "validation")
+
+    def test_oversized_body_is_refused(self) -> None:
+        service = relay_service.RelayService(self.relay, max_body_bytes=16)
+        with Harness(service) as harness:
+            body = json.dumps(self.record()).encode()
+            status, payload = harness.request(
+                "POST",
+                "/ingest?cursor=1",
+                body=body,
+                headers={
+                    "X-Idempotency-Key": "key-1",
+                    "X-Relay-Signature": f"sha256={self.relay.sign(body, 'key-1')}",
+                },
+            )
+        self.assertEqual(status, 413)
+        self.assertEqual(payload["error"]["code"], "payload_too_large")
+
+    def test_cursor_from_header(self) -> None:
+        body = json.dumps(self.record()).encode()
+        status, payload = self.harness.request(
+            "POST",
+            "/ingest",
+            body=body,
+            headers={
+                "X-Idempotency-Key": "key-1",
+                "X-Cursor": "1",
+                "X-Relay-Signature": f"sha256={self.relay.sign(body, 'key-1')}",
+            },
+        )
+        self.assertEqual(status, 202)
+        self.assertEqual(payload["cursor"], 1)
+
+    def test_healthz_needs_no_signature(self) -> None:
+        status, payload = self.harness.request("GET", "/healthz")
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["service"], "relay")
+
+    def test_extra_fields_are_rejected(self) -> None:
+        status, payload = self.ingest(self.record(extra="unexpected"))
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"]["code"], "validation")
+        self.assertEqual(self.sunk, [])
+
+    def test_a_record_from_another_source_is_rejected(self) -> None:
+        status, payload = self.ingest(self.record(source_id="other"))
+        self.assertEqual(status, 403)
+        self.assertEqual(payload["error"]["code"], "forbidden")
+        self.assertEqual(self.sunk, [])
+
+    def test_deeply_nested_json_is_rejected(self) -> None:
+        nested: object = "leaf"
+        for _ in range(30):
+            nested = [nested]
+        status, payload = self.ingest(self.record(blob=nested))
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"]["code"], "validation")
+        self.assertEqual(self.sunk, [])
+
+
+if __name__ == "__main__":
+    unittest.main()

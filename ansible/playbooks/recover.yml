@@ -1,0 +1,337 @@
+---
+# Clean-room recovery outline for a freshly autoinstalled host that still has
+# its encrypted disks. Run site.yml first (non-destructive) so crypttab, the
+# zfs units, fstab, and the recovery scripts exist, then:
+#
+#   ansible-playbook -i inventory/hosts.yml playbooks/recover.yml \
+#     --tags destructive \
+#     -e homelab_recovery_confirm=true
+#
+# The order is the safety property: fence every writer, open storage, restore
+# the newest snapshot of every selected group onto a dedicated scratch mount,
+# verify that every required tier holds a covering snapshot, and only then
+# re-enable the writers. The scratch mount must be its own mount with room for
+# the snapshots; the entrypoint moves each group's staged subtree to
+# <target>/<path> and prints that destination. There is no generation manifest.
+# A dry run (no -e homelab_recovery_apply=true) touches nothing. The recovery
+# portal is never a prerequisite.
+
+- name: Fence the data-plane writers before any restore
+  hosts: data_plane_hosts
+  gather_facts: false
+  tags: [destructive]
+  tasks:
+    - name: Require the destructive tag and an explicit recovery confirmation
+      ansible.builtin.assert:
+        that:
+          - "'destructive' in ansible_run_tags"
+          - homelab_recovery_confirm | bool
+          - homelab_recovery_scratch_target is match('^/')
+        fail_msg: >-
+          Refusing to recover without --tags destructive,
+          -e homelab_recovery_confirm=true, and an absolute
+          homelab_recovery_scratch_target.
+
+    - name: Check which writer units are installed
+      ansible.builtin.stat:
+        path: "/etc/systemd/system/{{ item }}"
+      loop: "{{ homelab_writer_units }}"
+      register: recovery_writer_unit_files
+
+    - name: Stop and disable every installed writer unit
+      ansible.builtin.systemd_service:
+        name: "{{ item.item }}"
+        enabled: false
+        state: stopped
+      loop: "{{ recovery_writer_unit_files.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when:
+        - homelab_recovery_apply | bool
+        - item.stat.exists
+
+    - name: Check which backup units are installed
+      ansible.builtin.stat:
+        path: "/etc/systemd/system/{{ item }}"
+      loop: "{{ homelab_backup_timer_units }}"
+      register: recovery_backup_timer_files
+
+    - name: Fence every backup timer
+      ansible.builtin.systemd_service:
+        name: "{{ item.item }}"
+        enabled: false
+        state: stopped
+      loop: "{{ recovery_backup_timer_files.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when:
+        - homelab_recovery_apply | bool
+        - item.stat.exists
+
+    - name: Ensure the fence directory exists
+      ansible.builtin.file:
+        path: "{{ homelab_writer_fence | dirname }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      when: homelab_recovery_apply | bool
+
+    - name: Create the writer fence marker
+      ansible.builtin.file:
+        path: "{{ homelab_writer_fence }}"
+        state: touch
+        owner: root
+        group: root
+        mode: "0600"
+      when: homelab_recovery_apply | bool
+
+- name: Bring the encrypted storage online
+  hosts: storage_hosts
+  gather_facts: true
+  tags: [destructive]
+  tasks:
+    - name: Require explicit recovery confirmation
+      ansible.builtin.assert:
+        that:
+          - homelab_recovery_confirm | bool
+        fail_msg: "Pass homelab_recovery_confirm=true"
+
+    - name: Open every encrypted volume with its operator-provisioned keyfile
+      community.crypto.luks_device:
+        device: "{{ item.device }}"
+        name: "{{ item.name }}"
+        state: opened
+        keyfile: "{{ item.keyfile }}"
+      loop: "{{ luks_volumes }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when:
+        - homelab_recovery_apply | bool
+        - not ansible_check_mode
+
+    - name: Read the pools the kernel can see
+      ansible.builtin.command:
+        argv: [zpool, list, -H, -o, name]
+      register: recovery_pools
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: Resolve the pool's encrypted volume to its stable by-id device
+      ansible.builtin.set_fact:
+        recovery_pool_device: >-
+          {{ luks_volumes | selectattr('name', 'equalto', zfs_pool_luks_volume)
+             | map(attribute='device') | first | default('') }}
+
+    - name: Refuse an unscoped import of the pool
+      ansible.builtin.assert:
+        that:
+          - recovery_pool_device is match('^/dev/disk/by-id/')
+          - recovery_pool_device in homelab_destructive_device_ids
+          - zfs_pool_device == '/dev/mapper/' ~ zfs_pool_luks_volume
+        fail_msg: >-
+          Refusing to import {{ zfs_pool }} from an allow-listed pinned device;
+          add {{ recovery_pool_device }} to homelab_destructive_device_ids.
+        quiet: true
+      when: zfs_pool not in recovery_pools.stdout_lines
+
+    - name: Import the pool from its pinned device without mounting it yet
+      ansible.builtin.command:
+        argv: [zpool, import, -N, -d, "{{ zfs_pool_device }}", "{{ zfs_pool }}"]
+      when:
+        - homelab_recovery_apply | bool
+        - zfs_pool not in recovery_pools.stdout_lines
+      changed_when: true
+
+    - name: Mount every dataset in the pool
+      ansible.builtin.systemd_service:
+        name: zfs-mount.service
+        state: restarted
+      when: homelab_recovery_apply | bool
+
+    - name: Mount the backup repositories on demand
+      ansible.builtin.systemd_service:
+        name: "{{ (item.path | replace('/', '-') | regex_replace('^-', '')) + '.mount' }}"
+        state: started
+      loop: "{{ backup_mounts }}"
+      loop_control:
+        label: "{{ item.path }}"
+      when: homelab_recovery_apply | bool
+
+- name: Restore the newest group snapshots into a scratch target
+  hosts: data_plane_hosts
+  gather_facts: false
+  tags: [destructive]
+  tasks:
+    - name: Create the scratch restore target
+      ansible.builtin.file:
+        path: "{{ homelab_recovery_scratch_target }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0750"
+      when: homelab_recovery_apply | bool
+
+    - name: Resolve the mount that holds the scratch target
+      ansible.builtin.command:
+        argv:
+          - findmnt
+          - --target
+          - "{{ homelab_recovery_scratch_target }}"
+          - --output
+          - TARGET
+          - --noheadings
+          - --raw
+      register: recovery_scratch_mount
+      changed_when: false
+      check_mode: false
+      failed_when: false
+      when: homelab_recovery_apply | bool
+
+    - name: Require the scratch target to be a dedicated, non-root mount
+      ansible.builtin.assert:
+        that:
+          - homelab_recovery_scratch_target != '/'
+          - recovery_scratch_mount.rc == 0
+          - recovery_scratch_mount.stdout | trim == homelab_recovery_scratch_target
+        fail_msg: >-
+          {{ homelab_recovery_scratch_target }} must be its own mount (findmnt
+          reports {{ recovery_scratch_mount.stdout | default('') | trim }})
+          and must never be /. A scratch directory on the root filesystem has no
+          independent capacity; mount a dedicated scratch dataset first.
+        quiet: true
+      when: homelab_recovery_apply | bool
+
+    - name: Measure the scratch target's free space
+      ansible.builtin.command:
+        argv:
+          - findmnt
+          - --target
+          - "{{ homelab_recovery_scratch_target }}"
+          - --output
+          - AVAIL
+          - --bytes
+          - --noheadings
+          - --raw
+      register: recovery_scratch_avail
+      changed_when: false
+      check_mode: false
+      when: homelab_recovery_apply | bool
+
+    - name: Compute the bytes the newest covering snapshots need
+      ansible.builtin.command:
+        argv: [/usr/local/sbin/homelab-clean-room-restore, --capacity-bytes]
+      environment:
+        HOMELAB_RESTORE_CONFIRM: restore
+        HOMELAB_RESTORE_ROOT: "{{ homelab_recovery_scratch_target }}"
+        HOMELAB_RESTORE_GROUPS: "{{ homelab_recovery_groups }}"
+        HOMELAB_REQUIRED_TIERS: "{{ homelab_recovery_required_tiers | join(',') }}"
+        HOMELAB_RECOVERY_MIN_FREE_GB: "{{ homelab_recovery_min_free_gb }}"
+      register: recovery_capacity
+      changed_when: false
+      check_mode: false
+      when: homelab_recovery_apply | bool
+
+    - name: Require the scratch target to hold the newest covering snapshots
+      ansible.builtin.assert:
+        that:
+          - recovery_scratch_avail.stdout | int >= recovery_capacity.stdout | int
+        fail_msg: >-
+          {{ homelab_recovery_scratch_target }} has
+          {{ recovery_scratch_avail.stdout | int }} bytes free but the newest
+          covering snapshots need {{ recovery_capacity.stdout | int }} bytes;
+          short by
+          {{ (recovery_capacity.stdout | int) - (recovery_scratch_avail.stdout | int) }}
+          bytes. Grow the scratch dataset or narrow homelab_recovery_groups.
+        quiet: true
+      when: homelab_recovery_apply | bool
+
+    - name: Render the restore plan
+      ansible.builtin.command:
+        argv: [/usr/local/sbin/homelab-clean-room-restore]
+      environment:
+        HOMELAB_RESTORE_CONFIRM: restore
+        HOMELAB_RESTORE_ROOT: "{{ homelab_recovery_scratch_target }}"
+        HOMELAB_RESTORE_GROUPS: "{{ homelab_recovery_groups }}"
+        HOMELAB_REQUIRED_TIERS: "{{ homelab_recovery_required_tiers | join(',') }}"
+        HOMELAB_ALLOW_LIVE: "{{ '1' if homelab_recovery_allow_live | bool else '0' }}"
+        HOMELAB_RESTORE_OVERWRITE: "{{ '1' if homelab_recovery_overwrite | bool else '0' }}"
+      register: recovery_plan
+      changed_when: false
+      check_mode: false
+      when: not (homelab_recovery_apply | bool)
+
+    - name: Print the restore plan
+      ansible.builtin.debug:
+        var: recovery_plan.stdout_lines
+      when: not (homelab_recovery_apply | bool)
+
+    - name: Restore the newest snapshot of every selected group
+      ansible.builtin.command:
+        argv: [/usr/local/sbin/homelab-clean-room-restore]
+      environment:
+        HOMELAB_RESTORE_CONFIRM: restore
+        HOMELAB_RESTORE_ROOT: "{{ homelab_recovery_scratch_target }}"
+        HOMELAB_RESTORE_GROUPS: "{{ homelab_recovery_groups }}"
+        HOMELAB_REQUIRED_TIERS: "{{ homelab_recovery_required_tiers | join(',') }}"
+        HOMELAB_ALLOW_LIVE: "{{ '1' if homelab_recovery_allow_live | bool else '0' }}"
+        HOMELAB_RESTORE_OVERWRITE: "{{ '1' if homelab_recovery_overwrite | bool else '0' }}"
+        HOMELAB_RESTORE_APPLY: "1"
+      when: homelab_recovery_apply | bool
+      changed_when: true
+      check_mode: false
+
+    # Verify-only proves the repositories and their path coverage, not the tree
+    # this run restored. The apply step above prints each real destination and
+    # its entry count; a rollback later re-runs the same restore to the old tree.
+    - name: Verify every required tier still holds a covering snapshot (repositories only)
+      ansible.builtin.command:
+        argv: [/usr/local/sbin/homelab-clean-room-restore, --verify-only]
+      environment:
+        HOMELAB_RESTORE_CONFIRM: restore
+        HOMELAB_RESTORE_ROOT: "{{ homelab_recovery_scratch_target }}"
+        HOMELAB_RESTORE_GROUPS: "{{ homelab_recovery_groups }}"
+        HOMELAB_REQUIRED_TIERS: "{{ homelab_recovery_required_tiers | join(',') }}"
+      changed_when: false
+      check_mode: false
+      when: homelab_recovery_apply | bool
+
+- name: Re-enable the writers only after a verified restore
+  hosts: data_plane_hosts
+  gather_facts: false
+  tags: [destructive]
+  tasks:
+    - name: Re-enable every installed writer unit
+      ansible.builtin.systemd_service:
+        name: "{{ item.item }}"
+        enabled: true
+        state: started
+      loop: "{{ recovery_writer_unit_files.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when:
+        - homelab_recovery_apply | bool
+        - homelab_recovery_resume_writers | bool
+        - item.stat.exists
+
+    - name: Restart every installed backup unit
+      ansible.builtin.systemd_service:
+        name: "{{ item.item }}"
+        enabled: true
+        state: started
+      loop: "{{ recovery_backup_timer_files.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when:
+        - homelab_recovery_apply | bool
+        - homelab_recovery_resume_writers | bool
+        - item.stat.exists
+
+    - name: Remove the writer fence marker
+      ansible.builtin.file:
+        path: "{{ homelab_writer_fence }}"
+        state: absent
+      when:
+        - homelab_recovery_apply | bool
+        - homelab_recovery_resume_writers | bool

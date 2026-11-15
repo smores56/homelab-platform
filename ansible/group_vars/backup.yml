@@ -1,0 +1,117 @@
+---
+# Backup policy for the storage host. This file is data, not code: one recovery
+# group maps to one restic repository per tier and to one subtree of the single
+# recursive snapshot. No secret belongs here; every repository opens the same
+# root-only password file.
+#
+# One source for dataset layout: recovery-group membership and mount points come
+# from `recovery_inventory`, `zfs_datasets`, and `backup_host_paths` in
+# group_vars/all.yml. This file only adds policy (display path, cadence, tiers).
+#
+# The host plan `/etc/homelab/backup.json` and the public page manifest
+# `deploy/data-plane/config/recovery-groups.json` are both rendered from these
+# variables by roles/backup and scripts/render-recovery-groups.py;
+# tests/data-plane/test_inventory_contract.py fails when either drifts.
+
+backup_schema_version: 1
+
+# One recursive snapshot of the pool, bind-mounted once at a stable path. Restic
+# reads the frozen tree; the ZFS snapshot name is the generation id.
+backup_snapshot_dataset: "{{ zfs_pool }}"
+backup_snapshot_root: /run/data-plane/current
+
+# One password for every repository: a single encrypted recovery blob and one
+# read-only R2 token cover every group. Override the root or the R2 URL from
+# inventory; never put a password in this tree.
+backup_password_root: /etc/homelab/secrets/restic
+backup_password_file: "{{ backup_password_root }}/data-plane.password"
+backup_r2_repository_root: s3:https://ACCOUNT.r2.cloudflarestorage.com/homelab-restic
+# Root-only EnvironmentFile (AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY) for the
+# read-only R2 token. Optional: local-only runs need no object credentials.
+backup_r2_environment_file: "{{ backup_password_root }}/r2.env"
+
+# Tiers in copy order. `nvme` is the primary repository every run writes; `hdd`
+# and `r2` are replicated from it with `restic copy`. A repository is
+# <repository_root>/<group id>.
+backup_tiers:
+  - name: nvme
+    repository_root: /var/backups/primary/restic
+  - name: hdd
+    repository_root: /var/backups/secondary/restic
+  - name: r2
+    repository_root: "{{ backup_r2_repository_root }}"
+
+# Per-group policy. `path` is the subtree the recovery page shows and the unit
+# backs up, relative to the snapshot root; every dataset in the group must mount
+# inside it. Cadence is only `fast` or `media`.
+backup_group_specs:
+  books:
+    path: srv/books
+    cadence: media
+    tiers: [nvme, hdd, r2]
+  memory-external:
+    path: srv/memory/external
+    cadence: fast
+    tiers: [nvme, hdd, r2]
+  memory-local:
+    path: srv/memory/local
+    cadence: fast
+    tiers: [nvme, hdd, r2]
+  music:
+    path: srv/music
+    cadence: media
+    tiers: [nvme, hdd, r2]
+  notes:
+    path: srv/notes
+    cadence: fast
+    tiers: [nvme, hdd, r2]
+  photos:
+    path: srv/photos
+    cadence: media
+    tiers: [nvme, hdd, r2]
+  wallpapers:
+    path: srv/wallpapers
+    cadence: media
+    tiers: [nvme, hdd, r2]
+  data-plane-state:
+    path: var/lib/data-plane
+    cadence: fast
+    tiers: [nvme, hdd, r2]
+  browsing:
+    path: srv/browsing
+    cadence: fast
+    tiers: [nvme, hdd, r2]
+  finance:
+    path: srv/finance
+    cadence: fast
+    tiers: [nvme, hdd, r2]
+  mail:
+    path: srv/mail
+    cadence: fast
+    tiers: [nvme, hdd, r2]
+  # Secure Boot key material lives outside the pool; the unit reads the live
+  # path because a recursive snapshot cannot capture it.
+  host-keys:
+    path: var/lib/sbctl
+    cadence: media
+    tiers: [nvme, hdd, r2]
+
+# Ordered group ids: host inventory groups first, then declared host paths.
+# Derived so a dataset that is classified in all.yml can never be silently
+# skipped by the backup plan.
+backup_group_ids: >-
+  {{ (recovery_inventory.keys() | list | map('regex_replace', '_', '-') | list)
+     + (backup_host_paths | map(attribute='id') | list) }}
+
+backup_config_file: /etc/homelab/backup.json
+
+# Cadences are systemd OnCalendar expressions. Control state is captured every
+# 15 minutes; media is captured hourly. Every run takes one snapshot and copies
+# it to each tier in the group's list.
+backup_cadences:
+  fast:
+    calendar: "*-*-* *:00/15:00"
+    delay: 120
+  media:
+    calendar: "*-*-* *:05:00"
+    delay: 300
