@@ -8,10 +8,8 @@ from data_plane.errors import ContractError
 from data_plane.model import (
     Authority,
     Capability,
-    DatasetMount,
     EffectClass,
     FieldAuthority,
-    RecoveryGroup,
     SourceContract,
     Visibility,
     validate_many,
@@ -101,48 +99,3 @@ class SourceContractTests(unittest.TestCase):
     def test_validate_many_rejects_duplicate_ids(self):
         with self.assertRaises(ContractError):
             validate_many((contract(), contract()))
-
-
-class RecoveryGroupTests(unittest.TestCase):
-    def test_valid_group(self):
-        group = RecoveryGroup(
-            group_id="books",
-            pool="data",
-            parent_dataset="data/books",
-            members=(
-                DatasetMount(
-                    name="books",
-                    dataset="data/books/content",
-                    mount="/srv/books",
-                    writer="write-broker",
-                ),
-            ),
-            required_config=("/etc/data-plane/books.toml",),
-        )
-        group.validate()
-
-    def test_member_outside_parent_rejected(self):
-        group = RecoveryGroup(
-            group_id="books",
-            pool="data",
-            parent_dataset="data/books",
-            members=(
-                DatasetMount(
-                    name="escape", dataset="data/photos", mount="/srv/photos"
-                ),
-            ),
-        )
-        with self.assertRaises(ContractError):
-            group.validate()
-
-    def test_duplicate_mount_rejected(self):
-        member = DatasetMount(name="a", dataset="data/x/a", mount="/srv/a")
-        group = RecoveryGroup(
-            group_id="x", pool="data", parent_dataset="data/x", members=(member, member)
-        )
-        with self.assertRaises(ContractError):
-            group.validate()
-
-
-if __name__ == "__main__":
-    unittest.main()

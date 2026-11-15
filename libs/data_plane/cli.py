@@ -25,11 +25,9 @@ from .memory.file_memory import FileMemory
 from .model import (
     Authority,
     Capability,
-    DatasetMount,
     EffectClass,
     FidelityLimit,
     FieldAuthority,
-    RecoveryGroup,
     SourceContract,
     Visibility,
     validate_many,
@@ -90,38 +88,15 @@ def _source(raw: Mapping[str, Any]) -> SourceContract:
     )
 
 
-def _recovery_group(raw: Mapping[str, Any]) -> RecoveryGroup:
-    return RecoveryGroup(
-        group_id=str(raw["group_id"]),
-        pool=str(raw["pool"]),
-        parent_dataset=str(raw["parent_dataset"]),
-        members=tuple(
-            DatasetMount(
-                name=str(item["name"]),
-                dataset=str(item["dataset"]),
-                mount=str(item["mount"]),
-                writer=str(item.get("writer", "")),
-            )
-            for item in raw.get("members", ())
-        ),
-        required_config=tuple(str(item) for item in raw.get("required_config", ())),
-        notes=str(raw.get("notes", "")),
-    )
-
-
 def _cmd_validate_catalog(args: argparse.Namespace) -> int:
-    contracts = validate_many(_source(raw) for raw in _as_list(_load_json(args.path), "sources"))
-    print(json.dumps({"sources": len(contracts), "ids": [item.source_id for item in contracts]}))
-    return 0
-
-
-def _cmd_validate_recovery(args: argparse.Namespace) -> int:
-    groups = []
-    for raw in _as_list(_load_json(args.path), "groups"):
-        group = _recovery_group(raw)
-        group.validate()
-        groups.append(group)
-    print(json.dumps({"groups": len(groups), "ids": [item.group_id for item in groups]}))
+    contracts = validate_many(
+        _source(raw) for raw in _as_list(_load_json(args.path), "sources")
+    )
+    print(
+        json.dumps(
+            {"sources": len(contracts), "ids": [item.source_id for item in contracts]}
+        )
+    )
     return 0
 
 
@@ -249,10 +224,6 @@ def _parser() -> argparse.ArgumentParser:
     catalog = sub.add_parser("validate-catalog", help="validate source contracts")
     catalog.add_argument("path")
     catalog.set_defaults(handler=_cmd_validate_catalog)
-
-    recovery = sub.add_parser("validate-recovery", help="validate recovery groups")
-    recovery.add_argument("path")
-    recovery.set_defaults(handler=_cmd_validate_recovery)
 
     confirmation = sub.add_parser(
         "render-confirmation", help="hash and render a normalized operation"

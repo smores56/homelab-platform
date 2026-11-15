@@ -205,64 +205,6 @@ class SourceContract:
         )
 
 
-@dataclass(frozen=True)
-class DatasetMount:
-    """One dataset in a recovery group and its idiomatic mount path."""
-
-    name: str
-    dataset: str
-    mount: str
-    writer: str = ""
-
-    def validate(self, parent_dataset: str) -> None:
-        if not self.name.strip():
-            raise ContractError("dataset mount has an empty name")
-        if not self.dataset.strip():
-            raise ContractError(f"dataset {self.name!r} has no dataset path")
-        if self.dataset != parent_dataset and not self.dataset.startswith(
-            parent_dataset.rstrip("/") + "/"
-        ):
-            raise ContractError(
-                f"dataset {self.dataset!r} is not under recovery parent {parent_dataset!r}"
-            )
-        if not self.mount.startswith("/"):
-            raise ContractError(f"dataset {self.name!r} mount must be absolute")
-        if ".." in self.mount.split("/"):
-            raise ContractError(f"dataset {self.name!r} mount escapes its root")
-
-
-@dataclass(frozen=True)
-class RecoveryGroup:
-    """One ZFS parent dataset and every mutable member that shares its point."""
-
-    group_id: str
-    pool: str
-    parent_dataset: str
-    members: tuple[DatasetMount, ...]
-    required_config: tuple[str, ...] = ()
-    notes: str = ""
-
-    def validate(self) -> None:
-        if not self.group_id.strip():
-            raise ContractError("recovery group has an empty id")
-        if not self.pool.strip():
-            raise ContractError(f"recovery group {self.group_id!r} has no pool")
-        if not self.parent_dataset.strip():
-            raise ContractError(f"recovery group {self.group_id!r} has no parent dataset")
-        if not self.members:
-            raise ContractError(f"recovery group {self.group_id!r} has no members")
-        for member in self.members:
-            member.validate(self.parent_dataset)
-        mounts = [member.mount for member in self.members]
-        if len(mounts) != len(set(mounts)):
-            raise ContractError(f"recovery group {self.group_id!r} has duplicate mounts")
-        for path in self.required_config:
-            if not path.startswith("/"):
-                raise ContractError(
-                    f"recovery group {self.group_id!r} config path {path!r} is not absolute"
-                )
-
-
 def validate_many(contracts: Iterable[SourceContract]) -> tuple[SourceContract, ...]:
     """Validate a collection and reject duplicate source ids."""
 
