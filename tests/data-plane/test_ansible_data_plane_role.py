@@ -261,3 +261,23 @@ class StorageContractTests(unittest.TestCase):
         self.assertEqual(defaults["storage_infrastructure_mode"], "0700")
         self.assertEqual(defaults["storage_infrastructure_owner"], "root")
         self.assertEqual(defaults["storage_infrastructure_group"], "root")
+
+    def test_data_trees_belong_to_the_host_data_owner(self):
+        defaults = render.load_yaml(
+            ROOT / "ansible" / "roles" / "storage" / "defaults" / "main.yml"
+        )
+        self.assertEqual(defaults["storage_default_owner"], "{{ homelab_data_owner }}")
+        self.assertEqual(defaults["storage_default_group"], "{{ homelab_data_group }}")
+        self.assertEqual(ALL_VARS["homelab_data_owner"], "smores")
+        self.assertEqual(ALL_VARS["homelab_data_group"], "users")
+        # setgid, so a write by the broker uid or a guest's mapped uid keeps the
+        # shared group.
+        self.assertEqual(defaults["storage_personal_mode"], "2770")
+        self.assertEqual(defaults["storage_general_mode"], "2775")
+        self.assertEqual(defaults["storage_public_mode"], "2775")
+
+    def test_broker_joins_the_shared_data_group(self):
+        broker = next(s for s in SERVICES if s["short"] == "write-broker")
+        self.assertEqual(broker["data_group"], "{{ homelab_data_group }}")
+        self.assertIn("--group-add {{ data_plane_data_gid }}", UNIT_TEMPLATE)
+        self.assertIn("data_plane_data_lookup", json.dumps(TASKS))

@@ -191,6 +191,13 @@ zfs_ashift: 12
 zfs_compression: zstd
 zfs_atime: "off"
 
+# Data trees belong to the host account the cluster guest maps to (guest uid
+# 1000 maps to this host user) and to the admin group. The write broker keeps
+# its own uid and joins this group, so a setgid tree stays editable from both
+# sides.
+homelab_data_owner: smores
+homelab_data_group: users
+
 # One recovery group per parent dataset. A new dataset without an entry here is
 # rejected at apply time (roles/storage) and by playbooks/check.yml. Backup
 # policy (cadence, tiers, display path) lives in group_vars/backup.yml; this file

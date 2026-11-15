@@ -71,9 +71,33 @@
     group: root
     mode: "0644"
 
+# The broker writes a general tree owned by the host data user and group. It
+# joins that group instead of running as the host user, and the setgid tree
+# keeps files editable from both sides.
+- name: Resolve the shared data group
+  ansible.builtin.command:
+    argv: [getent, group, "{{ homelab_data_group }}"]
+  register: data_plane_data_lookup
+  changed_when: false
+  check_mode: false
+
+- name: Require the shared data group on the host
+  ansible.builtin.assert:
+    that:
+      - data_plane_data_lookup.rc == 0
+      - data_plane_data_lookup.stdout.split(':') | length >= 3
+    fail_msg: >-
+      {{ homelab_data_group }} does not exist; create it before converging the
+      broker.
+    quiet: true
+
+- name: Record the shared data gid
+  ansible.builtin.set_fact:
+    data_plane_data_gid: "{{ data_plane_data_lookup.stdout.split(':')[2] }}"
+
 # The datasets are root-only infrastructure; only the directories a container
-# mounts read-write belong to the container uid. /srv/books stays host-owned:
-# a general-source write needs an owner match, which is a cutover decision.
+# mounts read-write belong to the container uid. /srv/books keeps the host data
+# owner/group; the broker joins that group and writes through the setgid tree.
 - name: Grant the container uid its writable state directories
   ansible.builtin.file:
     path: "{{ item.1 }}"

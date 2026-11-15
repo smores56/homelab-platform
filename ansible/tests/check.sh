@@ -215,12 +215,20 @@ else
   bad "the kata-qemu handler has no ConfigPath"
 fi
 
-# Personal data is never world-readable.
-if grep -qF 'storage_personal_mode: "0750"' roles/storage/defaults/main.yml &&
-  grep -qF 'storage_public_mode: "0755"' roles/storage/defaults/main.yml; then
-  ok "dataset modes default to personal 0750 and public 0755"
+# Personal data is never world-readable, and every data tree is setgid so a
+# write by the broker uid or a guest's mapped uid keeps the shared group.
+if grep -qF 'storage_personal_mode: "2770"' roles/storage/defaults/main.yml &&
+  grep -qF 'storage_general_mode: "2775"' roles/storage/defaults/main.yml &&
+  grep -qF 'storage_public_mode: "2775"' roles/storage/defaults/main.yml; then
+  ok "dataset modes are setgid: personal 2770, general/public 2775"
 else
-  bad "storage mode defaults do not distinguish personal from public"
+  bad "storage mode defaults do not keep personal data non-world-readable"
+fi
+if grep -qF 'storage_default_owner: "{{ homelab_data_owner }}"' roles/storage/defaults/main.yml &&
+  grep -qF 'storage_default_group: "{{ homelab_data_group }}"' roles/storage/defaults/main.yml; then
+  ok "served trees belong to the host data owner and shared group"
+else
+  bad "served trees do not use the host data owner and shared group"
 fi
 if grep -qF 'recovery_inventory[item.recovery_group].visibility' roles/storage/tasks/main.yml; then
   ok "served-tree mode is derived from recovery_inventory visibility"

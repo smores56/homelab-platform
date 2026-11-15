@@ -20,7 +20,7 @@ arrive from the operator or the private inventory.
 | `roles/base` | Packages, timezone, sysctl, users, SSH, unattended-upgrades, journald |
 | `roles/luks` | LUKS2 keyfile slots and crypttab; disk initialisation only under `--tags destructive` |
 | `roles/zfs` | Pool import/create, recovery-group datasets, mount ordering |
-| `roles/storage` | `/srv` ownership, backup mounts, default-deny dataset inventory |
+| `roles/storage` | `/srv` ownership (data owner + setgid shared group), backup mounts, default-deny dataset inventory |
 | `roles/k3s` | Pinned k3s, containerd handlers, RuntimeClass, kubeconfig mode |
 | `roles/nvidia` | Driver and container-toolkit branch pins; device plugin owns no host config |
 | `roles/kata` | Kata/QEMU packages and the `kata-qemu` RuntimeClass |

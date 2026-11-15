@@ -1,12 +1,16 @@
 ---
-storage_default_owner: root
-storage_default_group: root
+# Data trees belong to the host data user and group (group_vars), setgid so a
+# file the broker or a guest creates keeps the shared group.
+storage_default_owner: "{{ homelab_data_owner }}"
+storage_default_group: "{{ homelab_data_group }}"
 # Mode is derived from recovery_inventory[<group>].visibility, never from a
 # per-dataset `mode` in group_vars: personal data is group-readable only,
 # general/public data alone may be world-readable. Unknown visibility falls back
-# to the personal mode, so a typo fails closed.
-storage_personal_mode: "0750"
-storage_public_mode: "0755"
+# to the personal mode, so a typo fails closed. The setgid bit is what keeps the
+# group stable across writers with different uids.
+storage_personal_mode: "2770"
+storage_general_mode: "2775"
+storage_public_mode: "2775"
 # Service state: never world-readable, and the service that owns it narrows the
 # mode further when it grants the container uid write access.
 storage_infrastructure_mode: "0700"

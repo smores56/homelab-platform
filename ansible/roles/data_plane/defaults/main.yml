@@ -80,3 +80,6 @@ data_plane_services:
     assert_mounts:
       - /srv/books
     backup_mounts: false
+    # The shared data group, added as a supplementary group so the setgid tree
+    # is writable without running as the host user.
+    data_group: "{{ homelab_data_group }}"

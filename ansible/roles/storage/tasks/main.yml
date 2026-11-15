@@ -101,12 +101,15 @@
     # service state and are root-only; the consuming service narrows its own
     # writable subdirectory. A per-dataset `mode` in group_vars is not consulted
     # so a wider value cannot leak into a personal dataset; an unknown
-    # visibility falls back to the personal mode.
+    # visibility falls back to the personal mode. Every data mode is setgid so
+    # the group survives a write from the broker's uid or a guest's mapped uid.
     mode: >-
       {{ (storage_infrastructure_mode
           if recovery_inventory[item.recovery_group].visibility == 'infrastructure'
+          else storage_general_mode
+          if recovery_inventory[item.recovery_group].visibility == 'general'
           else storage_public_mode
-          if recovery_inventory[item.recovery_group].visibility in ['general', 'public']
+          if recovery_inventory[item.recovery_group].visibility == 'public'
           else storage_personal_mode) }}
   loop: "{{ zfs_datasets }}"
   loop_control:

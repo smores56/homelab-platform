@@ -38,6 +38,9 @@ ExecStart=/usr/bin/podman run \
   --cap-drop=all \
   --security-opt=no-new-privileges \
   --env-file {{ data_plane_config_root }}/{{ service.short }}.env \
+{% if service.data_group is defined %}
+  --group-add {{ data_plane_data_gid }} \
+{% endif %}
   --user {{ service.container_user | default('65532:65532') }} \
   --tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m \
 {% for port in service.ports | default([]) %}
