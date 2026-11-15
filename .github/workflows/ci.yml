@@ -137,7 +137,7 @@ jobs:
       - name: lint every tracked YAML file
         run: |
           yamllint --version
-          yamllint -c .yamllint.yaml $(git ls-files '*.yaml' '*.yml')
+          yamllint -c .yamllint.yaml $(git ls-files '*.yaml' '*.yml') provision/smortress/user-data
 
   tofu:
     name: tofu fmt and validate
@@ -178,7 +178,9 @@ jobs:
             tests/access/*.sh tests/backup/*.sh tests/digest/*.sh \
             tests/observability/*.sh tests/agent-control/*.sh \
             clusters/homelab/flux-system/bootstrap.sh \
-            clusters/homelab/platform/backup/*.sh
+            clusters/homelab/platform/backup/*.sh provision/*.sh tests/provision/*.sh
+      - name: provision static checks
+        run: tests/provision/check.sh
 
   action-pins:
     name: action SHA pins

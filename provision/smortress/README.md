@@ -69,3 +69,16 @@ boots it again: autoinstall re-runs and wipes the disk it just built. In the
 spike, stop QEMU at the first post-install reboot and start it again with
 `SMORTRESS_SPIKE_BOOT=disk`. On hardware, remove the seed USB before the
 reboot, exactly as you would remove any install medium.
+
+## One-command proof
+
+```sh
+nix-shell -p qemu xorriso curl gnupg socat openssh --run \
+  'SMORTRESS_SSH_KEY=~/.ssh/smortress-bootstrap provision/smortress/verify.sh'
+```
+
+Installs into a scratch qcow2, stops QEMU at the reboot, boots the result,
+unlocks root with the passphrase file, and prints `PASS`/`FAIL` per assertion:
+encrypted root, separate `/boot`, keyfile crypttab, two keyslots, header
+backup, `tank` with `cachefile=none`, and the provision unit active. Exit code
+is non-zero on any failure.

@@ -39,7 +39,7 @@ nix run nixpkgs#actionlint -- .              # a workflow GitHub cannot parse ne
 nix run nixpkgs#shellcheck -- scripts/*.sh tests/policies/*.sh tests/tofu/*.sh \
   tests/access/*.sh tests/backup/*.sh tests/digest/*.sh tests/observability/*.sh \
   tests/agent-control/*.sh clusters/homelab/flux-system/bootstrap.sh \
-  clusters/homelab/platform/backup/*.sh
+  clusters/homelab/platform/backup/*.sh provision/*.sh tests/provision/*.sh
 scripts/check-action-pins.sh
 scripts/check-pr-secret-boundary.sh
 scripts/check-codeowners.sh
