@@ -6,9 +6,9 @@ metadata:
   namespace: graphiti
   labels:
     app.kubernetes.io/name: graphiti
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: data
-    homelabs.dev/managed-by: platform
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: data
+    homelab.dev/managed-by: platform
 spec:
   accessModes: ["ReadWriteOnce"]
   storageClassName: data-local

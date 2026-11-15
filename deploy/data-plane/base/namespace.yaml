@@ -11,10 +11,10 @@ kind: Namespace
 metadata:
   name: data-plane
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tenant: platform
-    homelabs.dev/tier: platform
-    homelabs.dev/managed-by: platform
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tenant: platform
+    homelab.dev/tier: platform
+    homelab.dev/managed-by: platform
     pod-security.kubernetes.io/enforce: restricted
     pod-security.kubernetes.io/audit: restricted
     pod-security.kubernetes.io/warn: restricted

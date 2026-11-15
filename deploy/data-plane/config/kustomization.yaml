@@ -11,8 +11,8 @@ kind: Kustomization
 generatorOptions:
   disableNameSuffixHash: true
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: platform
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: platform
 
 configMapGenerator:
   - name: data-plane-config

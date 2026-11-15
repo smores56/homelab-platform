@@ -11,7 +11,7 @@ kind: Kustomization
 resources:
   - ../base
 commonAnnotations:
-  homelabs.dev/environment: local
+  homelab.dev/environment: local
 patches:
   - target:
       kind: PersistentVolumeClaim

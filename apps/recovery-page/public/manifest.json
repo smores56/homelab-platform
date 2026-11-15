@@ -4,13 +4,13 @@
     {
       "id": "photos",
       "label": "photos",
-      "repo": "s3:https://example-account.r2.cloudflarestorage.com/homelabs-restic/photos",
+      "repo": "s3:https://example-account.r2.cloudflarestorage.com/homelab-restic/photos",
       "data_root": "/photos"
     },
     {
       "id": "notes",
       "label": "notes",
-      "repo": "s3:https://example-account.r2.cloudflarestorage.com/homelabs-restic/notes",
+      "repo": "s3:https://example-account.r2.cloudflarestorage.com/homelab-restic/notes",
       "data_root": "/notes"
     }
   ]

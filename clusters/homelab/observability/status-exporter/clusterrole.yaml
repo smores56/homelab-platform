@@ -4,8 +4,8 @@ metadata:
   name: observability-status-exporter
   labels:
     app.kubernetes.io/name: status-exporter
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: observability
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: observability
 # Namespace-scoped rules only. It is bound by one RoleBinding per data namespace
 # (observability/rbac-data.yaml), so it cannot read pods anywhere else. The
 # cluster-scoped `nodes` read lives in its own ClusterRole, because a

@@ -4,4 +4,4 @@ kind: Kustomization
 # Stage 6: the tenant source and reconciler. Created by the platform identity;
 # from here on its spec is pinned by tenant-flux-guard.
 resources:
-  - homelabs-apps.yaml
+  - homelab-apps.yaml

@@ -9,8 +9,8 @@ metadata:
   name: egress-broker-only
   namespace: tenant-apps
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: tenant
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: tenant
 spec:
   podSelector: {}
   policyTypes: ["Egress"]
@@ -18,7 +18,7 @@ spec:
     - to:
         - namespaceSelector:
             matchLabels:
-              homelabs.dev/tier: broker
+              homelab.dev/tier: broker
           podSelector: {}
       ports:
         - protocol: TCP
@@ -30,8 +30,8 @@ metadata:
   name: ingress-tenant-only
   namespace: broker
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: broker
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: broker
 spec:
   podSelector: {}
   policyTypes: ["Ingress"]
@@ -39,7 +39,7 @@ spec:
     - from:
         - namespaceSelector:
             matchLabels:
-              homelabs.dev/tier: tenant
+              homelab.dev/tier: tenant
           podSelector: {}
       ports:
         - protocol: TCP

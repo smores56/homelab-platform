@@ -10,8 +10,8 @@ kind: ValidatingAdmissionPolicy
 metadata:
   name: nanobot-policy
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: platform
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: platform
 spec:
   failurePolicy: Fail
   matchConstraints:
@@ -78,14 +78,14 @@ kind: ValidatingAdmissionPolicyBinding
 metadata:
   name: nanobot-policy
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: platform
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: platform
 spec:
   policyName: nanobot-policy
   validationActions: [Deny]
   matchResources:
     namespaceSelector:
       matchExpressions:
-        - key: homelabs.dev/tier
+        - key: homelab.dev/tier
           operator: In
           values: ["tenant"]

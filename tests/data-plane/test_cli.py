@@ -64,7 +64,7 @@ PLAN = {
         {"name": "nvme", "repository_root": "/var/backups/primary/restic"},
         {
             "name": "r2",
-            "repository_root": "s3:https://account.r2.cloudflarestorage.com/homelabs-restic",
+            "repository_root": "s3:https://account.r2.cloudflarestorage.com/homelab-restic",
         },
     ],
     "groups": [

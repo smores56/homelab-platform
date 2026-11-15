@@ -6,5 +6,5 @@ kind: RuntimeClass
 metadata:
   name: gvisor
   labels:
-    app.kubernetes.io/part-of: homelabs
+    app.kubernetes.io/part-of: homelab
 handler: runsc

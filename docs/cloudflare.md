@@ -134,7 +134,7 @@ that already exists.
 ## Applying
 
 ```sh
-# On smortress, from a homelabs-platform checkout, as the operator.
+# On smortress, from a homelab-platform checkout, as the operator.
 ./scripts/tofu-cloudflare.sh init -input=false
 ./scripts/tofu-cloudflare.sh plan -no-color
 ./scripts/tofu-cloudflare.sh apply -no-color

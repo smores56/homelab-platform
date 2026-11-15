@@ -7,8 +7,8 @@ metadata:
   name: platform-storage
   namespace: flux-system
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: platform
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: platform
 spec:
   interval: 10m
   retryInterval: 1m

@@ -32,7 +32,7 @@ from data_plane.errors import BackupConfigError, BackupError
 PASSWORD = "/etc/homelab/secrets/restic/data-plane.password"
 PRIMARY = "/var/backups/primary/restic"
 SECONDARY = "/var/backups/secondary/restic"
-R2 = "s3:https://account.r2.cloudflarestorage.com/homelabs-restic"
+R2 = "s3:https://account.r2.cloudflarestorage.com/homelab-restic"
 NOW = 10_000_000.0
 
 

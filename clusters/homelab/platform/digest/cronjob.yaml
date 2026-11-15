@@ -13,8 +13,8 @@ metadata:
   namespace: observability
   labels:
     app.kubernetes.io/name: cluster-digest
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: platform
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: platform
 spec:
   schedule: "*/15 * * * *"
   timeZone: UTC
@@ -31,9 +31,9 @@ spec:
         metadata:
           labels:
             app.kubernetes.io/name: cluster-digest
-            app.kubernetes.io/part-of: homelabs
-            homelabs.dev/tier: platform
-            homelabs.dev/managed-by: platform
+            app.kubernetes.io/part-of: homelab
+            homelab.dev/tier: platform
+            homelab.dev/managed-by: platform
         spec:
           serviceAccountName: cluster-digest
           automountServiceAccountToken: false

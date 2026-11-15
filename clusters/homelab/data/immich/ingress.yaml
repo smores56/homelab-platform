@@ -12,8 +12,8 @@ metadata:
   namespace: immich
   labels:
     app.kubernetes.io/name: immich
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: data
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: data
 spec:
   rules:
     - host: photos.sammohr.dev

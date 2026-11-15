@@ -4,7 +4,7 @@ metadata:
   name: broker
   labels:
     app.kubernetes.io/name: broker
-    homelabs.dev/tier: broker
+    homelab.dev/tier: broker
 spec:
   type: ClusterIP
   selector:

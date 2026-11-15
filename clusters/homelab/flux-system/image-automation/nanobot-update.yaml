@@ -1,10 +1,10 @@
-# Flux commits the digest into smores56/homelabs-apps. The marker it looks for is
+# Flux commits the digest into smores56/homelab-apps. The marker it looks for is
 # in that repository (tenant side, added by another lane):
 #
-#   image: ghcr.io/smores56/homelabs-platform/nanobot@sha256:<old>
+#   image: ghcr.io/smores56/homelab-platform/nanobot@sha256:<old>
 #     # {"$imagepolicy": "flux-system:nanobot:digest"}
 #
-# The push uses the same write deploy key as `homelabs-apps-git.yaml`, so the
+# The push uses the same write deploy key as `homelab-apps-git.yaml`, so the
 # commit is attributable to the automation identity and the tenant's own
 # reconciler reads it back from main with no token.
 apiVersion: image.toolkit.fluxcd.io/v1
@@ -13,13 +13,13 @@ metadata:
   name: nanobot
   namespace: flux-system
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: platform
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: platform
 spec:
   interval: 10m
   sourceRef:
     kind: GitRepository
-    name: homelabs-apps
+    name: homelab-apps
   git:
     checkout:
       ref:

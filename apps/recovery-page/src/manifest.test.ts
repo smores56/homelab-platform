@@ -15,13 +15,13 @@ const manifest: RecoveryManifest = {
     {
       id: "photos",
       label: "Photos",
-      repo: "s3:https://account.r2.cloudflarestorage.com/homelabs-restic-personal/photos",
+      repo: "s3:https://account.r2.cloudflarestorage.com/homelab-restic-personal/photos",
       data_root: "/srv/photos",
     },
     {
       id: "books",
       label: "Books",
-      repo: "s3:https://account.r2.cloudflarestorage.com/homelabs-restic-general/books",
+      repo: "s3:https://account.r2.cloudflarestorage.com/homelab-restic-general/books",
       data_root: "/srv/books",
     },
   ],
@@ -54,7 +54,7 @@ describe("recovery manifest", () => {
         {
           id: "photos",
           label: "photos",
-          repo: "s3:https://account.r2.cloudflarestorage.com/homelabs-restic/photos",
+          repo: "s3:https://account.r2.cloudflarestorage.com/homelab-restic/photos",
           data_root: "/photos",
         },
       ],
@@ -65,7 +65,7 @@ describe("recovery manifest", () => {
   test("requires the repo prefix after the bucket to end with the group id", () => {
     const mismatch = clone();
     mismatch.groups[0].repo =
-      "s3:https://account.r2.cloudflarestorage.com/homelabs-restic-personal/notes";
+      "s3:https://account.r2.cloudflarestorage.com/homelab-restic-personal/notes";
     expect(validateManifest(mismatch).join(" ")).toContain(
       "must end with the group id photos",
     );
@@ -74,11 +74,11 @@ describe("recovery manifest", () => {
     // still ends in the id are both accepted.
     const exact = clone();
     exact.groups[0].repo =
-      "s3:https://account.r2.cloudflarestorage.com/homelabs-restic-personal/photos";
+      "s3:https://account.r2.cloudflarestorage.com/homelab-restic-personal/photos";
     expect(validateManifest(exact)).toEqual([]);
     const nested = clone();
     nested.groups[0].repo =
-      "s3:https://account.r2.cloudflarestorage.com/homelabs-restic-personal/teams/photos";
+      "s3:https://account.r2.cloudflarestorage.com/homelab-restic-personal/teams/photos";
     expect(validateManifest(nested)).toEqual([]);
   });
 

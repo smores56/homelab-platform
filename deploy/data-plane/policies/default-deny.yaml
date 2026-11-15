@@ -6,8 +6,8 @@ metadata:
   name: default-deny
   namespace: data-plane
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: platform
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: platform
 spec:
   podSelector: {}
   policyTypes: ["Ingress", "Egress"]

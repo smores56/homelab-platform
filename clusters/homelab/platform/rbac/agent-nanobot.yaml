@@ -15,7 +15,7 @@ metadata:
   namespace: tenant-apps
   labels:
     app.kubernetes.io/name: nanobot
-    homelabs.dev/tier: tenant
+    homelab.dev/tier: tenant
 automountServiceAccountToken: false
 ---
 # Debug rights on the data tier, and only these: read events (what happened) and
@@ -37,7 +37,7 @@ metadata:
   namespace: immich
   labels:
     app.kubernetes.io/name: nanobot
-    homelabs.dev/tier: data
+    homelab.dev/tier: data
 rules:
   - apiGroups: [""]
     resources: ["events"]
@@ -53,7 +53,7 @@ metadata:
   namespace: immich
   labels:
     app.kubernetes.io/name: nanobot
-    homelabs.dev/tier: data
+    homelab.dev/tier: data
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -70,7 +70,7 @@ metadata:
   namespace: navidrome
   labels:
     app.kubernetes.io/name: nanobot
-    homelabs.dev/tier: data
+    homelab.dev/tier: data
 rules:
   - apiGroups: [""]
     resources: ["events"]
@@ -86,7 +86,7 @@ metadata:
   namespace: navidrome
   labels:
     app.kubernetes.io/name: nanobot
-    homelabs.dev/tier: data
+    homelab.dev/tier: data
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -103,7 +103,7 @@ metadata:
   namespace: opdshelf
   labels:
     app.kubernetes.io/name: nanobot
-    homelabs.dev/tier: data
+    homelab.dev/tier: data
 rules:
   - apiGroups: [""]
     resources: ["events"]
@@ -119,7 +119,7 @@ metadata:
   namespace: opdshelf
   labels:
     app.kubernetes.io/name: nanobot
-    homelabs.dev/tier: data
+    homelab.dev/tier: data
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -136,7 +136,7 @@ metadata:
   namespace: graphiti
   labels:
     app.kubernetes.io/name: nanobot
-    homelabs.dev/tier: data
+    homelab.dev/tier: data
 rules:
   - apiGroups: [""]
     resources: ["events"]
@@ -152,7 +152,7 @@ metadata:
   namespace: graphiti
   labels:
     app.kubernetes.io/name: nanobot
-    homelabs.dev/tier: data
+    homelab.dev/tier: data
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role

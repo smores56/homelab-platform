@@ -17,8 +17,8 @@ metadata:
   name: kubernetes-api-egress
   namespace: observability
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: observability
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: observability
 spec:
   podSelector:
     matchExpressions:

@@ -6,8 +6,8 @@ metadata:
   labels:
     app.kubernetes.io/name: write-broker
     app.kubernetes.io/component: write-path
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: platform
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: platform
 spec:
   type: ClusterIP
   selector:

@@ -9,8 +9,8 @@ metadata:
   namespace: data-plane
   labels:
     app.kubernetes.io/name: confirmation-surface
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: platform
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: platform
 spec:
   podSelector:
     matchLabels:

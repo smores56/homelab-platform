@@ -13,8 +13,8 @@ metadata:
   name: graphiti-config
   namespace: graphiti
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: data
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: data
 data:
   config.yaml.tmpl: |
     server:

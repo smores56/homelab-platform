@@ -22,7 +22,7 @@ metadata:
   name: ntfy-config
   labels:
     app.kubernetes.io/name: ntfy
-    homelabs.dev/tier: notify
+    homelab.dev/tier: notify
 data:
   server.yml: |
     base-url: "https://ntfy.sammohr.dev"

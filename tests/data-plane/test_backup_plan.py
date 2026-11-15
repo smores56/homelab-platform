@@ -24,7 +24,7 @@ def plan_document() -> dict:
             {"name": "hdd", "repository_root": "/var/backups/secondary/restic"},
             {
                 "name": "r2",
-                "repository_root": "s3:https://account.r2.cloudflarestorage.com/homelabs-restic",
+                "repository_root": "s3:https://account.r2.cloudflarestorage.com/homelab-restic",
             },
         ],
         "groups": [
@@ -62,7 +62,7 @@ class PlanLoadingTests(unittest.TestCase):
         )
         self.assertEqual(
             plan.repository("photos", "r2"),
-            "s3:https://account.r2.cloudflarestorage.com/homelabs-restic/photos",
+            "s3:https://account.r2.cloudflarestorage.com/homelab-restic/photos",
         )
         self.assertEqual(
             plan.snapshot_path("photos"), "/run/data-plane/current/photos"

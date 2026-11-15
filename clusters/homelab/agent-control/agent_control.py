@@ -48,13 +48,13 @@ DEFAULT_PORT = 8081
 DEFAULT_TAIL = 100
 MAX_TAIL = 500
 MAX_EVENTS = 120
-RESTART_ANNOTATION = "homelabs.dev/restart-requested-at"
+RESTART_ANNOTATION = "homelab.dev/restart-requested-at"
 
 # The one outbound GitHub call. Repository, workflow and ref are constants: a
 # request cannot name another workflow, another ref or another endpoint.
 GITHUB_API_BASE = "https://api.github.com"
 GITHUB_API_VERSION = "2022-11-28"
-BUILD_REPO = "smores56/homelabs-platform"
+BUILD_REPO = "smores56/homelab-platform"
 BUILD_WORKFLOW = "publish-nanobot.yml"
 BUILD_REF = "main"
 BUILD_TOKEN_FILE = "/run/secrets/build-token"
@@ -64,7 +64,7 @@ BUILD_DISPATCH_PATH = (
 
 # The response may only carry these labels: everything else on a pod is either
 # noise or an operator's private bookkeeping.
-POD_LABELS = ("app.kubernetes.io/name", "homelabs.dev/managed-by")
+POD_LABELS = ("app.kubernetes.io/name", "homelab.dev/managed-by")
 
 # The whole HTTP surface. A path absent here is a 404; a path present with a
 # different method is a 405. The probe is a TCP check on the port on purpose, so

@@ -21,7 +21,7 @@ const SMOKE_KEYS: DataKeys = {
   version: 1,
   r2: {
     endpoint: "https://example.invalid",
-    bucket: "homelabs-restic",
+    bucket: "homelab-restic",
     accessKeyId: "smoke-access-key",
     secretAccessKey: "smoke-secret-key",
   },

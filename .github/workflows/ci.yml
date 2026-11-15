@@ -307,7 +307,7 @@ jobs:
       - name: stop the throwaway control plane
         if: always()
         run: |
-          state="${TMPDIR:-/tmp}/homelabs-policy-apiserver"
+          state="${TMPDIR:-/tmp}/homelab-policy-apiserver"
           for log in "$state"/etcd.log "$state"/apiserver.log; do
             if [ -f "$log" ]; then
               echo "--- $log"

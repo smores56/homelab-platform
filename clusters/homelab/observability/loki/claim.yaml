@@ -6,8 +6,8 @@ metadata:
   name: loki-data
   labels:
     app.kubernetes.io/name: loki
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: observability
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: observability
 spec:
   accessModes: ["ReadWriteOnce"]
   storageClassName: local-path

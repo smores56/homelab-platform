@@ -23,8 +23,8 @@ metadata:
   namespace: data-plane
   labels:
     app.kubernetes.io/name: collector-brave
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: platform
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: platform
 spec:
   podSelector:
     matchLabels:
@@ -49,8 +49,8 @@ metadata:
   namespace: data-plane
   labels:
     app.kubernetes.io/name: collector-finance
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: platform
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: platform
 spec:
   podSelector:
     matchLabels:
@@ -75,8 +75,8 @@ metadata:
   namespace: data-plane
   labels:
     app.kubernetes.io/name: collector-tuta
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: platform
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: platform
 spec:
   podSelector:
     matchLabels:
@@ -101,8 +101,8 @@ metadata:
   namespace: data-plane
   labels:
     app.kubernetes.io/name: collector-immich
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: platform
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: platform
 spec:
   podSelector:
     matchLabels:

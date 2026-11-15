@@ -1,6 +1,6 @@
 # The agent image. It builds from this repository, so what runs as the tenant
 # identity changes only when a human merges here: a tenant push to
-# smores56/homelabs-apps cannot reach images/nanobot/.
+# smores56/homelab-apps cannot reach images/nanobot/.
 #
 # Dispatch contract (consumed by agent-control's `POST /self/build`, owned by
 # another lane; it never holds or prints this job's token):
@@ -38,7 +38,7 @@ jobs:
           persist-credentials: false
       - name: Build, push, and print the digest
         env:
-          IMAGE: ghcr.io/smores56/homelabs-platform/nanobot
+          IMAGE: ghcr.io/smores56/homelab-platform/nanobot
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -56,7 +56,7 @@ jobs:
             echo "- \`$IMAGE:$tag\`"
             echo "- \`$IMAGE@$digest\`"
             echo
-            echo "Flux commits the digest to smores56/homelabs-apps (ImagePolicy"
+            echo "Flux commits the digest to smores56/homelab-apps (ImagePolicy"
             echo "\`flux-system/nanobot\`); nothing here writes to that repository."
           } >>"$GITHUB_STEP_SUMMARY"
           echo "pin: $IMAGE@$digest"

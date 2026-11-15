@@ -26,7 +26,7 @@ from data_plane.migration.preflight import ResticGateRunner, run_gate
 PASSWORD = "/etc/homelab/secrets/restic/data-plane.password"
 NVME = "/var/backups/nvme/restic"
 HDD = "/var/backups/hdd/restic"
-R2 = "s3:https://account.r2.cloudflarestorage.com/homelabs-restic"
+R2 = "s3:https://account.r2.cloudflarestorage.com/homelab-restic"
 NOW = 1_800_000_000.0
 
 

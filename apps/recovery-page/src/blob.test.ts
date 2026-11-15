@@ -13,7 +13,7 @@ const payload: DataKeys = {
   version: 1,
   r2: {
     endpoint: "https://account123.r2.cloudflarestorage.com",
-    bucket: "homelabs-restic-personal",
+    bucket: "homelab-restic-personal",
     accessKeyId: "test-access-key",
     secretAccessKey: "test-secret-key",
     region: "auto",

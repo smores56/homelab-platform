@@ -8,8 +8,8 @@ kind: NetworkPolicy
 metadata:
   name: default-deny
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: webhook
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: webhook
 spec:
   podSelector: {}
   policyTypes: ["Ingress", "Egress"]
@@ -19,8 +19,8 @@ kind: NetworkPolicy
 metadata:
   name: allow-dns-egress
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: webhook
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: webhook
 spec:
   podSelector: {}
   policyTypes: ["Egress"]
@@ -42,8 +42,8 @@ kind: NetworkPolicy
 metadata:
   name: allow-ingress-cloudflared
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: webhook
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: webhook
 spec:
   podSelector:
     matchLabels:
@@ -69,8 +69,8 @@ kind: NetworkPolicy
 metadata:
   name: allow-gateway-egress
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: webhook
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: webhook
 spec:
   podSelector:
     matchLabels:

@@ -47,5 +47,5 @@ resources:
 # rendered output contains only digest-pinned references.
 images:
   - name: data-plane
-    newName: ghcr.io/smores56/homelabs-platform/data-plane
+    newName: ghcr.io/smores56/homelab-platform/data-plane
     digest: sha256:0000000000000000000000000000000000000000000000000000000000000000

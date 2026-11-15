@@ -34,7 +34,7 @@ def app_enrollment(installation="github-installation-id"):
         injection=Injection(kind="basic", username="x-access-token"),
         app=AppScope(
             installation=installation,
-            repositories=("homelabs-platform",),
+            repositories=("homelab-platform",),
             permissions=(("contents", "write"),),
         ),
     )
@@ -67,7 +67,7 @@ class AppTests(unittest.TestCase):
         self.assertEqual(credentials.value(app_enrollment()), "ghs_minted")
         self.assertEqual(
             tokens.calls,
-            [(181438296, ("homelabs-platform",), {"contents": "write"})],
+            [(181438296, ("homelab-platform",), {"contents": "write"})],
         )
 
     def test_minted_tokens_join_the_redaction_set(self):
@@ -91,7 +91,7 @@ class RaisingCredentials:
 
 class Handler:
     command = "GET"
-    path = "/gh/repos/smores56/homelabs-platform/pulls"
+    path = "/gh/repos/smores56/homelab-platform/pulls"
     headers = {"Host": "broker"}
 
     def __init__(self):

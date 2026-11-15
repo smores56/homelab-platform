@@ -1,5 +1,5 @@
 # One DaemonSet ships every container log on the node. Routing is by the
-# *namespace* label `homelabs.dev/tier` (not the pod label), because the tier is
+# *namespace* label `homelab.dev/tier` (not the pod label), because the tier is
 # a property of the namespace: a pod that forgets a label must not be able to
 # opt itself into the raw tenant.
 #
@@ -32,7 +32,7 @@ transforms:
     type: remap
     inputs: [k8s_logs]
     source: |
-      .tenant_route = if .kubernetes.namespace_labels."homelabs.dev/tier" == "data" {
+      .tenant_route = if .kubernetes.namespace_labels."homelab.dev/tier" == "data" {
         "data"
       } else {
         "raw"
@@ -60,8 +60,8 @@ transforms:
     type: remap
     inputs: [raw_filter]
     source: |
-      .loki_tier = if is_string(.kubernetes.namespace_labels."homelabs.dev/tier") {
-        .kubernetes.namespace_labels."homelabs.dev/tier"
+      .loki_tier = if is_string(.kubernetes.namespace_labels."homelab.dev/tier") {
+        .kubernetes.namespace_labels."homelab.dev/tier"
       } else {
         "unknown"
       }

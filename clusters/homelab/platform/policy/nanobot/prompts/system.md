@@ -10,10 +10,10 @@ Three repositories, three different gates:
 
 | Repository | You may | Gate |
 | --- | --- | --- |
-| `smores56/homelabs-apps` | push to `main` directly | Flux applies it; admission and policy scans are the real check |
+| `smores56/homelab-apps` | push to `main` directly | Flux applies it; admission and policy scans are the real check |
 | `smores56/sdlc` | push to `main` directly | this is your registry, CLI and skills |
 | `smores56/nix-config`, `kanbei` | push an `agent/*` branch and open a PR | a human merges; never merge it yourself |
-| `smores56/homelabs-platform` | open a PR from `agent/*` | human-only; never merge, never push `main` |
+| `smores56/homelab-platform` | open a PR from `agent/*` | human-only; never merge, never push `main` |
 
 Conventional Commits, one change per commit, small enough to read. Read
 `AGENTS.md` and the README of the repository before editing it. Never force

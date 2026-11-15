@@ -15,7 +15,7 @@ const keys: DataKeys = {
   version: 1,
   r2: {
     endpoint: "https://account.r2.cloudflarestorage.com",
-    bucket: "homelabs-restic-personal",
+    bucket: "homelab-restic-personal",
     accessKeyId: "access",
     secretAccessKey: "secret",
   },
@@ -26,19 +26,19 @@ const groups: RecoveryGroup[] = [
   {
     id: "photos",
     label: "Photos",
-    repo: "s3:https://account.r2.cloudflarestorage.com/homelabs-restic-personal/photos",
+    repo: "s3:https://account.r2.cloudflarestorage.com/homelab-restic-personal/photos",
     data_root: "/srv/photos",
   },
   {
     id: "notes",
     label: "Notes",
-    repo: "s3:https://account.r2.cloudflarestorage.com/homelabs-restic-personal/notes",
+    repo: "s3:https://account.r2.cloudflarestorage.com/homelab-restic-personal/notes",
     data_root: "/srv/notes",
   },
   {
     id: "books",
     label: "Books",
-    repo: "s3:https://account.r2.cloudflarestorage.com/homelabs-restic-general/books",
+    repo: "s3:https://account.r2.cloudflarestorage.com/homelab-restic-general/books",
     data_root: "/srv/books",
   },
 ];
@@ -65,7 +65,7 @@ describe("groupStore", () => {
   test("takes the repository prefix from the group's URL", () => {
     expect(groupStore(keys, groups[0])).toEqual({
       endpoint: "https://account.r2.cloudflarestorage.com",
-      bucket: "homelabs-restic-personal",
+      bucket: "homelab-restic-personal",
       prefix: "photos",
     });
     const nested = { ...groups[0], repo: `${groups[0].repo}/immich` };
