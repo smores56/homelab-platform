@@ -116,10 +116,13 @@ nothing was applied.
 nix-shell -p kustomize kubeconform --run "deploy/data-plane/tests/check.sh"
 kustomize build deploy/data-plane/base > /tmp/data-plane.yaml
 
-# 2. Replace the digest placeholder in base/kustomization.yaml and images.yaml,
-#    then repeat step 1. The script fails if the lists drift or the image is not
-#    digest-pinned. A profile overlay also mounts the credential Secrets at the
-#    DATA_PLANE_SECRET_FILE paths; the base mounts none.
+# 2. Publish the image, then pin the printed digest in all three places and
+#    repeat step 1:
+#      deploy/data-plane/base/kustomization.yaml   (images: newName/newTag)
+#      deploy/data-plane/images.yaml               (the repeated contract)
+#      ansible/group_vars/all.yml                  (data_plane_images, host units)
+#    The check fails on a tag, a floating reference, the all-zero placeholder,
+#    or drift between the two deploy files.
 
 # 3. Client-side dry run; no server and no admission call.
 kubectl apply --dry-run=client --validate=false -f /tmp/data-plane.yaml
@@ -134,6 +137,38 @@ for source in brave finance tuta immich; do
   kubectl -n data-plane rollout status "deployment/collector-$source" --timeout=120s
 done
 ```
+
+## Operator-provisioned Secrets
+
+The base mounts five Secrets and creates none. The key names are the contract:
+rename a key and the pod fails closed on a missing file, never on a default.
+
+| Secret | Keys | Mount | Read by |
+| --- | --- | --- | --- |
+| `event-service-secrets` | `append-token`, `read-token`, `consumers.json` | `/run/secrets/event` | `event` |
+| `write-broker-secrets` | `identity`, `operator-key` | `/run/secrets/broker` | `broker` |
+| `confirmation-surface-secrets` | `token`, `key` | `/run/secrets/confirmation` | `confirmation` |
+| `relay-brave`, `relay-finance`, `relay-tuta`, `relay-immich` | `token` | `/run/secrets/relay/<source>` | one `collector` each |
+
+```sh
+kubectl -n data-plane create secret generic event-service-secrets \
+  --from-file=append-token --from-file=read-token --from-file=consumers.json
+kubectl -n data-plane create secret generic write-broker-secrets \
+  --from-file=identity --from-file=operator-key
+kubectl -n data-plane create secret generic confirmation-surface-secrets \
+  --from-file=token --from-file=key
+for source in brave finance tuta immich; do
+  kubectl -n data-plane create secret generic "relay-$source" --from-file=token
+done
+```
+
+`append-token` and `read-token` must differ — the service refuses equal tokens
+so a producer cannot read its own log and a reader cannot inject events.
+`consumers.json` is a JSON object of consumer name to secret. A relay never
+receives either event token. The host systemd units in `ansible/roles/data_plane`
+are a separate plane: they load an EnvironmentFile per unit and do not mount
+these files, so the cluster tree is the supported path for the
+credential-carrying services (`docs/manual-steps.md` step 35, item 9).
 
 Verification, in order:
 

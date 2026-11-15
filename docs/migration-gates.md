@@ -20,6 +20,11 @@ command runs a destructive step.
 
 ## Gate sequence
 
+The operator prerequisites — the R2 account id, the host secret root, the
+repositories, the real copy/restore drill and the cluster Secrets — are step 35
+of `docs/manual-steps.md`. The gates below assume that proof exists; no gate
+creates a repository, a credential or a snapshot.
+
 The phases are ordered and each one is exited only through its gate.
 
 | # | Phase | Gate | Required evidence | Irreversible | Operator confirmation |
@@ -263,9 +268,13 @@ condition is the only way to change a result.
 4. Restore the latest old-system generation onto scratch storage and record the
    generation id in the recovery kit.
 5. Boot the 970 rollback disk and record that it boots. Do not modify it.
-6. Run the plan-driven backup gate against the host plan:
+6. Create the new repositories and prove one real cycle before the gate can
+   mean anything (`docs/manual-steps.md` step 35, items 3-7): `backup-init` per
+   group, one `homelab-backup` run, `backup-check`, then the plan-driven gate:
 
    ```sh
+   python3 -m data_plane backup-init --plan /etc/homelab/backup.json
+   /usr/local/sbin/homelab-backup --config /etc/homelab/backup.json --cadence fast
    python3 -m data_plane.migration preflight --plan /etc/homelab/backup.json --json
    ```
 

@@ -94,6 +94,22 @@ The endpoint and bucket default to the values every manifest group shares; pass
 `--endpoint`/`--bucket` only when they equal the manifest (the script refuses a mismatch). There is
 no password-file option and no legacy scrypt envelope.
 
+In the monorepo, build the blob against the manifest the site ships, not the
+synthetic example, or `--check-only` proves groups that are not published:
+
+```sh
+cd apps/recovery-page
+deno task blob --manifest ../../deploy/data-plane/config/recovery-groups.json \
+  --secrets ../../secrets/recovery.yaml
+deno task blob --check-only \
+  --manifest ../../deploy/data-plane/config/recovery-groups.json
+```
+
+The operator prerequisites — the real R2 account id in
+`ansible/group_vars/backup.yml` and the rendered manifest, a passed host
+`preflight`, and a real restore drill before this page can retire the legacy
+one — are `docs/manual-steps.md` step 35.
+
 Before the blob is renamed into place it asks for the recovery password a third time, from scratch,
 and opens the file that was just written with that entry.
 

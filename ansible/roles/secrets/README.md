@@ -9,8 +9,16 @@ temporary directory, then runs:
 ```sh
 ansible-playbook playbooks/site.yml --tags secrets \
   -e secrets_source_dir=/run/operator-secrets \
-  -e '{"secrets_files":["event-service.env","write-broker.env","restic-password"]}'
+  -e '{"secrets_files":["event-service.env","write-broker.env", \
+       "collector-relay.env","restic/data-plane.password","restic/r2.env"]}'
 ```
+
+The file list is relative to the source directory and mirrors the destination
+under `/etc/homelab/secrets`. The `restic/` subdirectory is created first by
+`docs/manual-steps.md` step 35, item 3; `copy` does not create intermediate
+directories. The backup units read those two files as root
+(`--password-file`, and `AWS_*` from an `EnvironmentFile`), so they take no
+`*.env` wrapper.
 
 The role refuses an empty or relative source directory, refuses a path inside
 `.git`, creates `/etc/homelab/secrets` at `0700`, and copies each file at

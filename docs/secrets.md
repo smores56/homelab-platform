@@ -55,7 +55,23 @@ gone. These are the holdovers, each with the task that ends it:
 | --- | --- | --- |
 | `cloudflare-api-token` | `kanbei-access.nix` DNS-01, the `cloudflare-*` flake apps | flake apps: the step-14 state move; Kanbei: a DNS-scoped token of its own |
 | `cloudflared-credentials` | the host tunnel (`web-proxy.nix`) | #615, when the last host-owned route moves |
-| `restic-password`, `r2-access-key-id`, `r2-secret-access-key` | `restic-backup.nix` | #619's per-tree drill gate, one tree at a time |
+| `restic-password`, `r2-access-key-id`, `r2-secret-access-key` | `restic-backup.nix` | #660: one repository per recovery group, then the restore drill (`docs/manual-steps.md` step 35) |
+
+### The #660 data plane
+
+| Credential | Lives at | Read by | Rule |
+| --- | --- | --- | --- |
+| One restic password | `/etc/homelab/secrets/restic/data-plane.password`, root-only | every `homelab-backup` run and the recovery entrypoint | one password covers every group and tier; never per-group keys |
+| Read-only R2 key pair | `/etc/homelab/secrets/restic/r2.env` (`AWS_*`), root-only | `restic copy` to R2, the page blob source | cannot read, delete or change bucket policy; the write credential is not on the host |
+| Page blob keys | `secrets/recovery.yaml` in this repository, SOPS to the admin identity | `deno task blob` only | `restic-password` and the `r2-*-readonly` pair; the blob itself is public and encrypted |
+| Event append/read tokens | cluster Secret `event-service-secrets` | `event` and the broker/confirmation surfaces | must differ; a relay holds neither |
+| Relay tokens | one Secret per source (`relay-brave`, …) | that collector only | never shared between sources |
+
+The host backup units run as root and read the files directly; no container
+mount and no SOPS-on-host step is involved. The cluster Secrets are created by
+the operator from `deploy/data-plane/README.md`, because this tree creates no
+Secret.
+
 | `memory-mcp-token` | the maki memory shim | #617's cluster route with an Access service token |
 
 Until each row moves, the same value may exist in two stores. The host copy stays
