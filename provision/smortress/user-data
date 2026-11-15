@@ -28,6 +28,7 @@ autoinstall:
   packages:
     - clevis
     - clevis-dracut
+    - clevis-tpm2
     - clevis-luks
     - cryptsetup
     - linux-modules-zfs-generic
@@ -47,11 +48,11 @@ autoinstall:
       - id: disk-target
         type: disk
         ptable: gpt
-        wipe: superblock
+        wipe: superblock-recursive
         preserve: false
         grub_device: true
         match:
-          serial: SMORTRESS980
+          serial: __DISK_SERIAL__
       - id: part-esp
         type: partition
         device: disk-target
@@ -134,7 +135,7 @@ autoinstall:
         zpool set cachefile=none tank
         exit 0
       fi
-      zpool create -o ashift=12 -O mountpoint=none -O canmount=off \
+      zpool create -o cachefile=none -o ashift=12 -O mountpoint=none -O canmount=off \
         -O compression=zstd -O atime=off -O xattr=sa -O acltype=posixacl \
         tank /dev/mapper/luks-data
       zpool set cachefile=none tank
@@ -157,16 +158,9 @@ autoinstall:
       UNIT
     - |
       set -eu
-      {
-        echo '--- SMORTRESS-DIAG crypttab'
-        cat /target/etc/crypttab || true
-        echo '--- SMORTRESS-DIAG luks'
-        ls -l /target/etc/luks || true
-      } > /dev/console 2>&1
-    - |
-      set -eu
       printf 'add_dracutmodules+=" network clevis "\n' > /target/etc/dracut.conf.d/90-clevis.conf
       sed -i 's|^GRUB_CMDLINE_LINUX_DEFAULT="\(.*\)"|GRUB_CMDLINE_LINUX_DEFAULT="\1 ip=dhcp"|' /target/etc/default/grub
+      grep -q 'ip=dhcp' /target/etc/default/grub
     - |
       set -eu
       cat > /target/usr/local/sbin/smortress-clevis-bind <<'CLEVIS'
@@ -179,14 +173,20 @@ autoinstall:
       key=${2:?usage: smortress-clevis-bind <tang-url> <passphrase-file>}
       root_dev=$(cryptsetup status "$(findmnt -no SOURCE /)" | awk '/device:/{print $2}')
       adv=$(curl -fsS "$url/adv")
-      cfg=$(printf '{"t":2,"pins":{"tang":[{"url":"%s","adv":%s}],"tpm2":{"pcr_ids":"7"}}}' "$url" "$adv")
-      clevis luks bind -d "$root_dev" sss "$cfg" -y -k "$key"
       if [ -e /dev/tpmrm0 ] || [ -e /dev/tpm0 ]; then
+        cfg=$(printf '{"t":2,"pins":{"tang":[{"url":"%s","adv":%s}],"tpm2":{"pcr_ids":"7"}}}' "$url" "$adv")
+        clevis luks bind -d "$root_dev" sss "$cfg" -y -k "$key"
         clevis luks bind -d "$root_dev" tpm2 '{"pcr_ids":"7"}' -y -k "$key"
+      else
+        cfg=$(printf '{"url":"%s","adv":%s}' "$url" "$adv")
+        clevis luks bind -d "$root_dev" tang "$cfg" -y -k "$key"
       fi
       dracut -f
       CLEVIS
       chmod 0755 /target/usr/local/sbin/smortress-clevis-bind
+    - |
+      set -eu
+      rm -f /target/var/log/installer/*autoinstall* /target/var/log/installer/curtin-install-cfg.yaml
     - curtin in-target -- update-grub
     - curtin in-target -- sh -c 'dracut -f' || true
     - curtin in-target -- systemctl enable smortress-provision.service

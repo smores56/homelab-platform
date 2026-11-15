@@ -11,8 +11,10 @@ here=$(cd -- "$(dirname -- "$0")" && pwd)
 release=26.04.1
 base_url=https://releases.ubuntu.com/$release
 
-iso=${SMORTRESS_ISO:-"$here/ubuntu-$release-live-server-amd64.iso"}
-seed=${SMORTRESS_SEED:-"$here/seed.iso"}
+cache=${SMORTRESS_CACHE:-"$HOME/.cache/smortress"}
+iso=${SMORTRESS_ISO:-"$cache/ubuntu-$release-live-server-amd64.iso"}
+seed=${SMORTRESS_SEED:-"$cache/seed.iso"}
+disk_serial=${SMORTRESS_DISK_SERIAL:-S5P2NG0NC04320K}
 key_file=${SMORTRESS_SSH_KEY:-"$HOME/.ssh/id_ed25519.pub"}
 pass_file=${SMORTRESS_ROOT_PASSPHRASE_FILE:-"$HOME/.config/smortress/luks-root.passphrase"}
 keyring=${UBUNTU_KEYRING:-}
@@ -27,8 +29,13 @@ escape_sed() {
 }
 
 command -v xorriso >/dev/null 2>&1 || die "xorriso is required (nix-shell -p xorriso)"
+command -v gpgv >/dev/null 2>&1 || die "gnupg is required (nix-shell -p gnupg)"
 command -v curl >/dev/null 2>&1 || die "curl is required"
 [ -f "$key_file" ] || die "SSH public key not found: $key_file (set SMORTRESS_SSH_KEY)"
+case $(tr -d "\n" < "$key_file") in
+  ssh-*) ;;
+  *) die "$key_file is not an SSH public key" ;;
+esac
 
 if [ ! -f "$pass_file" ]; then
   install -d -m 0700 "$(dirname -- "$pass_file")"
@@ -45,6 +52,7 @@ esac
 
 iso_dir=$(dirname -- "$iso")
 iso_name=$(basename -- "$iso")
+mkdir -p "$iso_dir"
 
 if [ ! -f "$iso" ]; then
   printf 'Fetching %s\n' "$base_url/$iso_name"
@@ -108,11 +116,16 @@ esc_pass=$(escape_sed "$passphrase")
 esc_key=$(escape_sed "$(tr -d '\n' < "$key_file")")
 sed -e "s|__LUKS_ROOT_PASSPHRASE__|$esc_pass|" \
   -e "s|__SSH_AUTHORIZED_KEY__|$esc_key|" \
+  -e "s|__DISK_SERIAL__|$disk_serial|" \
   "$here/user-data" > "$work/user-data"
+if grep -qE '__[A-Z_]+__' "$work/user-data"; then
+  die "unsubstituted placeholder left in user-data"
+fi
 cp "$here/meta-data" "$work/meta-data"
 
-xorriso -as mkisofs -quiet -volid cidata -joliet -rock \
-  -output "$seed" "$work/user-data" "$work/meta-data"
+(umask 077; xorriso -as mkisofs -quiet -volid cidata -joliet -rock \
+  -output "$seed" "$work/user-data" "$work/meta-data")
+chmod 600 "$seed"
 
 printf 'Seed written to %s\n' "$seed"
 printf 'It contains the root LUKS passphrase. Destroy it after the install.\n'
