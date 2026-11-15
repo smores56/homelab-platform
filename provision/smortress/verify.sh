@@ -38,8 +38,12 @@ done
 [ -f "$pass_file" ] || { echo "verify: passphrase file not found" >&2; exit 2; }
 
 echo "== installing =="
+# A throwaway host key: the point is that the seeded key is the installed one.
+hostkey=$work/ssh_host_ed25519_key
+ssh-keygen -q -t ed25519 -N '' -f "$hostkey" >/dev/null
+seeded_hostkey=$(ssh-keygen -y -P '' -f "$hostkey" | cut -d' ' -f1,2)
 SMORTRESS_CACHE=$work SMORTRESS_SEED=$seed SMORTRESS_DISK_SERIAL=SMORTRESS980 \
-  SMORTRESS_SSH_KEY=$pub "$here/build-seed.sh" >/dev/null
+  SMORTRESS_SSH_KEY=$pub SMORTRESS_HOST_KEY=$hostkey "$here/build-seed.sh" >/dev/null
 
 setsid env SMORTRESS_SEED="$seed" SMORTRESS_OVMF_VARS="$vars" \
   SMORTRESS_SPIKE_DISK="$disk" SMORTRESS_SPIKE_SSH_PORT="$port" \
@@ -102,6 +106,9 @@ check "data volume has two keyslots" remote 'dev=$(cryptsetup status luks-data |
 check "pool exists" remote 'zpool list -H -o name tank | grep -qx tank'
 check "pool is not cached" remote 'test "$(zpool get -H -o value cachefile tank)" = none'
 check "provision unit ran" remote 'systemctl is-active smortress-provision | grep -qx active'
+installed_hostkey=$(remote 'ssh-keygen -y -P "" -f /etc/ssh/ssh_host_ed25519_key | cut -d" " -f1,2')
+check "installed system keeps the seeded host key" test "$installed_hostkey" = "$seeded_hostkey"
+check "generated rsa/ecdsa host keys are gone" remote 'test ! -e /etc/ssh/ssh_host_rsa_key -a ! -e /etc/ssh/ssh_host_ecdsa_key'
 
 echo "== $([ "$fail" -eq 0 ] && echo PASS || echo FAIL) =="
 exit "$fail"

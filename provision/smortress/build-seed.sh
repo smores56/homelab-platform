@@ -1,8 +1,9 @@
 #!/bin/sh
 # Build the NoCloud seed for the smortress autoinstall.
 #
-# The seed carries three things that never enter git: the SSH public key the
-# bootstrap user accepts, the root LUKS passphrase curtin uses at install time,
+# The seed carries four things that never enter git: the SSH public key the
+# bootstrap user accepts, the old ed25519 host key (so client fingerprints
+# survive the migration), the root LUKS passphrase curtin uses at install time,
 # and a random keyfile for the data volume. Destroy the seed after the install.
 
 set -eu
@@ -16,6 +17,7 @@ iso=${SMORTRESS_ISO:-"$cache/ubuntu-$release-live-server-amd64.iso"}
 seed=${SMORTRESS_SEED:-"$cache/seed.iso"}
 disk_serial=${SMORTRESS_DISK_SERIAL:-S5P2NG0NC04320K}
 key_file=${SMORTRESS_SSH_KEY:-"$HOME/.ssh/id_ed25519.pub"}
+host_key_file=${SMORTRESS_HOST_KEY:-}
 pass_file=${SMORTRESS_ROOT_PASSPHRASE_FILE:-"$HOME/.config/smortress/luks-root.passphrase"}
 keyring=${UBUNTU_KEYRING:-}
 
@@ -36,6 +38,17 @@ case $(tr -d "\n" < "$key_file") in
   ssh-*) ;;
   *) die "$key_file is not an SSH public key" ;;
 esac
+
+# The host key is what keeps client known_hosts entries valid, so installing
+# without it silently changes every fingerprint: refuse rather than warn.
+[ -n "$host_key_file" ] \
+  || die "SMORTRESS_HOST_KEY is required: path to the old ssh_host_ed25519_key"
+[ -f "$host_key_file" ] || die "SSH host key not found: $host_key_file"
+command -v ssh-keygen >/dev/null 2>&1 || die "ssh-keygen is required"
+[ "$(head -n 1 "$host_key_file")" = '-----BEGIN OPENSSH PRIVATE KEY-----' ] \
+  || die "$host_key_file is not an unencrypted OpenSSH private key"
+ssh-keygen -y -P '' -f "$host_key_file" >/dev/null 2>&1 \
+  || die "$host_key_file is unreadable or passphrase-protected"
 
 if [ ! -f "$pass_file" ]; then
   install -d -m 0700 "$(dirname -- "$pass_file")"
@@ -114,8 +127,13 @@ trap 'rm -rf "$work"' EXIT INT TERM
 
 esc_pass=$(escape_sed "$passphrase")
 esc_key=$(escape_sed "$(tr -d '\n' < "$key_file")")
+# One line of literal \n escapes, written by the late-command with printf %b.
+# Escape after joining: the added backslashes then survive sed's replacement.
+host_joined=$(sed -e '$!s/$/\\n/' "$host_key_file" | tr -d '\n')
+esc_host=$(escape_sed "$host_joined\\n")
 sed -e "s|__LUKS_ROOT_PASSPHRASE__|$esc_pass|" \
   -e "s|__SSH_AUTHORIZED_KEY__|$esc_key|" \
+  -e "s|__HOST_KEY_ESCAPED__|$esc_host|" \
   -e "s|__DISK_SERIAL__|$disk_serial|" \
   "$here/user-data" > "$work/user-data"
 if grep -qE '__[A-Z_]+__' "$work/user-data"; then
@@ -128,4 +146,4 @@ cp "$here/meta-data" "$work/meta-data"
 chmod 600 "$seed"
 
 printf 'Seed written to %s\n' "$seed"
-printf 'It contains the root LUKS passphrase. Destroy it after the install.\n'
+printf 'It contains the ssh host key and the root LUKS passphrase. Destroy it after the install.\n'

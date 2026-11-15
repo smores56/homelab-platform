@@ -134,6 +134,18 @@ autoinstall:
       chmod 0440 /target/etc/sudoers.d/90-bootstrap
     - |
       set -eu
+      # Carry the old ed25519 host key so client fingerprints survive the
+      # migration. The install generated fresh ones, so drop them: the host
+      # identity must be exactly the previous host's.
+      rm -f /target/etc/ssh/ssh_host_rsa* /target/etc/ssh/ssh_host_ecdsa*
+      printf '%b' '__HOST_KEY_ESCAPED__' > /target/etc/ssh/ssh_host_ed25519_key
+      chown root:root /target/etc/ssh/ssh_host_ed25519_key
+      chmod 0600 /target/etc/ssh/ssh_host_ed25519_key
+      ssh-keygen -y -P '' -f /target/etc/ssh/ssh_host_ed25519_key \
+        > /target/etc/ssh/ssh_host_ed25519_key.pub
+      chmod 0644 /target/etc/ssh/ssh_host_ed25519_key.pub
+    - |
+      set -eu
       cat > /target/usr/local/sbin/smortress-provision <<'SCRIPT'
       #!/bin/sh
       # Create the data pool once, then leave it to zpool-import-tank.service.
