@@ -165,10 +165,14 @@ done
 `append-token` and `read-token` must differ — the service refuses equal tokens
 so a producer cannot read its own log and a reader cannot inject events.
 `consumers.json` is a JSON object of consumer name to secret. A relay never
-receives either event token. The host systemd units in `ansible/roles/data_plane`
-are a separate plane: they load an EnvironmentFile per unit and do not mount
-these files, so the cluster tree is the supported path for the
-credential-carrying services (`docs/manual-steps.md` step 35, item 9).
+receives either event token.
+
+The host units are a separate plane with the same values: they mount
+`/etc/homelab/secrets/<service>/<file>` read-only at the paths their environment
+names, and the `data_plane` role raises exactly those files to `0640
+root:65532` for the container uid. The files are installed by the `secrets` play
+(`docs/manual-steps.md` step 35, item 3); a missing file fails the converge
+rather than the unit.
 
 Verification, in order:
 

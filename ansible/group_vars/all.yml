@@ -120,7 +120,6 @@ homelab_rollback_disk_released: false
 homelab_writer_units:
   - homelab-write-broker.service
   - homelab-event-service.service
-  - homelab-collector-relay.service
 homelab_backup_timer: homelab-backup-fast.timer
 # Every scheduled backup unit the recovery playbook fences. Missing units are
 # skipped, so this list can name a timer a host has not adopted yet.
@@ -378,7 +377,6 @@ nvidia_container_toolkit_version: "1.17.*"
 # asserts on `@sha256:<64 hex>` before it writes a unit. Mirrored locally, and
 # podman runs with --pull=never so a tag can never silently replace a digest.
 data_plane_images:
-  collector_relay: ""
   event_service: ""
   write_broker: ""
 

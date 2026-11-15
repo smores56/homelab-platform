@@ -2087,6 +2087,27 @@ prunes. A missing repository is reported by name, not created.
    Store the same password and read-only pair in `secrets/recovery.yaml` (SOPS,
    operator identity) for the page blob.
 
+   The data-plane units read their own files from subdirectories of the same
+   root. Stage the decrypted bundle outside the repository and install it with
+   the secrets play; the play is a no-op when the variable is unset, and the
+   data-plane role asserts every declared file before it starts a unit:
+
+   ```sh
+   ansible-playbook -i inventory/hosts.yml playbooks/site.yml --tags secrets \
+     -e secrets_source_dir=/run/operator-secrets \
+     -e '{"secrets_files":["event-service/append-token", \
+          "event-service/read-token","event-service/consumers.json", \
+          "write-broker/identity","write-broker/operator-key", \
+          "restic/data-plane.password","restic/r2.env"]}'
+   ```
+
+   The role creates each parent directory at `0700`, copies at `0600
+   root:root`, and wipes nothing: the decrypted directory is the operator's to
+   remove. `homelab-event-service` and `homelab-write-broker` then mount their
+   files read-only and the role raises exactly those files to `0640
+   root:65532` for the container uid. The host runs no relay; relays and
+   collectors live in the cluster tree.
+
 4. Create every repository, one group at a time. `backup-init` is idempotent and
    creates only the tiers the group lists:
 
@@ -2198,12 +2219,10 @@ prunes. A missing repository is reported by name, not created.
    and a relay never receives either. `consumers.json` is a JSON object of
    consumer name to secret, not a token.
 
-   The host podman units in `ansible/roles/data_plane` are a different plane:
-   they load an `EnvironmentFile` per unit and do not mount these files, so a
-   plain `site.yml` start of `homelab-event-service.service` fails closed. Until
-   that mount exists, the cluster tree is the supported path for the
-   credential-carrying services, and the backup proof above is unaffected
-   because the host runner reads `/etc/homelab/secrets/restic` as root.
+   The host units use the same values under
+   `/etc/homelab/secrets/<service>/` (item 3) and mount them read-only at the
+   paths their environment names; `homelab-collector-relay` is retired, because
+   the host has no collector and the cluster owns one relay per source.
 
 10. Before any destructive step, provision rescue access and re-prove it:
 

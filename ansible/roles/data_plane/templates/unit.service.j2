@@ -47,6 +47,9 @@ ExecStart=/usr/bin/podman run \
 {% for volume in service.volumes | default([]) %}
   --volume {{ volume }} \
 {% endfor %}
+{% for secret in service.secret_files | default([]) %}
+  --volume {{ secret.src }}:{{ secret.dest }}:ro \
+{% endfor %}
   {{ data_plane_images[service.image_key] }}{% for arg in service.args | default([]) %} {{ arg }}{% endfor %}
 
 # Hardening. RequiresMountsFor/AssertPathIsMountPoint above make a missing
@@ -64,6 +67,9 @@ RestrictSUIDSGID=yes
 LockPersonality=yes
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 ReadWritePaths=/run/lock
+# Podman writes its storage, locks and metadata under --root; the read-only
+# rootfs above would make the unit start and immediately die.
+ReadWritePaths={{ data_plane_podman_root }}/{{ service.short }}
 {% for path in service.read_write_paths | default([]) %}
 ReadWritePaths={{ path }}
 {% endfor %}

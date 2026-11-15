@@ -56,6 +56,7 @@ gone. These are the holdovers, each with the task that ends it:
 | `cloudflare-api-token` | `kanbei-access.nix` DNS-01, the `cloudflare-*` flake apps | flake apps: the step-14 state move; Kanbei: a DNS-scoped token of its own |
 | `cloudflared-credentials` | the host tunnel (`web-proxy.nix`) | #615, when the last host-owned route moves |
 | `restic-password`, `r2-access-key-id`, `r2-secret-access-key` | `restic-backup.nix` | #660: one repository per recovery group, then the restore drill (`docs/manual-steps.md` step 35) |
+| `memory-mcp-token` | the maki memory shim | #617's cluster route with an Access service token |
 
 ### The #660 data plane
 
@@ -64,15 +65,17 @@ gone. These are the holdovers, each with the task that ends it:
 | One restic password | `/etc/homelab/secrets/restic/data-plane.password`, root-only | every `homelab-backup` run and the recovery entrypoint | one password covers every group and tier; never per-group keys |
 | Read-only R2 key pair | `/etc/homelab/secrets/restic/r2.env` (`AWS_*`), root-only | `restic copy` to R2, the page blob source | cannot read, delete or change bucket policy; the write credential is not on the host |
 | Page blob keys | `secrets/recovery.yaml` in this repository, SOPS to the admin identity | `deno task blob` only | `restic-password` and the `r2-*-readonly` pair; the blob itself is public and encrypted |
-| Event append/read tokens | cluster Secret `event-service-secrets` | `event` and the broker/confirmation surfaces | must differ; a relay holds neither |
-| Relay tokens | one Secret per source (`relay-brave`, …) | that collector only | never shared between sources |
+| Event append/read tokens | `/etc/homelab/secrets/event-service/` on the host, cluster Secret `event-service-secrets` in the cluster | `event` only | must differ; the service refuses equal values, and a relay holds neither |
+| Broker identity and approval key | `/etc/homelab/secrets/write-broker/` on the host, Secret `write-broker-secrets` in the cluster | `broker` only | the approval key is not the identity; no workload receives both |
+| Relay tokens | one Secret per source (`relay-brave`, …) | that collector only | never shared between sources; the host runs no relay |
 
-The host backup units run as root and read the files directly; no container
-mount and no SOPS-on-host step is involved. The cluster Secrets are created by
-the operator from `deploy/data-plane/README.md`, because this tree creates no
-Secret.
-
-| `memory-mcp-token` | the maki memory shim | #617's cluster route with an Access service token |
+Host secret files are installed by the `secrets` play (`--tags secrets`, one
+decrypted directory) at `0600 root:root` under `0700` directories. The unit
+that mounts one raises exactly that file to `0640 root:65532` for the container
+uid and mounts it read-only; the numeric gid is not a host group. The host
+backup units run as root and read `/etc/homelab/secrets/restic` directly. The
+cluster Secrets are created by the operator from `deploy/data-plane/README.md`,
+because this tree creates no Secret.
 
 Until each row moves, the same value may exist in two stores. The host copy stays
 authoritative for the host reader; the platform copy is written with the host

@@ -1,10 +1,18 @@
 ---
 data_plane_default_container_user: "65532:65532"
 
-# The three host services. Every image is selected by key from
+# Declared secret files are mounted into the container read-only. The secret
+# root stays 0700 root:root, so this numeric gid exists for the mount and the
+# container's --user/--group, not as a host group.
+data_plane_secret_owner: root
+data_plane_secret_group: "65532"
+data_plane_secret_mode: "0640"
+
+# The two host services. Every image is selected by key from
 # data_plane_images and must be digest-pinned. Units run rootful podman with a
 # read-only container root, all capabilities dropped, and no-new-privileges; the
-# host unit itself is hardened below and in templates/unit.service.j2.
+# host unit itself is hardened below and in templates/unit.service.j2. Relays
+# and collectors live in the cluster tree, where each has a source and a sink.
 data_plane_services:
   - name: homelab-event-service
     short: event-service
@@ -16,9 +24,20 @@ data_plane_services:
       - "127.0.0.1:7101:7101"
     environment:
       DATA_PLANE_DB: "{{ data_plane_state_root }}/events/events.sqlite"
-      DATA_PLANE_SECRET_FILE: "{{ data_plane_secret_root }}/event-service.env"
+      DATA_PLANE_EVENT_APPEND_TOKEN_FILE: /run/secrets/event/append-token
+      DATA_PLANE_EVENT_READ_TOKEN_FILE: /run/secrets/event/read-token
+      DATA_PLANE_CONSUMER_SECRETS_FILE: /run/secrets/event/consumers.json
       DATA_PLANE_HOST: "0.0.0.0"
       DATA_PLANE_PORT: "7101"
+    # The append and read tokens differ by contract; the service refuses equal
+    # values. consumers.json is a JSON object, not a token.
+    secret_files:
+      - src: "{{ data_plane_secret_root }}/event-service/append-token"
+        dest: /run/secrets/event/append-token
+      - src: "{{ data_plane_secret_root }}/event-service/read-token"
+        dest: /run/secrets/event/read-token
+      - src: "{{ data_plane_secret_root }}/event-service/consumers.json"
+        dest: /run/secrets/event/consumers.json
     state_dir: "{{ data_plane_state_root }}/event-service"
     volumes:
       - "{{ data_plane_state_root }}/events:/var/lib/data-plane/events:rw"
@@ -41,11 +60,17 @@ data_plane_services:
       - "127.0.0.1:7102:7102"
     environment:
       DATA_PLANE_DB: "{{ data_plane_state_root }}/intents/intents.sqlite"
-      DATA_PLANE_SECRET_FILE: "{{ data_plane_secret_root }}/write-broker.env"
+      DATA_PLANE_SECRET_FILE: /run/secrets/broker/identity
+      DATA_PLANE_OPERATOR_KEY_FILE: /run/secrets/broker/operator-key
       DATA_PLANE_CATALOG: "{{ data_plane_config_root }}/sources.json"
       DATA_PLANE_HOST: "0.0.0.0"
       DATA_PLANE_PORT: "7102"
       DATA_PLANE_GENERAL_ROOT: /srv/books
+    secret_files:
+      - src: "{{ data_plane_secret_root }}/write-broker/identity"
+        dest: /run/secrets/broker/identity
+      - src: "{{ data_plane_secret_root }}/write-broker/operator-key"
+        dest: /run/secrets/broker/operator-key
     state_dir: "{{ data_plane_state_root }}/write-broker"
     volumes:
       - "{{ data_plane_state_root }}/intents:/var/lib/data-plane/intents:rw"
@@ -56,26 +81,4 @@ data_plane_services:
       - /srv/books
     assert_mounts:
       - /srv/books
-    backup_mounts: false
-
-  - name: homelab-collector-relay
-    short: collector-relay
-    description: Scheduled reconciliation pass for collector replicas
-    image_key: collector_relay
-    type: simple
-    args: ["relay"]
-    ports:
-      - "127.0.0.1:7104:7104"
-    environment:
-      DATA_PLANE_SECRET_FILE: "{{ data_plane_secret_root }}/collector-relay.env"
-      DATA_PLANE_SCHEMA: "{{ data_plane_config_root }}/relay-schema.json"
-      DATA_PLANE_HOST: "0.0.0.0"
-      DATA_PLANE_PORT: "7104"
-    state_dir: "{{ data_plane_state_root }}/collector-relay"
-    volumes:
-      - "{{ data_plane_state_root }}/collector-relay:/var/lib/homelab/collector-relay:rw"
-    read_write_paths:
-      - "{{ data_plane_state_root }}/collector-relay"
-      - "{{ data_plane_run_root }}/collector-relay"
-    assert_mounts: []
     backup_mounts: false
