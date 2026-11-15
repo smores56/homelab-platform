@@ -25,7 +25,7 @@ backup_snapshot_root: /run/data-plane/current
 # inventory; never put a password in this tree.
 backup_password_root: /etc/homelab/secrets/restic
 backup_password_file: "{{ backup_password_root }}/data-plane.password"
-backup_r2_repository_root: s3:https://ACCOUNT.r2.cloudflarestorage.com/homelab-restic
+backup_r2_repository_root: s3:https://385f7d47e2e8438fbda5d6f76d760434.r2.cloudflarestorage.com/homelab-restic
 # Root-only EnvironmentFile (AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY) for the
 # read-only R2 token. Optional: local-only runs need no object credentials.
 backup_r2_environment_file: "{{ backup_password_root }}/r2.env"
