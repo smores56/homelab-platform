@@ -105,7 +105,9 @@ if [ "$boot_mode" = serial ]; then
     -append "--- autoinstall console=ttyS0,115200n8"
 fi
 
-if [ "${SMORTRESS_SPIKE_CURSES:-0}" = "1" ]; then
+if [ -n "${SMORTRESS_SPIKE_SERIAL_SOCKET:-}" ]; then
+  set -- "$@" -display none -serial "unix:$SMORTRESS_SPIKE_SERIAL_SOCKET,server,nowait"
+elif [ "${SMORTRESS_SPIKE_CURSES:-0}" = "1" ]; then
   set -- "$@" -display curses
 else
   set -- "$@" -nographic

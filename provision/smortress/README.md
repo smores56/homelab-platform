@@ -13,8 +13,9 @@ On the disk whose serial is `SMORTRESS980`:
 | Partition | Size | Contents |
 | --- | --- | --- |
 | p1 | 1G | ESP, `/boot/efi` |
-| p2 | 150G | `luks-root` (passphrase), ext4 `/` |
-| p3 | 300G | `luks-data` (keyfile), bare mapper for `tank` |
+| p2 | 2G | plain ext4 `/boot` |
+| p3 | 148G | `luks-root` (passphrase), ext4 `/` |
+| p4 | 300G | `luks-data` (keyfile), bare mapper for `tank` |
 
 The rest of the disk stays unallocated on purpose: the pool grows into it
 without touching the other volumes, and the primary repository lives on the 970.

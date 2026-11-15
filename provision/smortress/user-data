@@ -1,6 +1,10 @@
 #cloud-config
 # Ubuntu 26.04.1 autoinstall for smortress (T6, smores56/sdlc#691).
 #
+# /boot is a plain ext4 partition: GRUB cannot read a kernel and initrd from a
+# LUKS volume without GRUB_ENABLE_CRYPTODISK, which would put a passphrase
+# prompt before the Clevis unlock.
+#
 # Placeholders are substituted by build-seed.sh; this file is committed with
 # none of the real values. Read provision/smortress/README.md before building a
 # seed: the root passphrase ends up inside the seed image.
@@ -58,6 +62,19 @@ autoinstall:
         type: format
         fstype: fat32
         volume: part-esp
+      - id: part-boot
+        type: partition
+        device: disk-target
+        size: 2G
+      - id: fmt-boot
+        type: format
+        fstype: ext4
+        label: boot
+        volume: part-boot
+      - id: mnt-boot
+        type: mount
+        path: /boot
+        device: fmt-boot
       - id: mnt-esp
         type: mount
         path: /boot/efi
@@ -65,7 +82,7 @@ autoinstall:
       - id: part-root
         type: partition
         device: disk-target
-        size: 150G
+        size: 148G
       - id: dm-root
         type: dm_crypt
         volume: part-root
