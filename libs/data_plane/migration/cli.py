@@ -72,7 +72,7 @@ def _cmd_inventory(args: argparse.Namespace) -> int:
     report = inventory.build_report(
         inventory.read_facts(),
         inventory.SubprocessRunner(timeout=args.timeout),
-        git_root=args.git_root,
+        git_roots=args.git_root or inventory.GIT_ROOTS,
     )
     text = json.dumps(report, indent=2, sort_keys=True) + "\n"
     if args.out:
@@ -124,7 +124,10 @@ def _parser() -> argparse.ArgumentParser:
         "--json", action="store_true", help="print the report (default)"
     )
     inventor.add_argument(
-        "--git-root", default=str(Path.home() / "ghq"), help="ghq checkout root"
+        "--git-root",
+        action="append",
+        default=None,
+        help="checkout root to scan; repeatable (default: ghq and repos)",
     )
     inventor.add_argument(
         "--timeout", type=float, default=60.0, help="per-command timeout"
