@@ -71,16 +71,15 @@ if [ -w /dev/kvm ]; then
   accel=kvm
 fi
 
-# -nographic keeps the install log on the serial console, but the Ubuntu
-# installer draws its own UI on the VGA console and shows nothing there. Set
-# SMORTRESS_SPIKE_CURSES=1 to render the VGA console in the terminal instead.
-set -- -nographic
-if [ "${SMORTRESS_SPIKE_CURSES:-0}" = "1" ]; then
-  set -- -display curses
-fi
+# The ISO's GRUB draws on serial, but the kernel switches to tty1 and the
+# installer UI disappears. Booting /casper/vmlinuz directly with console=ttyS0
+# keeps the whole install visible. SMORTRESS_SPIKE_BOOT=iso falls back to the
+# ISO's own bootloader; SMORTRESS_SPIKE_CURSES=1 renders the VGA console.
+boot_mode=${SMORTRESS_SPIKE_BOOT:-serial}
+kern=${SMORTRESS_SPIKE_KERNEL:-"$here/spike-vmlinuz"}
+initrd=${SMORTRESS_SPIKE_INITRD:-"$here/spike-initrd"}
 
-exec qemu-system-x86_64 \
-  -machine q35 \
+set -- -machine q35 \
   -accel "$accel" \
   -m 8192 \
   -smp 4 \
@@ -92,5 +91,24 @@ exec qemu-system-x86_64 \
   -device virtio-blk-pci,drive=seed0 \
   -cdrom "$iso" \
   -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:$ssh_port-:22" \
-  -device virtio-net-pci,netdev=net0 \
-  "$@"
+  -device virtio-net-pci,netdev=net0
+
+if [ "$boot_mode" = serial ]; then
+  if [ ! -f "$kern" ] || [ ! -f "$initrd" ]; then
+    command -v xorriso >/dev/null 2>&1 || die "xorriso is required to extract the installer kernel"
+    xorriso -osirrox on -indev "$iso" -extract /casper/vmlinuz "$kern" >/dev/null 2>&1 \
+      || die "could not extract /casper/vmlinuz"
+    xorriso -osirrox on -indev "$iso" -extract /casper/initrd "$initrd" >/dev/null 2>&1 \
+      || die "could not extract /casper/initrd"
+  fi
+  set -- "$@" -kernel "$kern" -initrd "$initrd" \
+    -append "--- autoinstall console=ttyS0,115200n8"
+fi
+
+if [ "${SMORTRESS_SPIKE_CURSES:-0}" = "1" ]; then
+  set -- "$@" -display curses
+else
+  set -- "$@" -nographic
+fi
+
+exec qemu-system-x86_64 "$@"

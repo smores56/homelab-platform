@@ -78,9 +78,14 @@ if [ -f "$iso_dir/SHA256SUMS" ]; then
     fi
   fi
   if [ -f "$iso_dir/SHA256SUMS.gpg" ]; then
-    gpg --no-default-keyring --keyring "$keyring" --with-colons --list-keys 2>/dev/null \
-      | awk -F: '$1 == "fpr" { print $10 }' | grep -qx "$cdimage_fpr" \
-      || die "$keyring does not hold the pinned image signing key $cdimage_fpr"
+    gnupg_home=$(mktemp -d)
+    if ! GNUPGHOME=$gnupg_home gpg --no-options --no-default-keyring --keyring "$keyring" \
+      --with-colons --list-keys 2>/dev/null \
+      | awk -F: '$1 == "fpr" { print $10 }' | grep -qx "$cdimage_fpr"; then
+      rm -rf "$gnupg_home"
+      die "$keyring does not hold the pinned image signing key $cdimage_fpr"
+    fi
+    rm -rf "$gnupg_home"
     status=$(gpgv --keyring "$keyring" --status-fd 1 \
       "$iso_dir/SHA256SUMS.gpg" "$iso_dir/SHA256SUMS" 2>/dev/null) \
       || die "SHA256SUMS signature did not verify against $keyring"

@@ -13,6 +13,9 @@ autoinstall:
   identity:
     hostname: smortress
     username: ansible
+    realname: Smortress Bootstrap
+    # Locked password: the bootstrap user authenticates by SSH key only.
+    password: "*"
   ssh:
     install-server: true
     allow-pw: false
