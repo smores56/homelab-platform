@@ -71,8 +71,8 @@ gone. These are the holdovers, each with the task that ends it:
 | Credential | Lives at | Read by | Rule |
 | --- | --- | --- | --- |
 | One restic password | generated in `secrets/660-host.yaml`, installed to `/etc/homelab/secrets/restic/data-plane.password` | every `homelab-backup` run and the recovery entrypoint | one password covers every group and tier; never per-group keys |
-| Read-only R2 key pair | `/etc/homelab/secrets/restic/r2.env` (`AWS_*`), root-only | `restic copy` to R2, the page blob source | cannot read, delete or change bucket policy; the write credential is not on the host |
-| Page blob keys | `secrets/recovery.yaml` in this repository, SOPS to the admin identity | `deno task blob` only | `restic-password` and the `r2-*-readonly` pair; the blob itself is public and encrypted |
+| R2 key pair, read/write, scoped to `homelab-restic` | `/etc/homelab/secrets/restic/r2.env` (`AWS_*`), `0600 root:root` on the storage host | `homelab-backup` (init, backup, check, prune) and `restic copy` to R2 | bucket-scoped read/write with no bucket-admin or policy rights: the host creates and prunes repositories, so it cannot be read-only; the recovery page never sees this pair |
+| Page blob keys | `secrets/recovery.yaml` in this repository, SOPS to the admin identity; never installed on a host and never a Pages env var | `deno task blob` only | `restic-password` and the `r2-*-readonly` pair, kebab-case keys; the blob itself is public and encrypted |
 | Event append/read tokens | `/etc/homelab/secrets/event-service/` on the host, cluster Secret `event-service-secrets` in the cluster | `event` only | must differ; the service refuses equal values, and a relay holds neither |
 | Broker identity and approval key | `/etc/homelab/secrets/write-broker/` on the host, Secret `write-broker-secrets` in the cluster | `broker` only | the broker mounts both; no other workload receives either |
 | Relay tokens | one Secret per source (`relay-brave`, …) | that collector only | never shared between sources; the host runs no relay |
