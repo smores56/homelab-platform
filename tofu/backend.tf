@@ -20,7 +20,7 @@
 # because there is no key to lose that way.
 terraform {
   backend "s3" {
-    bucket = "homelabs-tofu-state"
+    bucket = "homelab-tofu-state"
     key    = "cloudflare/terraform.tfstate"
     # R2 has no regions; the SDK still requires a value.
     region = "auto"

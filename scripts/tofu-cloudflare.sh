@@ -41,7 +41,7 @@ if [[ -z ${CLOUDFLARE_API_TOKEN:-} ]]; then
 fi
 
 # The state backend has its own credential: a dedicated R2 token scoped to
-# `homelabs-tofu-state` only. The host's restic pair must not reach it, because
+# `homelab-tofu-state` only. The host's restic pair must not reach it, because
 # the state decides what the next apply does; a leaked backup key should be able
 # to lose backups at worst, never retarget the edge. Same file, different keys.
 if [[ -z ${AWS_ACCESS_KEY_ID:-} || -z ${AWS_SECRET_ACCESS_KEY:-} ]]; then

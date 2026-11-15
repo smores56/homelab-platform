@@ -626,7 +626,7 @@ and a local file that was forgotten would plan a create for every object that
 already exists. Do it in this order and read the `state list` diff.
 
 1. Create the bucket and its key. In the Cloudflare dashboard: R2 → **Create
-   bucket** → `homelabs-tofu-state` (private, default location), then R2 → **Manage
+   bucket** → `homelab-tofu-state` (private, default location), then R2 → **Manage
    API tokens** → **Create API token** → *Object Read & Write* on that bucket
    only. Store the pair in the `cloudflare` environment:
 

@@ -13,6 +13,6 @@ says how a change travels.
    replaces or destroys anything stops instead, and waits for an owner dispatch.
 3. Outside changes (dashboard edits) show up as a weekly `tofu-drift` issue.
 
-State lives in the `homelabs-tofu-state` R2 bucket (`backend.tf`), never in git.
+State lives in the `homelab-tofu-state` R2 bucket (`backend.tf`), never in git.
 The write credential exists only in the `cloudflare` environment; the read-only
 pair exists only in `cloudflare-plan`.

@@ -366,7 +366,7 @@ or a tunnel error means the name is unprotected. Verify the CAA pin with
 `dig +short CAA sammohr.dev`: the two pinned records plus the ones Cloudflare
 appends for Universal SSL.
 
-State now lives in the `homelabs-tofu-state` R2 bucket (`tofu/backend.tf`,
+State now lives in the `homelab-tofu-state` R2 bucket (`tofu/backend.tf`,
 `docs/cloudflare.md` "State"). Since SDLC #622 the merge is the approval:
 `tofu-plan-pr.yml` is the required plan on every PR, a merge to `main` applies
 (additive plans only), `tofu-apply.yml` keeps the owner dispatch for everything
