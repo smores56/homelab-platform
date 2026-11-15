@@ -176,6 +176,7 @@ async function selectGroup(id: string): Promise<void> {
   } catch (error) {
     repository = null;
     snapshot = null;
+    renderGroupPicker();
     const message = reachHint(errorMessage(error), location.origin);
     setRestoreStatus(`Could not open ${state.group.label}: ${message}`, "error");
     if (treeList) treeList.innerHTML = treeMessage("The backup could not be opened.", "error");
@@ -223,7 +224,7 @@ function renderEntries(entries: ResticDirEntry[]): string {
     .join("");
 }
 
-async function renderTree(allowFallback = true): Promise<void> {
+async function renderTree(): Promise<void> {
   if (!repository || !snapshot || !treeList) return;
   const generation = ++treeGeneration;
   entriesByPath.clear();
@@ -233,15 +234,8 @@ async function renderTree(allowFallback = true): Promise<void> {
     treeList.innerHTML = renderEntries(entries);
   } catch (error) {
     if (generation !== treeGeneration) return;
-    if (allowFallback && browseRoot) {
-      // A snapshot that does not carry the declared data_root (or one from
-      // another host) is browsed from the repository root instead of
-      // dead-ending in an empty panel.
-      browseRoot = "";
-      restoreBase = "";
-      await renderTree(false);
-      return;
-    }
+    // The group was opened at its resolved data_root; a failed listing is
+    // reported, never widened to the snapshot root.
     treeList.innerHTML = treeMessage(`Could not list this backup: ${errorMessage(error)}`, "error");
   }
 }

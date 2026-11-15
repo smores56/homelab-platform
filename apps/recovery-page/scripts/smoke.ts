@@ -16,7 +16,6 @@
 import { type DataKeys, encryptBlob } from "../src/blob.ts";
 
 const SMOKE_PASSWORD = "smoke password";
-const SMOKE_COST = { iterations: 1, memory: 8192, parallelism: 1 };
 
 const SMOKE_KEYS: DataKeys = {
   version: 1,
@@ -112,7 +111,7 @@ async function main(): Promise<void> {
     throw new Error("index.html must keep #unlocked hidden until the password is entered");
   }
 
-  const envelope = JSON.stringify(await encryptBlob(SMOKE_KEYS, SMOKE_PASSWORD, SMOKE_COST));
+  const envelope = JSON.stringify(await encryptBlob(SMOKE_KEYS, SMOKE_PASSWORD));
 
   const server = Deno.serve({ port: 0, hostname: "127.0.0.1" }, async (request) => {
     const path = new URL(request.url).pathname;

@@ -103,7 +103,9 @@ export async function resolveDataRoot(
   dataRoot: string,
 ): Promise<string | null> {
   const wanted = normalizeDataRoot(dataRoot);
-  if (!wanted) return "";
+  // A manifest data_root of "/" is refused by validation; treat it as
+  // unresolved here too so nothing widens a selection to the snapshot root.
+  if (!wanted) return null;
   const suffix = wanted.split("/").filter(Boolean);
   const matches = (path: string): boolean => {
     const segments = path.split("/").filter(Boolean);
@@ -210,13 +212,17 @@ export class GroupCatalog {
     state.snapshotTime = snapshot.time;
     state.error = null;
     const resolved = await resolveDataRoot(repository, snapshot, state.group.data_root);
-    const browseRoot = resolved ?? normalizeDataRoot(state.group.data_root);
+    if (resolved === null) {
+      const reason = `the newest snapshot does not contain ${state.group.data_root}`;
+      state.error = reason;
+      throw new Error(reason);
+    }
     return {
       group: state.group,
       repository,
       snapshot,
-      browseRoot,
-      restorePrefix: restorePrefix(browseRoot),
+      browseRoot: resolved,
+      restorePrefix: restorePrefix(resolved),
     };
   }
 }

@@ -41,6 +41,21 @@ export const DEFAULT_COST: Argon2Cost = {
   parallelism: 4,
 };
 
+type KdfHeader = Pick<
+  DataKeysBlob,
+  "version" | "kdf" | "iterations" | "memory" | "parallelism"
+>;
+
+/**
+ * The only KDF header the page opens. The envelope is public and arrives before
+ * the password, so an attacker could ask for the largest in-range cost; pinning
+ * the exact params turns that pre-auth DoS into an instant rejection. Add a new
+ * entry (never widen one) when the pinned cost changes.
+ */
+export const KDF_ALLOWLIST: readonly KdfHeader[] = [
+  { version: 2, kdf: "argon2id", ...DEFAULT_COST },
+];
+
 // Caps keep a hostile or corrupt blob from freezing a phone. Argon2 memory is
 // in KiB; the minimum is 8 KiB per lane (RFC 9106 section 3.1).
 const MAX_COST: Argon2Cost = {
@@ -100,6 +115,21 @@ function assertCost(cost: Argon2Cost): void {
   if (errors.length > 0) throw new Error("invalid data-keys KDF parameters");
 }
 
+function assertPinnedKdf(header: KdfHeader): void {
+  const pinned = KDF_ALLOWLIST.some((entry) =>
+    entry.version === header.version &&
+    entry.kdf === header.kdf &&
+    entry.iterations === header.iterations &&
+    entry.memory === header.memory &&
+    entry.parallelism === header.parallelism
+  );
+  if (!pinned) {
+    throw new Error(
+      "invalid data-keys KDF parameters: the header does not match the pinned cost",
+    );
+  }
+}
+
 export function validateDataKeys(value: unknown): string[] {
   const errors: string[] = [];
   if (!isRecord(value)) return ["data keys must be an object"];
@@ -110,6 +140,17 @@ export function validateDataKeys(value: unknown): string[] {
   else {
     for (const field of ["endpoint", "bucket", "accessKeyId", "secretAccessKey"] as const) {
       if (!isNonEmptyString(r2[field])) errors.push(`r2.${field} is missing`);
+    }
+    if (isNonEmptyString(r2.endpoint)) {
+      let endpoint: URL | null = null;
+      try {
+        endpoint = new URL(r2.endpoint);
+      } catch {
+        errors.push("r2.endpoint is not a URL");
+      }
+      if (endpoint && endpoint.protocol !== "https:") {
+        errors.push("r2.endpoint must use https");
+      }
     }
   }
 
@@ -223,7 +264,10 @@ export async function decryptBlob(
     throw new Error("unsupported data-keys envelope");
   }
   if (!password) throw new Error("a recovery password is required");
-  assertCost({
+  // Check the header against the pin before decoding or deriving anything.
+  assertPinnedKdf({
+    version: envelope.version,
+    kdf: envelope.kdf,
     iterations: envelope.iterations,
     memory: envelope.memory,
     parallelism: envelope.parallelism,

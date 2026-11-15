@@ -39,7 +39,7 @@ describe("recovery manifest", () => {
 
   test("accepts a bare https repository URL", () => {
     const bare = clone();
-    bare.groups[0].repo = "https://account.r2.cloudflarestorage.com/bucket/prefix";
+    bare.groups[0].repo = "https://account.r2.cloudflarestorage.com/bucket/photos";
     expect(validateManifest(bare)).toEqual([]);
     expect(repositoryUrl(bare.groups[0].repo)?.host).toBe(
       "account.r2.cloudflarestorage.com",
@@ -60,6 +60,26 @@ describe("recovery manifest", () => {
       ],
     };
     expect(validateManifest(rendered)).toEqual([]);
+  });
+
+  test("requires the repo prefix after the bucket to end with the group id", () => {
+    const mismatch = clone();
+    mismatch.groups[0].repo =
+      "s3:https://account.r2.cloudflarestorage.com/homelab-restic-personal/notes";
+    expect(validateManifest(mismatch).join(" ")).toContain(
+      "must end with the group id photos",
+    );
+
+    // The renderer's exact `<bucket>/<group id>` form and a nested prefix that
+    // still ends in the id are both accepted.
+    const exact = clone();
+    exact.groups[0].repo =
+      "s3:https://account.r2.cloudflarestorage.com/homelab-restic-personal/photos";
+    expect(validateManifest(exact)).toEqual([]);
+    const nested = clone();
+    nested.groups[0].repo =
+      "s3:https://account.r2.cloudflarestorage.com/homelab-restic-personal/teams/photos";
+    expect(validateManifest(nested)).toEqual([]);
   });
 
   test("accepts a local-tier path as shape but never as an R2 repository", () => {
@@ -137,20 +157,28 @@ describe("recovery manifest", () => {
     expect(validateManifest(trailing)).toEqual([]);
   });
 
+  test("rejects the snapshot root as a data_root", () => {
+    // "/" would browse and download the whole snapshot at once.
+    const root = clone();
+    root.groups[0].data_root = "/";
+    expect(validateManifest(root).join(" ")).toContain("must name a directory");
+  });
+
   test("parseManifest names every problem instead of guessing", () => {
     expect(() =>
       parseManifest({ schema_version: 9, groups: [{ id: "x", label: "X", repo: "nope" }] })
     ).toThrow(/invalid manifest/);
   });
 
-  test("ships a valid, placeholder-free manifest", () => {
-    const shipped = JSON.parse(
-      readFileSync(new URL("../public/manifest.json", import.meta.url), "utf8"),
-    );
+  test("ships an example manifest with no placeholders", () => {
+    const text = readFileSync(new URL("../public/manifest.json", import.meta.url), "utf8");
+    const shipped = JSON.parse(text);
     expect(validateManifest(shipped)).toEqual([]);
     expect(shipped.schema_version).toBe(1);
     expect(shipped.groups.length).toBeGreaterThan(0);
-    expect(JSON.stringify(shipped)).not.toContain("Fill this in");
+    expect(text).not.toContain("ACCOUNT.");
+    expect(text).not.toContain("<");
+    expect(text).not.toContain(">");
     for (const group of shipped.groups) {
       expect(Object.keys(group).sort()).toEqual(["data_root", "id", "label", "repo"]);
     }

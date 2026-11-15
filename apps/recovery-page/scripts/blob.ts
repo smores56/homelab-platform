@@ -21,10 +21,19 @@
 
 import { type DataKeys, type DataKeysBlob, decryptBlob, encryptBlob } from "../src/blob.ts";
 import { groupStore, resolveDataRoot } from "../src/groups.ts";
-import { parseManifest, type RecoveryManifest, repositoryUrl } from "../src/manifest.ts";
+import {
+  parseManifest,
+  type RecoveryGroup,
+  type RecoveryManifest,
+  repositoryUrl,
+} from "../src/manifest.ts";
 import { normalizeDataRoot } from "../src/restore.ts";
 import { R2Backend } from "../src/restic/r2.ts";
-import { openRepository } from "../src/restic/repository.ts";
+import {
+  openRepository,
+  type ResticRepository,
+  type ResticSnapshot,
+} from "../src/restic/repository.ts";
 import { promptHidden, promptNewPassword, verifyBlobPassword } from "./prompt.ts";
 
 type Args = {
@@ -114,7 +123,7 @@ async function readManifest(path: string): Promise<RecoveryManifest> {
  * endpoint, bucket, and read-only token. A manifest that names a second host is
  * refused rather than silently ignored.
  */
-function sharedStore(
+export function sharedStore(
   manifest: RecoveryManifest,
   endpoint: string | null,
   bucket: string | null,
@@ -149,7 +158,16 @@ function sharedStore(
   const [host] = [...hosts];
   const [manifestBucket] = [...buckets];
   const resolvedEndpoint = endpoint ?? `https://${host}`;
-  if (new URL(resolvedEndpoint).host !== host) {
+  let endpointUrl: URL;
+  try {
+    endpointUrl = new URL(resolvedEndpoint);
+  } catch {
+    throw new Error(`--endpoint ${resolvedEndpoint} is not a URL`);
+  }
+  if (endpointUrl.protocol !== "https:") {
+    throw new Error(`--endpoint ${resolvedEndpoint} must use https`);
+  }
+  if (endpointUrl.host !== host) {
     throw new Error(`--endpoint ${resolvedEndpoint} does not match the manifest host ${host}`);
   }
   if (bucket !== null && bucket !== manifestBucket) {
@@ -190,6 +208,26 @@ function requireSecret(secrets: Record<string, string>, name: string): string {
 }
 
 /**
+ * Prove one group's newest snapshot holds its declared data_root and that the
+ * directory is not empty. The check-only run and the build both fail closed: a
+ * data_root of "/" or a directory with nothing in it is a broken backup, not a
+ * group to browse.
+ */
+export async function checkGroupRoot(
+  repository: Pick<ResticRepository, "listDirectory">,
+  snapshot: ResticSnapshot,
+  group: RecoveryGroup,
+): Promise<string> {
+  const root = normalizeDataRoot(group.data_root);
+  if (!root) throw new Error("the declared data_root is the snapshot root");
+  const resolved = await resolveDataRoot(repository, snapshot, group.data_root);
+  if (resolved === null) throw new Error(`the newest snapshot does not contain ${root}`);
+  const entries = await repository.listDirectory(snapshot, resolved);
+  if (entries.length === 0) throw new Error(`${resolved}/ is empty`);
+  return resolved;
+}
+
+/**
  * Open every group's repository and prove the newest snapshot exists and holds
  * the declared data_root. Every group is attempted so one broken manifest entry
  * does not hide the rest; the command still fails if any group fails.
@@ -205,14 +243,9 @@ async function checkGroups(keys: DataKeys, manifest: RecoveryManifest): Promise<
         throw new Error("the repository has no snapshots");
       }
       const snapshot = repository.snapshots[0];
-      const root = normalizeDataRoot(group.data_root);
-      const resolved = await resolveDataRoot(repository, snapshot, group.data_root);
-      if (root && resolved === null) {
-        throw new Error(`the newest snapshot does not contain ${root}`);
-      }
+      const resolved = await checkGroupRoot(repository, snapshot, group);
       console.log(
-        `group ${group.id}: snapshot ${snapshot.id} (${snapshot.time})` +
-          `${resolved ? ` contains ${resolved}/` : ""}`,
+        `group ${group.id}: snapshot ${snapshot.id} (${snapshot.time}) contains ${resolved}/`,
       );
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
@@ -308,7 +341,9 @@ async function main(): Promise<void> {
   console.log("done");
 }
 
-main().catch((error: unknown) => {
-  console.error(`blob failed: ${error instanceof Error ? error.message : String(error)}`);
-  Deno.exit(1);
-});
+if (import.meta.main) {
+  main().catch((error: unknown) => {
+    console.error(`blob failed: ${error instanceof Error ? error.message : String(error)}`);
+    Deno.exit(1);
+  });
+}

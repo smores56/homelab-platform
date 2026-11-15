@@ -29,7 +29,8 @@ After unlock the page shows a **group picker**: every group in the manifest, wit
 newest snapshot date once that repository has opened. Choosing a group opens that repository's
 newest snapshot and browses the group's tree. The browser uses the manifest `data_root`; downloads
 are made relative to its parent, so a photo restores as `photos/...` under the folder the relative
-picks, not flattened into it.
+picks, not flattened into it. Symlinks inside a snapshot are skipped during restore, not
+materialised.
 
 A single manifest entry that fails to open is shown on its row and does not stop the other groups. A
 **malformed manifest fails the unlock closed**: the page will not guess a repository.
@@ -56,13 +57,14 @@ The platform renderer writes `public/manifest.json`:
 - `label` — human name shown in the picker; the platform renderer currently uses the id.
 - `repo` — the group's restic repository as `<tier root>/<group id>`. For the public page this must
   be the R2 tier, e.g. `s3:https://host/bucket/<group id>`: no credentials, query, fragment, or
-  `..`. A bare `https://` URL is also accepted.
+  `..`. A bare `https://` URL is also accepted. The path after the bucket must be exactly the group
+  id or a nested prefix ending in it (`.../teams/photos` for `photos`), so a manifest entry cannot
+  point one group at another group's repository.
 - `data_root` — absolute path inside the newest snapshot that holds the group's data (`/photos`,
-  `/srv/photos`, `/var/lib/data-plane/events`, or `/` for a repository rooted at the group). `..`
-  and backslashes are refused. The browser opens at this directory and restores relative to its
-  parent, so a photo restores as `photos/...`. The directory is resolved exactly or as the
-  shallowest directory whose trailing segments match, so the renderer's `/photos` finds a snapshot
-  backed up from `/run/data-plane/current/photos`.
+  `/srv/photos`, `/var/lib/data-plane/events`). `/`, `..` and backslashes are refused. The browser
+  opens at this directory and restores relative to its parent, so a photo restores as `photos/...`.
+  The directory is resolved exactly or as the shallowest directory whose trailing segments match, so
+  the renderer's `/photos` finds a snapshot backed up from `/run/data-plane/current/photos`.
 
 The checked-in `public/manifest.json` mirrors the platform renderer's output shape; the real file is
 written by `libs/data_plane/recovery/manifest.py` during deploy. `scripts/build.ts` refuses to build
@@ -96,7 +98,7 @@ and opens the file that was just written with that entry.
 
 `deno task blob --check-only` needs only the recovery password and the manifest: it decrypts the
 committed blob and, **for every group**, opens the newest snapshot and proves the declared
-`data_root` exists. There is no magic marker file; the manifest is the contract.
+`data_root` exists and is not empty. There is no magic marker file; the manifest is the contract.
 
 ```sh
 cd apps/recovery-page

@@ -39,7 +39,7 @@ const groups: RecoveryGroup[] = [
     id: "books",
     label: "Books",
     repo: "s3:https://account.r2.cloudflarestorage.com/homelab-restic-general/books",
-    data_root: "/",
+    data_root: "/srv/books",
   },
 ];
 
@@ -112,7 +112,13 @@ describe("resolveDataRoot", () => {
     expect(await resolveDataRoot(repository, snap, "/photos")).toBe(
       "run/data-plane/current/photos",
     );
-    expect(await resolveDataRoot(repository, snap, "/")).toBe("");
+  });
+
+  test("refuses the snapshot root as a data_root", async () => {
+    // "/" would browse and download the whole snapshot; the manifest rejects it
+    // and resolution must not turn it into the empty root either.
+    const repository = fakeRepository([snap], staged);
+    expect(await resolveDataRoot(repository, snap, "/")).toBeNull();
   });
 
   test("returns null when the snapshot does not contain the data_root", async () => {
@@ -155,7 +161,7 @@ describe("GroupCatalog", () => {
       return Promise.resolve(
         fakeRepository(
           [snapshot("old", "2026-11-06T00:00:00Z"), snapshot("new", "2026-11-08T00:00:00Z")],
-          { "srv/photos": [] },
+          { "srv/photos": [], "srv/books": [] },
         ),
       );
     });
@@ -167,12 +173,32 @@ describe("GroupCatalog", () => {
     expect(photos.group.id).toBe("photos");
 
     const books = await catalog.select("books");
-    expect(books.browseRoot).toBe("");
-    expect(books.restorePrefix).toBe("");
+    expect(books.browseRoot).toBe("srv/books");
+    expect(books.restorePrefix).toBe("srv");
 
     // A second selection reuses the opened repository.
     await catalog.select("photos");
     expect(opened).toBe(2);
+  });
+
+  test("select refuses a snapshot that lacks the data_root instead of widening", async () => {
+    // A manifest entry whose data_root is absent must mark that row, not fall
+    // back to the snapshot root and let the user download everything.
+    const catalog = new GroupCatalog(groups, () =>
+      Promise.resolve(
+        fakeRepository([snapshot("new", "2026-11-08T00:00:00Z")], {
+          "srv/notes": [],
+        }),
+      ));
+
+    await expect(catalog.select("photos")).rejects.toThrow(
+      "the newest snapshot does not contain /srv/photos",
+    );
+    const state = catalog.state("photos");
+    expect(state?.error).toBe("the newest snapshot does not contain /srv/photos");
+    expect(renderGroupList(catalog.states, () => "date")).toContain(
+      "Unavailable: the newest snapshot does not contain /srv/photos",
+    );
   });
 
   test("select refuses an unknown group or one without snapshots", async () => {

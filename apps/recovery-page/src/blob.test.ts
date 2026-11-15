@@ -1,6 +1,13 @@
 import { describe, it as test } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { type DataKeys, decryptBlob, encryptBlob, validateCost, validateDataKeys } from "./blob.ts";
+import {
+  type DataKeys,
+  decryptBlob,
+  DEFAULT_COST,
+  encryptBlob,
+  validateCost,
+  validateDataKeys,
+} from "./blob.ts";
 
 const payload: DataKeys = {
   version: 1,
@@ -16,7 +23,8 @@ const payload: DataKeys = {
   },
 };
 
-const fast = { iterations: 1, memory: 8192, parallelism: 1 };
+// The page only opens the pinned KDF header, so the round-trip fixtures use it.
+const pinned = DEFAULT_COST;
 const password = "correct horse battery staple";
 
 function tamperCiphertext(envelope: { ciphertext: string }): void {
@@ -27,7 +35,7 @@ function tamperCiphertext(envelope: { ciphertext: string }): void {
 
 describe("data-keys blob", () => {
   test("round-trips a valid payload", async () => {
-    const envelope = await encryptBlob(payload, password, fast);
+    const envelope = await encryptBlob(payload, password, pinned);
     const out = await decryptBlob(envelope, password);
     expect(out).toEqual(payload);
     expect(envelope.version).toBe(2);
@@ -35,27 +43,27 @@ describe("data-keys blob", () => {
   });
 
   test("rejects the wrong password", async () => {
-    const envelope = await encryptBlob(payload, password, fast);
+    const envelope = await encryptBlob(payload, password, pinned);
     await expect(decryptBlob(envelope, "wrong password")).rejects.toThrow(
       "unable to unlock the data keys",
     );
   });
 
   test("rejects a tampered ciphertext", async () => {
-    const envelope = await encryptBlob(payload, password, fast);
+    const envelope = await encryptBlob(payload, password, pinned);
     tamperCiphertext(envelope);
     await expect(decryptBlob(envelope, password)).rejects.toThrow();
   });
 
   test("rejects an unknown envelope version", async () => {
-    const envelope = await encryptBlob(payload, password, fast);
+    const envelope = await encryptBlob(payload, password, pinned);
     await expect(decryptBlob({ ...envelope, version: 99 } as never, password)).rejects.toThrow(
       "unsupported data-keys envelope",
     );
   });
 
   test("rejects the removed scrypt envelope", async () => {
-    const envelope = await encryptBlob(payload, password, fast);
+    const envelope = await encryptBlob(payload, password, pinned);
     await expect(
       decryptBlob({ ...envelope, version: 1, kdf: "scrypt" } as never, password),
     ).rejects.toThrow("unsupported data-keys envelope");
@@ -82,7 +90,7 @@ describe("data-keys blob", () => {
   });
 
   test("does not put the password in the envelope", async () => {
-    const envelope = await encryptBlob(payload, password, fast);
+    const envelope = await encryptBlob(payload, password, pinned);
     const serialized = JSON.stringify(envelope);
     expect(serialized).not.toContain(password);
     expect(serialized).not.toContain(payload.restic.password);
@@ -91,7 +99,7 @@ describe("data-keys blob", () => {
 
 describe("blob hardening", () => {
   test("rejects unreasonable KDF parameters before deriving a key", async () => {
-    const envelope = await encryptBlob(payload, password, fast);
+    const envelope = await encryptBlob(payload, password, pinned);
     await expect(
       decryptBlob({ ...envelope, iterations: 10_000 } as never, password),
     ).rejects.toThrow("invalid data-keys KDF parameters");
@@ -100,15 +108,34 @@ describe("blob hardening", () => {
     ).rejects.toThrow("invalid data-keys KDF parameters");
   });
 
+  test("rejects inflated parameters that are still within the ranges", async () => {
+    // The envelope arrives before the password, so only the pinned cost may be
+    // derived: raising it to the maximum must not buy an attacker the work.
+    const envelope = await encryptBlob(payload, password);
+    await expect(
+      decryptBlob({ ...envelope, iterations: 10, memory: 256 * 1024, parallelism: 16 }, password),
+    ).rejects.toThrow("does not match the pinned cost");
+  });
+
+  test("requires an https R2 endpoint", () => {
+    expect(
+      validateDataKeys({ ...payload, r2: { ...payload.r2, endpoint: "http://example.r2.test" } })
+        .join(" "),
+    ).toContain("must use https");
+    expect(
+      validateDataKeys({ ...payload, r2: { ...payload.r2, endpoint: "not a url" } }).join(" "),
+    ).toContain("not a URL");
+  });
+
   test("rejects malformed base64", async () => {
-    const envelope = await encryptBlob(payload, password, fast);
+    const envelope = await encryptBlob(payload, password, pinned);
     await expect(decryptBlob({ ...envelope, salt: "!!!" } as never, password)).rejects.toThrow(
       "invalid data-keys envelope",
     );
   });
 
   test("rejects a changed KDF header", async () => {
-    const envelope = await encryptBlob(payload, password, fast);
+    const envelope = await encryptBlob(payload, password, pinned);
     await expect(decryptBlob({ ...envelope, iterations: 2 } as never, password)).rejects.toThrow();
   });
 
@@ -121,24 +148,24 @@ describe("blob hardening", () => {
     const decomposed = composed.normalize("NFD");
     expect(decomposed).not.toEqual(composed);
 
-    const envelope = await encryptBlob(payload, decomposed, fast);
+    const envelope = await encryptBlob(payload, decomposed, pinned);
     await expect(decryptBlob(envelope, composed)).resolves.toEqual(payload);
   });
 
   // A newline or an escape sequence pasted into the prompt must not become part
   // of the key: it is invisible on the printed letter and impossible to retype.
   test("rejects a password with a control character", async () => {
-    await expect(encryptBlob(payload, "correct horse\n", fast)).rejects.toThrow(
+    await expect(encryptBlob(payload, "correct horse\n", pinned)).rejects.toThrow(
       "password contains a control character",
     );
-    const envelope = await encryptBlob(payload, password, fast);
+    const envelope = await encryptBlob(payload, password, pinned);
     await expect(decryptBlob(envelope, "correct horse\n")).rejects.toThrow(
       "password contains a control character",
     );
   });
 
   test("validates cost ranges", async () => {
-    expect(validateCost(fast)).toEqual([]);
+    expect(validateCost(pinned)).toEqual([]);
     expect(validateCost({ iterations: 0, memory: 8192, parallelism: 1 })).not.toEqual([]);
     expect(validateCost({ iterations: 1, memory: 4, parallelism: 1 })).not.toEqual([]);
     expect(validateCost({ iterations: 1, memory: 8, parallelism: 4 })).not.toEqual([]);

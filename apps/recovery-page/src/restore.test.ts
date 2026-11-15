@@ -20,12 +20,11 @@ describe("restorePrefix", () => {
     ).toEqual(["photos", "2024", "a.jpg"]);
   });
 
-  test("a repository-root group restores its whole tree", () => {
-    expect(restorePrefix("/")).toBe("");
-    expect(relativeSegments(restorePrefix("/"), "srv/books/a.epub")).toEqual([
-      "srv",
-      "books",
-      "a.epub",
+  test("an empty restore prefix keeps the whole tree", () => {
+    expect(relativeSegments(restorePrefix("/photos"), "photos/2024/a.jpg")).toEqual([
+      "photos",
+      "2024",
+      "a.jpg",
     ]);
   });
 });

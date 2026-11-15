@@ -94,6 +94,21 @@ function validateRepo(repo: unknown, label: string, errors: string[]): void {
   }
 }
 
+/**
+ * The group's repository is `<bucket>/<group id>` under the shared bucket, or a
+ * nested prefix that still ends in the group id. Anything else would let a
+ * tampered manifest point one group's picker at another group's repository.
+ */
+function validateRepoPrefix(repo: string, id: string, label: string, errors: string[]): void {
+  const url = repositoryUrl(repo);
+  if (!url) return;
+  const segments = url.pathname.split("/").filter(Boolean);
+  const prefix = segments.slice(1).join("/");
+  if (prefix !== id && !prefix.endsWith(`/${id}`)) {
+    errors.push(`group ${label} repo must end with the group id ${id}`);
+  }
+}
+
 function validateDataRoot(root: unknown, label: string, errors: string[]): void {
   if (typeof root !== "string") {
     errors.push(`group ${label} is missing data_root`);
@@ -112,6 +127,10 @@ function validateDataRoot(root: unknown, label: string, errors: string[]): void 
     return;
   }
   const segments = root.split("/").filter(Boolean);
+  if (segments.length === 0) {
+    errors.push(`group ${label} data_root must name a directory, not the snapshot root`);
+    return;
+  }
   if (segments.some((segment) => segment === "." || segment === "..")) {
     errors.push(`group ${label} data_root contains a traversal segment`);
   }
@@ -147,6 +166,9 @@ export function validateManifest(value: unknown): string[] {
       errors.push(`group ${label} has a control character in its label`);
     }
     validateRepo(group.repo, label, errors);
+    if (isNonEmptyString(group.repo) && isNonEmptyString(group.id)) {
+      validateRepoPrefix(group.repo, group.id, label, errors);
+    }
     validateDataRoot(group.data_root, label, errors);
   }
   return errors;

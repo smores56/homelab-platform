@@ -1,4 +1,7 @@
 import { cp, mkdir, rm } from "node:fs/promises";
+// esbuild's npm package reads ESBUILD_* from process.env and spawns its native
+// binary, so the task needs --allow-env and --allow-run; this file itself uses
+// only --allow-read and --allow-write.
 import * as esbuild from "esbuild";
 import { parseManifest } from "../src/manifest.ts";
 
