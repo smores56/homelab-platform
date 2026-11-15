@@ -4,7 +4,7 @@ Everything here needs a human: account creation, 2FA, token issuance, and the
 one-time GitHub settings that `gh api` is allowed to change but an agent must
 not. Record the date and who ran it when it is done.
 
-## 1. Create the `homelab-agent` GitHub App
+## 1. Create the `smores56-homelab-agent` GitHub App
 
 The agent's GitHub identity is an app, not a user: installation tokens are
 short-lived, scoped per request by the broker, and revocable from the app's
@@ -18,8 +18,8 @@ gone; the remaining controls are that no repository-level secrets exist (only
 main-gated environment secrets), and the ruleset in item 3.
 
 1. Create the app at https://github.com/settings/apps/new:
-   - Name: `homelab-agent` (its actor becomes
-     `homelab-agent[bot]`).
+   - Name: `homelab-agent` (that name is taken globally, so GitHub assigned the
+     slug `smores56-homelab-agent`; its actor is `smores56-homelab-agent[bot]`).
    - Homepage: `https://github.com/smores56/homelab-platform`.
    - Webhook: **inactive** (the broker polls; there is no endpoint for GitHub
      to deliver to, and the tunnel admits nothing from GitHub).
@@ -156,7 +156,7 @@ to an environment that exists.
 
 Run the commands from `docs/runbook.md` section "Branch protection on main".
 They require the same admin token; `enforce_admins` is false so the owner can
-still push a bootstrap commit, while `homelab-agent[bot]` and every other
+still push a bootstrap commit, while `smores56-homelab-agent[bot]` and every other
 identity are bound by PR review, the required checks, and **Require review from
 Code Owners** — the last one is what keeps `.github/` and `*.tf` (Kanbei-
 critical) human-reviewed now that the app can technically push a workflow edit.
@@ -1969,7 +1969,7 @@ host with `422`, and hook creation is refused with
    the broker requests only `repository_hooks` and the mandatory `metadata`
    from these repositories, so a wider app permission is authority no host uses.
 2. Re-consent the installation: https://github.com/settings/installations ->
-   `homelab-agent` -> **Review permissions** -> accept the new permissions.
+   `smores56-homelab-agent` -> **Review permissions** -> accept the new permissions.
    The installation page lists `Repository webhooks: Read and write` afterwards;
    the broker does not restart, because the token is minted per request.
 3. Probe through the broker. The explicit `Host` matters: curl to `127.0.0.1`

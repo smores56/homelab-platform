@@ -431,7 +431,7 @@ read` on the two repositories and is not the agent's identity.
 
 ### GitHub App identity
 
-The broker holds `homelab-agent`'s private key and mints installation
+The broker holds `smores56-homelab-agent`'s private key and mints installation
 tokens on demand (`apps/broker/broker/github_app.py`): an RS256 JWT
 (`iat` −60 s, `exp` +540 s, `iss` = app id) is exchanged at
 `POST /app/installations/{id}/access_tokens` with the enrollment's
