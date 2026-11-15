@@ -59,6 +59,14 @@ class ManifestError(DataPlaneError):
     """A backup generation manifest is incomplete or incompatible."""
 
 
+class BackupConfigError(DataPlaneError):
+    """The host backup plan is missing a required, fail-closed detail."""
+
+
+class BackupError(DataPlaneError):
+    """One backup step (snapshot, restic command) failed."""
+
+
 class OutcomeUnknown(DataPlaneError):
     """An effect may or may not have landed; never replay blindly."""
 

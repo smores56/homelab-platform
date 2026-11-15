@@ -1,8 +1,8 @@
 # data_plane
 
 Portable, stdlib-only libraries for the Nix-free personal data system in #660.
-They are service-independent: nothing here imports Kubernetes, Nix, a provider
-SDK, or `restic`. The same code runs in the local and external planes.
+They are service-independent: nothing here imports Kubernetes, Nix, or a
+provider SDK. The same code runs in the local and external planes.
 
 ## Modules
 
@@ -15,13 +15,14 @@ SDK, or `restic`. The same code runs in the local and external planes.
 | `intents` | SQLite intent/effect journal with a closed transition table; no blind replay |
 | `broker` | Scoped reads and confirmed, revision-checked writes; outcome reconciliation |
 | `broker_journal` | Adapter that persists the broker's full operation in the one journal |
-| `backup.generations` | Immutable generation manifests, atomic writes, complete-generation selection |
-| `backup.controller` | Fence/checkpoint/snapshot once, fan out independently, publish only if all copies land |
-| `backup.destinations` | Destination protocol and fixture destinations; no `restic copy` |
+| `backup.plan` | Host backup plan: one restic repository per group and tier, first tier is primary |
+| `backup.restic` | Argv-only restic commands and snapshot parsing; no tags, no shell |
+| `backup.runner` | One recursive ZFS snapshot, staged backup, copies, prune, freshness, check |
 | `collectors.relay` | Authenticated, schema-validated, rate-limited, idempotent ingest |
 | `collectors.staging` | Staging generation, atomic publish, cursors, tombstones, fidelity limits |
 | `memory.file_memory` | Portable per-profile file memory with provenance and tombstones |
-| `recovery.planner` | Select a complete compatible generation and emit an ordered, dry-run restore plan |
+| `recovery.manifest` | Public per-group manifest (strongest tier first) with an atomic write |
+| `migration` | Ordered migration phases and the plan-driven backup gate |
 | `github.backup` | Safe argv for mirror/bundle capture and a verifiable manifest |
 | `cli` | Offline validation and inspection commands |
 
@@ -34,10 +35,10 @@ SDK, or `restic`. The same code runs in the local and external planes.
   single-use and expires.
 - **No blind replay.** An `outcome_unknown` intent is reconciled by reading the
   source; it never returns to `applying`.
-- **A generation is complete or it is not published.** Every required destination
-  must independently capture the same snapshot before the manifest is written.
-- **A partial enumeration never advances a cursor or deletes a replica object.**
-- **Restore selects a complete generation**, never a mutable `latest` pointer.
+- **A run has one snapshot.** One recursive ZFS snapshot feeds every group; restic reads
+  the staged path, so no group can observe a different point in time.
+- **A repository exists only after an operator creates it.** A missing repository
+  fails closed and names the `backup-init` command; nothing auto-initializes.
 
 ## Commands
 
@@ -48,13 +49,17 @@ tests/data-plane/check.sh
 
 PYTHONPATH=libs python3 -m data_plane validate-catalog catalog.json
 PYTHONPATH=libs python3 -m data_plane render-confirmation operation.json
-PYTHONPATH=libs python3 -m data_plane manifest-hash generation.json
-PYTHONPATH=libs python3 -m data_plane select-generation backups/*.json \
-  --destinations nvme hdd r2 --datasets content --schema 1
+PYTHONPATH=libs python3 -m data_plane backup-manifest --plan /etc/homelab/backup.json
+PYTHONPATH=libs python3 -m data_plane backup-freshness --plan /etc/homelab/backup.json --json
+PYTHONPATH=libs python3 -m data_plane.migration preflight --plan /etc/homelab/backup.json --json
 ```
 
-Everything is fixture-only. The commands never contact a cluster, a provider, or
-a backup repository.
+Everything except the `backup-*` commands and `migration preflight` is
+fixture-only. `backup-manifest` reads the plan and never contacts a repository;
+`migration preflight` only reads each repository (`restic snapshots` and
+`restic check`); `backup-run`, `backup-init`, `backup-freshness`, and
+`backup-check` shell out to `zfs`/`restic` through the subprocess runner unless
+`--dry-run` records the argv instead.
 
 ## Integration
 

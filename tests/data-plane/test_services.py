@@ -24,14 +24,11 @@ for candidate in (str(ROOT), str(ROOT / "libs")):
         sys.path.insert(0, candidate)
 
 from apps.data_plane import (  # noqa: E402 - path setup above
-    backup_service,
     broker_service,
     common,
     event_service,
     relay_service,
 )
-from data_plane.backup.controller import FanoutController  # noqa: E402
-from data_plane.backup.destinations import InMemoryDestination  # noqa: E402
 from data_plane.broker import Broker, Intent  # noqa: E402
 from data_plane.collectors.relay import RecordSchema, Relay  # noqa: E402
 from data_plane.confirmation import ConfirmationGate  # noqa: E402
@@ -710,126 +707,6 @@ class RelayServiceTests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertEqual(payload["error"]["code"], "validation")
         self.assertEqual(self.sunk, [])
-
-
-class FakeSnapshotter:
-    def __init__(self) -> None:
-        self.calls: list[tuple[str, str]] = []
-
-    def fence(self, group_id: str) -> None:
-        self.calls.append(("fence", group_id))
-
-    def checkpoint(self, group_id: str) -> None:
-        self.calls.append(("checkpoint", group_id))
-
-    def snapshot(self, group_id: str) -> dict[str, str]:
-        self.calls.append(("snapshot", group_id))
-        return {f"fixture-{group_id}": f"snap-{group_id}-1"}
-
-    def resume(self, group_id: str) -> None:
-        self.calls.append(("resume", group_id))
-
-
-OPERATOR_TOKEN = "operator-test-token"
-
-
-class BackupServiceTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        self.snapshotter = FakeSnapshotter()
-        self.controller = FanoutController(
-            self.snapshotter,
-            [InMemoryDestination("fixture-a"), InMemoryDestination("fixture-b")],
-            Path(self.tmp.name) / "manifests",
-            clock=lambda: 1_000.0,
-        )
-        self.service = backup_service.BackupService(
-            self.controller,
-            ("fixture-a", "fixture-b"),
-            ("books",),
-            operator_secret=OPERATOR_TOKEN,
-            fixture_mode=False,
-        )
-        self.harness = Harness(self.service)
-        self.harness.__enter__()
-        self.addCleanup(self.harness.__exit__, None, None, None)
-
-    def run_backup(
-        self, payload: dict, *, token: str | None = OPERATOR_TOKEN
-    ) -> tuple[int, object]:
-        headers = {} if token is None else {"Authorization": f"Bearer {token}"}
-        return self.harness.request(
-            "POST", "/run", body=json.dumps(payload).encode(), headers=headers
-        )
-
-    def test_run_publishes_a_complete_generation(self) -> None:
-        status, manifest = self.run_backup({"group": "books"})
-        self.assertEqual(status, 200)
-        self.assertTrue(manifest["complete"])
-        self.assertEqual(manifest["group_id"], "books")
-        self.assertEqual(
-            [item["destination"] for item in manifest["destinations"]],
-            ["fixture-a", "fixture-b"],
-        )
-        self.assertEqual(
-            self.snapshotter.calls,
-            [
-                ("fence", "books"),
-                ("checkpoint", "books"),
-                ("snapshot", "books"),
-                ("resume", "books"),
-            ],
-        )
-        self.assertTrue(list(Path(self.tmp.name, "manifests").glob("*.json")))
-
-    def test_unknown_group_is_a_validation_error(self) -> None:
-        status, payload = self.run_backup({"group": "music"})
-        self.assertEqual(status, 400)
-        self.assertEqual(payload["error"]["code"], "validation")
-
-    def test_run_without_an_operator_token_is_refused(self) -> None:
-        status, payload = self.run_backup({"group": "books"}, token=None)
-        self.assertEqual(status, 401)
-        self.assertEqual(payload["error"]["code"], "unauthorized")
-
-        status, payload = self.run_backup({"group": "books"}, token="wrong")
-        self.assertEqual(status, 403)
-        self.assertEqual(payload["error"]["code"], "forbidden")
-
-    def test_fixture_mode_never_reports_verified(self) -> None:
-        fixture = backup_service.BackupService(
-            self.controller,
-            ("fixture-a", "fixture-b"),
-            ("books",),
-            operator_secret=OPERATOR_TOKEN,
-        )
-        with Harness(fixture) as harness:
-            status, payload = harness.request(
-                "POST",
-                "/run",
-                body=json.dumps({"group": "books"}).encode(),
-                headers={"Authorization": f"Bearer {OPERATOR_TOKEN}"},
-            )
-        self.assertEqual(status, 503)
-        self.assertEqual(payload["error"]["code"], "unavailable")
-
-    def test_a_service_without_a_token_fails_closed(self) -> None:
-        unconfigured = backup_service.BackupService(
-            self.controller,
-            ("fixture-a", "fixture-b"),
-            ("books",),
-            operator_secret=None,
-            fixture_mode=False,
-        )
-        with Harness(unconfigured) as harness:
-            status, payload = harness.request("POST", "/run", body=b"")
-        self.assertEqual(status, 503)
-
-    def test_healthz_names_no_group_or_destination(self) -> None:
-        status, payload = self.harness.request("GET", "/healthz")
-        self.assertEqual(status, 200)
-        self.assertEqual(payload, {"status": "ok", "service": "backup"})
 
 
 if __name__ == "__main__":

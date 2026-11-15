@@ -1,4 +1,4 @@
-"""Migration gates, preflight evidence, data-loss verification, and rollback."""
+"""Migration phases, data-loss verification, and rollback planning."""
 
 from __future__ import annotations
 
@@ -13,13 +13,11 @@ from data_plane.migration import (
     PHASE_NAMES,
     DataLossError,
     GateBlocked,
-    PreflightError,
     RollbackError,
     Snapshot,
     advance,
     apply_rollback,
     assert_no_data_loss,
-    check_preflight,
     compare,
     compare_evidence,
     next_phase,
@@ -27,33 +25,20 @@ from data_plane.migration import (
 )
 from data_plane.migration.cli import main
 from data_plane.migration.phases import (
-    FRESH_BACKUP,
-    RESTORE_VERIFIED,
-    ROLLBACK_DISK_BOOT_TESTED,
-    SSH_PATHS_INDEPENDENT,
+    CUTOVER_REHEARSAL_PASSED,
+    GATE_READY,
 )
 from data_plane.migration.verify import SnapshotEntry, Tombstone
 
 NOW = 1_800_000_000.0
 CONFIRMED_AT = "2026-11-14T05:00:00+00:00"
-DESTINATIONS = ("primary", "secondary", "r2")
 
 
-def backup(
-    destination: str,
-    group: str = "notes",
-    age_hours: float = 1.0,
-    **overrides,
-) -> dict[str, object]:
-    values: dict[str, object] = {
-        "group": group,
-        "destination": destination,
-        "created_at": NOW - age_hours * 3600.0,
-        "verified": True,
-        "complete": True,
+def confirmations() -> dict[str, object]:
+    return {
+        "cutover": {"confirmed": True, "by": "smores", "at": CONFIRMED_AT},
+        "retire_old": {"confirmed": True, "by": "smores", "at": CONFIRMED_AT},
     }
-    values.update(overrides)
-    return values
 
 
 def ssh_path(name: str, kind: str = "direct", **overrides) -> dict[str, object]:
@@ -63,40 +48,6 @@ def ssh_path(name: str, kind: str = "direct", **overrides) -> dict[str, object]:
         "verified": True,
         "independent_of_data_plane": True,
         "verified_at": NOW - 600.0,
-    }
-    values.update(overrides)
-    return values
-
-
-def evidence(**overrides) -> dict[str, object]:
-    values: dict[str, object] = {
-        "now": NOW,
-        "required_destinations": list(DESTINATIONS),
-        "required_groups": ["notes"],
-        "backup_max_age_hours": 24,
-        "restore_max_age_hours": 24,
-        "ssh_max_age_hours": 24,
-        "backups": [backup(destination) for destination in DESTINATIONS],
-        "restore_verification": {
-            "generation_id": "notes-1",
-            "storage": "scratch",
-            "verified": True,
-            "verified_at": NOW - 3600.0,
-        },
-        "rollback_disk": {
-            "device": "/dev/disk/by-id/nvme-Samsung_SSD_970_EVO_1TB",
-            "present": True,
-            "boot_tested": True,
-            "converted": False,
-        },
-        "ssh_paths": [
-            ssh_path("lan", "direct"),
-            ssh_path("tunnel", "cloudflared-rescue"),
-        ],
-        "operator_confirmations": {
-            "cutover": {"confirmed": True, "by": "smores", "at": CONFIRMED_AT},
-            "retire_old": {"confirmed": True, "by": "smores", "at": CONFIRMED_AT},
-        },
     }
     values.update(overrides)
     return values
@@ -118,7 +69,7 @@ SHA_C = "c" * 64
 def rollback_evidence(**overrides) -> dict[str, object]:
     values: dict[str, object] = {
         "new_writer_units": [
-            "homelab-backup-controller.service",
+            "homelab-backup-media.service",
             "homelab-event-service.service",
         ],
         "old_boot_entry": "nixos-old",
@@ -152,55 +103,40 @@ class PhaseTest(unittest.TestCase):
         self.assertEqual(next_phase("inventory").name, "protect_old")
         self.assertIsNone(next_phase("retire_old"))
 
-    def test_protect_old_needs_every_gate(self):
+    def test_protect_old_needs_the_gate(self):
         with self.assertRaises(GateBlocked) as raised:
             advance("protect_old", {})
         missing = {key for failure in raised.exception.failures for key in failure.missing}
+        self.assertEqual(missing, {GATE_READY})
+
+    def test_protect_old_advances_with_the_gate_report(self):
         self.assertEqual(
-            missing,
-            {
-                FRESH_BACKUP,
-                RESTORE_VERIFIED,
-                ROLLBACK_DISK_BOOT_TESTED,
-                SSH_PATHS_INDEPENDENT,
-            },
+            advance("protect_old", {GATE_READY: True}).name, "pilot"
         )
 
-    def test_protect_old_advances_with_preflight_evidence(self):
-        report = check_preflight(evidence()).require()
-        self.assertEqual(advance("protect_old", report.evidence).name, "pilot")
-
     def test_cutover_needs_a_confirmation_not_just_evidence(self):
-        report = check_preflight(evidence()).require()
-        complete = {
-            key: value
-            for key, value in report.evidence.items()
-            if key != "operator_confirmations"
-        }
-        complete["cutover_rehearsal_passed"] = True
+        complete = {GATE_READY: True, CUTOVER_REHEARSAL_PASSED: True}
         with self.assertRaises(GateBlocked) as raised:
             advance("cutover", complete)
         self.assertTrue(
             any("confirmation" in failure.detail for failure in raised.exception.failures)
         )
         self.assertEqual(
-            advance(
-                "cutover",
-                dict(complete, operator_confirmations=evidence()["operator_confirmations"]),
-            ).name,
+            advance("cutover", dict(complete, operator_confirmations=confirmations())).name,
             "retire_old",
         )
 
-    def test_preflight_report_feeds_the_cutover_and_retirement_gates(self):
-        full = evidence(
-            cutover_rehearsal_passed=True,
-            retired_writers_stopped=True,
-            new_generation_verified=True,
-            rollback_no_longer_required=True,
-        )
-        report = check_preflight(full).require()
-        self.assertEqual(advance("cutover", report.evidence).name, "retire_old")
-        self.assertIsNone(advance("retire_old", report.evidence))
+    def test_gate_report_feeds_the_cutover_and_retirement_gates(self):
+        full = {
+            GATE_READY: True,
+            CUTOVER_REHEARSAL_PASSED: True,
+            "retired_writers_stopped": True,
+            "new_generation_verified": True,
+            "rollback_no_longer_required": True,
+            "operator_confirmations": confirmations(),
+        }
+        self.assertEqual(advance("cutover", full).name, "retire_old")
+        self.assertIsNone(advance("retire_old", full))
 
     def test_retire_old_refuses_without_confirmation(self):
         gate_evidence = {
@@ -210,155 +146,6 @@ class PhaseTest(unittest.TestCase):
         }
         with self.assertRaises(GateBlocked):
             advance("retire_old", gate_evidence)
-
-
-class PreflightTest(unittest.TestCase):
-    def test_happy_path(self):
-        report = check_preflight(evidence())
-        self.assertTrue(report.ok, report.to_dict())
-        for key in (
-            FRESH_BACKUP,
-            RESTORE_VERIFIED,
-            ROLLBACK_DISK_BOOT_TESTED,
-            SSH_PATHS_INDEPENDENT,
-            "operator_confirmation",
-        ):
-            self.assertTrue(report.evidence[key], key)
-        self.assertEqual(
-            report.checked,
-            (
-                "backup_freshness",
-                "restore_verification",
-                "rollback_disk",
-                "ssh_paths",
-                "operator_confirmation",
-            ),
-        )
-        self.assertIs(report.require(), report)
-
-    def test_stale_backup_fails_every_destination(self):
-        report = check_preflight(
-            evidence(
-                backups=[
-                    backup("primary"),
-                    backup("secondary", age_hours=30.0),
-                    backup("r2"),
-                ]
-            )
-        )
-        self.assertFalse(report.ok)
-        failures = [item for item in report.failures if item.check == "backup_freshness"]
-        self.assertEqual(
-            [item.subject for item in failures], ["secondary/notes"]
-        )
-        self.assertIn("stale", failures[0].detail)
-
-    def test_unverified_backup_does_not_count(self):
-        report = check_preflight(
-            evidence(
-                backups=[
-                    backup("primary"),
-                    backup("secondary", verified=False),
-                    backup("r2"),
-                ]
-            )
-        )
-        self.assertFalse(report.ok)
-        details = " ".join(item.detail for item in report.failures)
-        self.assertIn("not verified", details)
-
-    def test_unverified_restore_fails(self):
-        report = check_preflight(
-            evidence(
-                restore_verification={
-                    "generation_id": "notes-1",
-                    "storage": "scratch",
-                    "verified": False,
-                    "verified_at": NOW - 600.0,
-                }
-            )
-        )
-        self.assertFalse(report.ok)
-        self.assertTrue(
-            any(item.check == "restore_verification" for item in report.failures)
-        )
-
-    def test_restore_must_be_on_scratch_storage(self):
-        report = check_preflight(
-            evidence(
-                restore_verification={
-                    "generation_id": "notes-1",
-                    "storage": "production",
-                    "verified": True,
-                    "verified_at": NOW - 600.0,
-                }
-            )
-        )
-        self.assertFalse(report.ok)
-        self.assertIn(
-            "scratch",
-            " ".join(item.detail for item in report.failures),
-        )
-
-    def test_missing_second_ssh_path_fails(self):
-        report = check_preflight(evidence(ssh_paths=[ssh_path("lan")]))
-        self.assertFalse(report.ok)
-        self.assertIn(
-            "at least two",
-            " ".join(
-                item.detail
-                for item in report.failures
-                if item.check == "ssh_paths"
-            ),
-        )
-
-    def test_data_plane_dependent_ssh_path_does_not_count(self):
-        report = check_preflight(
-            evidence(
-                ssh_paths=[
-                    ssh_path("lan"),
-                    ssh_path("tunnel", independent_of_data_plane=False),
-                ]
-            )
-        )
-        self.assertFalse(report.ok)
-        self.assertIn(
-            "independent of k3s",
-            " ".join(item.detail for item in report.failures),
-        )
-
-    def test_rollback_disk_must_be_present_and_boot_tested(self):
-        report = check_preflight(
-            evidence(rollback_disk={"device": "/dev/nvme1n1", "present": False})
-        )
-        self.assertFalse(report.ok)
-        details = [item for item in report.failures if item.check == "rollback_disk"]
-        self.assertEqual(len(details), 2)
-
-    def test_irreversible_phase_without_confirmation_fails(self):
-        confirmations = {"cutover": evidence()["operator_confirmations"]["cutover"]}
-        report = check_preflight(evidence(operator_confirmations=confirmations))
-        self.assertFalse(report.ok)
-        subjects = [
-            item.subject
-            for item in report.failures
-            if item.check == "operator_confirmation"
-        ]
-        self.assertEqual(subjects, ["retire_old"])
-
-    def test_require_raises_with_all_failures(self):
-        report = check_preflight(evidence(ssh_paths=[]))
-        with self.assertRaises(PreflightError) as raised:
-            report.require()
-        self.assertIs(raised.exception.failures, report.failures)
-
-    def test_malformed_evidence_is_structured(self):
-        report = check_preflight({"now": NOW})
-        self.assertFalse(report.ok)
-        checks = {item.check for item in report.failures}
-        self.assertIn("backup_freshness", checks)
-        self.assertIn("restore_verification", checks)
-        self.assertIn("ssh_paths", checks)
 
 
 class VerifyTest(unittest.TestCase):
@@ -525,18 +312,6 @@ class CliTest(unittest.TestCase):
         path.write_text(json.dumps(payload), encoding="utf-8")
         return path
 
-    def test_preflight_success_and_failure(self):
-        with tempfile.TemporaryDirectory() as raw:
-            directory = Path(raw)
-            good = self.write(directory, "good.json", evidence())
-            bad = self.write(directory, "bad.json", evidence(ssh_paths=[]))
-            code, out, _ = self.run_cli("preflight", str(good))
-            self.assertEqual(code, 0)
-            self.assertTrue(json.loads(out)["ok"])
-            code, out, _ = self.run_cli("preflight", str(bad))
-            self.assertEqual(code, 1)
-            self.assertFalse(json.loads(out)["ok"])
-
     def test_verify_reports_data_loss(self):
         with tempfile.TemporaryDirectory() as raw:
             directory = Path(raw)
@@ -566,7 +341,7 @@ class CliTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             path = Path(raw) / "broken.json"
             path.write_text("{", encoding="utf-8")
-            code, _, err = self.run_cli("preflight", str(path))
+            code, _, err = self.run_cli("verify", str(path))
             self.assertEqual(code, 2)
             self.assertIn("not valid JSON", err)
 

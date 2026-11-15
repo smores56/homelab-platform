@@ -3,8 +3,9 @@
 A phase is a boundary, not a command. The operator may cross it only when the
 gate's evidence is present; ``protect_old`` and ``cutover`` are the hard gates
 that stand between a working old system and a new one that cannot yet be
-recovered. Evidence is a plain mapping so the same object can come from the
-preflight report, a reviewed JSON file, or a test fixture.
+recovered. Evidence is a plain mapping; the plan-driven preflight publishes its
+``GateReport.ok`` under ``GATE_READY`` and that one key is what the backup
+gates consume.
 
 Nothing here executes a command, reads a secret, or contacts a host.
 """
@@ -16,11 +17,8 @@ from typing import Any, Iterable, Mapping
 
 from ..errors import DataPlaneError
 
-# Evidence keys shared by the preflight report and the phase gates.
-FRESH_BACKUP = "fresh_backup"
-RESTORE_VERIFIED = "restore_verified"
-ROLLBACK_DISK_BOOT_TESTED = "rollback_disk_boot_tested"
-SSH_PATHS_INDEPENDENT = "ssh_paths_independent"
+# The plan-driven preflight's single readiness fact is GateReport.ok.
+GATE_READY = "gate_ready"
 CUTOVER_REHEARSAL_PASSED = "cutover_rehearsal_passed"
 
 
@@ -109,12 +107,7 @@ class Phase:
             raise MigrationError("phase has an empty name")
 
 
-_PROTECT_EVIDENCE = (
-    FRESH_BACKUP,
-    RESTORE_VERIFIED,
-    ROLLBACK_DISK_BOOT_TESTED,
-    SSH_PATHS_INDEPENDENT,
-)
+_PROTECT_EVIDENCE = (GATE_READY,)
 
 PHASES: tuple[Phase, ...] = (
     Phase(
@@ -140,9 +133,9 @@ PHASES: tuple[Phase, ...] = (
             name="old-system-protected",
             evidence=_PROTECT_EVIDENCE,
             description=(
-                "A fresh verified backup exists on every required destination, "
-                "a restore is verified on scratch storage, the 970 boots, and "
-                "two independent SSH paths are proven."
+                "The plan-driven backup gate passes: every group and tier is "
+                "fresh and path-covered, every repository passes a structural "
+                "restic check, and each primary passes --read-data."
             ),
         ),
     ),
@@ -194,8 +187,8 @@ PHASES: tuple[Phase, ...] = (
             evidence=_PROTECT_EVIDENCE + (CUTOVER_REHEARSAL_PASSED,),
             requires_operator_confirmation=True,
             description=(
-                "The protection evidence still holds, a rollback rehearsal "
-                "passed, and the operator confirms the cutover."
+                "The backup gate still holds, a rollback rehearsal passed, "
+                "and the operator confirms the cutover."
             ),
         ),
     ),

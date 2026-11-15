@@ -1,9 +1,9 @@
-"""Migration gates: ordered phases, preflight evidence, verification, rollback.
+"""Migration gates: ordered phases, the plan-driven backup gate, verification.
 
-The package never contacts a host and never executes a destructive step. It
-exists so the migration plan, the pre-migration evidence, the data-loss gate,
-and the old-system rollback can be reviewed and tested before an operator runs
-anything.
+The package never executes a destructive step. ``preflight`` proves the backup
+chain from the host plan; the phase gates consume its single readiness fact.
+The migration plan, the data-loss gate, and the old-system rollback can be
+reviewed and tested before an operator runs anything.
 """
 
 from __future__ import annotations
@@ -27,11 +27,12 @@ from .phases import (
     required_evidence_keys,
 )
 from .preflight import (
-    PreflightError,
-    PreflightFailure,
-    PreflightReport,
-    check_preflight,
-    parse_timestamp,
+    GateReport,
+    GateRunner,
+    GroupCheck,
+    ReadDataCheck,
+    ResticGateRunner,
+    run_gate,
 )
 from .rollback import (
     ROLLBACK_CONFIRMATION,
@@ -61,15 +62,17 @@ __all__ = [
     "Gate",
     "GateBlocked",
     "GateFailure",
+    "GateReport",
+    "GateRunner",
+    "GroupCheck",
     "MigrationError",
     "PHASES",
     "PHASE_NAMES",
     "Phase",
-    "PreflightError",
-    "PreflightFailure",
-    "PreflightReport",
     "ROLLBACK_CONFIRMATION",
     "ROLLBACK_STEP_NAMES",
+    "ReadDataCheck",
+    "ResticGateRunner",
     "RollbackBackend",
     "RollbackError",
     "RollbackPlan",
@@ -81,7 +84,6 @@ __all__ = [
     "apply_rollback",
     "assert_no_data_loss",
     "check_advance",
-    "check_preflight",
     "compare",
     "compare_evidence",
     "confirmation_missing",
@@ -90,8 +92,8 @@ __all__ = [
     "irreversible_phases",
     "load_plan",
     "next_phase",
-    "parse_timestamp",
     "phase",
     "plan_rollback",
     "required_evidence_keys",
+    "run_gate",
 ]

@@ -1,19 +1,7 @@
-"""Ordered, verified restore plans over one backup generation."""
+"""Public recovery manifest built from the host backup plan."""
 
 from __future__ import annotations
 
-from .planner import (
-    RestoreBackend,
-    RestorePlan,
-    RestoreStep,
-    execute,
-    plan_restore,
-)
+from .manifest import MANIFEST_VERSION, build_manifest, write_manifest
 
-__all__ = [
-    "RestoreBackend",
-    "RestorePlan",
-    "RestoreStep",
-    "execute",
-    "plan_restore",
-]
+__all__ = ["MANIFEST_VERSION", "build_manifest", "write_manifest"]

@@ -8,11 +8,13 @@ policy of their own.
 ## Status: offline and fixture-only
 
 These services are **offline fixtures until images and secrets are
-provisioned**. `run.py` opens local SQLite files, a fixture snapshotter, and
-in-memory backup destinations. It never runs `restic`, never dials a cluster or
-a provider, and never reads live personal data. The broker and relay adapters
-are stand-ins (`FixtureAdapter` in `run.py`, a list sink for the relay) so the
-endpoint contracts can be exercised before a deployment exists.
+provisioned**. `run.py` opens local SQLite files and in-process adapters. It
+never runs `restic`, never dials a cluster or a provider, and never reads live
+personal data. The broker and relay adapters are stand-ins (`FixtureAdapter` in
+`run.py`, a list sink for the relay) so the endpoint contracts can be exercised
+before a deployment exists. Backups are not a service: the host runs the
+`data_plane` CLI (`backup-run`, `backup-freshness`, ...) over one recursive ZFS
+snapshot instead.
 
 Nothing here issues a secret, and no secret is stored in the repository. A
 secret is read once from a file named on the command line or in the
@@ -25,14 +27,11 @@ python -m apps.data_plane.run event  --db state/events.db --secret-file /run/sec
 python -m apps.data_plane.run relay  --schema relay-schema.json --secret-file /run/secrets/relay
 python -m apps.data_plane.run broker --db state/intents.db --catalog catalog.json \
   --secret-file /run/secrets/identity
-python -m apps.data_plane.run backup --manifest-dir state/manifests \
-  --group fixture --destination fixture-a --destination fixture-b
 ```
 
 Every flag also has an environment variable: `DATA_PLANE_HOST`,
 `DATA_PLANE_PORT`, `DATA_PLANE_DB`, `DATA_PLANE_SECRET_FILE`,
-`DATA_PLANE_SCHEMA`, `DATA_PLANE_CATALOG`, `DATA_PLANE_MANIFEST_DIR`,
-`DATA_PLANE_GROUPS`, `DATA_PLANE_DESTINATIONS`, and
+`DATA_PLANE_SCHEMA`, `DATA_PLANE_CATALOG`, and
 `DATA_PLANE_MAX_BODY_BYTES`. Logs go to stderr. The default bind is
 `127.0.0.1:8080`; a container sets `DATA_PLANE_HOST=0.0.0.0` and a real port.
 
@@ -132,15 +131,3 @@ The schema is a JSON file loaded at startup:
 | --- | --- | --- |
 | `POST /ingest` | body + `X-Idempotency-Key` + `X-Relay-Signature`, cursor in `?cursor=` or `X-Cursor` | 202 result object |
 | `GET /healthz` | none | 200 `{"status","service"}` |
-
-## Backup service
-
-Dry-run/fixture backend only: a fixture snapshotter and in-memory destinations.
-No restic process is executed and no repository is contacted.
-
-| Route | Body | Result |
-| --- | --- | --- |
-| `POST /run` | body `{}` or optional `{"group","destinations"}` | 200 generation manifest |
-| `GET /healthz` | none | 200 `{"status","service","destinations","groups"}` |
-
-A group or destination not configured at startup is a 400 validation error.

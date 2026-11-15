@@ -1,19 +1,23 @@
 """Command-line surface for the portable data-plane libraries.
 
-Every command is offline: it reads local fixtures, validates contracts and
-manifests, and prints JSON/text. No command touches a cluster, a provider, or a
-restic repository.
+Most commands are offline: they read local fixtures, validate contracts, and
+print JSON. The ``backup-*`` commands operate on the host backup plan; they use
+a real subprocess runner unless ``--dry-run`` records the argv instead.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from .backup.generations import read_manifest, manifest_hash, select_generation
+from .backup.plan import BackupPlan, Group, load_plan
+from .backup.restic import DryRunRunner, Runner, SubprocessRunner
+from .backup.runner import check, freshness, init_group, run_group, snapshot
 from .confirmation import NormalizedOperation, operation_hash, render
 from .errors import DataPlaneError
 from .github.backup import GithubBackupPlan
@@ -30,6 +34,9 @@ from .model import (
     Visibility,
     validate_many,
 )
+from .recovery.manifest import build_manifest, write_manifest
+
+DEFAULT_PLAN = "/etc/homelab/backup.json"
 
 
 def _load_json(path: str | Path) -> Any:
@@ -129,39 +136,94 @@ def _cmd_render_confirmation(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_manifest_hash(args: argparse.Namespace) -> int:
-    manifest = read_manifest(args.path)
+def _backup_runner(args: argparse.Namespace) -> Runner:
+    return DryRunRunner() if args.dry_run else SubprocessRunner()
+
+
+def _selected_groups(plan: BackupPlan, args: argparse.Namespace) -> tuple[Group, ...]:
+    requested = tuple(getattr(args, "group", None) or ())
+    if not requested:
+        return plan.groups
+    return tuple(plan.group(group_id) for group_id in requested)
+
+
+def _cmd_backup_run(args: argparse.Namespace) -> int:
+    plan = load_plan(args.plan)
+    runner = _backup_runner(args)
+    point = snapshot(plan, runner=runner)
+    runs = [
+        run_group(plan, group.id, now=point.created_at, runner=runner, host=args.host)
+        for group in _selected_groups(plan, args)
+    ]
     print(
         json.dumps(
             {
-                "generation_id": manifest.generation_id,
-                "group_id": manifest.group_id,
-                "complete": manifest.complete,
-                "manifest_hash": manifest_hash(manifest),
-            }
+                "snapshot": point.name,
+                "snapshot_dataset": point.dataset,
+                "groups": [asdict(run) for run in runs],
+            },
+            indent=2,
         )
     )
     return 0
 
 
-def _cmd_select_generation(args: argparse.Namespace) -> int:
-    manifests = [read_manifest(path) for path in args.paths]
-    selected = select_generation(
-        manifests,
-        required_destinations=args.destinations,
-        required_datasets=args.datasets,
-        schema_version=args.schema,
-    )
-    print(
-        json.dumps(
-            {
-                "generation_id": selected.generation_id,
-                "group_id": selected.group_id,
-                "created_at": selected.created_at,
-                "destinations": [ref.destination for ref in selected.destinations],
-            }
-        )
-    )
+def _cmd_backup_init(args: argparse.Namespace) -> int:
+    plan = load_plan(args.plan)
+    runner = _backup_runner(args)
+    results = [
+        init_group(plan, group.id, runner=runner)
+        for group in _selected_groups(plan, args)
+    ]
+    print(json.dumps({"groups": [asdict(result) for result in results]}, indent=2))
+    return 0
+
+
+def _cmd_backup_freshness(args: argparse.Namespace) -> int:
+    plan = load_plan(args.plan)
+    report = freshness(plan, runner=_backup_runner(args))
+    if args.json:
+        payload = {
+            "generated_at": report.generated_at,
+            "all_ok": report.all_ok,
+            "groups": [
+                {
+                    "group_id": group.group_id,
+                    "ok": group.ok,
+                    "tiers": [asdict(tier) for tier in group.tiers],
+                }
+                for group in report.groups
+            ],
+        }
+        print(json.dumps(payload, indent=2))
+    else:
+        for group in report.groups:
+            for tier in group.tiers:
+                state = "ok" if tier.ok else "NOT OK"
+                print(f"{group.group_id}/{tier.tier}: {state} - {tier.reason}")
+    return 0 if report.all_ok else 1
+
+
+def _cmd_backup_check(args: argparse.Namespace) -> int:
+    plan = load_plan(args.plan)
+    runner = _backup_runner(args)
+    results = []
+    all_ok = True
+    for group in _selected_groups(plan, args):
+        tiers = check(plan, group.id, read_data=args.read_data, runner=runner)
+        all_ok = all_ok and all(tier.ok for tier in tiers)
+        results.append({"group_id": group.id, "tiers": [asdict(t) for t in tiers]})
+    print(json.dumps({"all_ok": all_ok, "groups": results}, indent=2))
+    return 0 if all_ok else 1
+
+
+def _cmd_backup_manifest(args: argparse.Namespace) -> int:
+    plan = load_plan(args.plan)
+    if args.out:
+        target = write_manifest(args.out, plan, overwrite=args.overwrite)
+        print(json.dumps({"path": str(target), "groups": len(plan.groups)}))
+    else:
+        print(json.dumps(build_manifest(plan), indent=2))
     return 0
 
 
@@ -186,6 +248,14 @@ def _cmd_github_plan(args: argparse.Namespace) -> int:
     return 0
 
 
+def _add_backup_plan(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--plan",
+        default=os.environ.get("DATA_PLANE_BACKUP_PLAN", DEFAULT_PLAN),
+        help=f"host backup plan (default: {DEFAULT_PLAN})",
+    )
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="data_plane", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -204,16 +274,46 @@ def _parser() -> argparse.ArgumentParser:
     confirmation.add_argument("path")
     confirmation.set_defaults(handler=_cmd_render_confirmation)
 
-    manifest = sub.add_parser("manifest-hash", help="read and hash a generation manifest")
-    manifest.add_argument("path")
-    manifest.set_defaults(handler=_cmd_manifest_hash)
+    run = sub.add_parser(
+        "backup-run",
+        help="snapshot once, back up each group, copy to the other tiers, prune",
+    )
+    _add_backup_plan(run)
+    run.add_argument("--group", action="append")
+    run.add_argument("--host", help="restic host name (default: this host)")
+    run.add_argument("--dry-run", action="store_true")
+    run.set_defaults(handler=_cmd_backup_run)
 
-    select = sub.add_parser("select-generation", help="pick the newest complete generation")
-    select.add_argument("paths", nargs="+")
-    select.add_argument("--destinations", nargs="+", required=True)
-    select.add_argument("--datasets", nargs="+", required=True)
-    select.add_argument("--schema", type=int, default=1)
-    select.set_defaults(handler=_cmd_select_generation)
+    init = sub.add_parser(
+        "backup-init", help="create the missing repositories for a group"
+    )
+    _add_backup_plan(init)
+    init.add_argument("--group", action="append")
+    init.add_argument("--dry-run", action="store_true")
+    init.set_defaults(handler=_cmd_backup_init)
+
+    fresh = sub.add_parser(
+        "backup-freshness", help="check per-group, per-tier snapshot freshness"
+    )
+    _add_backup_plan(fresh)
+    fresh.add_argument("--json", action="store_true")
+    fresh.add_argument("--dry-run", action="store_true")
+    fresh.set_defaults(handler=_cmd_backup_freshness)
+
+    verify = sub.add_parser("backup-check", help="run restic check per tier")
+    _add_backup_plan(verify)
+    verify.add_argument("--group", action="append")
+    verify.add_argument("--read-data", action="store_true")
+    verify.add_argument("--dry-run", action="store_true")
+    verify.set_defaults(handler=_cmd_backup_check)
+
+    manifest = sub.add_parser(
+        "backup-manifest", help="build the public recovery manifest"
+    )
+    _add_backup_plan(manifest)
+    manifest.add_argument("--out")
+    manifest.add_argument("--overwrite", action="store_true")
+    manifest.set_defaults(handler=_cmd_backup_manifest)
 
     memory = sub.add_parser("memory-search", help="search portable file memory")
     memory.add_argument("root")

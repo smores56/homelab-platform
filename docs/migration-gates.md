@@ -13,9 +13,10 @@ Two operator constraints outrank every other migration concern:
    and the 970 is not converted until a verified copy and a verified restore
    exist.
 
-Everything below is offline: the Python CLI reads JSON evidence and prints a
-plan or a failure list. It never contacts a host, opens a repository, or runs a
-destructive command.
+`preflight` is read-only but online: it opens each restic repository to prove
+the backup chain and never writes, copies, prunes, or initializes anything.
+`verify` and `rollback-plan` stay offline and read one JSON document. No
+command runs a destructive step.
 
 ## Gate sequence
 
@@ -24,11 +25,11 @@ The phases are ordered and each one is exited only through its gate.
 | # | Phase | Gate | Required evidence | Irreversible | Operator confirmation |
 | --- | --- | --- | --- | --- | --- |
 | 1 | `inventory` | `inventory-complete` | `machine_inventory`, `source_inventory`, `git_inventory` | no | no |
-| 2 | `protect_old` | `old-system-protected` | `fresh_backup`, `restore_verified`, `rollback_disk_boot_tested`, `ssh_paths_independent` | no | no |
+| 2 | `protect_old` | `old-system-protected` | `gate_ready` (the plan-driven backup gate's `ok`) | no | no |
 | 3 | `pilot` | `pilot-signed-off` | `pilot_client_signed_off` | no | no |
 | 4 | `scratch_stack` | `scratch-stack-verified` | `scratch_stack_verified`, `recovery_spike_passed` | no | no |
 | 5 | `shadow_backfill` | `shadow-reconciled` | `shadow_reconciled`, `fidelity_gaps_recorded` | no | no |
-| 6 | `cutover` | `cutover-ready` | the four protection facts, plus `cutover_rehearsal_passed` | no (rollback window open) | **yes** |
+| 6 | `cutover` | `cutover-ready` | `gate_ready`, plus `cutover_rehearsal_passed` | no (rollback window open) | **yes** |
 | 7 | `retire_old` | `retirement-approved` | `retired_writers_stopped`, `new_generation_verified`, `rollback_no_longer_required` | **yes** | **yes** |
 
 `protect_old` and `cutover` are the hard gates. The plan refuses to advance
@@ -37,84 +38,67 @@ recorded human confirmation. `retire_old` is irreversible and therefore also
 requires a confirmation by construction: the gate type rejects an irreversible
 gate that does not require one.
 
-A phase is not a script step. The operator performs the work, records evidence,
-runs the preflight, and only then advances. The implementation is pure:
+A phase is not a script step. The operator performs the work, runs the
+plan-driven backup gate, and only then advances. The implementation is pure:
 `advance(phase, evidence)` returns the next phase or raises `GateBlocked` with
-every missing fact.
+every missing fact. The gate report publishes its verdict under the single key
+`gate_ready`, which is what the `protect_old` and `cutover` gates consume; the
+operator-confirmation mappings remain separate.
 
-## Preflight evidence
+## Backup gate
 
-`check_preflight` returns a structured report with one entry per failed
-condition and never raises for missing fields, so every gap is visible at once.
+`preflight` proves the backup chain from the host plan, against the real
+repositories. There is no separate evidence artefact to sign or carry: the plan
+is the only input, and the report is the record of what restic answered.
 
-```json
-{
-  "now": "2026-11-14T06:00:00+00:00",
-  "required_destinations": ["primary", "secondary", "r2"],
-  "required_groups": ["notes", "photos"],
-  "backup_max_age_hours": 24,
-  "restore_max_age_hours": 24,
-  "ssh_max_age_hours": 24,
-  "backups": [
-    {
-      "group": "notes",
-      "destination": "primary",
-      "created_at": "2026-11-14T05:30:00+00:00",
-      "verified": true,
-      "complete": true
-    }
-  ],
-  "restore_verification": {
-    "generation_id": "notes-20261114T0530",
-    "storage": "scratch",
-    "verified": true,
-    "verified_at": "2026-11-14T05:45:00+00:00"
-  },
-  "rollback_disk": {
-    "device": "/dev/disk/by-id/nvme-Samsung_SSD_970_EVO_1TB",
-    "present": true,
-    "boot_tested": true,
-    "converted": false,
-    "released": false
-  },
-  "ssh_paths": [
-    {
-      "name": "lan",
-      "kind": "direct",
-      "verified": true,
-      "independent_of_data_plane": true,
-      "verified_at": "2026-11-14T05:55:00+00:00"
-    },
-    {
-      "name": "tunnel",
-      "kind": "cloudflared-rescue",
-      "verified": true,
-      "independent_of_data_plane": true,
-      "verified_at": "2026-11-14T05:55:00+00:00"
-    }
-  ],
-  "operator_confirmations": {
-    "cutover": {"confirmed": true, "by": "smores", "at": "2026-11-14T05:58:00+00:00"},
-    "retire_old": {"confirmed": true, "by": "smores", "at": "2026-11-14T05:58:00+00:00"}
-  }
-}
+```sh
+export PYTHONPATH="$PWD/libs"
+python3 -m data_plane.migration preflight --plan /etc/homelab/backup.json
+python3 -m data_plane.migration preflight --plan /etc/homelab/backup.json --json
 ```
 
-What each check proves:
+The Ansible gate runs the same command on the data-plane host, where the backup
+role installs the library at `/opt/data-plane/lib` and the plan at
+`backup_config_file`; it proves freshness, path coverage, and repository
+structure by default, and takes `-e homelab_migration_read_data=true` to add the
+primary read-data pass before a cutover.
+
+The plan names every recovery group, its staged path, its cadence, and its
+ordered tiers; the first tier is the primary. For every group the gate proves:
 
 | Check | Passes only when |
 | --- | --- |
-| `backup_freshness` | Every required group has a fresh (`backup_max_age_hours`), `verified: true`, `complete: true` capture on **every** required destination. A future-dated, stale, incomplete, or unverified capture does not count. |
-| `restore_verification` | A generation was restored and verified on `storage: "scratch"` recently (`restore_max_age_hours`), and the generation id is named. A production restore is not proof. |
-| `rollback_disk` | The 970 is `present`, `boot_tested`, named by an absolute device path, and neither `converted` nor `wiped`. `released: true` is the separate fact Ansible reads before it will let the 970 appear as a destructive target. |
-| `ssh_paths` | At least two distinct paths are freshly verified, `independent_of_data_plane: true`, and not stale (`ssh_max_age_hours`). Two entries for the same route, or one path that rides the data plane, do not count. |
-| `operator_confirmation` | Every phase with an irreversible or confirmation-required gate has `confirmed: true`, an operator (`by`), and a time (`at`). Unknown phases are rejected as typos. |
+| freshness and path coverage | Every tier holds a snapshot under the group's staged path, the newest is within the cadence limit (nvme/hdd 0.25 h on `fast` and 1 h on `media`; `r2` 1 h on `fast` and 6 h on `media`), and that newest snapshot covers the whole staged path. |
+| structural `restic check` | Every tier of every group runs `restic check` and exits 0. This reads repository structure and pack integrity, not the data payload. |
+| `restic check --read-data` | Each group's **primary** tier (the first one) reads every pack and exits 0. Lower tiers get only the structural check. |
 
-`fresh_backup`, `restore_verified`, `rollback_disk_boot_tested`, and
-`ssh_paths_independent` are emitted as booleans in the report, and the
-`operator_confirmations` mapping is carried through unchanged, so the same
-report feeds `phases.advance` directly for `protect_old`, `cutover`, and
-`retire_old`.
+A missing repository never becomes an exception: the runner reports that tier
+as failed with its message (`repository is not initialized`, or the restic
+stderr) and the gate keeps checking the other groups and tiers, so one run
+shows every gap. `--no-read-data` skips only the primary read-data pass; use it
+for a quick structural sweep, never for the cutover gate.
+
+Read failures from the lines after the verdict:
+
+```text
+preflight: FAILED
+  photos/hdd: newest snapshot is 40.00h old, over the 6.0h limit
+  notes/nvme: check: restic check failed with 1: ...
+  photos/nvme: read-data: restic check failed with 1: ...
+```
+
+- `<group>/<tier>: <reason>` is freshness or path coverage: run
+  `backup-run --plan …` and confirm the group's staged path is fully covered.
+- `<group>/<tier>: check: …` is structural repository damage: stop and inspect
+  that repository before copying or pruning anything.
+- `<group>/<tier>: read-data: …` is payload damage on the primary: treat it as
+  data loss until proven otherwise.
+- `repository is not initialized` means the operator has not created that
+  repository yet; `backup-init --plan … --group <group>` creates it, and nothing
+  auto-initializes.
+
+Exit codes: `0` the gate holds; `1` a check failed and the report names every
+failure; `2` an unreadable or invalid plan, or a usage error.
 
 ## Data-loss verification
 
@@ -140,9 +124,9 @@ the old system:
 
 | Action | Boundary | Requirement |
 | --- | --- | --- |
-| Converting the 970 from old-system rollback disk to a Restic destination | **Ends the old-system rollback path.** | `retire_old` gate, `rollback_no_longer_required`, explicit operator confirmation, and a verified new-system generation on every required destination. |
+| Converting the 970 from old-system rollback disk to a Restic destination | **Ends the old-system rollback path.** | `retire_old` gate, `rollback_no_longer_required`, explicit operator confirmation, and a passing plan-driven backup gate on every group and tier. |
 | Deleting retired application data and personal Graphiti state | Data is gone after retention expires | Approved `retire_old` confirmation plus the source-specific migration evidence (books/photos/music/notes/memory). Graphiti needs a restored new memory backup first. |
-| Deleting or pruning old HDD/R2 generations | Old recovery points disappear | Reviewed retention process, not an ad-hoc `forget`/`prune`. |
+| Deleting or pruning old HDD/R2 snapshots | Old recovery points disappear | Reviewed retention process, not an ad-hoc `forget`/`prune`. |
 | Reclassifying a source from personal to general | Prior external processing cannot be recalled | Confirmed bulk export and a new source epoch, per the #660 design. |
 
 Everything else — route switches, writer pauses, re-enabling an old service —
@@ -168,10 +152,10 @@ literal confirmation `rollback`. The planner refuses a generation that is not
 `rollback_disk.wiped` is true.
 
 **After the 970 is converted:** rollback as described above no longer exists.
-Recovery depends solely on the new system's independently verified generations
-(local NVMe, HDD, and R2, each captured from the same fenced snapshot). This
-transition is a separate human approval, not a consequence of finishing
-cutover.
+Recovery depends solely on the new system's independent tiers (local NVMe,
+HDD, and R2, all fed from the same fenced snapshot), which the backup gate
+keeps proving. This transition is a separate human approval, not a consequence
+of finishing cutover.
 
 The 970 is inventory-only during the migration. It is never formatted, and its
 contents are not modified, before the `retire_old` gate passes. The 5 TB HDD is
@@ -198,18 +182,16 @@ old ones.
 
 ## Ansible enforcement
 
-The offline gates above are not advisory. Ansible re-runs the same preflight
-module and refuses the corresponding host actions:
+The gates above are not advisory: the operator runs the plan-driven backup
+gate before the corresponding host actions, and Ansible gates the destructive
+ones on its own flags:
 
-- A destructive run needs **all** of `--tags destructive`, a per-host
-  `homelab_destructive_device_ids` allow-list of `/dev/disk/by-id/` paths, and
-  `-e homelab_migration_evidence=<raw evidence.json>`. The Ansible gate invokes
-  `python3 -m data_plane.migration preflight` and requires `fresh_backup`,
-  `restore_verified`, `rollback_disk_boot_tested`, and
-  `ssh_paths_independent`. Operator confirmations stay with the phase gates.
-  The retired global boolean is rejected, not ignored.
+- A destructive run needs **all** of `--tags destructive` and a per-host
+  `homelab_destructive_device_ids` allow-list of `/dev/disk/by-id/` paths. The
+  retired global boolean is rejected, not ignored. Operator confirmations stay
+  with the phase gates.
 - LUKS resolves every target to one canonical disk and refuses the root disk,
-  the 970 unless the evidence says `rollback_disk.released: true`, and any
+  the 970 unless the run names it as the declared rollback device, and any
   device with an existing filesystem or pool unless the volume sets
   `allow_existing: true`. A second keyslot (offline passphrase) and a root-only
   header backup are required before any inner filesystem or pool is created.
@@ -218,16 +200,16 @@ module and refuses the corresponding host actions:
   mapper's by-id device is allow-listed and the pool is absent. Both
   `zfs-import-cache.service` and `zfs-import-scan.service` require
   `systemd-cryptsetup@…`.
-- A plain `site.yml` never starts `homelab-write-broker.service` or
-  `homelab-backup-controller.timer`; `--tags writers` and `--tags backup` are
-  separate, evidenced steps.
-- `recover.yml` fences every writer first, restores the signed generation into a
-  scratch target, verifies its content hashes, and only then re-enables the
-  writers. A restore target that is a live mount or holds
-  `.homelab-writer-active` is refused unless `--allow-live` is passed after
-  fencing. `zfs receive` never uses `-F` on the default path. The recovery
-  portal is not a prerequisite; a missing backup mount or a stopped portal is
-  only a warning.
+- A plain `site.yml` never starts `homelab-write-broker.service` or the backup
+  timers (`homelab-backup-fast.timer`, `homelab-backup-media.timer`);
+  `--tags writers` and `--tags backup` are separate, gated steps.
+- `recover.yml` fences every writer and backup timer first, restores each
+  group's newest covering snapshot from nvme→hdd→r2 into a scratch target, and
+  verifies the restored tree before re-enabling the writers. A restore target
+  that is a live mount or holds `.homelab-writer-active` is refused unless
+  `--allow-live` is passed after fencing. `zfs receive` never uses `-F` on the
+  default path. The recovery portal is not a prerequisite; a missing backup
+  mount or a stopped portal is only a warning.
 
 ## Commands
 
@@ -236,18 +218,18 @@ this):
 
 ```sh
 export PYTHONPATH="$PWD/libs"
-python3 -m data_plane.migration preflight evidence.json
-python3 -m data_plane.migration verify replica-evidence.json
-python3 -m data_plane.migration rollback-plan rollback-evidence.json
+python3 -m data_plane.migration preflight --plan /etc/homelab/backup.json
+python3 -m data_plane.migration verify replica.json
+python3 -m data_plane.migration rollback-plan rollback.json
 ```
 
-Exit codes: `0` all gates hold; `1` a check failed (the JSON report names every
-failure); `2` malformed evidence or usage. `--now` overrides the evidence clock
-for a reproducible review.
+Exit codes: `0` all gates hold; `1` a check failed (the report names every
+failure); `2` an unreadable or invalid plan, malformed evidence, or usage.
 
 There is no bypass flag. The Ansible tree forbids `ignore_errors`, and the
-Python gate has no "force" or "skip" switch; changing the evidence file is the
-only way to change a result, and that is reviewed.
+Python gate has no "force" or "skip" switch; `--no-read-data` only skips the
+primary read-data pass and is visible in the report. Fixing the failed
+condition is the only way to change a result.
 
 ## Exact pre-migration sequence
 
@@ -264,18 +246,18 @@ only way to change a result, and that is reviewed.
    pass unless two independent paths authenticate from the controller.
 3. Complete the old system's HDD/R2 backups, back up Cloudflare/OpenTofu state
    and GitHub artifacts, and populate the Bitwarden recovery kit.
-4. Restore the latest old-system generation onto scratch storage and record its
-   generation id. `storage` in the evidence must be `scratch`.
-5. Boot the 970 rollback disk and record `boot_tested: true`. Do not modify it.
-6. Write the preflight evidence, then run:
+4. Restore the latest old-system generation onto scratch storage and record the
+   generation id in the recovery kit.
+5. Boot the 970 rollback disk and record that it boots. Do not modify it.
+6. Run the plan-driven backup gate against the host plan:
 
    ```sh
-   python3 -m data_plane.migration preflight evidence.json
+   python3 -m data_plane.migration preflight --plan /etc/homelab/backup.json --json
    ```
 
    Fix every reported failure. Re-run `playbooks/rescue.yml` and verify both
    SSH paths again immediately before any destructive step.
-7. Only when `protect_old` evidence is complete may the pilot, scratch stack,
-   shadow backfill, and cutover begin. Cutover still needs the confirmation.
+7. Only when `gate_ready` is true may the pilot, scratch stack, shadow
+   backfill, and cutover begin. Cutover still needs the confirmation.
 8. `retire_old` (including the 970 conversion) is last and needs its own
    confirmation. Until then, the rollback plan above stays valid.

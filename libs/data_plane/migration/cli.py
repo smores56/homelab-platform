@@ -1,7 +1,10 @@
 """Command line for the migration gates: preflight, verify, rollback-plan.
 
-Every command is offline. It reads one JSON evidence file and prints JSON; no
-command contacts a host, opens a repository, or executes a rollback step.
+``preflight`` runs the plan-driven backup gate through restic: freshness and
+path coverage per group and tier, a structural ``restic check`` on every
+repository, and ``--read-data`` on each group's primary. ``verify`` and
+``rollback-plan`` stay offline: they read one JSON evidence file and print
+JSON.
 """
 
 from __future__ import annotations
@@ -12,9 +15,11 @@ import sys
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from ..backup.plan import load_plan
+from ..backup.restic import SubprocessRunner
 from ..errors import DataPlaneError
 from .phases import MigrationError
-from .preflight import check_preflight, parse_timestamp
+from .preflight import GateReport, ResticGateRunner, run_gate
 from .rollback import plan_rollback
 from .verify import compare_evidence
 
@@ -35,14 +40,28 @@ def _print(payload: Mapping[str, Any]) -> None:
     print(json.dumps(payload, indent=2, sort_keys=True))
 
 
+def _gate_runner() -> ResticGateRunner:
+    # A dry-run commander would call every check ok without reading a
+    # repository, so the operator command always shells out to restic.
+    return ResticGateRunner(SubprocessRunner())
+
+
+def _print_gate(report: GateReport) -> None:
+    print(f"preflight: {'ok' if report.ok else 'FAILED'}")
+    for detail in report.failure_details():
+        print(f"  {detail}")
+
+
 def _cmd_preflight(args: argparse.Namespace) -> int:
-    now = None
-    if args.now is not None:
-        now = parse_timestamp(args.now)
-        if now is None:
-            raise MigrationError("--now is not an epoch timestamp or ISO 8601")
-    report = check_preflight(_load(args.evidence), now=now)
-    _print(report.to_dict())
+    report = run_gate(
+        load_plan(args.plan),
+        _gate_runner(),
+        read_data=not args.no_read_data,
+    )
+    if args.json:
+        _print(report.to_dict())
+    else:
+        _print_gate(report)
     return 0 if report.ok else 1
 
 
@@ -66,12 +85,16 @@ def _parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     preflight = sub.add_parser(
-        "preflight", help="check every pre-migration evidence gate"
+        "preflight", help="run the plan-driven backup gate"
     )
-    preflight.add_argument("evidence")
+    preflight.add_argument("--plan", required=True, help="host backup plan JSON")
     preflight.add_argument(
-        "--now",
-        help="override the evidence clock (epoch seconds or ISO 8601)",
+        "--json", action="store_true", help="print the full report"
+    )
+    preflight.add_argument(
+        "--no-read-data",
+        action="store_true",
+        help="skip restic check --read-data on each group's primary",
     )
     preflight.set_defaults(handler=_cmd_preflight)
 

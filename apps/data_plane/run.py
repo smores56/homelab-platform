@@ -4,11 +4,11 @@ One process runs one service. Configuration comes from flags or the matching
 environment variable; a missing DB path or secret file aborts startup instead
 of serving a half-configured endpoint. Logs go to stderr so a container can
 keep stdout for nothing else and a read-only root filesystem only needs the
-database and manifest directories to be writable mounts.
+database to be a writable mount.
 
-Every backend is local and offline: SQLite files, a fixture snapshotter, and
-in-memory destinations. Nothing here shells out to restic, dials a provider, or
-reads a live source.
+Every backend is local and offline: SQLite files and in-process adapters.
+Nothing here shells out to restic, dials a provider, or reads a live source;
+backups run from the ``data_plane`` CLI, not from a long-lived service.
 """
 
 from __future__ import annotations
@@ -20,13 +20,9 @@ import os
 import sqlite3
 import sys
 import threading
-import time
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from data_plane.backup.controller import FanoutController
-from data_plane.backup.destinations import InMemoryDestination
-from data_plane.backup.generations import read_manifest
 from data_plane.approval import (
     MAX_APPROVAL_TTL_SECONDS,
     SignedApprovalVerifier,
@@ -40,7 +36,6 @@ from data_plane.errors import DataPlaneError
 from data_plane.event_log import EventLog
 from data_plane.identity import IdentityIssuer
 from data_plane.intents import IntentStore
-from data_plane.recovery.portal import write_portal
 from data_plane.model import (
     Authority,
     Capability,
@@ -52,13 +47,11 @@ from data_plane.model import (
 )
 
 from . import (
-    backup_service,
     broker_service,
     collector_service,
     common,
     confirmation_service,
     event_service,
-    portal_service,
     relay_service,
 )
 
@@ -66,8 +59,6 @@ SERVICES = (
     "event",
     "broker",
     "relay",
-    "backup",
-    "portal",
     "confirmation",
     "collector",
 )
@@ -96,12 +87,6 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--secret-file", default=_env("DATA_PLANE_SECRET_FILE"))
     parser.add_argument("--schema", default=_env("DATA_PLANE_SCHEMA"))
     parser.add_argument("--catalog", default=_env("DATA_PLANE_CATALOG"))
-    parser.add_argument(
-        "--manifest-dir", default=_env("DATA_PLANE_MANIFEST_DIR", "manifests")
-    )
-    parser.add_argument(
-        "--portal-dir", default=_env("DATA_PLANE_PORTAL_DIR")
-    )
     parser.add_argument(
         "--operator-token-file",
         default=_env("DATA_PLANE_OPERATOR_TOKEN_FILE")
@@ -132,9 +117,6 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--consumer-secrets-file", default=_env("DATA_PLANE_CONSUMER_SECRETS_FILE")
     )
-    parser.add_argument("--dataset", action="append", dest="datasets")
-    parser.add_argument("--group", action="append", dest="groups")
-    parser.add_argument("--destination", action="append", dest="destinations")
     parser.add_argument(
         "--max-body-bytes",
         type=int,
@@ -169,12 +151,6 @@ def _read_required_file(path: str | None, name: str) -> bytes:
     if not raw:
         raise ConfigError(f"{name} file {target} is empty")
     return raw
-
-
-def _comma_list(value: str | None) -> tuple[str, ...]:
-    if not value:
-        return ()
-    return tuple(item.strip() for item in value.split(",") if item.strip())
 
 
 def _load_consumer_secrets(path: str | None) -> dict[str, bytes] | None:
@@ -326,27 +302,6 @@ class JournalRecorder:
         )
 
 
-class FixtureSnapshotter:
-    """Snapshotter that fences, checkpoints, and returns fixture snapshot ids."""
-
-    def __init__(self, clock: Any = time.time) -> None:
-        self._clock = clock
-        self.events: list[tuple[str, str]] = []
-
-    def fence(self, group_id: str) -> None:
-        self.events.append(("fence", group_id))
-
-    def checkpoint(self, group_id: str) -> None:
-        self.events.append(("checkpoint", group_id))
-
-    def snapshot(self, group_id: str) -> dict[str, str]:
-        self.events.append(("snapshot", group_id))
-        return {f"fixture-{group_id}": f"snap-{group_id}-{int(self._clock() * 1000)}"}
-
-    def resume(self, group_id: str) -> None:
-        self.events.append(("resume", group_id))
-
-
 def _run_event(args: argparse.Namespace) -> int:
     log = EventLog(_required(args.db, "--db (DATA_PLANE_DB)"))
     try:
@@ -439,49 +394,6 @@ def _run_broker(args: argparse.Namespace) -> int:
             approval_store.close()
         event_log.close()
         journal.close()
-    return 0
-
-
-def _run_backup(args: argparse.Namespace) -> int:
-    if _env("DATA_PLANE_ALLOW_FIXTURES", "false").lower() not in {"1", "true", "yes"}:
-        raise ConfigError(
-            "backup service is fixture-only until a real ZFS snapshotter and "
-            "restic destinations are configured; set DATA_PLANE_ALLOW_FIXTURES=true "
-            "only for a local drill"
-        )
-    groups = tuple(args.groups or _comma_list(_env("DATA_PLANE_GROUPS"))) or (
-        "fixture",
-    )
-    destinations = tuple(
-        args.destinations or _comma_list(_env("DATA_PLANE_DESTINATIONS"))
-    ) or ("fixture-a", "fixture-b")
-    controller = FanoutController(
-        FixtureSnapshotter(),
-        [InMemoryDestination(name) for name in destinations],
-        Path(args.manifest_dir),
-    )
-    service = backup_service.BackupService(controller, destinations, groups)
-    common.serve("backup", common.handler_for(service), port=args.port, host=args.host)
-    return 0
-
-
-def _run_portal(args: argparse.Namespace) -> int:
-    manifest_dir = Path(args.manifest_dir)
-    manifests = [
-        read_manifest(path) for path in sorted(manifest_dir.glob("*.json"))
-    ]
-    destinations = tuple(
-        args.destinations or _comma_list(_env("DATA_PLANE_DESTINATIONS"))
-    )
-    datasets = tuple(args.datasets or _comma_list(_env("DATA_PLANE_DATASETS")))
-    if not destinations:
-        raise ConfigError("DATA_PLANE_DESTINATIONS is required for the portal")
-    directory = Path(
-        _required(args.portal_dir, "--portal-dir (DATA_PLANE_PORTAL_DIR)")
-    )
-    write_portal(directory, manifests, destinations, datasets, 1)
-    service = portal_service.PortalService(directory)
-    common.serve("portal", service.handler(), port=args.port, host=args.host)
     return 0
 
 
@@ -582,8 +494,6 @@ _RUNNERS = {
     "event": _run_event,
     "broker": _run_broker,
     "relay": _run_relay,
-    "backup": _run_backup,
-    "portal": _run_portal,
     "confirmation": _run_confirmation,
     "collector": _run_collector,
 }
