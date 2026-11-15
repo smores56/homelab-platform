@@ -14,24 +14,28 @@
 # tenant-apps); isolation between tenants comes from RBAC and the per-namespace
 # `spec.decryption.secretRef`, not from key uniqueness.
 #
-# That identity does not exist yet, so `^clusters/.*\.yaml$` currently encrypts to
-# the admin identity only. The shared cluster identity MUST be added as an extra
-# recipient on that rule before any ciphertext under clusters/ is committed.
+# Cluster manifests are encrypted to the shared cluster identity and to the admin
+# identity, so the operator can still read and edit them. Adding a recipient later
+# is not retroactive: changing this rule means `sops updatekeys` on every file
+# already under clusters/.
 #
 # The admin identity is the operator's passphrase-wrapped age key. It is added to
 # both rules on purpose: a cluster manifest has to stay editable by the person who
 # maintains it.
 keys:
   - &admin age1skuwunreduvw8gtkzyf9atsyjnku388ly8c252h3qger84fg5d7q4kf6xs
+  # One cluster identity for every namespace: the same key material is placed in
+  # each namespace's sops-age Secret, so isolation comes from RBAC and the
+  # per-namespace secretRef, not from distinct keys.
+  - &cluster age1hkrrfwmylwm2exe78e83fc3n352n0gc43f9ncu2cx7qyyfazc3kqx7sjjv
 
 creation_rules:
   - path_regex: ^secrets/.*\.yaml$
     key_groups:
       - age:
           - *admin
-  # Admin-only until the shared cluster identity exists; add that recipient here
-  # before the first encrypted cluster manifest lands.
   - path_regex: ^clusters/.*\.yaml$
     key_groups:
       - age:
           - *admin
+          - *cluster
