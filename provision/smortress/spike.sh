@@ -71,6 +71,14 @@ if [ -w /dev/kvm ]; then
   accel=kvm
 fi
 
+# -nographic keeps the install log on the serial console, but the Ubuntu
+# installer draws its own UI on the VGA console and shows nothing there. Set
+# SMORTRESS_SPIKE_CURSES=1 to render the VGA console in the terminal instead.
+set -- -nographic
+if [ "${SMORTRESS_SPIKE_CURSES:-0}" = "1" ]; then
+  set -- -display curses
+fi
+
 exec qemu-system-x86_64 \
   -machine q35 \
   -accel "$accel" \
@@ -85,4 +93,4 @@ exec qemu-system-x86_64 \
   -cdrom "$iso" \
   -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:$ssh_port-:22" \
   -device virtio-net-pci,netdev=net0 \
-  -nographic
+  "$@"
