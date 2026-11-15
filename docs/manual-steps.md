@@ -2061,31 +2061,36 @@ prunes. A missing repository is reported by name, not created.
    recorded no size). A primary disk that cannot hold the retained 14/8/12 set
    for every group fails at the first prune, not at the first backup.
 
-3. Create the host secret root. One password opens every repository; one
-   read-only R2 key pair covers the shared bucket:
+3. Unpack the host-secret bundle. `secrets/660-host.yaml` is the one encrypted
+   source (admin recipient only). It already holds a fresh restic password and
+   the service tokens; add the read-only R2 pair once Cloudflare has issued it:
 
    ```sh
-   sudo install -d -m 0700 /etc/homelab/secrets/restic
-   sudo sh -c 'umask 077; openssl rand -base64 48 > /etc/homelab/secrets/restic/data-plane.password'
-   sudo sh -c 'umask 077; cat > /etc/homelab/secrets/restic/r2.env' <<'ENV'
-   AWS_ACCESS_KEY_ID=<read-only access key id>
-   AWS_SECRET_ACCESS_KEY=<read-only secret access key>
-   ENV
-   sudo chmod 0600 /etc/homelab/secrets/restic/data-plane.password \
-     /etc/homelab/secrets/restic/r2.env
+   sops secrets/660-host.yaml       # set r2_access_key_id / r2_secret_access_key
+   sops -d --extract '["restic_password"]' secrets/660-host.yaml | base64 -d
+   # copy that value into the password manager now; it opens every new repository
    ```
 
-   Prove the credentials reach the bucket without creating anything:
+   Unpack it into the directory the install play reads, then wipe the plaintext:
 
    ```sh
-   sudo sh -c '. /etc/homelab/secrets/restic/r2.env && exec restic \
+   sops -d secrets/660-host.yaml > /dev/shm/host-secrets.yaml
+   sudo scripts/unpack-host-secrets.py --bundle /dev/shm/host-secrets.yaml \
+     --dest /run/operator-secrets
+   shred -u /dev/shm/host-secrets.yaml
+   ```
+
+   Prove the pair reaches the bucket without creating anything:
+
+   ```sh
+   sudo sh -c '. /run/operator-secrets/restic/r2.env && exec restic \
      --repo "s3:https://<account>.r2.cloudflarestorage.com/homelab-restic/notes" \
-     --password-file /etc/homelab/secrets/restic/data-plane.password snapshots'
+     --password-file /run/operator-secrets/restic/data-plane.password snapshots'
    # expect: "repository ... does not exist" — never an authentication error
    ```
 
    Store the same password and read-only pair in `secrets/recovery.yaml` (SOPS,
-   operator identity) for the page blob.
+   admin identity) for the page blob.
 
    The data-plane units read their own files from subdirectories of the same
    root. Stage the decrypted bundle outside the repository and install it with

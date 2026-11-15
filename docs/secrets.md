@@ -24,6 +24,11 @@ scoped to `homelabs-tofu-state` alone and is deliberately **not** the host's
 restic pair: state decides what the next apply does, so a backup credential must
 not be able to rewrite it.
 
+`secrets/660-host.yaml` is the host-plane bundle: a freshly generated restic
+password, the event and broker tokens, and the R2 read-only pair. Every value is
+base64 so the file stays flat; `scripts/unpack-host-secrets.py` writes exactly
+the paths `host_secret_files` names and never prints a value.
+
 `scripts/tofu-cloudflare.sh` reads that file by default; `CLOUDFLARE_SECRETS_FILE`
 overrides it, and pre-set `AWS_*` / `CLOUDFLARE_API_TOKEN` skip SOPS entirely
 (that is how CI runs).
@@ -63,7 +68,7 @@ gone. These are the holdovers, each with the task that ends it:
 
 | Credential | Lives at | Read by | Rule |
 | --- | --- | --- | --- |
-| One restic password | `/etc/homelab/secrets/restic/data-plane.password`, root-only | every `homelab-backup` run and the recovery entrypoint | one password covers every group and tier; never per-group keys |
+| One restic password | generated in `secrets/660-host.yaml`, installed to `/etc/homelab/secrets/restic/data-plane.password` | every `homelab-backup` run and the recovery entrypoint | one password covers every group and tier; never per-group keys |
 | Read-only R2 key pair | `/etc/homelab/secrets/restic/r2.env` (`AWS_*`), root-only | `restic copy` to R2, the page blob source | cannot read, delete or change bucket policy; the write credential is not on the host |
 | Page blob keys | `secrets/recovery.yaml` in this repository, SOPS to the admin identity | `deno task blob` only | `restic-password` and the `r2-*-readonly` pair; the blob itself is public and encrypted |
 | Event append/read tokens | `/etc/homelab/secrets/event-service/` on the host, cluster Secret `event-service-secrets` in the cluster | `event` only | must differ; the service refuses equal values, and a relay holds neither |
