@@ -1,0 +1,129 @@
+#cloud-config
+# Ubuntu 26.04.1 autoinstall for smortress (T6, smores56/sdlc#691).
+#
+# Placeholders are substituted by build-seed.sh; this file is committed with
+# none of the real values. Read provision/smortress/README.md before building a
+# seed: the root passphrase ends up inside the seed image.
+autoinstall:
+  version: 1
+  locale: en_US.UTF-8
+  keyboard:
+    layout: us
+  timezone: America/New_York
+  identity:
+    hostname: smortress
+    username: ansible
+  ssh:
+    install-server: true
+    allow-pw: false
+    authorized-keys:
+      - __SSH_AUTHORIZED_KEY__
+  packages:
+    - clevis
+    - clevis-dracut
+    - clevis-luks
+    - cryptsetup
+    - linux-modules-zfs-generic
+    - openssh-server
+    - python3
+    - sudo
+    - zfsutils-linux
+    - zfs-zed
+  early-commands:
+    - |
+      set -eu
+      install -d -m 0700 /run/smortress-keys
+      head -c 64 /dev/urandom | base64 > /run/smortress-keys/data.key
+      chmod 0600 /run/smortress-keys/data.key
+  storage:
+    config:
+      - id: disk-target
+        type: disk
+        ptable: gpt
+        wipe: superblock
+        preserve: false
+        grub_device: true
+        match:
+          serial: SMORTRESS980
+      - id: part-esp
+        type: partition
+        device: disk-target
+        size: 1G
+        flag: boot
+        grub_device: true
+      - id: fmt-esp
+        type: format
+        fstype: fat32
+        volume: part-esp
+      - id: mnt-esp
+        type: mount
+        path: /boot/efi
+        device: fmt-esp
+      - id: part-root
+        type: partition
+        device: disk-target
+        size: 150G
+      - id: dm-root
+        type: dm_crypt
+        volume: part-root
+        dm_name: luks-root
+        key: "__LUKS_ROOT_PASSPHRASE__"
+      - id: fmt-root
+        type: format
+        fstype: ext4
+        label: root
+        volume: dm-root
+      - id: mnt-root
+        type: mount
+        path: /
+        device: fmt-root
+      - id: part-data
+        type: partition
+        device: disk-target
+        size: 300G
+      - id: dm-data
+        type: dm_crypt
+        volume: part-data
+        dm_name: luks-data
+        keyfile: /run/smortress-keys/data.key
+  late-commands:
+    - curtin in-target -- install -d -m 0700 /etc/luks
+    - |
+      set -eu
+      install -m 0400 -o root -g root /run/smortress-keys/data.key /target/etc/luks/data.key
+      sed -i 's|/run/smortress-keys/|/etc/luks/|' /target/etc/crypttab
+      rm -f /run/smortress-keys/data.key
+    - |
+      set -eu
+      # The bootstrap user has no password; Ansible replaces this with the
+      # managed admin users and their keys on the first converge.
+      printf 'ansible ALL=(ALL) NOPASSWD:ALL\n' > /target/etc/sudoers.d/90-bootstrap
+      chmod 0440 /target/etc/sudoers.d/90-bootstrap
+    - |
+      set -eu
+      cat > /target/usr/local/sbin/smortress-provision <<'SCRIPT'
+      #!/bin/sh
+      # Create the data pool once, then leave it to zpool-import-tank.service.
+      set -eu
+      if zpool list -H -o name tank >/dev/null 2>&1; then exit 0; fi
+      zpool create -o ashift=12 -O mountpoint=none -O canmount=off \
+        -O compression=zstd -O atime=off -O xattr=sa -O acltype=posixacl \
+        tank /dev/mapper/luks-data
+      zpool set cachefile=none tank
+      SCRIPT
+      chmod 0755 /target/usr/local/sbin/smortress-provision
+      cat > /target/etc/systemd/system/smortress-provision.service <<'UNIT'
+      [Unit]
+      Description=Create the ZFS data pool on first boot
+      Requires=dev-mapper-luks\x2ddata.device
+      After=dev-mapper-luks\x2ddata.device
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/usr/local/sbin/smortress-provision
+
+      [Install]
+      WantedBy=multi-user.target
+      UNIT
+    - curtin in-target -- systemctl enable smortress-provision.service

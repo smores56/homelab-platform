@@ -1,0 +1,5 @@
+*.iso
+*.qcow2
+spike-vars.fd
+SHA256SUMS
+SHA256SUMS.gpg
