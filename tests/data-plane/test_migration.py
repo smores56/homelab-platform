@@ -75,7 +75,10 @@ def rollback_evidence(**overrides) -> dict[str, object]:
         "old_boot_entry": "nixos-old",
         "old_generation": {
             "generation_id": "old-notes-7",
-            "manifest": "/root/old-generation.json",
+            "repo": "s3:https://account.r2.cloudflarestorage.com/restic-backup",
+            "snapshot_id": "40dc1520",
+            "password_file": "/root/restic.password",
+            "target": "/mnt/recovery-scratch",
             "verified": True,
         },
         "rescue_ssh_units": ["ssh.service"],
@@ -249,11 +252,11 @@ class RollbackTest(unittest.TestCase):
         )
         self.assertEqual(
             plan.steps[2].environment,
-            (
-                ("HOMELAB_GENERATION_MANIFEST", "/root/old-generation.json"),
-                ("HOMELAB_RESTORE_CONFIRM", "restore"),
-                ("HOMELAB_RESTORE_APPLY", "1"),
-            ),
+            (),
+        )
+        self.assertEqual(
+            plan.steps[2].argv[1:3],
+            ("restore", "40dc1520"),
         )
         self.assertTrue(plan.steps[2].irreversible)
 
@@ -289,10 +292,9 @@ class RollbackTest(unittest.TestCase):
 
         executed = apply_rollback(executable, Backend(), "rollback")
         self.assertEqual(executed[-1], "enable_rescue_ssh")
-        self.assertEqual(
-            calls[2][1]["HOMELAB_GENERATION_MANIFEST"],
-            "/root/old-generation.json",
-        )
+        self.assertEqual(calls[2][1], {})
+        self.assertEqual(calls[2][0][1:3], ["restore", "40dc1520"])
+        self.assertIn("--verify", calls[2][0])
 
     def test_fewer_than_two_verified_ssh_paths_warns(self):
         plan = plan_rollback(rollback_evidence(ssh_paths=[ssh_path("lan")]))

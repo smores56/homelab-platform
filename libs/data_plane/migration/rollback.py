@@ -13,6 +13,7 @@ confirmation ``rollback``. Nothing here executes a command by itself.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Any, Mapping, Protocol, Sequence
 
@@ -145,7 +146,8 @@ def plan_rollback(
     """Build the four-step rollback plan from reviewed evidence.
 
     Required evidence: ``new_writer_units``, ``old_boot_entry``, and an
-    ``old_generation`` mapping naming a verified generation and its manifest.
+    ``old_generation`` mapping naming a verified legacy snapshot: its
+    ``repo``, ``snapshot_id``, ``password_file``, and absolute ``target``.
     ``rescue_ssh_units`` defaults to ``ssh.service``.
     """
 
@@ -176,11 +178,20 @@ def plan_rollback(
             "old_generation is not verified; refusing to plan a restore from it"
         )
     generation_id = _text(generation.get("generation_id"))
-    manifest = _text(generation.get("manifest"))
+    repo = _text(generation.get("repo"))
+    snapshot_id = _text(generation.get("snapshot_id"))
+    password_file = _text(generation.get("password_file"))
+    target = _text(generation.get("target"))
     if not generation_id:
         raise RollbackError("old_generation.generation_id is empty")
-    if not manifest.startswith("/"):
-        raise RollbackError("old_generation.manifest must be an absolute path")
+    if not repo:
+        raise RollbackError("old_generation.repo is empty")
+    if not snapshot_id:
+        raise RollbackError("old_generation.snapshot_id is empty")
+    if not password_file.startswith("/"):
+        raise RollbackError("old_generation.password_file must be an absolute path")
+    if not target.startswith("/"):
+        raise RollbackError("old_generation.target must be an absolute path")
 
     ssh_units = (
         _units(evidence.get("rescue_ssh_units"), "rescue_ssh_units")
@@ -221,15 +232,23 @@ def plan_rollback(
             order=3,
             name="restore_old_generation",
             description=(
-                f"Restore the latest verified old generation {generation_id} "
-                "through the clean-room entrypoint."
+                f"Restore the verified old snapshot {snapshot_id} "
+                f"(generation {generation_id}) from {repo} into {target} "
+                "with restic --verify."
             ),
-            argv=("/usr/local/sbin/homelab-clean-room-restore",),
-            environment=(
-                ("HOMELAB_GENERATION_MANIFEST", manifest),
-                ("HOMELAB_RESTORE_CONFIRM", "restore"),
-                ("HOMELAB_RESTORE_APPLY", "1"),
+            argv=(
+                os.environ.get("DATA_PLANE_RESTIC", "restic"),
+                "restore",
+                snapshot_id,
+                "--repo",
+                repo,
+                "--password-file",
+                password_file,
+                "--target",
+                target,
+                "--verify",
             ),
+            environment=(),
             irreversible=True,
         ),
         RollbackStep(
