@@ -53,6 +53,10 @@ if [ ! -f "$iso" ]; then
   curl -fsSL -o "$iso_dir/SHA256SUMS.gpg" "$base_url/SHA256SUMS.gpg"
 fi
 
+# Ubuntu CD Image Automatic Signing Key (2012), published at
+# https://documentation.ubuntu.com/security/software-integrity/image-verification
+cdimage_fpr=843938DF228D22F7B3742BC0D94AA3F0EFE21092
+
 if [ -f "$iso_dir/SHA256SUMS" ]; then
   if [ -z "$keyring" ]; then
     for candidate in \
@@ -65,11 +69,25 @@ if [ -f "$iso_dir/SHA256SUMS" ]; then
       fi
     done
   fi
-  if [ -n "$keyring" ] && [ -f "$iso_dir/SHA256SUMS.gpg" ]; then
-    gpgv --keyring "$keyring" "$iso_dir/SHA256SUMS.gpg" "$iso_dir/SHA256SUMS" \
+  if [ -z "$keyring" ]; then
+    keyring=$iso_dir/ubuntu-archive-keyring.gpg
+    if [ ! -f "$keyring" ]; then
+      printf 'Fetching the Ubuntu image signing keyring\n'
+      curl -fsSL -o "$keyring" https://archive.ubuntu.com/ubuntu/project/ubuntu-archive-keyring.gpg \
+        || die "could not fetch the Ubuntu image signing keyring"
+    fi
+  fi
+  if [ -f "$iso_dir/SHA256SUMS.gpg" ]; then
+    gpg --no-default-keyring --keyring "$keyring" --with-colons --list-keys 2>/dev/null \
+      | awk -F: '$1 == "fpr" { print $10 }' | grep -qx "$cdimage_fpr" \
+      || die "$keyring does not hold the pinned image signing key $cdimage_fpr"
+    status=$(gpgv --keyring "$keyring" --status-fd 1 \
+      "$iso_dir/SHA256SUMS.gpg" "$iso_dir/SHA256SUMS" 2>/dev/null) \
       || die "SHA256SUMS signature did not verify against $keyring"
+    printf '%s\n' "$status" | grep -q "^\[GNUPG:\] VALIDSIG $cdimage_fpr " \
+      || die "SHA256SUMS was not signed by the pinned image signing key"
   elif [ "${SMORTRESS_SKIP_SIGNATURE:-0}" != "1" ]; then
-    die "no Ubuntu image signing keyring found; set UBUNTU_KEYRING, or SMORTRESS_SKIP_SIGNATURE=1 to accept the checksum only"
+    die "missing $iso_dir/SHA256SUMS.gpg; re-run with the network available or SMORTRESS_SKIP_SIGNATURE=1 for checksum only"
   fi
   (cd "$iso_dir" && grep -F "$iso_name" SHA256SUMS > SHA256SUMS.iso && sha256sum -c SHA256SUMS.iso) \
     || die "ISO checksum mismatch"
