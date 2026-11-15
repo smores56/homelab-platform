@@ -59,7 +59,7 @@ network instead: `loki-ingress` accepts 3100 from the Vector pod and the gateway
 pod only, so no tenant, no broker and no Prometheus can set `X-Scope-OrgID`
 themselves (`clusters/homelab/observability/network/loki-flows.yaml`).
 
-Routing is on the **namespace** label `homelabs.dev/tier`, never a pod label: a
+Routing is on the **namespace** label `homelab.dev/tier`, never a pod label: a
 namespace is where the operator sets the tier, and a pod must not be able to
 opt itself out of the allowlist. A namespace without the label (kube-system,
 flux-system, default) ships `raw`.
@@ -162,13 +162,13 @@ identity. `status-exporter` is the sanctioned view:
 
 | Metric | Meaning |
 | --- | --- |
-| `homelabs_data_pod_ready{namespace,pod}` | 1 when every container is ready |
-| `homelabs_data_pod_restart_count{namespace,pod}` | sum of container restart counts |
-| `homelabs_data_workload_ready{namespace,kind,name}` | 1 when desired replicas are ready |
-| `homelabs_data_workload_image{namespace,kind,name,image}` | 1 per image (version) |
-| `homelabs_data_status_exporter_last_scrape_success` | 1 after a successful API read |
-| `homelabs_data_status_exporter_up` | 1 while the exporter serves |
-| `homelabs_cluster_node_ready{node}` | 1 when the node's `Ready` condition is True |
+| `homelab_data_pod_ready{namespace,pod}` | 1 when every container is ready |
+| `homelab_data_pod_restart_count{namespace,pod}` | sum of container restart counts |
+| `homelab_data_workload_ready{namespace,kind,name}` | 1 when desired replicas are ready |
+| `homelab_data_workload_image{namespace,kind,name,image}` | 1 per image (version) |
+| `homelab_data_status_exporter_last_scrape_success` | 1 after a successful API read |
+| `homelab_data_status_exporter_up` | 1 while the exporter serves |
+| `homelab_cluster_node_ready{node}` | 1 when the node's `Ready` condition is True |
 
 The identity is the narrowest shape that can answer those questions, and it is
 split in two because a ClusterRoleBinding grants **every** rule of the role it
@@ -205,7 +205,7 @@ writes one bounded JSON document to the cluster-digest share. The Flux stage is
 
 The objects live in `observability` because a Secret reference never crosses a
 namespace and the ESO-generated `loki-gateway-token` lives there; every label is
-`homelabs.dev/tier: platform` because the code is human-owned and no agent
+`homelab.dev/tier: platform` because the code is human-owned and no agent
 supplies a byte of the input.
 
 Document shape (`schema_version` `"1"`):
@@ -217,7 +217,7 @@ Document shape (`schema_version` `"1"`):
 | `window` | Loki lookback, `15m` |
 | `source_freshness.status_exporter` | `{ok, age_seconds, stale}`; age is `generated_at` minus the exporter's own `last_scrape_timestamp_seconds` sample, `null` when the sample is missing or the exporter was unreachable; `ok` also requires `last_scrape_success == 1` and `age_seconds <= 90` |
 | `source_freshness.loki_gateway` | `{ok, age_seconds, stale}`; age is `generated_at` minus the newest stored data-tenant entry, `null` when the 15 m window held none; `stale` is that age missing or beyond the window |
-| `cluster.nodes[]` | `{name, ready}` from `homelabs_cluster_node_ready` |
+| `cluster.nodes[]` | `{name, ready}` from `homelab_cluster_node_ready` |
 | `cluster.pods[]` | `{namespace, pod, ready, restarts}` |
 | `cluster.workloads[]` | `{namespace, kind, name, ready, restarts, images}`; restarts are summed over pods whose name starts with the workload name |
 | `nanobot_activity` | `observed_events`, `event_count`, `truncated`, `events[]` |
@@ -348,8 +348,8 @@ flux-system (Alert)  ---------------------------------------->  notifyrelay (web
 | Alert | Expression | For | Severity |
 | --- | --- | --- | --- |
 | `TargetDown` | `up == 0` | 5m | warning |
-| `StatusExporterFailing` | `homelabs_data_status_exporter_last_scrape_success == 0` | 10m | warning |
-| `DataWorkloadNotReady` | `homelabs_data_workload_ready == 0` | 15m | warning |
+| `StatusExporterFailing` | `homelab_data_status_exporter_last_scrape_success == 0` | 10m | warning |
+| `DataWorkloadNotReady` | `homelab_data_workload_ready == 0` | 15m | warning |
 | `ResticBackupStale` | last successful `restic-backup` older than 26h (per tree) | 10m | critical |
 | `ResticPreflightStale` | last successful `restic-preflight` older than 8d (per tree) | 30m | warning |
 
@@ -362,7 +362,7 @@ and eight days without a pass means that evidence is missing.
 
 Prometheus itself starts empty, so a series that has never been scraped cannot
 alert. The staleness rules are therefore also a dead-man switch for the exporter:
-if `homelabs_data_cronjob_last_successful_timestamp_seconds` disappears entirely
+if `homelab_data_cronjob_last_successful_timestamp_seconds` disappears entirely
 (the exporter is gone), `TargetDown`/`StatusExporterFailing` fires instead.
 
 **What is not alerting.** Nothing here reads cluster logs for patterns, and there
@@ -419,7 +419,7 @@ Consumption, in order of preference:
    ```
 
    If the image pins its own `command`, mount the ConfigMap key at
-   `/etc/postgresql/conf.d/10-homelabs-data.conf` and add
+   `/etc/postgresql/conf.d/10-homelab-data.conf` and add
    `include_dir = '/etc/postgresql/conf.d'` to the image's `postgresql.conf`, or
    pass `-c config_file=/etc/postgresql/data-settings.conf` with the key mounted
    at that path.

@@ -7,7 +7,7 @@ metadata:
   name: webhook
   labels:
     app.kubernetes.io/name: webhook
-    homelabs.dev/tier: webhook
+    homelab.dev/tier: webhook
 spec:
   # One writer on the sources claim: a second replica would not see a source
   # registered behind the other's back, so a capability URL would work on one
@@ -23,8 +23,8 @@ spec:
       labels:
         app.kubernetes.io/name: webhook
         app.kubernetes.io/component: inbound-webhook
-        homelabs.dev/tier: webhook
-        homelabs.dev/managed-by: platform
+        homelab.dev/tier: webhook
+        homelab.dev/managed-by: platform
     spec:
       serviceAccountName: webhook
       automountServiceAccountToken: false

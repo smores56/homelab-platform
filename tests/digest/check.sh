@@ -83,7 +83,7 @@ eq "$(jq -r '[.[] | select(.kind == "Namespace") | .metadata.name] | join(",")' 
   "the digest build creates no namespace (it targets observability)"
 eq "$(jq -r '[.[] | .metadata.namespace] | unique | join(",")' "$work/digest.json")" "observability" \
   "every digest object is in observability (the token Secret's namespace)"
-eq "$(jq -r '.[] | select(.kind == "CronJob") | .metadata.labels["homelabs.dev/tier"]' "$work/digest.json")" \
+eq "$(jq -r '.[] | select(.kind == "CronJob") | .metadata.labels["homelab.dev/tier"]' "$work/digest.json")" \
   "platform" "the CronJob is platform-tier"
 eq "$(jq -r '.[] | select(.kind == "ServiceAccount") | [.metadata.name, .automountServiceAccountToken] | join(":")' "$work/digest.json")" \
   "cluster-digest:false" "the digest ServiceAccount never mounts a token"

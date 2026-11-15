@@ -4,7 +4,7 @@ metadata:
   name: webhook
   labels:
     app.kubernetes.io/name: webhook
-    homelabs.dev/tier: webhook
+    homelab.dev/tier: webhook
 spec:
   type: ClusterIP
   selector:

@@ -8,8 +8,8 @@ kind: ValidatingAdmissionPolicy
 metadata:
   name: tenant-images
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: platform
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: platform
 spec:
   failurePolicy: Fail
   matchConstraints:
@@ -46,14 +46,14 @@ kind: ValidatingAdmissionPolicyBinding
 metadata:
   name: tenant-images
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: platform
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: platform
 spec:
   policyName: tenant-images
   validationActions: [Deny]
   matchResources:
     namespaceSelector:
       matchExpressions:
-        - key: homelabs.dev/tier
+        - key: homelab.dev/tier
           operator: In
           values: ["tenant"]

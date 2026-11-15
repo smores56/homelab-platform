@@ -8,9 +8,9 @@
 # token from the environment of the git process. A token in the clone URL would
 # be written into the mirror's remote config and the reflog.
 #
-#   github-backup.sh --owner smores56 --repo homelabs-platform --out /backup
-#   github-backup.sh --owner smores56 --repo homelabs-platform --dry-run
-#   github-backup.sh --owner smores56 --repo homelabs-platform --print-url
+#   github-backup.sh --owner smores56 --repo homelab-platform --out /backup
+#   github-backup.sh --owner smores56 --repo homelab-platform --dry-run
+#   github-backup.sh --owner smores56 --repo homelab-platform --print-url
 #
 # --print-url and --dry-run are the offline shapes tests/backup/check.sh
 # exercises; neither touches the network.

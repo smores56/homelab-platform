@@ -19,8 +19,8 @@ metadata:
   namespace: immich
   labels:
     app.kubernetes.io/name: restic
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: data
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: data
 spec:
   podSelector:
     matchLabels:
@@ -57,8 +57,8 @@ metadata:
   namespace: navidrome
   labels:
     app.kubernetes.io/name: restic
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: data
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: data
 spec:
   podSelector:
     matchLabels:
@@ -95,8 +95,8 @@ metadata:
   namespace: opdshelf
   labels:
     app.kubernetes.io/name: restic
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: data
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: data
 spec:
   podSelector:
     matchLabels:
@@ -133,8 +133,8 @@ metadata:
   namespace: graphiti
   labels:
     app.kubernetes.io/name: restic
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: data
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: data
 spec:
   podSelector:
     matchLabels:

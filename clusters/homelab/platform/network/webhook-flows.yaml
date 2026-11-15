@@ -10,8 +10,8 @@ metadata:
   name: egress-webhook
   namespace: ingress
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: ingress
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: ingress
 spec:
   podSelector:
     matchLabels:
@@ -30,7 +30,7 @@ spec:
           port: 8080
 ---
 # The tenant cannot widen its own isolation, so the inbound half of the
-# webhook-to-gateway pair is platform-owned. The copy in homelabs-apps'
+# webhook-to-gateway pair is platform-owned. The copy in homelab-apps'
 # networkpolicy contract must match this object.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -38,8 +38,8 @@ metadata:
   name: allow-webhook-ingress
   namespace: tenant-apps
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: tenant
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: tenant
 spec:
   podSelector:
     matchLabels:

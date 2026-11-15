@@ -15,8 +15,8 @@ metadata:
   name: alertmanager
   labels:
     app.kubernetes.io/name: alertmanager
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: observability
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: observability
 spec:
   replicas: 1
   strategy:
@@ -28,8 +28,8 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: alertmanager
-        app.kubernetes.io/part-of: homelabs
-        homelabs.dev/tier: observability
+        app.kubernetes.io/part-of: homelab
+        homelab.dev/tier: observability
     spec:
       serviceAccountName: alertmanager
       automountServiceAccountToken: false

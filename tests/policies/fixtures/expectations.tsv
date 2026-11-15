@@ -21,7 +21,7 @@ tenant-pvc-bad-name.yaml	tenant-apps	deny	tenant-pvc-naming	must be labelled app
 tenant-kustomization-good.yaml	tenant-apps	allow	-	-
 tenant-kustomization-platform-sa.yaml	tenant-apps	deny	tenant-flux-guard	must reconcile as tenant-apps-reconciler
 tenant-kustomization-other-target.yaml	tenant-apps	deny	tenant-flux-guard	must target their own namespace
-tenant-kustomization-foreign-source.yaml	tenant-apps	deny	tenant-flux-guard	same-namespace homelabs-apps GitRepository
+tenant-kustomization-foreign-source.yaml	tenant-apps	deny	tenant-flux-guard	same-namespace homelab-apps GitRepository
 tenant-kustomization-kubeconfig.yaml	tenant-apps	deny	tenant-flux-guard	must not carry a kubeConfig
 tenant-kustomization-foreign-age-key.yaml	tenant-apps	deny	tenant-flux-guard	namespace-local sops-age secret
 data-pod-good.yaml	immich	allow	-	-

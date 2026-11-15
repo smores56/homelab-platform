@@ -12,7 +12,7 @@ metadata:
   name: ntfy-data
   labels:
     app.kubernetes.io/name: ntfy
-    homelabs.dev/tier: notify
+    homelab.dev/tier: notify
 spec:
   accessModes:
     - ReadWriteOnce

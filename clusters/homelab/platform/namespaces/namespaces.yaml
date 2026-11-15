@@ -15,10 +15,10 @@ kind: Namespace
 metadata:
   name: platform
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tenant: platform
-    homelabs.dev/tier: platform
-    homelabs.dev/managed-by: platform
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tenant: platform
+    homelab.dev/tier: platform
+    homelab.dev/managed-by: platform
     # Flux, ESO and the policy controllers need baseline; observability
     # workloads that need host access live in the observability namespace.
     pod-security.kubernetes.io/enforce: baseline
@@ -30,12 +30,12 @@ kind: Namespace
 metadata:
   name: tenant-apps
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tenant: apps
-    homelabs.dev/tier: tenant
-    homelabs.dev/managed-by: tenant
-    # homelabs-apps is reconciled into this namespace by the tenant
-    # service account; see clusters/homelab/platform/tenants/homelabs-apps.yaml.
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tenant: apps
+    homelab.dev/tier: tenant
+    homelab.dev/managed-by: tenant
+    # homelab-apps is reconciled into this namespace by the tenant
+    # service account; see clusters/homelab/platform/tenants/homelab-apps.yaml.
     pod-security.kubernetes.io/enforce: restricted
     pod-security.kubernetes.io/audit: restricted
     pod-security.kubernetes.io/warn: restricted
@@ -45,10 +45,10 @@ kind: Namespace
 metadata:
   name: broker
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tenant: broker
-    homelabs.dev/tier: broker
-    homelabs.dev/managed-by: platform
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tenant: broker
+    homelab.dev/tier: broker
+    homelab.dev/managed-by: platform
     pod-security.kubernetes.io/enforce: restricted
     pod-security.kubernetes.io/audit: restricted
     pod-security.kubernetes.io/warn: restricted
@@ -62,10 +62,10 @@ kind: Namespace
 metadata:
   name: webhook
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tenant: webhook
-    homelabs.dev/tier: webhook
-    homelabs.dev/managed-by: platform
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tenant: webhook
+    homelab.dev/tier: webhook
+    homelab.dev/managed-by: platform
     pod-security.kubernetes.io/enforce: restricted
     pod-security.kubernetes.io/audit: restricted
     pod-security.kubernetes.io/warn: restricted
@@ -81,10 +81,10 @@ kind: Namespace
 metadata:
   name: notify
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tenant: notify
-    homelabs.dev/tier: notify
-    homelabs.dev/managed-by: platform
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tenant: notify
+    homelab.dev/tier: notify
+    homelab.dev/managed-by: platform
     pod-security.kubernetes.io/enforce: restricted
     pod-security.kubernetes.io/audit: restricted
     pod-security.kubernetes.io/warn: restricted
@@ -96,10 +96,10 @@ kind: Namespace
 metadata:
   name: immich
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tenant: immich
-    homelabs.dev/tier: data
-    homelabs.dev/managed-by: platform
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tenant: immich
+    homelab.dev/tier: data
+    homelab.dev/managed-by: platform
     pod-security.kubernetes.io/enforce: restricted
     pod-security.kubernetes.io/audit: restricted
     pod-security.kubernetes.io/warn: restricted
@@ -109,10 +109,10 @@ kind: Namespace
 metadata:
   name: navidrome
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tenant: navidrome
-    homelabs.dev/tier: data
-    homelabs.dev/managed-by: platform
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tenant: navidrome
+    homelab.dev/tier: data
+    homelab.dev/managed-by: platform
     pod-security.kubernetes.io/enforce: restricted
     pod-security.kubernetes.io/audit: restricted
     pod-security.kubernetes.io/warn: restricted
@@ -122,10 +122,10 @@ kind: Namespace
 metadata:
   name: opdshelf
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tenant: opdshelf
-    homelabs.dev/tier: data
-    homelabs.dev/managed-by: platform
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tenant: opdshelf
+    homelab.dev/tier: data
+    homelab.dev/managed-by: platform
     # OPDShelf is a plain non-root binary (uid 1000, dropped capabilities,
     # RuntimeDefault seccomp), so this namespace matches the other data
     # tenants; the Calibre-Web s6 preinit that needed `baseline` is gone.
@@ -138,10 +138,10 @@ kind: Namespace
 metadata:
   name: graphiti
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tenant: graphiti
-    homelabs.dev/tier: data
-    homelabs.dev/managed-by: platform
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tenant: graphiti
+    homelab.dev/tier: data
+    homelab.dev/managed-by: platform
     # baseline, not restricted: the image's Cmd is `uv run --no-sync main.py`
     # with uv in /root/.local/bin, so the container must start as root before
     # the process itself runs unprivileged (the host runs the same image the
@@ -155,10 +155,10 @@ kind: Namespace
 metadata:
   name: ingress
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tenant: ingress
-    homelabs.dev/tier: ingress
-    homelabs.dev/managed-by: platform
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tenant: ingress
+    homelab.dev/tier: ingress
+    homelab.dev/managed-by: platform
     pod-security.kubernetes.io/enforce: restricted
     pod-security.kubernetes.io/audit: restricted
     pod-security.kubernetes.io/warn: restricted
@@ -168,10 +168,10 @@ kind: Namespace
 metadata:
   name: observability
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tenant: observability
-    homelabs.dev/tier: observability
-    homelabs.dev/managed-by: platform
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tenant: observability
+    homelab.dev/tier: observability
+    homelab.dev/managed-by: platform
     # node-exporter needs hostPath and hostNetwork, which the baseline and
     # restricted profiles both forbid. The no-host-access policy exempts every
     # namespace whose tier is not tenant/broker/data, so this stays explicit.

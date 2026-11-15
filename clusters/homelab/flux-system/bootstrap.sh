@@ -11,7 +11,7 @@
 set -euo pipefail
 
 owner="smores56"
-repository="homelabs-platform"
+repository="homelab-platform"
 branch="main"
 cluster_path="clusters/homelab"
 root_sa="kustomize-controller"

@@ -1,4 +1,4 @@
-# Tenant identity for the homelabs-apps reconciler. The service account is
+# Tenant identity for the homelab-apps reconciler. The service account is
 # only ever impersonated by kustomize-controller; no pod may run as it
 # (07-tenant-flux-sa-pods.yaml enforces that), so its token is never mounted.
 apiVersion: v1
@@ -7,8 +7,8 @@ metadata:
   name: tenant-apps-reconciler
   namespace: tenant-apps
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: tenant
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: tenant
 automountServiceAccountToken: false
 ---
 # Least privilege for one tenant namespace. Everything the tenant cannot do is
@@ -31,8 +31,8 @@ metadata:
   name: tenant-apps-reconciler
   namespace: tenant-apps
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: tenant
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: tenant
 rules:
   - apiGroups: [""]
     resources: ["pods"]
@@ -63,8 +63,8 @@ metadata:
   name: tenant-apps-reconciler
   namespace: tenant-apps
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: tenant
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: tenant
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role

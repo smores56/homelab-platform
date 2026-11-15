@@ -7,8 +7,8 @@ metadata:
   name: allow-dns-egress
   namespace: tenant-apps
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: tenant
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: tenant
 spec:
   podSelector: {}
   policyTypes: ["Egress"]
@@ -29,8 +29,8 @@ metadata:
   name: allow-dns-egress
   namespace: broker
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: broker
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: broker
 spec:
   podSelector: {}
   policyTypes: ["Egress"]
@@ -51,8 +51,8 @@ metadata:
   name: allow-dns-egress
   namespace: immich
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: data
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: data
 spec:
   podSelector: {}
   policyTypes: ["Egress"]
@@ -73,8 +73,8 @@ metadata:
   name: allow-dns-egress
   namespace: navidrome
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: data
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: data
 spec:
   podSelector: {}
   policyTypes: ["Egress"]
@@ -95,8 +95,8 @@ metadata:
   name: allow-dns-egress
   namespace: opdshelf
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: data
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: data
 spec:
   podSelector: {}
   policyTypes: ["Egress"]
@@ -117,8 +117,8 @@ metadata:
   name: allow-dns-egress
   namespace: graphiti
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: data
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: data
 spec:
   podSelector: {}
   policyTypes: ["Egress"]
@@ -139,8 +139,8 @@ metadata:
   name: allow-dns-egress
   namespace: ingress
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: ingress
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: ingress
 spec:
   podSelector: {}
   policyTypes: ["Egress"]

@@ -77,13 +77,13 @@ class ShippedConfigTest(unittest.TestCase):
     def test_github_app_enrollments_carry_their_scope(self) -> None:
         self.assertIsNotNone(self.config.github_app)
         apps = self.config.hosts["github-apps"].app
-        self.assertEqual(apps.repositories, ("homelabs-apps",))
+        self.assertEqual(apps.repositories, ("homelab-apps",))
         self.assertEqual(dict(apps.permissions), {"contents": "write"})
         platform = self.config.hosts["github-platform"].app
         self.assertEqual(dict(platform.permissions), {"contents": "write", "pull_requests": "write"})
         push = self.config.hosts["github-platform-push"].app
         self.assertEqual(dict(push.permissions), {"contents": "write"})
-        self.assertEqual(push.repositories, ("homelabs-platform",))
+        self.assertEqual(push.repositories, ("homelab-platform",))
         self.assertEqual(self.config.hosts["github-platform-push"].injection.kind, "basic")
 
     def test_agent_enrollments_cover_the_pr_repositories(self) -> None:
@@ -132,7 +132,7 @@ class ShippedConfigTest(unittest.TestCase):
         self.assertFalse(hooks.allow_private)
         self.assertEqual(hooks.injection.kind, "bearer")
         self.assertEqual(hooks.app.installation, "github-installation-id")
-        self.assertEqual(hooks.app.repositories, ("sdlc", "homelabs-apps"))
+        self.assertEqual(hooks.app.repositories, ("sdlc", "homelab-apps"))
         self.assertEqual(dict(hooks.app.permissions), {"repository_hooks": "write", "metadata": "read"})
         self.assertEqual(hooks.allow_methods, ("POST",))
         self.assertEqual(len(hooks.allow_paths), 1)
@@ -420,7 +420,7 @@ class GithubAppEnrollmentTest(unittest.TestCase):
             "port": 443,
             "github_app": {
                 "installation": "example-installation-id",
-                "repositories": ["homelabs-apps"],
+                "repositories": ["homelab-apps"],
                 "permissions": {"contents": "write"},
             },
             "inject": {"kind": "basic", "username": "x-access-token"},

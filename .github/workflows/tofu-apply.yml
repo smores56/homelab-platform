@@ -58,7 +58,7 @@ jobs:
           set -euo pipefail
           if [[ $ACTOR != "$OWNER" ]]; then
             echo "::error::refusing to plan or apply: the actor is '$ACTOR', not '$OWNER'."
-            echo "::error::homelabs-platform is human-only; a bot merge or dispatch may not write the zone."
+            echo "::error::homelab-platform is human-only; a bot merge or dispatch may not write the zone."
             exit 1
           fi
 

@@ -15,8 +15,8 @@ kind: NetworkPolicy
 metadata:
   name: default-deny
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: notify
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: notify
 spec:
   podSelector: {}
   policyTypes: ["Ingress", "Egress"]
@@ -26,8 +26,8 @@ kind: NetworkPolicy
 metadata:
   name: allow-dns-egress
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: notify
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: notify
 spec:
   podSelector: {}
   policyTypes: ["Egress"]
@@ -47,8 +47,8 @@ kind: NetworkPolicy
 metadata:
   name: allow-ingress-cloudflared
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: notify
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: notify
 spec:
   podSelector:
     matchLabels:
@@ -71,8 +71,8 @@ kind: NetworkPolicy
 metadata:
   name: allow-ingress-notifyrelay
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: notify
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: notify
 spec:
   podSelector:
     matchLabels:
@@ -95,8 +95,8 @@ kind: NetworkPolicy
 metadata:
   name: allow-ingress-prometheus
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: notify
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: notify
 spec:
   podSelector:
     matchLabels:

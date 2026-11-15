@@ -1,11 +1,11 @@
-# homelabs-platform
+# homelab-platform
 
 Human-owned cluster platform for `smortress`: Flux bootstrap, namespaces, RBAC,
 admission policy, network policy, SOPS/ESO stores, data-bearing app manifests,
 Cloudflare OpenTofu, and the cluster-side CI that guards them.
 
 Agents (nanobot) never push here. They work in
-[`homelabs-apps`](https://github.com/smores56/homelabs-apps) and propose platform
+[`homelab-apps`](https://github.com/smores56/homelab-apps) and propose platform
 changes by pull request from a fork, so no PR workflow can read a secret.
 
 ## Layout

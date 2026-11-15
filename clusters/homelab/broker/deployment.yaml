@@ -7,7 +7,7 @@ metadata:
   name: broker
   labels:
     app.kubernetes.io/name: broker
-    homelabs.dev/tier: broker
+    homelab.dev/tier: broker
 spec:
   replicas: 2
   selector:
@@ -18,7 +18,7 @@ spec:
       labels:
         app.kubernetes.io/name: broker
         app.kubernetes.io/component: egress-broker
-        homelabs.dev/tier: broker
+        homelab.dev/tier: broker
     spec:
       serviceAccountName: broker
       automountServiceAccountToken: false

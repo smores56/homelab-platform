@@ -11,9 +11,9 @@ metadata:
   namespace: tenant-apps
   labels:
     app.kubernetes.io/name: agent-control
-    homelabs.dev/tier: tenant
+    homelab.dev/tier: tenant
   annotations:
-    homelabs.dev/purpose: "cluster API capability for the agent (docs/tenancy.md)"
+    homelab.dev/purpose: "cluster API capability for the agent (docs/tenancy.md)"
 spec:
   replicas: 2
   selector:
@@ -23,7 +23,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: agent-control
-        homelabs.dev/managed-by: platform
+        homelab.dev/managed-by: platform
     spec:
       serviceAccountName: agent-control
       # The only automounted tenant token in the cluster. 12-agent-identity

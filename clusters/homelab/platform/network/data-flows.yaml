@@ -23,8 +23,8 @@ metadata:
   name: allow-same-namespace
   namespace: immich
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: data
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: data
 spec:
   podSelector: {}
   policyTypes: ["Ingress", "Egress"]
@@ -41,8 +41,8 @@ metadata:
   name: immich-http-from-ingress
   namespace: immich
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: data
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: data
 spec:
   podSelector:
     matchLabels:
@@ -63,8 +63,8 @@ metadata:
   name: allow-same-namespace
   namespace: navidrome
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: data
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: data
 spec:
   podSelector: {}
   policyTypes: ["Ingress", "Egress"]
@@ -81,8 +81,8 @@ metadata:
   name: navidrome-http-from-ingress
   namespace: navidrome
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: data
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: data
 spec:
   podSelector:
     matchLabels:
@@ -103,8 +103,8 @@ metadata:
   name: allow-same-namespace
   namespace: opdshelf
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: data
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: data
 spec:
   podSelector: {}
   policyTypes: ["Ingress", "Egress"]
@@ -121,8 +121,8 @@ metadata:
   name: opdshelf-http-from-ingress
   namespace: opdshelf
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: data
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: data
 spec:
   podSelector:
     matchLabels:
@@ -143,8 +143,8 @@ metadata:
   name: allow-same-namespace
   namespace: graphiti
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: data
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: data
 spec:
   podSelector: {}
   policyTypes: ["Ingress", "Egress"]
@@ -165,8 +165,8 @@ metadata:
   name: memory-mcp-from-ingress
   namespace: graphiti
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: data
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: data
 spec:
   podSelector:
     matchLabels:
@@ -190,8 +190,8 @@ metadata:
   name: memory-mcp-nodeport-from-host
   namespace: graphiti
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: data
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: data
 spec:
   # The wrapper's only client: the host's loopback forwarder, over the tap
   # NodePort. kube-proxy may SNAT node-local traffic to the node address, so
@@ -220,8 +220,8 @@ metadata:
   name: memory-mcp-from-broker
   namespace: graphiti
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: data
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: data
 spec:
   podSelector:
     matchLabels:
@@ -242,8 +242,8 @@ metadata:
   name: immich-ml-public-https
   namespace: immich
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: data
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: data
 spec:
   podSelector:
     matchLabels:
@@ -267,8 +267,8 @@ metadata:
   name: graphiti-public-https
   namespace: graphiti
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: data
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: data
 spec:
   podSelector:
     matchLabels:
@@ -292,8 +292,8 @@ metadata:
   name: egress-data-apps-only
   namespace: ingress
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: ingress
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: ingress
 spec:
   podSelector: {}
   policyTypes: ["Egress"]
@@ -347,8 +347,8 @@ metadata:
   name: egress-tunnel-edge
   namespace: ingress
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: ingress
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: ingress
 spec:
   podSelector:
     matchLabels:

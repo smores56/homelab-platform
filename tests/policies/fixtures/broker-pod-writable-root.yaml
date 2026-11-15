@@ -6,7 +6,7 @@ metadata:
   namespace: broker
   labels:
     app.kubernetes.io/name: broker
-    homelabs.dev/tier: broker
+    homelab.dev/tier: broker
 spec:
   runtimeClassName: gvisor
   automountServiceAccountToken: false

@@ -10,8 +10,8 @@ metadata:
   namespace: graphiti
   labels:
     app.kubernetes.io/name: graphiti
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: data
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: data
 spec:
   schedule: "45 2 * * *"
   timeZone: Europe/Berlin
@@ -28,9 +28,9 @@ spec:
         metadata:
           labels:
             app.kubernetes.io/name: graphiti-dump
-            app.kubernetes.io/part-of: homelabs
-            homelabs.dev/tier: data
-            homelabs.dev/managed-by: platform
+            app.kubernetes.io/part-of: homelab
+            homelab.dev/tier: data
+            homelab.dev/managed-by: platform
         spec:
           serviceAccountName: data-workload
           automountServiceAccountToken: false

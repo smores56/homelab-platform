@@ -29,7 +29,7 @@
 # (tracked in the nix-config lane, not here). The tenant cannot widen either
 # layer itself; both copies are platform-owned.
 #
-# homelabs-apps keeps a mirrored copy of the tenant-side policies as its
+# homelab-apps keeps a mirrored copy of the tenant-side policies as its
 # reviewed contract. That copy must gain the same two `ipBlock` entries, or the
 # namespace-side render the tenant reviews and the one the cluster enforces
 # disagree.
@@ -39,8 +39,8 @@ metadata:
   name: egress-public
   namespace: tenant-apps
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: tenant
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: tenant
 spec:
   podSelector: {}
   policyTypes: ["Egress"]

@@ -6,7 +6,7 @@ metadata:
   namespace: tenant-apps
   labels:
     app.kubernetes.io/name: nanobot
-    app.kubernetes.io/part-of: homelabs
+    app.kubernetes.io/part-of: homelab
 spec:
   runtimeClassName: gvisor
   automountServiceAccountToken: false

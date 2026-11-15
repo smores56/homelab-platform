@@ -95,7 +95,7 @@ class ClusterHealthTest(unittest.TestCase):
         self.assertEqual(
             [{"name": "cluster", "ready": False}],
             digest.cluster_health(
-                [{"name": "homelabs_cluster_node_ready", "labels": {"node": "cluster"}, "value": 0.0}]
+                [{"name": "homelab_cluster_node_ready", "labels": {"node": "cluster"}, "value": 0.0}]
             )["nodes"],
         )
 
@@ -281,8 +281,8 @@ class FreshnessTest(unittest.TestCase):
 
     def test_failed_last_scrape_is_not_ok_even_when_recent(self) -> None:
         text = exporter_text().replace(
-            "homelabs_data_status_exporter_last_scrape_success 1",
-            "homelabs_data_status_exporter_last_scrape_success 0",
+            "homelab_data_status_exporter_last_scrape_success 1",
+            "homelab_data_status_exporter_last_scrape_success 0",
         )
         entry = build(exporter_text=text)["source_freshness"]["status_exporter"]
         # One failed refresh: the snapshot is still 15 s old, so this is not

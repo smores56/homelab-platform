@@ -10,8 +10,8 @@ metadata:
   name: data-workload
   namespace: immich
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: data
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: data
 automountServiceAccountToken: false
 ---
 apiVersion: v1
@@ -20,8 +20,8 @@ metadata:
   name: data-workload
   namespace: navidrome
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: data
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: data
 automountServiceAccountToken: false
 ---
 apiVersion: v1
@@ -30,8 +30,8 @@ metadata:
   name: data-workload
   namespace: opdshelf
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: data
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: data
 automountServiceAccountToken: false
 ---
 apiVersion: v1
@@ -40,6 +40,6 @@ metadata:
   name: data-workload
   namespace: graphiti
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: data
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: data
 automountServiceAccountToken: false

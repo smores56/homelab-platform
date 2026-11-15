@@ -8,7 +8,7 @@ metadata:
   name: egress-agent-control
   labels:
     app.kubernetes.io/name: broker
-    homelabs.dev/tier: broker
+    homelab.dev/tier: broker
 spec:
   podSelector: {}
   policyTypes: ["Egress"]

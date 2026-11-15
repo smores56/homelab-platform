@@ -8,8 +8,8 @@ kind: ValidatingAdmissionPolicy
 metadata:
   name: data-workload-source
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: platform
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: platform
 spec:
   failurePolicy: Fail
   matchConstraints:
@@ -19,8 +19,8 @@ spec:
         operations: ["CREATE", "UPDATE"]
         resources: ["pods"]
   validations:
-    - expression: "has(object.metadata.labels) && object.metadata.labels['homelabs.dev/managed-by'] == 'platform'"
-      message: "data-namespace pods must carry homelabs.dev/managed-by=platform"
+    - expression: "has(object.metadata.labels) && object.metadata.labels['homelab.dev/managed-by'] == 'platform'"
+      message: "data-namespace pods must carry homelab.dev/managed-by=platform"
     - expression: "object.spec.serviceAccountName == 'data-workload'"
       message: "data-namespace pods must run as the data-workload service account"
 ---
@@ -29,14 +29,14 @@ kind: ValidatingAdmissionPolicyBinding
 metadata:
   name: data-workload-source
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: platform
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: platform
 spec:
   policyName: data-workload-source
   validationActions: [Deny]
   matchResources:
     namespaceSelector:
       matchExpressions:
-        - key: homelabs.dev/tier
+        - key: homelab.dev/tier
           operator: In
           values: ["data"]

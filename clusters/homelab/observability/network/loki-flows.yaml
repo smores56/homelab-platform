@@ -15,8 +15,8 @@ metadata:
   namespace: observability
   labels:
     app.kubernetes.io/name: loki
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: observability
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: observability
 spec:
   podSelector:
     matchLabels:
@@ -47,8 +47,8 @@ metadata:
   namespace: observability
   labels:
     app.kubernetes.io/name: vector
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: observability
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: observability
 spec:
   podSelector:
     matchLabels:
@@ -71,8 +71,8 @@ metadata:
   namespace: observability
   labels:
     app.kubernetes.io/name: loki-gateway
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: observability
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: observability
 spec:
   podSelector:
     matchLabels:

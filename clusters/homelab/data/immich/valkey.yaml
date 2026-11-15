@@ -7,8 +7,8 @@ metadata:
   namespace: immich
   labels:
     app.kubernetes.io/name: immich-valkey
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: data
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: data
 spec:
   replicas: 1
   strategy:
@@ -20,9 +20,9 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: immich-valkey
-        app.kubernetes.io/part-of: homelabs
-        homelabs.dev/tier: data
-        homelabs.dev/managed-by: platform
+        app.kubernetes.io/part-of: homelab
+        homelab.dev/tier: data
+        homelab.dev/managed-by: platform
     spec:
       serviceAccountName: data-workload
       automountServiceAccountToken: false

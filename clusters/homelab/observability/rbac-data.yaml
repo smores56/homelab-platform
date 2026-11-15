@@ -10,8 +10,8 @@ metadata:
   namespace: immich
   labels:
     app.kubernetes.io/name: status-exporter
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: data
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: data
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -28,8 +28,8 @@ metadata:
   namespace: navidrome
   labels:
     app.kubernetes.io/name: status-exporter
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: data
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: data
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -46,8 +46,8 @@ metadata:
   namespace: opdshelf
   labels:
     app.kubernetes.io/name: status-exporter
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: data
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: data
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -64,8 +64,8 @@ metadata:
   namespace: graphiti
   labels:
     app.kubernetes.io/name: status-exporter
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: data
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: data
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole

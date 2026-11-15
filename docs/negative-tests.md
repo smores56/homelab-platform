@@ -39,7 +39,7 @@ Result of the static half: **PASS** locally on the bootstrap commits
 (`scripts/check-pr-secret-boundary.sh` → `no pull_request workflow references
 secrets beyond GITHUB_TOKEN`), and the same script is green in CI job
 `action SHA pins`' sibling checks on run
-[43024148131](https://github.com/smores56/homelabs-platform/actions/runs/43024148131)
+[43024148131](https://github.com/smores56/homelab-platform/actions/runs/43024148131)
 (`ci`, push to `main`, all jobs success). Job `fork-pr-secret-boundary` itself
 is skipped on pushes by its `if:` guard; it has not run yet because no pull
 request exists on the repository (branch protection is not applied, see
@@ -57,7 +57,7 @@ not executed.
 
 1. Complete `docs/manual-steps.md` steps 1 and 3 (machine user, environment
    secret).
-2. As the machine user, fork `smores56/homelabs-platform` and open a branch
+2. As the machine user, fork `smores56/homelab-platform` and open a branch
    whose `.github/workflows/probe.yml` contains:
 
    ```yaml
@@ -297,7 +297,7 @@ Static, in `tests/policies/check.sh` (no cluster, no credentials):
   03:15, before restic's 03:30 + 15 minute delay), mount the app's own claim,
   and write `/data/db-dumps/<app>.{dump,rdb}`.
 - Every data workload runs as `data-workload`, carries
-  `homelabs.dev/managed-by=platform`, runs as uid 1000 (the share's host owner),
+  `homelab.dev/managed-by=platform`, runs as uid 1000 (the share's host owner),
   and sets limits and a probe; the dump jobs are exempt from the probe rule.
 - The four `Ingress` hosts resolve to the expected Service and port, so the
   routing contract T7 mirrors cannot drift.
@@ -477,8 +477,8 @@ the previous table in this document describes the #578 families; #582 adds:
 - the `tenant-images` prefix is the platform registry path
   (`ghcr.io/smores56/homelabs-platform/nanobot@sha256:`);
 - `ImageRepository`/`ImagePolicy nanobot` order `^build-<n>$` numerically in
-  `flux-system`, and `ImageUpdateAutomation` pushes `main` of `homelabs-apps`
-  through the `homelabs-apps-write` Secret; the flux-system build holds no
+  `flux-system`, and `ImageUpdateAutomation` pushes `main` of `homelab-apps`
+  through the `homelab-apps-write` Secret; the flux-system build holds no
   Secret and the write contract records the setter marker;
 - `publish-nanobot.yml` exists, is `workflow_dispatch`-able, tags
   `build-${GITHUB_RUN_NUMBER}` and writes the digest to the run summary;

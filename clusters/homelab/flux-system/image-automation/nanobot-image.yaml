@@ -9,8 +9,8 @@ metadata:
   name: nanobot
   namespace: flux-system
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: platform
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: platform
 spec:
   image: ghcr.io/smores56/homelabs-platform/nanobot
   interval: 5m
@@ -23,8 +23,8 @@ metadata:
   name: nanobot
   namespace: flux-system
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: platform
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: platform
 spec:
   imageRepositoryRef:
     name: nanobot

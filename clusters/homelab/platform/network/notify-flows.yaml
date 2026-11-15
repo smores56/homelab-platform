@@ -11,8 +11,8 @@ metadata:
   name: egress-notify
   namespace: ingress
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: ingress
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: ingress
 spec:
   podSelector:
     matchLabels:

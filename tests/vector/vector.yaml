@@ -16,7 +16,7 @@ transforms:
     type: remap
     inputs: [test_input]
     source: |
-      .tenant_route = if .kubernetes.namespace_labels."homelabs.dev/tier" == "data" {
+      .tenant_route = if .kubernetes.namespace_labels."homelab.dev/tier" == "data" {
         "data"
       } else {
         "raw"
@@ -59,7 +59,7 @@ tests:
             pod_labels:
               app.kubernetes.io/name: immich-server
             namespace_labels:
-              homelabs.dev/tier: data
+              homelab.dev/tier: data
     outputs:
       - extract_from: data_allowlist
         conditions:
@@ -90,7 +90,7 @@ tests:
           kubernetes:
             pod_namespace: data
             namespace_labels:
-              homelabs.dev/tier: data
+              homelab.dev/tier: data
     outputs:
       - extract_from: data_allowlist
         conditions:
@@ -112,7 +112,7 @@ tests:
           kubernetes:
             pod_namespace: data
             namespace_labels:
-              homelabs.dev/tier: data
+              homelab.dev/tier: data
     outputs:
       - extract_from: data_allowlist
         conditions:
@@ -132,7 +132,7 @@ tests:
           kubernetes:
             pod_namespace: data
             namespace_labels:
-              homelabs.dev/tier: data
+              homelab.dev/tier: data
     outputs:
       - extract_from: tenant_route
         conditions:
@@ -149,7 +149,7 @@ tests:
           kubernetes:
             pod_namespace: tenant-apps
             namespace_labels:
-              homelabs.dev/tier: tenant
+              homelab.dev/tier: tenant
     outputs:
       - extract_from: tenant_route
         conditions:

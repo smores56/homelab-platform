@@ -19,8 +19,8 @@ metadata:
   name: notifyrelay
   namespace: flux-system
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: platform
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: platform
 spec:
   type: generic
   address: http://notifyrelay.observability.svc.cluster.local:8080/flux
@@ -32,8 +32,8 @@ metadata:
   name: cluster
   namespace: flux-system
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: platform
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: platform
 spec:
   providerRef:
     name: notifyrelay

@@ -14,7 +14,7 @@
 # normal late run. A tree that has never succeeded is covered by the same
 # expression, because the exporter reports 0 as its last-success timestamp.
 groups:
-  - name: homelabs-platform
+  - name: homelab-platform
     rules:
       - alert: TargetDown
         expr: up == 0
@@ -28,7 +28,7 @@ groups:
             status exporter this also means every data-tier metric is stale.
 
       - alert: StatusExporterFailing
-        expr: homelabs_data_status_exporter_last_scrape_success == 0
+        expr: homelab_data_status_exporter_last_scrape_success == 0
         for: 10m
         labels:
           severity: warning
@@ -40,7 +40,7 @@ groups:
             this clears; the alert inhibits the alerts it would otherwise cause.
 
       - alert: DataWorkloadNotReady
-        expr: homelabs_data_workload_ready == 0
+        expr: homelab_data_workload_ready == 0
         for: 15m
         labels:
           severity: warning
@@ -66,7 +66,7 @@ groups:
 
       - alert: ResticBackupStale
         expr: >-
-          time() - homelabs_data_cronjob_last_successful_timestamp_seconds{cronjob="restic-backup"} > 26 * 3600
+          time() - homelab_data_cronjob_last_successful_timestamp_seconds{cronjob="restic-backup"} > 26 * 3600
         for: 10m
         labels:
           severity: critical
@@ -80,7 +80,7 @@ groups:
 
       - alert: ResticPreflightStale
         expr: >-
-          time() - homelabs_data_cronjob_last_successful_timestamp_seconds{cronjob="restic-preflight"} > 8 * 24 * 3600
+          time() - homelab_data_cronjob_last_successful_timestamp_seconds{cronjob="restic-preflight"} > 8 * 24 * 3600
         for: 30m
         labels:
           severity: warning

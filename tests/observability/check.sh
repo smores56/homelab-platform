@@ -299,9 +299,9 @@ else
 fi
 rules=clusters/homelab/observability/prometheus/rules.yaml
 for expr in 'up == 0' 'up{job="kubernetes-pods", namespace="notify"} == 0' \
-  'homelabs_data_workload_ready == 0' \
-  'homelabs_data_cronjob_last_successful_timestamp_seconds{cronjob="restic-backup"} > 26 * 3600' \
-  'homelabs_data_cronjob_last_successful_timestamp_seconds{cronjob="restic-preflight"} > 8 * 24 * 3600'; do
+  'homelab_data_workload_ready == 0' \
+  'homelab_data_cronjob_last_successful_timestamp_seconds{cronjob="restic-backup"} > 26 * 3600' \
+  'homelab_data_cronjob_last_successful_timestamp_seconds{cronjob="restic-preflight"} > 8 * 24 * 3600'; do
   # No `-q` anywhere in a `pipefail` pipeline: it makes grep exit at the first
   # match, `tr` then dies of SIGPIPE, and pipefail turns a found rule into a
   # missing one. Redirect instead, so grep reads to EOF.

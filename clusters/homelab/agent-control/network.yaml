@@ -12,7 +12,7 @@ metadata:
   namespace: tenant-apps
   labels:
     app.kubernetes.io/name: agent-control
-    homelabs.dev/tier: tenant
+    homelab.dev/tier: tenant
 spec:
   podSelector:
     matchLabels:
@@ -40,7 +40,7 @@ metadata:
   namespace: broker
   labels:
     app.kubernetes.io/name: agent-control
-    homelabs.dev/tier: broker
+    homelab.dev/tier: broker
 spec:
   podSelector:
     matchLabels:
@@ -70,7 +70,7 @@ metadata:
   namespace: tenant-apps
   labels:
     app.kubernetes.io/name: agent-control
-    homelabs.dev/tier: tenant
+    homelab.dev/tier: tenant
 spec:
   podSelector:
     matchLabels:
