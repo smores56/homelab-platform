@@ -204,8 +204,11 @@ the backup gate proves the repositories from the host plan.
 - `/etc/crypttab`: keyfile unlock for boot volumes; `noauto` for both backup
   disks. The managed block never repeats a name the autoinstall already wrote
   (`luks-root` stays autoinstall-owned), and the role asserts the finished file
-  has no duplicate names. No `nofail` is ever written, so an unlock failure
-  stops dependants.
+  has no duplicate names. `nofail` is never written into the managed block, so
+  an unlock failure stops dependants. The installer-owned `luks-data` entry sits
+  outside the block and does carry `nofail`, so the host still boots when the
+  pool cannot unlock; consumers fail closed through `RequiresMountsFor` and
+  `ConditionPathIsMountPoint`.
 - systemd drop-ins make **both** `zfs-import-cache.service` and
   `zfs-import-scan.service` require the encrypted data volume, and
   `zfs-mount.service` require a successful import. Ansible imports the pool only

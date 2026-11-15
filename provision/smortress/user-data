@@ -43,6 +43,8 @@ autoinstall:
       install -d -m 0700 /run/smortress-keys
       head -c 64 /dev/urandom | base64 > /run/smortress-keys/data.key
       chmod 0600 /run/smortress-keys/data.key
+      printf '%s\n' '__LUKS_ROOT_PASSPHRASE__' > /run/smortress-keys/root.pass
+      chmod 0600 /run/smortress-keys/root.pass
   storage:
     config:
       - id: disk-target
@@ -117,7 +119,13 @@ autoinstall:
       awk 'BEGIN { OFS = " " } $1 == "luks-data" { $3 = "/etc/luks/data.key"; $4 = "luks,discard,nofail" } { print }' \
         /target/etc/crypttab > /target/etc/crypttab.new
       cat /target/etc/crypttab.new > /target/etc/crypttab
-      rm -f /target/etc/crypttab.new /run/smortress-keys/data.key
+      rm -f /target/etc/crypttab.new
+      data_dev=$(cryptsetup status luks-data | awk '/device:/{print $2}')
+      cryptsetup luksAddKey --key-file /target/etc/luks/data.key "$data_dev" /run/smortress-keys/root.pass
+      cryptsetup luksHeaderBackup --key-file /target/etc/luks/data.key "$data_dev" \
+        --header-backup-file /target/etc/luks/luks-data.header
+      chmod 0400 /target/etc/luks/luks-data.header
+      rm -f /run/smortress-keys/data.key /run/smortress-keys/root.pass
     - |
       set -eu
       # The bootstrap user has no password; Ansible replaces this with the
@@ -167,18 +175,21 @@ autoinstall:
       #!/bin/sh
       # Bind Clevis to the root volume: sss (Tang + TPM2, both required) plus a
       # bare TPM2 token so a host can still boot when Tang is unreachable.
-      # Usage: smortress-clevis-bind <tang-url> <passphrase-file>
+      # Usage: smortress-clevis-bind <tang-url> <passphrase-file> <tang-thp>
+      # <tang-thp> is the SHA-256 thumbprint printed by `tang-show-keys` on the
+      # server; pinning it rejects a spoofed advertisement at bind time.
       set -eu
-      url=${1:?usage: smortress-clevis-bind <tang-url> <passphrase-file>}
-      key=${2:?usage: smortress-clevis-bind <tang-url> <passphrase-file>}
+      url=${1:?usage: smortress-clevis-bind <tang-url> <passphrase-file> <tang-thp>}
+      key=${2:?usage: smortress-clevis-bind <tang-url> <passphrase-file> <tang-thp>}
+      thp=${3:?usage: smortress-clevis-bind <tang-url> <passphrase-file> <tang-thp>}
       root_dev=$(cryptsetup status "$(findmnt -no SOURCE /)" | awk '/device:/{print $2}')
       adv=$(curl -fsS "$url/adv")
       if [ -e /dev/tpmrm0 ] || [ -e /dev/tpm0 ]; then
-        cfg=$(printf '{"t":2,"pins":{"tang":[{"url":"%s","adv":%s}],"tpm2":{"pcr_ids":"7"}}}' "$url" "$adv")
+        cfg=$(printf '{"t":2,"pins":{"tang":[{"url":"%s","thp":"%s","adv":%s}],"tpm2":{"pcr_ids":"7"}}}' "$url" "$thp" "$adv")
         clevis luks bind -d "$root_dev" sss "$cfg" -y -k "$key"
         clevis luks bind -d "$root_dev" tpm2 '{"pcr_ids":"7"}' -y -k "$key"
       else
-        cfg=$(printf '{"url":"%s","adv":%s}' "$url" "$adv")
+        cfg=$(printf '{"url":"%s","thp":"%s","adv":%s}' "$url" "$thp" "$adv")
         clevis luks bind -d "$root_dev" tang "$cfg" -y -k "$key"
       fi
       dracut -f
