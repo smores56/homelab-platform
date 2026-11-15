@@ -123,37 +123,31 @@
     label: "{{ item.short }}"
   notify: Reload systemd
 
-- name: Inspect every declared secret file
+- name: Inspect the secret files the units mount
   ansible.builtin.stat:
-    path: "{{ item.1.src }}"
-  loop: "{{ data_plane_services | subelements('secret_files', skip_missing=True) }}"
+    path: "{{ data_plane_secret_root }}/{{ item.src }}"
+  loop: "{{ host_secret_files | selectattr('unit', 'defined') | list }}"
   loop_control:
-    label: "{{ item.1.src }}"
+    label: "{{ item.src }}"
   register: data_plane_secret_stats
 
-- name: Fail closed on a missing secret file
+- name: Fail closed on a missing or mis-permissioned secret file
   ansible.builtin.assert:
     that:
       - item.stat.exists
       - item.stat.isreg
+      - item.stat.uid == 0
+      - item.stat.gid == data_plane_container_gid | int
+      - item.stat.mode == host_secret_container_mode
     fail_msg: >-
-      {{ item.item.1.src }} is missing or not a regular file; install the
-      operator bundle with `ansible-playbook playbooks/site.yml --tags secrets
+      {{ item.item.src }} is missing or not root:{{ data_plane_container_gid }}
+      {{ secrets_container_mode }}; install the operator bundle with
+      `ansible-playbook playbooks/site.yml --tags secrets
       -e secrets_source_dir=<decrypted directory>`.
     quiet: true
   loop: "{{ data_plane_secret_stats.results }}"
   loop_control:
-    label: "{{ item.item.1.src }}"
-
-- name: Make each declared secret readable by the container uid
-  ansible.builtin.file:
-    path: "{{ item.1.src }}"
-    owner: "{{ data_plane_secret_owner }}"
-    group: "{{ data_plane_secret_group }}"
-    mode: "{{ data_plane_secret_mode }}"
-  loop: "{{ data_plane_services | subelements('secret_files', skip_missing=True) }}"
-  loop_control:
-    label: "{{ item.1.src }}"
+    label: "{{ item.item.src }}"
 
 - name: Install the service units
   ansible.builtin.template:

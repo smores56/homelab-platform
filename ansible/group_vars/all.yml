@@ -391,6 +391,33 @@ data_plane_run_root: /run/homelab
 # never silently replace a digest.
 data_plane_image_archive: ""
 
+# One policy for every host secret. `src` is the path under the secret root and
+# under the decrypted bundle; an entry a unit mounts also names that unit and
+# the container path. The operator supplies only the decrypted directory.
+#   unit present -> installs on data_plane_hosts, root:container-gid 0640
+#   unit absent  -> installs on storage_hosts,   root:root 0600
+data_plane_container_gid: "65532"
+host_secret_container_mode: "0640"
+host_secret_root_mode: "0600"
+host_secret_files:
+  - src: restic/data-plane.password
+  - src: restic/r2.env
+  - src: event-service/append-token
+    unit: homelab-event-service
+    mount: /run/secrets/event/append-token
+  - src: event-service/read-token
+    unit: homelab-event-service
+    mount: /run/secrets/event/read-token
+  - src: event-service/consumers.json
+    unit: homelab-event-service
+    mount: /run/secrets/event/consumers.json
+  - src: write-broker/identity
+    unit: homelab-write-broker
+    mount: /run/secrets/broker/identity
+  - src: write-broker/operator-key
+    unit: homelab-write-broker
+    mount: /run/secrets/broker/operator-key
+
 # --------------------------------------------------------------------------
 # Recovery
 # --------------------------------------------------------------------------

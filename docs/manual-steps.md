@@ -2090,26 +2090,23 @@ prunes. A missing repository is reported by name, not created.
    The data-plane units read their own files from subdirectories of the same
    root. Stage the decrypted bundle outside the repository and install it with
    the secrets play; the play targets the storage and data-plane hosts and is a
-   no-op while `secrets_source_dir` is empty, and the data-plane role asserts
-   every declared file before it starts a unit:
+   no-op while `secrets_source_dir` is empty:
 
    ```sh
    ansible-playbook -i inventory/hosts.yml playbooks/site.yml --tags secrets \
-     -e secrets_source_dir=/run/operator-secrets \
-     -e '{"secrets_files":["event-service/append-token", \
-          "event-service/read-token","event-service/consumers.json", \
-          "write-broker/identity","write-broker/operator-key", \
-          "restic/data-plane.password","restic/r2.env"]}'
+     -e secrets_source_dir=/run/operator-secrets
    ```
 
-   The role creates each parent directory at `0700`, copies at `0600
-   root:root`, and wipes nothing: the decrypted directory is the operator's to
-   remove. `homelab-event-service` and `homelab-write-broker` then mount their
-   files read-only, and the untagged data-plane play raises exactly those files
-   to `0640 root:65532` for the container uid. A rotation therefore needs the
-   full converge before the unit restarts (`--tags secrets` alone leaves the new
-   file at `0600`, and a running unit keeps its old inode). The host runs no
-   relay; relays and collectors live in the cluster tree.
+   The policy is `host_secret_files` in `group_vars/all.yml`: one entry per
+   file, relative to the secret root, with `unit` and `mount` for a file a unit
+   mounts. An entry with a unit installs on `data_plane_hosts` at `0640` with
+   the container gid; an entry without one installs on `storage_hosts` at `0600`
+   root. The role creates each parent directory at `0700` and copies with the
+   final owner and mode, so there is no second writer of that file and a drift
+   is corrected on the next run. A rotation replaces the file and
+   `try-restart`s only a running unit whose content changed; a stopped or
+   recovery-fenced unit stays stopped, so rotate, then run the play again. The
+   host runs no relay; relays and collectors live in the cluster tree.
 
    A host unit also cannot pull an image. Every `podman run` uses `--pull=never`
    and its own `--root`, so put a digest-pinned OCI archive on the host and set

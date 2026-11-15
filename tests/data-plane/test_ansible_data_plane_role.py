@@ -1,11 +1,12 @@
 """The host data-plane units must be able to read the secrets they mount.
 
-A unit that names a ``/run/secrets`` path must declare the host file behind it,
-the template must mount that file read-only, and the role must make it readable
-by the container uid. The secret root stays root-only, so the numeric gid is a
-property of the mount, not a host group. This test fails when an env path and a
-declared file drift apart, when ownership converges somewhere else, or when the
-retired collector-relay unit returns.
+One policy lives in ``host_secret_files``: an entry with a ``unit`` is mounted
+by that unit at ``mount`` and installed on the data-plane host at
+``0640`` with the container gid; an entry without one is read by a host daemon
+on the storage host at ``0600`` root. This test fails when an env path and a
+manifest entry drift apart, when the role stops deriving the mode or the host
+group, when a rotation stops restarting the changed unit, or when the retired
+collector-relay unit returns.
 """
 
 from __future__ import annotations
@@ -21,7 +22,6 @@ ROLE = ROOT / "ansible" / "roles" / "data_plane"
 SECRETS_ROLE = ROOT / "ansible" / "roles" / "secrets"
 
 CONTAINER_GID = "65532"
-SECRET_MODE = "0640"
 
 
 def _load_renderer():
@@ -35,16 +35,18 @@ def _load_renderer():
 render = _load_renderer()
 DEFAULTS = render.load_yaml(ROLE / "defaults" / "main.yml")
 TASKS = render.load_yaml(ROLE / "tasks" / "main.yml")
+SECRETS_DEFAULTS = render.load_yaml(SECRETS_ROLE / "defaults" / "main.yml")
 SECRETS_TASKS = render.load_yaml(SECRETS_ROLE / "tasks" / "main.yml")
 SITE = render.load_yaml(ROOT / "ansible" / "playbooks" / "site.yml")
 ALL_VARS, _ = render.load_group_vars()
 UNIT_TEMPLATE = (ROLE / "templates" / "unit.service.j2").read_text(encoding="utf-8")
 
 SERVICES = DEFAULTS["data_plane_services"]
+MANIFEST = ALL_VARS["host_secret_files"]
 
 
-def _declared(service):
-    return service.get("secret_files", [])
+def _mounted(unit):
+    return [entry for entry in MANIFEST if entry.get("unit") == unit]
 
 
 def _roles_of(play):
@@ -55,7 +57,7 @@ def _roles_of(play):
 class DataPlaneSecretMountTests(unittest.TestCase):
     def test_every_container_secret_path_is_declared_once(self):
         for service in SERVICES:
-            declared = {item["dest"] for item in _declared(service)}
+            declared = {entry["mount"] for entry in _mounted(service["name"])}
             env_paths = {
                 value
                 for value in service["environment"].values()
@@ -63,63 +65,43 @@ class DataPlaneSecretMountTests(unittest.TestCase):
             }
             self.assertEqual(declared, env_paths, service["short"])
 
-    def test_every_declared_source_is_under_the_secret_root(self):
-        root = ALL_VARS["data_plane_secret_root"].rstrip("/") + "/"
-        templated = "{{ data_plane_secret_root }}/"
-        for service in SERVICES:
-            for item in _declared(service):
-                self.assertTrue(
-                    item["src"].startswith(root)
-                    or item["src"].startswith(templated),
-                    item["src"],
-                )
-                self.assertTrue(item["dest"].startswith("/run/secrets/"), item["dest"])
+    def test_every_mount_is_backed_by_a_relative_source(self):
+        for entry in MANIFEST:
+            self.assertFalse(entry["src"].startswith("/"), entry["src"])
+            self.assertNotIn("..", entry["src"].split("/"), entry["src"])
+            if "mount" in entry:
+                self.assertTrue(entry["mount"].startswith("/run/secrets/"))
 
     def test_template_mounts_every_declared_file_read_only(self):
         self.assertIn(
-            "{% for secret in service.secret_files | default([]) %}", UNIT_TEMPLATE
-        )
-        self.assertIn("--volume {{ secret.src }}:{{ secret.dest }}:ro", UNIT_TEMPLATE)
-
-    def test_ownership_converges_to_the_container_gid(self):
-        self.assertEqual(DEFAULTS["data_plane_secret_owner"], "root")
-        self.assertEqual(DEFAULTS["data_plane_secret_group"], CONTAINER_GID)
-        self.assertEqual(DEFAULTS["data_plane_secret_mode"], SECRET_MODE)
-        converged = [
-            task for task in TASKS if "data_plane_secret_group" in json.dumps(task)
-        ]
-        self.assertEqual(len(converged), 1)
-        self.assertIn("data_plane_secret_mode", json.dumps(converged[0]))
-        self.assertIn("subelements", json.dumps(converged[0].get("loop", "")))
-
-    def test_a_missing_secret_file_fails_the_converge(self):
-        asserts = [task for task in TASKS if "ansible.builtin.assert" in task]
-        failing = [
-            task
-            for task in asserts
-            if any("item.stat.exists" in str(term)
-                   for term in task["ansible.builtin.assert"].get("that", []))
-        ]
-        self.assertEqual(len(failing), 1, "no fail-closed assert over the stat results")
-        self.assertEqual(
-            failing[0]["loop"], "{{ data_plane_secret_stats.results }}"
-        )
-
-    def test_unit_receives_the_rendered_environment(self):
-        self.assertIn(
-            "--env-file {{ data_plane_config_root }}/{{ service.short }}.env",
+            "{% for secret in host_secret_files | selectattr('unit', 'defined')"
+            " | selectattr('unit', 'equalto', service.name) | list %}",
             UNIT_TEMPLATE,
         )
-        self.assertNotIn("EnvironmentFile=", UNIT_TEMPLATE)
+        self.assertIn(
+            "--volume {{ data_plane_secret_root }}/{{ secret.src }}:"
+            "{{ secret.mount }}:ro",
+            UNIT_TEMPLATE,
+        )
 
-    def test_retired_unit_is_removed_and_not_fenced_elsewhere(self):
-        self.assertIn("homelab-collector-relay", DEFAULTS["data_plane_retired_units"])
-        removal = [
+    def test_mode_and_gid_are_derived_not_repeated(self):
+        self.assertEqual(ALL_VARS["data_plane_container_gid"], CONTAINER_GID)
+        self.assertEqual(ALL_VARS["host_secret_container_mode"], "0640")
+        self.assertEqual(ALL_VARS["host_secret_root_mode"], "0600")
+        self.assertIn("data_plane_container_gid",
+                      DEFAULTS["data_plane_default_container_user"])
+        self.assertNotIn("data_plane_secret_group", DEFAULTS)
+
+    def test_missing_or_mispermissioned_secret_fails_the_converge(self):
+        failing = [
             task
             for task in TASKS
-            if task.get("ansible.builtin.file", {}).get("state") == "absent"
+            if "ansible.builtin.assert" in task
+            and any("item.stat.gid" in str(term)
+                    for term in task["ansible.builtin.assert"].get("that", []))
         ]
-        self.assertTrue(removal, "nothing removes the retired unit file")
+        self.assertEqual(len(failing), 1)
+        self.assertEqual(failing[0]["loop"], "{{ data_plane_secret_stats.results }}")
 
     def test_retired_relay_unit_is_gone(self):
         self.assertNotIn("collector-relay", {s["short"] for s in SERVICES})
@@ -150,6 +132,60 @@ class UnitSandboxTests(unittest.TestCase):
                 creators.append(task)
         self.assertTrue(creators, "ReadWritePaths would name a missing directory")
 
+    def test_unit_receives_the_rendered_environment(self):
+        self.assertIn(
+            "--env-file {{ data_plane_config_root }}/{{ service.short }}.env",
+            UNIT_TEMPLATE,
+        )
+        self.assertNotIn("EnvironmentFile=", UNIT_TEMPLATE)
+
+    def test_retired_unit_is_removed(self):
+        self.assertIn("homelab-collector-relay", DEFAULTS["data_plane_retired_units"])
+        removal = [
+            task
+            for task in TASKS
+            if task.get("ansible.builtin.file", {}).get("state") == "absent"
+        ]
+        self.assertTrue(removal, "nothing removes the retired unit file")
+
+
+class SecretsRoleTests(unittest.TestCase):
+    def test_the_manifest_is_the_only_list(self):
+        flat = json.dumps(SECRETS_TASKS)
+        self.assertIn("host_secret_files", flat)
+        self.assertNotIn("secrets_files", flat)
+        self.assertEqual(SECRETS_DEFAULTS["secrets_source_dir"], "")
+
+    def test_host_group_is_derived_from_the_unit(self):
+        flat = json.dumps(SECRETS_TASKS)
+        self.assertIn("data_plane_hosts", flat)
+        self.assertIn("storage_hosts", flat)
+        self.assertIn("selectattr('unit', 'defined')", flat)
+
+    def test_the_copy_owns_the_final_owner_and_mode(self):
+        copies = [task for task in SECRETS_TASKS if "ansible.builtin.copy" in task]
+        self.assertEqual(len(copies), 1)
+        spec = copies[0]["ansible.builtin.copy"]
+        self.assertIn("data_plane_container_gid", spec["group"])
+        self.assertIn("host_secret_container_mode", spec["mode"])
+        self.assertIn("host_secret_root_mode", spec["mode"])
+
+    def test_a_content_rotation_restarts_only_that_unit(self):
+        flat = json.dumps(SECRETS_TASKS)
+        self.assertIn("try-restart", flat)
+        self.assertIn("checksum", flat)
+        self.assertIn("secrets_changed_units", flat)
+
+    def test_mount_and_unit_must_agree(self):
+        flat = json.dumps(SECRETS_TASKS)
+        self.assertIn("(item.mount is defined) == (item.unit is defined)", flat)
+
+    def test_parent_directories_and_traversal_guards(self):
+        flat = json.dumps(SECRETS_TASKS)
+        self.assertIn("dirname", flat)
+        self.assertIn("search", flat)
+        self.assertIn("realpath", flat)
+
 
 class SecretsPlayTests(unittest.TestCase):
     def test_secrets_install_before_the_data_plane_play(self):
@@ -160,17 +196,6 @@ class SecretsPlayTests(unittest.TestCase):
         self.assertIn("secrets_source_dir | length > 0", entry["when"])
         self.assertIn("secrets", secrets_play["tags"])
         self.assertEqual(secrets_play["hosts"], "storage_hosts:data_plane_hosts")
-    def test_secrets_role_creates_parent_directories(self):
-        self.assertTrue(
-            any("dirname" in json.dumps(task) for task in SECRETS_TASKS),
-            "a nested secrets_files entry cannot be copied without its parent",
-        )
-
-    def test_secrets_role_rejects_traversal_and_symlink_escapes(self):
-        flat = json.dumps(SECRETS_TASKS)
-        self.assertIn("search(", flat)
-        self.assertIn("realpath", flat)
-        self.assertNotIn("is not match('(^|/)\\\\.\\\\\\.(/|$)')", flat)
 
 
 class StateAndImageTests(unittest.TestCase):
@@ -192,8 +217,6 @@ class StateAndImageTests(unittest.TestCase):
             writable = set(service.get("writable_dirs", []))
             for source in self._volume_sources(service):
                 self.assertIn(source, writable, f"{service['short']} {source}")
-            # The writable list is exactly the set of state volumes; a directory
-            # granted to the container is never left host-owned.
             for path in writable:
                 self.assertTrue(path.startswith(self.STATE_ROOT_PREFIXES), path)
 

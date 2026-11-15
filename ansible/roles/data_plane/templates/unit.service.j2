@@ -46,8 +46,8 @@ ExecStart=/usr/bin/podman run \
 {% for volume in service.volumes | default([]) %}
   --volume {{ volume }} \
 {% endfor %}
-{% for secret in service.secret_files | default([]) %}
-  --volume {{ secret.src }}:{{ secret.dest }}:ro \
+{% for secret in host_secret_files | selectattr('unit', 'defined') | selectattr('unit', 'equalto', service.name) | list %}
+  --volume {{ data_plane_secret_root }}/{{ secret.src }}:{{ secret.mount }}:ro \
 {% endfor %}
   {{ data_plane_images[service.image_key] }}{% for arg in service.args | default([]) %} {{ arg }}{% endfor %}
 

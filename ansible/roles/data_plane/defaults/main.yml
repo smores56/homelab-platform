@@ -1,12 +1,7 @@
 ---
-data_plane_default_container_user: "65532:65532"
-
-# Declared secret files are mounted into the container read-only. The secret
-# root stays 0700 root:root, so this numeric gid exists for the mount and the
-# container's --user/--group, not as a host group.
-data_plane_secret_owner: root
-data_plane_secret_group: "65532"
-data_plane_secret_mode: "0640"
+# The container uid is the one place the numeric id lives; the secret policy in
+# group_vars derives the mount gid from it.
+data_plane_default_container_user: "{{ data_plane_container_gid }}:{{ data_plane_container_gid }}"
 
 # Units this role used to install. A converge stops, disables and removes them
 # so an upgraded host cannot keep running a retired writer off the recovery
@@ -39,15 +34,6 @@ data_plane_services:
       DATA_PLANE_CONSUMER_SECRETS_FILE: /run/secrets/event/consumers.json
       DATA_PLANE_HOST: "0.0.0.0"
       DATA_PLANE_PORT: "7101"
-    # The append and read tokens differ by contract; the service refuses equal
-    # values. consumers.json is a JSON object, not a token.
-    secret_files:
-      - src: "{{ data_plane_secret_root }}/event-service/append-token"
-        dest: /run/secrets/event/append-token
-      - src: "{{ data_plane_secret_root }}/event-service/read-token"
-        dest: /run/secrets/event/read-token
-      - src: "{{ data_plane_secret_root }}/event-service/consumers.json"
-        dest: /run/secrets/event/consumers.json
     state_dir: "{{ data_plane_state_root }}/event-service"
     # Dedicated datasets the container writes; the parent state root stays
     # root-only and this role hands only these directories to the container uid.
@@ -80,11 +66,6 @@ data_plane_services:
       DATA_PLANE_HOST: "0.0.0.0"
       DATA_PLANE_PORT: "7102"
       DATA_PLANE_GENERAL_ROOT: /srv/books
-    secret_files:
-      - src: "{{ data_plane_secret_root }}/write-broker/identity"
-        dest: /run/secrets/broker/identity
-      - src: "{{ data_plane_secret_root }}/write-broker/operator-key"
-        dest: /run/secrets/broker/operator-key
     state_dir: "{{ data_plane_state_root }}/write-broker"
     writable_dirs:
       - "{{ data_plane_state_root }}/intents"
