@@ -49,7 +49,7 @@ Service, PVC, ServiceAccount, Role, RoleBinding or NetworkPolicy for either.
   the event service from outside the cluster. That work is not a pod, so it
   carries no cluster identity and no NetworkPolicy needs to admit it.
 - `recovery.sammohr.dev` is served by Cloudflare Pages from `apps/recovery-page`
-  in `homelabs-platform`. It is a static app: it holds no cluster identity, no
+  in `homelab-platform`. It is a static app: it holds no cluster identity, no
   claim and no network policy. A download is the browser following a pre-signed
   R2 URL directly.
 - The data-plane image therefore serves only `event`, `broker`, `relay`,
@@ -73,7 +73,7 @@ is valid.
 
 | Service | Subcommand | Image reference | Digest variable |
 | --- | --- | --- | --- |
-| event-service | `event` | `ghcr.io/smores56/homelabs-platform/data-plane@sha256:<64 hex>` | `DATA_PLANE_IMAGE_DIGEST` |
+| event-service | `event` | `ghcr.io/smores56/homelab-platform/data-plane@sha256:<64 hex>` | `DATA_PLANE_IMAGE_DIGEST` |
 | write-broker | `broker` | same image | `DATA_PLANE_IMAGE_DIGEST` |
 | confirmation-surface | `confirmation` | same image | `DATA_PLANE_IMAGE_DIGEST` |
 | collector-relay (4) | `collector` | same image | `DATA_PLANE_IMAGE_DIGEST` |

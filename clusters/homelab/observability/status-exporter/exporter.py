@@ -104,7 +104,7 @@ def node_metrics(nodes: Iterable[dict[str, Any]]) -> list[str]:
     lines: list[str] = []
     for node in nodes:
         labels = {"node": node.get("metadata", {}).get("name", "")}
-        lines.append(render_sample("homelabs_cluster_node_ready", labels, node_ready(node)))
+        lines.append(render_sample("homelab_cluster_node_ready", labels, node_ready(node)))
     return lines
 
 
@@ -114,8 +114,8 @@ def pod_metrics(pods: Iterable[dict[str, Any]]) -> list[str]:
         name = pod.get("metadata", {}).get("name", "")
         namespace = pod.get("metadata", {}).get("namespace", DEFAULT_NAMESPACE)
         labels = {"namespace": namespace, "pod": name}
-        lines.append(render_sample("homelabs_data_pod_ready", labels, pod_ready(pod)))
-        lines.append(render_sample("homelabs_data_pod_restart_count", labels, pod_restarts(pod)))
+        lines.append(render_sample("homelab_data_pod_ready", labels, pod_ready(pod)))
+        lines.append(render_sample("homelab_data_pod_restart_count", labels, pod_restarts(pod)))
     return lines
 
 
@@ -126,10 +126,10 @@ def workload_metrics(workloads: Iterable[dict[str, Any]]) -> list[str]:
         kind = workload.get("kind", "")
         namespace = metadata.get("namespace", DEFAULT_NAMESPACE)
         labels = {"namespace": namespace, "kind": kind, "name": metadata.get("name", "")}
-        lines.append(render_sample("homelabs_data_workload_ready", labels, workload_ready(workload)))
+        lines.append(render_sample("homelab_data_workload_ready", labels, workload_ready(workload)))
         for image in workload_images(workload):
             lines.append(
-                render_sample("homelabs_data_workload_image", {**labels, "image": image}, 1)
+                render_sample("homelab_data_workload_image", {**labels, "image": image}, 1)
             )
     return lines
 
@@ -168,13 +168,13 @@ def cronjob_metrics(cronjobs: Iterable[dict[str, Any]]) -> list[str]:
         status = cronjob.get("status") or {}
         lines.append(
             render_sample(
-                "homelabs_data_cronjob_last_successful_timestamp_seconds",
+                "homelab_data_cronjob_last_successful_timestamp_seconds",
                 labels,
                 parse_rfc3339(status.get("lastSuccessfulTime")),
             )
         )
         suspended = 1 if (cronjob.get("spec") or {}).get("suspend") else 0
-        lines.append(render_sample("homelabs_data_cronjob_suspended", labels, suspended))
+        lines.append(render_sample("homelab_data_cronjob_suspended", labels, suspended))
     return lines
 
 
@@ -189,20 +189,20 @@ def render_success(success: bool, last_success_at: float | None = None) -> str:
     stamp = int(last_success_at or 0)
     return "\n".join(
         [
-            "# HELP homelabs_data_status_exporter_up 1 while the exporter serves metrics.",
-            "# TYPE homelabs_data_status_exporter_up gauge",
-            render_sample("homelabs_data_status_exporter_up", {}, 1 if success else 0),
-            "# HELP homelabs_data_status_exporter_last_scrape_success "
+            "# HELP homelab_data_status_exporter_up 1 while the exporter serves metrics.",
+            "# TYPE homelab_data_status_exporter_up gauge",
+            render_sample("homelab_data_status_exporter_up", {}, 1 if success else 0),
+            "# HELP homelab_data_status_exporter_last_scrape_success "
             "1 when the last Kubernetes API read succeeded.",
-            "# TYPE homelabs_data_status_exporter_last_scrape_success gauge",
+            "# TYPE homelab_data_status_exporter_last_scrape_success gauge",
             render_sample(
-                "homelabs_data_status_exporter_last_scrape_success", {}, 1 if success else 0
+                "homelab_data_status_exporter_last_scrape_success", {}, 1 if success else 0
             ),
-            "# HELP homelabs_data_status_exporter_last_scrape_timestamp_seconds "
+            "# HELP homelab_data_status_exporter_last_scrape_timestamp_seconds "
             "Unix time of the last successful Kubernetes API read (0 = never).",
-            "# TYPE homelabs_data_status_exporter_last_scrape_timestamp_seconds gauge",
+            "# TYPE homelab_data_status_exporter_last_scrape_timestamp_seconds gauge",
             render_sample(
-                "homelabs_data_status_exporter_last_scrape_timestamp_seconds", {}, stamp
+                "homelab_data_status_exporter_last_scrape_timestamp_seconds", {}, stamp
             ),
         ]
     )

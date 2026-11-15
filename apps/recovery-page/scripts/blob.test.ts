@@ -7,7 +7,7 @@ import { checkGroupRoot, sharedStore } from "./blob.ts";
 const group: RecoveryGroup = {
   id: "photos",
   label: "photos",
-  repo: "s3:https://account.r2.cloudflarestorage.com/homelabs-restic/photos",
+  repo: "s3:https://account.r2.cloudflarestorage.com/homelab-restic/photos",
   data_root: "/srv/photos",
 };
 
@@ -65,7 +65,7 @@ describe("sharedStore", () => {
   test("accepts the manifest's https store", () => {
     expect(sharedStore(manifest, null, null)).toEqual({
       endpoint: "https://account.r2.cloudflarestorage.com",
-      bucket: "homelabs-restic",
+      bucket: "homelab-restic",
     });
   });
 

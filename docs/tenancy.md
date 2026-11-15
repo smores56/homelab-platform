@@ -6,11 +6,11 @@ all select by label rather than by hard-coded name. The data tier is one
 namespace per application (smores56/sdlc#580), because each app is bound to one
 virtiofs share and must not be able to reach another app's.
 
-| Namespace | `homelabs.dev/tenant` | `homelabs.dev/tier` | PSA enforce | Contents |
+| Namespace | `homelab.dev/tenant` | `homelab.dev/tier` | PSA enforce | Contents |
 | --- | --- | --- | --- | --- |
 | `flux-system` | `platform` | `platform` | `baseline` | Flux controllers (labels added by the `flux-system-namespace` patch) |
 | `platform` | `platform` | `platform` | `baseline` | ESO, policy controllers, platform jobs |
-| `tenant-apps` | `apps` | `tenant` | `restricted` | `homelabs-apps` workloads (nanobot and successors) |
+| `tenant-apps` | `apps` | `tenant` | `restricted` | `homelab-apps` workloads (nanobot and successors) |
 | `broker` | `broker` | `broker` | `restricted` | Egress broker with per-host tokens |
 | `webhook` | `webhook` | `webhook` | `restricted` | Inbound webhook receiver; capability URLs enqueue into the agent (`docs/webhook.md`) |
 | `notify` | `notify` | `notify` | `restricted` | ntfy: the notification bus for the phone, the laptop, host units, Alertmanager, Flux and the agent (`docs/notify.md`) |
@@ -55,7 +55,7 @@ Seventeen policies, each in its own file with the binding that scopes it
 | --- | --- | --- |
 | `no-host-access` | `tenant`, `broker`, `data` (all four namespaces), `webhook`, `notify` | `hostNetwork`, `hostPID`, `hostIPC`, `hostPath`, privileged containers, `hostPort`, added capabilities, `allowPrivilegeEscalation` |
 | `tenant-gvisor` | `tenant` | any pod without `spec.runtimeClassName: gvisor` |
-| `tenant-images` | `tenant` | images not pinned by `@sha256:`, floating tags, nanobot from outside `ghcr.io/smores56/homelabs-platform/nanobot@sha256:` |
+| `tenant-images` | `tenant` | images not pinned by `@sha256:`, floating tags, nanobot from outside `ghcr.io/smores56/homelab-platform/nanobot@sha256:` |
 | `tenant-scratch-pvc` | `tenant` | pod volumes whose PVC name does not start with the pod's `app.kubernetes.io/name` |
 | `tenant-pvc-naming` | `tenant` | PVCs without an `app.kubernetes.io/name` label or not named `<name>-*` |
 | `tenant-flux-guard` | `tenant` | Kustomizations that use another service account, target another namespace, read another GitRepository, carry a `kubeConfig`, or decrypt with another age key |
@@ -63,7 +63,7 @@ Seventeen policies, each in its own file with the binding that scopes it
 | `tenant-secret-scope` | `tenant` | pods mounting or reading the `sops-age` Secret |
 | `nanobot-policy` | `tenant` | nanobot pods that omit the `nanobot-policy` ConfigMap mount, place another volume under `/etc/nanobot/{prompts,models}`, or set `NANOBOT_CONFIG_DIR` to anything but `/etc/nanobot` |
 | `nanobot-policy-write` | `tenant` | writes to the platform-owned `nanobot-policy` ConfigMap by anyone but the platform reconciler |
-| `data-workload-source` | `data` (all four) | pods without `homelabs.dev/managed-by=platform` or not running as `data-workload` |
+| `data-workload-source` | `data` (all four) | pods without `homelab.dev/managed-by=platform` or not running as `data-workload` |
 | `data-pvc-scope` | `data` (all four) | pods mounting a PVC whose name does not start with their own namespace, i.e. another app's share |
 | `data-pvc-storage` | `data` (all four) | PVCs not named `<namespace>-*` or not claiming `data-local` (no dynamic provisioning in the data tier) |
 | `webhook-runtime` | `webhook` | pods without gVisor, `runAsNonRoot` or a read-only rootfs (the publicly reachable receiver) |
@@ -93,7 +93,7 @@ host access.
   writes on RBAC objects are absent.
 
 That Role is the identity kustomize-controller impersonates for the
-`homelabs-apps` Kustomization, so the tenant owns its workload objects and
+`homelab-apps` Kustomization, so the tenant owns its workload objects and
 nothing else. `can-i` expectations live in `tests/policies/rbac.tsv` and run
 against a real API server in `--runtime` mode.
 
@@ -123,7 +123,7 @@ the agent gets** — there is no kubeconfig, no proxy and no generic forwarding.
 | Service | `tenant-apps/agent-control`, ClusterIP **8081** | ingress only from the `broker` namespace on 8081; egress only DNS and the k3s API range (443/6443) |
 | Role | `tenant-apps/agent-control` (platform RBAC stage) | `pods`, `pods/log`, `events`, `replicasets` get/list/watch; `get`/`patch` on `deployments/nanobot` only (`resourceNames`) |
 | ClusterRole | `agent-control-read`, bound in the agent-control stage | `pods`, `events`, `nodes` get/list/watch; `deployments`, `statefulsets`, `daemonsets` get/list; Flux `kustomizations` get/list |
-| Secret | `tenant-apps/agent-control-build` (hand-made, step 33), key `token`, mounted only at `/run/build` | a GitHub App installation token or fine-grained PAT with `Actions: write` on `smores56/homelabs-platform` only — **the only GitHub credential outside the broker**; mounted `optional: true`, so its absence degrades `POST /self/build` to `503` and nothing else |
+| Secret | `tenant-apps/agent-control-build` (hand-made, step 33), key `token`, mounted only at `/run/build` | a GitHub App installation token or fine-grained PAT with `Actions: write` on `smores56/homelab-platform` only — **the only GitHub credential outside the broker**; mounted `optional: true`, so its absence degrades `POST /self/build` to `503` and nothing else |
 
 The HTTP surface is exactly ten routes; any other path is `404` and a wrong
 method on a known path is `405`. Probes are TCP checks, so no HTTP health route
@@ -134,7 +134,7 @@ exists outside the list.
 | `GET /self/status` | the nanobot Deployment's replica counts and its own pods (status only) |
 | `GET /self/logs?tail=N` | container logs, `tail` clamped to 1..500, only for pods labelled `app.kubernetes.io/name=nanobot` **and** owned by the nanobot Deployment's ReplicaSets |
 | `GET /self/events` | events about those pods and the Deployment |
-| `POST /self/restart` | patches the `homelabs.dev/restart-requested-at` pod-template annotation on `deployments/nanobot` (`202`) |
+| `POST /self/restart` | patches the `homelab.dev/restart-requested-at` pod-template annotation on `deployments/nanobot` (`202`) |
 | `POST /self/build` | dispatches `publish-nanobot.yml` through the Actions API (`202`); repository, workflow and ref are constants, the token is read from the mounted Secret and never logged (`docs/flux.md`) |
 | `GET /cluster/pods`, `/cluster/events`, `/cluster/nodes` | read-only cluster picture, curated fields |
 | `GET /cluster/workloads` | Deployments/StatefulSets/DaemonSets across namespaces, **metadata only** |
@@ -190,7 +190,7 @@ widened, only those ports actually reach the internet. Neither layer is
 something the tenant can change.
 
 The tenant repository keeps a mirrored copy of its NetworkPolicies as the
-reviewed contract (`homelabs-apps`, `deploy/`). That copy must carry the same
+reviewed contract (`homelab-apps`, `deploy/`). That copy must carry the same
 two `ipBlock` entries; `tests/policies/check.sh` asserts the platform side only,
 because the tenant repository is not readable from this one.
 
@@ -244,7 +244,7 @@ The `sops-age` key is also why `tenant-secret-scope` exists: the tenant can crea
 pods, so without that rule it could mount the age identity and decrypt every
 SOPS file in its namespace.
 
-## Contract with `homelabs-apps`
+## Contract with `homelab-apps`
 
 The tenant repository is reconciled by `tenant-apps-reconciler` with
 `targetNamespace: tenant-apps` from `./deploy`, so:

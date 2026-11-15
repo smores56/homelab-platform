@@ -14,7 +14,7 @@ metadata:
   name: webhook-tokens-contract
   labels:
     app.kubernetes.io/name: webhook
-    homelabs.dev/tier: webhook
+    homelab.dev/tier: webhook
 data:
   secretName: webhook-tokens
   namespace: webhook

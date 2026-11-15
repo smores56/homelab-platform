@@ -17,8 +17,8 @@ metadata:
   namespace: ingress
   labels:
     app.kubernetes.io/name: cloudflared
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: ingress
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: ingress
 spec:
   replicas: 2
   selector:
@@ -28,9 +28,9 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: cloudflared
-        app.kubernetes.io/part-of: homelabs
-        homelabs.dev/tier: ingress
-        homelabs.dev/managed-by: platform
+        app.kubernetes.io/part-of: homelab
+        homelab.dev/tier: ingress
+        homelab.dev/managed-by: platform
     spec:
       serviceAccountName: cloudflared
       automountServiceAccountToken: false

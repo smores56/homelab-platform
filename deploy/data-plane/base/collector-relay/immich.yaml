@@ -9,9 +9,9 @@ metadata:
   labels:
     app.kubernetes.io/name: collector-immich
     app.kubernetes.io/component: collector-relay
-    homelabs.dev/source: immich
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: platform
+    homelab.dev/source: immich
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: platform
 spec:
   replicas: 1
   strategy:
@@ -24,10 +24,10 @@ spec:
       labels:
         app.kubernetes.io/name: collector-immich
         app.kubernetes.io/component: collector-relay
-        homelabs.dev/source: immich
-        app.kubernetes.io/part-of: homelabs
-        homelabs.dev/tier: platform
-        homelabs.dev/managed-by: platform
+        homelab.dev/source: immich
+        app.kubernetes.io/part-of: homelab
+        homelab.dev/tier: platform
+        homelab.dev/managed-by: platform
     spec:
       serviceAccountName: collector-relay
       automountServiceAccountToken: false

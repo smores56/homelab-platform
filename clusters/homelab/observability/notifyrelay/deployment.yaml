@@ -17,8 +17,8 @@ metadata:
   name: notifyrelay
   labels:
     app.kubernetes.io/name: notifyrelay
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: observability
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: observability
 spec:
   replicas: 1
   strategy:
@@ -30,8 +30,8 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: notifyrelay
-        app.kubernetes.io/part-of: homelabs
-        homelabs.dev/tier: observability
+        app.kubernetes.io/part-of: homelab
+        homelab.dev/tier: observability
       annotations:
         prometheus.io/scrape: "false"
     spec:
@@ -117,8 +117,8 @@ metadata:
   name: notifyrelay
   labels:
     app.kubernetes.io/name: notifyrelay
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: observability
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: observability
 spec:
   type: ClusterIP
   selector:
@@ -134,6 +134,6 @@ metadata:
   name: notifyrelay
   labels:
     app.kubernetes.io/name: notifyrelay
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: observability
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: observability
 automountServiceAccountToken: false

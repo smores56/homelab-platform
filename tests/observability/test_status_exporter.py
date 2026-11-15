@@ -49,7 +49,7 @@ class NodeMetricsTest(unittest.TestCase):
 
     def test_sample_carries_the_node_name(self) -> None:
         self.assertEqual(
-            ['homelabs_cluster_node_ready{node="cluster"} 1.0'],
+            ['homelab_cluster_node_ready{node="cluster"} 1.0'],
             exporter.node_metrics([node("True")]),
         )
 
@@ -70,10 +70,10 @@ class PodMetricsTest(unittest.TestCase):
     def test_samples_carry_namespace_and_pod(self) -> None:
         lines = exporter.pod_metrics([pod([True], [2])])
         self.assertIn(
-            'homelabs_data_pod_ready{namespace="data",pod="immich-server-0"} 1.0', lines
+            'homelab_data_pod_ready{namespace="data",pod="immich-server-0"} 1.0', lines
         )
         self.assertIn(
-            'homelabs_data_pod_restart_count{namespace="data",pod="immich-server-0"} 2', lines
+            'homelab_data_pod_restart_count{namespace="data",pod="immich-server-0"} 2', lines
         )
 
 
@@ -121,7 +121,7 @@ class WorkloadMetricsTest(unittest.TestCase):
     def test_image_metric_is_an_info_sample(self) -> None:
         lines = exporter.workload_metrics([workload("Deployment", "immich", 1, 1, "redis:7.4")])
         self.assertIn(
-            'homelabs_data_workload_image{image="redis:7.4",kind="Deployment",'
+            'homelab_data_workload_image{image="redis:7.4",kind="Deployment",'
             'name="immich",namespace="data"} 1',
             lines,
         )
@@ -133,20 +133,20 @@ class RenderTest(unittest.TestCase):
         self.assertEqual('m{pod="a\\"b\\\\c"} 1', line)
 
     def test_render_reports_scrape_success(self) -> None:
-        text = exporter.render(["homelabs_data_pod_ready{a=\"b\"} 1"], True, 1794367785)
-        self.assertIn("homelabs_data_pod_ready{a=\"b\"} 1", text)
-        self.assertIn("homelabs_data_status_exporter_last_scrape_success 1", text)
+        text = exporter.render(["homelab_data_pod_ready{a=\"b\"} 1"], True, 1794367785)
+        self.assertIn("homelab_data_pod_ready{a=\"b\"} 1", text)
+        self.assertIn("homelab_data_status_exporter_last_scrape_success 1", text)
         self.assertIn(
-            "homelabs_data_status_exporter_last_scrape_timestamp_seconds 1794367785", text
+            "homelab_data_status_exporter_last_scrape_timestamp_seconds 1794367785", text
         )
         self.assertTrue(text.endswith("\n"))
 
     def test_failed_scrape_still_serves_up(self) -> None:
         text = exporter.render([], False, 0)
-        self.assertIn("homelabs_data_status_exporter_up 1", text)
-        self.assertIn("homelabs_data_status_exporter_last_scrape_success 0", text)
+        self.assertIn("homelab_data_status_exporter_up 1", text)
+        self.assertIn("homelab_data_status_exporter_last_scrape_success 0", text)
         self.assertIn(
-            "homelabs_data_status_exporter_last_scrape_timestamp_seconds 0", text
+            "homelab_data_status_exporter_last_scrape_timestamp_seconds 0", text
         )
 
 
@@ -174,9 +174,9 @@ class CronJobMetricsTest(unittest.TestCase):
     def test_metrics_carry_the_tree_and_the_success_time(self) -> None:
         self.assertEqual(
             [
-                'homelabs_data_cronjob_last_successful_timestamp_seconds'
+                'homelab_data_cronjob_last_successful_timestamp_seconds'
                 '{cronjob="restic-backup",namespace="immich"} 1794367785.0',
-                'homelabs_data_cronjob_suspended{cronjob="restic-backup",namespace="immich"} 0',
+                'homelab_data_cronjob_suspended{cronjob="restic-backup",namespace="immich"} 0',
             ],
             exporter.cronjob_metrics([cronjob("2026-11-11T03:29:45Z")]),
         )
@@ -184,7 +184,7 @@ class CronJobMetricsTest(unittest.TestCase):
     def test_never_succeeded_reports_zero(self) -> None:
         lines = exporter.cronjob_metrics([cronjob(None)])
         self.assertIn(
-            'homelabs_data_cronjob_last_successful_timestamp_seconds'
+            'homelab_data_cronjob_last_successful_timestamp_seconds'
             '{cronjob="restic-backup",namespace="immich"} 0.0',
             lines,
         )
@@ -192,7 +192,7 @@ class CronJobMetricsTest(unittest.TestCase):
     def test_suspended_job_is_visible(self) -> None:
         lines = exporter.cronjob_metrics([cronjob(None, suspend=True)])
         self.assertIn(
-            'homelabs_data_cronjob_suspended{cronjob="restic-backup",namespace="immich"} 1',
+            'homelab_data_cronjob_suspended{cronjob="restic-backup",namespace="immich"} 1',
             lines,
         )
 
@@ -209,14 +209,14 @@ class CacheTest(unittest.TestCase):
             self.calls += 1
             if self.fail:
                 raise OSError("api unavailable")
-            return ["homelabs_data_status_exporter_up{} 1"]
+            return ["homelab_data_status_exporter_up{} 1"]
 
     def test_successful_scrape_stamps_wall_clock_time(self) -> None:
         cache = exporter.Cache(self.Client(), refresh_seconds=0)
-        self.assertIn("homelabs_data_status_exporter_last_scrape_success 1", cache.metrics())
+        self.assertIn("homelab_data_status_exporter_last_scrape_success 1", cache.metrics())
         self.assertGreater(cache.last_success_at, 0)
         self.assertIn(
-            f"homelabs_data_status_exporter_last_scrape_timestamp_seconds {int(cache.last_success_at)}",
+            f"homelab_data_status_exporter_last_scrape_timestamp_seconds {int(cache.last_success_at)}",
             cache.metrics(),
         )
 
@@ -227,12 +227,12 @@ class CacheTest(unittest.TestCase):
         good = cache.last_success_at
         client.fail = True
         text = cache.metrics()
-        self.assertIn("homelabs_data_status_exporter_last_scrape_success 0", text)
+        self.assertIn("homelab_data_status_exporter_last_scrape_success 0", text)
         # The age keeps growing from the last success instead of resetting, which
         # is what makes a stale exporter visible downstream.
         self.assertEqual(good, cache.last_success_at)
         self.assertIn(
-            f"homelabs_data_status_exporter_last_scrape_timestamp_seconds {int(good)}", text
+            f"homelab_data_status_exporter_last_scrape_timestamp_seconds {int(good)}", text
         )
 
 

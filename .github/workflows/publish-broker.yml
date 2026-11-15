@@ -30,7 +30,7 @@ jobs:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - name: Build, push, and print the digest
         env:
-          IMAGE: ghcr.io/smores56/homelabs-platform/broker
+          IMAGE: ghcr.io/smores56/homelab-platform/broker
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail

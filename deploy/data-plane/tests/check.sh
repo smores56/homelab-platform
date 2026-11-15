@@ -137,7 +137,7 @@ fi
 # ------------------------------------------------------------- image policy
 # Every image must be digest-pinned. A tag (`:v1`, `:latest`) is rejected: the
 # digest is the identity, and the reference must be the one data-plane image.
-image_re='^[[:space:]]*image: ghcr\.io/smores56/homelabs-platform/data-plane@sha256:[0-9a-f]{64}$'
+image_re='^[[:space:]]*image: ghcr\.io/smores56/homelab-platform/data-plane@sha256:[0-9a-f]{64}$'
 if grep -Eq '^[[:space:]]*image:' "$render"; then
   if grep -E '^[[:space:]]*image:' "$render" | grep -Evq "$image_re"; then
     bad "an image is not digest-pinned under the placeholder registry"
@@ -255,8 +255,8 @@ else
   bad "namespace does not enforce PSA restricted"
 fi
 
-if grep -q 'homelabs.dev/tier: platform' "$render" &&
-  grep -q 'homelabs.dev/tenant: platform' "$render"; then
+if grep -q 'homelab.dev/tier: platform' "$render" &&
+  grep -q 'homelab.dev/tenant: platform' "$render"; then
   ok "namespace carries tenant/tier labels"
 else
   bad "namespace labels missing"

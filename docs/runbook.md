@@ -1,6 +1,6 @@
 # Runbook
 
-Repository `smores56/homelabs-platform`. Updated 2026-11-11 at bootstrap commit
+Repository `smores56/homelab-platform`. Updated 2026-11-11 at bootstrap commit
 `4d1229f`, `gh` 2.96.0, owner `smores56`.
 
 The token available to the bootstrap agent is a fine-grained PAT scoped to
@@ -14,7 +14,7 @@ and remain owner actions. Exact responses are recorded under each step.
 ```sh
 git add -A && git commit -m "feat(platform): bootstrap repo, tenancy namespaces, and CI guards"
 git push -u origin main
-# To https://github.com/smores56/homelabs-platform.git
+# To https://github.com/smores56/homelab-platform.git
 #  * [new branch]      main -> main
 ```
 
@@ -24,11 +24,11 @@ Custom branch policy, so only `main` may deploy; no required reviewers, because
 the owner is the only approver and a self-review gate only adds a click.
 
 ```sh
-gh api -X PUT repos/smores56/homelabs-platform/environments/cloudflare --input - <<'JSON'
+gh api -X PUT repos/smores56/homelab-platform/environments/cloudflare --input - <<'JSON'
 {"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}
 JSON
 
-gh api -X POST repos/smores56/homelabs-platform/environments/cloudflare/deployment-branch-policies \
+gh api -X POST repos/smores56/homelab-platform/environments/cloudflare/deployment-branch-policies \
   -f name=main -f type=branch
 ```
 
@@ -42,14 +42,14 @@ Recorded responses:
 Actual state after the attempts:
 
 ```sh
-gh api repos/smores56/homelabs-platform/environments --jq '.environments[] | {name, created_at}'
+gh api repos/smores56/homelab-platform/environments --jq '.environments[] | {name, created_at}'
 # {"name":"cloudflare","created_at":"2026-11-11T12:51:13Z"}
 
-gh api repos/smores56/homelabs-platform/environments/cloudflare --jq \
+gh api repos/smores56/homelab-platform/environments/cloudflare --jq \
   '{name, protection_rules, deployment_branch_policy}'
 # {"name":"cloudflare","protection_rules":[],"deployment_branch_policy":null}
 
-gh api repos/smores56/homelabs-platform/environments/cloudflare/deployment-branch-policies
+gh api repos/smores56/homelab-platform/environments/cloudflare/deployment-branch-policies
 # 404 Not Found (no policies exist)
 ```
 
@@ -64,9 +64,9 @@ Order matters: set the branch policy, then the secret.
 Verify once an admin token is used:
 
 ```sh
-gh api repos/smores56/homelabs-platform/environments/cloudflare --jq \
+gh api repos/smores56/homelab-platform/environments/cloudflare --jq \
   '{name, protection_rules, deployment_branch_policy}'
-gh api repos/smores56/homelabs-platform/environments/cloudflare/deployment-branch-policies --jq \
+gh api repos/smores56/homelab-platform/environments/cloudflare/deployment-branch-policies --jq \
   '.branch_policies[] | {name, type}'
 ```
 
@@ -81,7 +81,7 @@ force-push, no deletion, conversation resolution. `enforce_admins` stays false s
 the owner can bootstrap; the machine user and every other account are bound.
 
 ```sh
-gh api -X PUT repos/smores56/homelabs-platform/branches/main/protection --input - <<'JSON'
+gh api -X PUT repos/smores56/homelab-platform/branches/main/protection --input - <<'JSON'
 {
   "required_status_checks": {
     "strict": true,
@@ -125,7 +125,7 @@ after the GET proved the token lacks the scope.)
 Verify once an admin token is used:
 
 ```sh
-gh api repos/smores56/homelabs-platform/branches/main/protection --jq \
+gh api repos/smores56/homelab-platform/branches/main/protection --jq \
   '{required_status_checks: .required_status_checks.contexts,
     reviews: .required_pull_request_reviews.require_code_owner_reviews,
     linear: .required_linear_history.enabled,
@@ -143,24 +143,24 @@ private vulnerability reporting on.
 
 ```sh
 # Actions enabled, only GitHub-owned + verified Marketplace actions allowed.
-gh api -X PUT repos/smores56/homelabs-platform/actions/permissions --input - <<'JSON'
+gh api -X PUT repos/smores56/homelab-platform/actions/permissions --input - <<'JSON'
 {"enabled":true,"allowed_actions":"selected","sha_pinning_required":true,
- "selected_actions_url":"https://api.github.com/repos/smores56/homelabs-platform/actions/permissions/selected-actions"}
+ "selected_actions_url":"https://api.github.com/repos/smores56/homelab-platform/actions/permissions/selected-actions"}
 JSON
-gh api -X PUT repos/smores56/homelabs-platform/actions/permissions/selected-actions --input - <<'JSON'
+gh api -X PUT repos/smores56/homelab-platform/actions/permissions/selected-actions --input - <<'JSON'
 {"github_owned_allowed":true,"verified_allowed":true}
 JSON
 
 # Default GITHUB_TOKEN is read-only and cannot approve PRs.
-gh api -X PUT repos/smores56/homelabs-platform/actions/permissions/workflow \
+gh api -X PUT repos/smores56/homelab-platform/actions/permissions/workflow \
   -f default_workflow_permissions=read -F can_approve_pull_request_reviews=false
 
 # Every fork PR run waits for an owner approval; fork runs get a read-only token.
-gh api -X PUT repos/smores56/homelabs-platform/actions/permissions/fork-pr-contributor-approval \
+gh api -X PUT repos/smores56/homelab-platform/actions/permissions/fork-pr-contributor-approval \
   -f approval_policy=all_external_contributors
 
 # Private vulnerability reporting.
-gh api -X PUT repos/smores56/homelabs-platform/private-vulnerability-reporting --input - <<<'{}'
+gh api -X PUT repos/smores56/homelab-platform/private-vulnerability-reporting --input - <<<'{}'
 ```
 
 Recorded responses:
@@ -168,7 +168,7 @@ Recorded responses:
 - `GET /actions/permissions`, `/actions/permissions/workflow`,
   `/actions/permissions/fork-pr-contributor-approval`:
   `{"message":"Resource not accessible by personal access token","documentation_url":"https://docs.github.com/rest/actions/permissions#get-github-actions-permissions-for-a-repository","status":403}`
-- `PATCH /repos/smores56/homelabs-platform`:
+- `PATCH /repos/smores56/homelab-platform`:
   `{"message":"Resource not accessible by personal access token","documentation_url":"https://docs.github.com/rest/repos/repos#update-a-repository","status":403}`
 
 Current state from the same token: repo is private,
@@ -178,9 +178,9 @@ so the endpoints above are scope failures, not plan failures.
 Verify once an admin token is used:
 
 ```sh
-gh api repos/smores56/homelabs-platform/actions/permissions/workflow
-gh api repos/smores56/homelabs-platform/actions/permissions/fork-pr-contributor-approval
-gh api repos/smores56/homelabs-platform/private-vulnerability-reporting
+gh api repos/smores56/homelab-platform/actions/permissions/workflow
+gh api repos/smores56/homelab-platform/actions/permissions/fork-pr-contributor-approval
+gh api repos/smores56/homelab-platform/private-vulnerability-reporting
 ```
 
 Expected: `{"default_workflow_permissions":"read","can_approve_pull_request_reviews":false}`,
@@ -209,9 +209,9 @@ Runs triggered by the bootstrap pushes, state read from the Actions API:
 
 | Workflow | Run | Result |
 | --- | --- | --- |
-| `ci` | [43024148131](https://github.com/smores56/homelabs-platform/actions/runs/43024148131) | success (`kustomize build`, `kubeconform`, `yamllint`, `tofu fmt and validate`, `shellcheck`, `action SHA pins`, `CODEOWNERS coverage` all success; `fork-pr-secret-boundary` skipped on push) |
-| `tofu-plan` | [43024148058](https://github.com/smores56/homelabs-platform/actions/runs/43024148058) | success; logs `CLOUDFLARE_API_TOKEN absent; skipping plan` |
-| `tofu-apply` | [43024148159](https://github.com/smores56/homelabs-platform/actions/runs/43024148159) | failure; step `apply` errors with `CLOUDFLARE_API_TOKEN absent; cannot apply` |
+| `ci` | [43024148131](https://github.com/smores56/homelab-platform/actions/runs/43024148131) | success (`kustomize build`, `kubeconform`, `yamllint`, `tofu fmt and validate`, `shellcheck`, `action SHA pins`, `CODEOWNERS coverage` all success; `fork-pr-secret-boundary` skipped on push) |
+| `tofu-plan` | [43024148058](https://github.com/smores56/homelab-platform/actions/runs/43024148058) | success; logs `CLOUDFLARE_API_TOKEN absent; skipping plan` |
+| `tofu-apply` | [43024148159](https://github.com/smores56/homelab-platform/actions/runs/43024148159) | failure; step `apply` errors with `CLOUDFLARE_API_TOKEN absent; cannot apply` |
 
 The `tofu-apply` failure is the intended loud signal until
 `docs/manual-steps.md` step 2 stores the token: with the environment secret
@@ -275,21 +275,21 @@ never set (`docs/flux.md`).
 
 ### 3. Tenant repository credential
 
-`homelabs-apps` is private, so the GitRepository in `tenant-apps` needs its own
+`homelab-apps` is private, so the GitRepository in `tenant-apps` needs its own
 read-only credential in the same namespace:
 
 ```sh
-flux create secret git homelabs-apps-auth \
+flux create secret git homelab-apps-auth \
   --namespace=tenant-apps \
-  --url=ssh://git@github.com/smores56/homelabs-apps
+  --url=ssh://git@github.com/smores56/homelab-apps
 ```
 
-Add the printed public key to `smores56/homelabs-apps` under Settings → Deploy
+Add the printed public key to `smores56/homelab-apps` under Settings → Deploy
 keys with **Allow write access clear**. Verify:
 
 ```sh
 flux -n tenant-apps get gitrepository        # READY True
-flux -n tenant-apps get kustomization        # homelabs-apps reconciled as tenant-apps-reconciler
+flux -n tenant-apps get kustomization        # homelab-apps reconciled as tenant-apps-reconciler
 ```
 
 ### 4. External Secrets (a precondition, not a toggle)
@@ -442,7 +442,7 @@ expression; this job can.
 ### CI evidence for the platform stack
 
 Push `bafa1f4` (2026-11-11), run
-[43028659181](https://github.com/smores56/homelabs-platform/actions/runs/43028659181):
+[43028659181](https://github.com/smores56/homelab-platform/actions/runs/43028659181):
 `kustomize build`, `kubeconform` (rendered manifests plus every policy fixture),
 `yamllint`, `tofu fmt and validate`, `shellcheck` (now covering
 `tests/policies/*.sh` and `bootstrap.sh`), `action SHA pins`,

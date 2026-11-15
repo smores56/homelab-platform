@@ -62,7 +62,7 @@ def _post(url: str, jwt: str, body: Mapping[str, object]) -> tuple[int, object]:
             "Authorization": f"Bearer {jwt}",
             "Content-Type": "application/json",
             "X-GitHub-Api-Version": "2022-11-28",
-            "User-Agent": "homelabs-broker",
+            "User-Agent": "homelab-broker",
         },
     )
     try:

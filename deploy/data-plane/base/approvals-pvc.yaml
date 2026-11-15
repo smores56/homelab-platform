@@ -15,7 +15,7 @@ metadata:
   labels:
     app.kubernetes.io/name: data-plane-state
     app.kubernetes.io/component: control-state
-    homelabs.dev/tier: platform
+    homelab.dev/tier: platform
 spec:
   accessModes:
     - ReadWriteOnce

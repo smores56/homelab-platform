@@ -13,18 +13,18 @@ describe("R2 helpers", () => {
   test("extracts a repository prefix from the restic repository URL", () => {
     expect(
       repositoryPrefix(
-        "s3:https://acct.r2.cloudflarestorage.com/homelabs-restic-personal",
-        "homelabs-restic-personal",
+        "s3:https://acct.r2.cloudflarestorage.com/homelab-restic-personal",
+        "homelab-restic-personal",
       ),
     ).toBe(
       "",
     );
     expect(
       repositoryPrefix(
-        "s3:https://acct.r2.cloudflarestorage.com/homelabs-restic-personal/family",
-        "homelabs-restic-personal",
+        "s3:https://acct.r2.cloudflarestorage.com/homelab-restic-personal/family",
+        "homelab-restic-personal",
       ),
     ).toBe("family");
-    expect(repositoryPrefix("not a url", "homelabs-restic-personal")).toBe("");
+    expect(repositoryPrefix("not a url", "homelab-restic-personal")).toBe("");
   });
 });

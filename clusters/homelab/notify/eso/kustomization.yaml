@@ -9,8 +9,8 @@ namespace: notify
 labels:
   - includeSelectors: false
     pairs:
-      app.kubernetes.io/part-of: homelabs
-      homelabs.dev/tier: notify
+      app.kubernetes.io/part-of: homelab
+      homelab.dev/tier: notify
 resources:
   - secretstore.yaml
   - externalsecret.yaml

@@ -11,22 +11,22 @@ metadata:
   namespace: platform
   labels:
     app.kubernetes.io/name: github-backup
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: platform
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: platform
 data:
   secretName: github-backup-read-pat
   sopsSecretName: github-backup-read-pat-sops
   key: token
   scope: >-
     Fine-grained PAT owned by the operator, repository access exactly
-    smores56/homelabs-platform and smores56/homelabs-apps, permission
+    smores56/homelab-platform and smores56/homelab-apps, permission
     Contents: read. No other repository and no other permission. A classic
     ghp_ token with repo scope is refused by the job at start.
   source: >-
     github-backup-read-pat.yaml, SOPS-encrypted with the operator's key, then
     `kubectl -n platform create secret generic github-backup-read-pat-sops
     --from-file=token=<(...)`. Never commit the encrypted file to this
-    repository or to homelabs-apps.
+    repository or to homelab-apps.
   rotate: >-
     Mint the replacement PAT, replace github-backup-read-pat-sops, wait for the
     ExternalSecret refresh (1h) or restart the operator's refresh, then revoke

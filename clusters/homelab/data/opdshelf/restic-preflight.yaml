@@ -14,8 +14,8 @@ metadata:
   namespace: opdshelf
   labels:
     app.kubernetes.io/name: restic
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: data
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: data
 spec:
   schedule: "0 12 * * 0"
   timeZone: Europe/Berlin
@@ -34,9 +34,9 @@ spec:
         metadata:
           labels:
             app.kubernetes.io/name: restic
-            app.kubernetes.io/part-of: homelabs
-            homelabs.dev/tier: data
-            homelabs.dev/managed-by: platform
+            app.kubernetes.io/part-of: homelab
+            homelab.dev/tier: data
+            homelab.dev/managed-by: platform
         spec:
           serviceAccountName: data-workload
           automountServiceAccountToken: false

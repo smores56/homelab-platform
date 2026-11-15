@@ -6,7 +6,7 @@ metadata:
   namespace: broker
   labels:
     app.kubernetes.io/name: broker
-    homelabs.dev/tier: broker
+    homelab.dev/tier: broker
 spec:
   automountServiceAccountToken: false
   securityContext:
@@ -16,7 +16,7 @@ spec:
       type: RuntimeDefault
   containers:
     - name: broker
-      image: ghcr.io/smores56/homelabs-platform/broker@sha256:0000000000000000000000000000000000000000000000000000000000000000
+      image: ghcr.io/smores56/homelab-platform/broker@sha256:0000000000000000000000000000000000000000000000000000000000000000
       securityContext:
         allowPrivilegeEscalation: false
         readOnlyRootFilesystem: true

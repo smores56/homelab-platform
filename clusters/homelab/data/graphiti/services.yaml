@@ -5,8 +5,8 @@ metadata:
   namespace: graphiti
   labels:
     app.kubernetes.io/name: graphiti
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: data
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: data
 spec:
   type: ClusterIP
   selector:
@@ -23,8 +23,8 @@ metadata:
   namespace: graphiti
   labels:
     app.kubernetes.io/name: graphiti-falkordb
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: data
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: data
 spec:
   type: ClusterIP
   selector:

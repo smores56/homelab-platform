@@ -8,8 +8,8 @@ namespace: webhook
 labels:
   - includeSelectors: false
     pairs:
-      app.kubernetes.io/part-of: homelabs
-      homelabs.dev/tier: webhook
+      app.kubernetes.io/part-of: homelab
+      homelab.dev/tier: webhook
 resources:
   - serviceaccount.yaml
   - pvc.yaml

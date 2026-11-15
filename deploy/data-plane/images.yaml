@@ -4,7 +4,7 @@
 # transformer that actually rewrites the Deployments; tests/check.sh fails the
 # build if the two blocks drift.
 #
-# Placeholder registry: ghcr.io/smores56/homelabs-platform/data-plane
+# Placeholder registry: ghcr.io/smores56/homelab-platform/data-plane
 # Digest variable: DATA_PLANE_IMAGE_DIGEST. Replace the all-zero `sha256:`
 # value with the digest the publish workflow prints, before any apply. No tag
 # is valid, and `latest` never is. The digest is the identity; the registry
@@ -20,5 +20,5 @@ kind: Kustomization
 images:
   # DATA_PLANE_IMAGE_DIGEST
   - name: data-plane
-    newName: ghcr.io/smores56/homelabs-platform/data-plane
+    newName: ghcr.io/smores56/homelab-platform/data-plane
     digest: sha256:0000000000000000000000000000000000000000000000000000000000000000

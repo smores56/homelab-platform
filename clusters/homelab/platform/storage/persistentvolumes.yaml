@@ -23,9 +23,9 @@ kind: PersistentVolume
 metadata:
   name: immich-share
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: data
-    homelabs.dev/share: immich
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: data
+    homelab.dev/share: immich
 spec:
   capacity:
     storage: 5Ti
@@ -53,9 +53,9 @@ kind: PersistentVolume
 metadata:
   name: navidrome-share
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: data
-    homelabs.dev/share: music
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: data
+    homelab.dev/share: music
 spec:
   capacity:
     storage: 5Ti
@@ -83,9 +83,9 @@ kind: PersistentVolume
 metadata:
   name: opdshelf-share
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: data
-    homelabs.dev/share: books
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: data
+    homelab.dev/share: books
 spec:
   capacity:
     storage: 5Ti
@@ -113,9 +113,9 @@ kind: PersistentVolume
 metadata:
   name: graphiti-share
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: data
-    homelabs.dev/share: graphiti
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: data
+    homelab.dev/share: graphiti
 spec:
   capacity:
     storage: 5Ti
@@ -148,9 +148,9 @@ kind: PersistentVolume
 metadata:
   name: cluster-digest-share
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: platform
-    homelabs.dev/share: cluster-digest
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: platform
+    homelab.dev/share: cluster-digest
 spec:
   capacity:
     storage: 1Gi
@@ -184,9 +184,9 @@ kind: PersistentVolume
 metadata:
   name: nanobot-books-data
   labels:
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: tenant
-    homelabs.dev/share: books
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: tenant
+    homelab.dev/share: books
 spec:
   capacity:
     storage: 5Ti

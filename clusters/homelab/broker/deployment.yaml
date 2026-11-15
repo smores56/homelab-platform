@@ -7,7 +7,7 @@ metadata:
   name: broker
   labels:
     app.kubernetes.io/name: broker
-    homelabs.dev/tier: broker
+    homelab.dev/tier: broker
 spec:
   replicas: 2
   selector:
@@ -18,7 +18,7 @@ spec:
       labels:
         app.kubernetes.io/name: broker
         app.kubernetes.io/component: egress-broker
-        homelabs.dev/tier: broker
+        homelab.dev/tier: broker
     spec:
       serviceAccountName: broker
       automountServiceAccountToken: false
@@ -37,7 +37,7 @@ spec:
           # Published by .github/workflows/publish-broker.yml on a change under
           # apps/broker (digest in the run summary); this is the build from the
           # base-pinned Dockerfile.
-          image: ghcr.io/smores56/homelabs-platform/broker@sha256:b2607366baad847ab5d30bfdf138e3c13d94ac0792edf27fa700f20f2544c3e7
+          image: ghcr.io/smores56/homelab-platform/broker@sha256:b2607366baad847ab5d30bfdf138e3c13d94ac0792edf27fa700f20f2544c3e7
           imagePullPolicy: IfNotPresent
           args:
             - /etc/broker/broker.json

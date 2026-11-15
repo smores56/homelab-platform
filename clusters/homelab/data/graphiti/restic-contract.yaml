@@ -16,8 +16,8 @@ metadata:
   namespace: graphiti
   labels:
     app.kubernetes.io/name: restic
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: data
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: data
 data:
   tree: graphiti
   repository: s3:https://385f7d47e2e8438fbda5d6f76d760434.r2.cloudflarestorage.com/restic-backup/trees/graphiti

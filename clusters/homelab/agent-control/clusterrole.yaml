@@ -14,7 +14,7 @@ metadata:
   name: agent-control-read
   labels:
     app.kubernetes.io/name: agent-control
-    homelabs.dev/tier: tenant
+    homelab.dev/tier: tenant
 rules:
   - apiGroups: [""]
     resources: ["pods", "events", "nodes"]

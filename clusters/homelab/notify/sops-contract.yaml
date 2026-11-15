@@ -21,7 +21,7 @@ metadata:
   name: ntfy-auth-contract
   labels:
     app.kubernetes.io/name: ntfy
-    homelabs.dev/tier: notify
+    homelab.dev/tier: notify
 data:
   secretName: ntfy-auth
   sopsSecretName: ntfy-auth-sops

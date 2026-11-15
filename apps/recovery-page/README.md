@@ -1,7 +1,7 @@
 # recovery page
 
 Future-inheritance, not an everyday password manager. This is the static, public recovery page for
-the homelabs-platform backup groups. It replaces the single-repository page in `nix-config/recovery`
+the homelab-platform backup groups. It replaces the single-repository page in `nix-config/recovery`
 with one page over every per-group repository the platform renders.
 
 - The page is public and contains no secret. `public/data-keys.enc` is public ciphertext; the

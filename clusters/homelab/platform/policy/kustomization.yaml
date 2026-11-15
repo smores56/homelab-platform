@@ -19,8 +19,8 @@ configMapGenerator:
   - name: nanobot-policy
     options:
       labels:
-        app.kubernetes.io/part-of: homelabs
-        homelabs.dev/tier: tenant
+        app.kubernetes.io/part-of: homelab
+        homelab.dev/tier: tenant
         app.kubernetes.io/component: policy
     files:
       - system.md=nanobot/prompts/system.md

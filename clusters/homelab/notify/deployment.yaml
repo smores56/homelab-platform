@@ -20,7 +20,7 @@ metadata:
   name: ntfy
   labels:
     app.kubernetes.io/name: ntfy
-    homelabs.dev/tier: notify
+    homelab.dev/tier: notify
 spec:
   replicas: 1
   strategy:
@@ -32,8 +32,8 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: ntfy
-        homelabs.dev/tier: notify
-        homelabs.dev/managed-by: platform
+        homelab.dev/tier: notify
+        homelab.dev/managed-by: platform
       annotations:
         # The metrics port, not the message port: 8080 is the API the tunnel and
         # the relay use, and scraping it would count as traffic.

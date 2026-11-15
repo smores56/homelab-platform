@@ -14,8 +14,8 @@ metadata:
   labels:
     app.kubernetes.io/name: event-service
     app.kubernetes.io/component: event-log
-    app.kubernetes.io/part-of: homelabs
-    homelabs.dev/tier: platform
+    app.kubernetes.io/part-of: homelab
+    homelab.dev/tier: platform
 spec:
   replicas: 1
   strategy:
@@ -28,9 +28,9 @@ spec:
       labels:
         app.kubernetes.io/name: event-service
         app.kubernetes.io/component: event-log
-        app.kubernetes.io/part-of: homelabs
-        homelabs.dev/tier: platform
-        homelabs.dev/managed-by: platform
+        app.kubernetes.io/part-of: homelab
+        homelab.dev/tier: platform
+        homelab.dev/managed-by: platform
     spec:
       serviceAccountName: event-service
       automountServiceAccountToken: false

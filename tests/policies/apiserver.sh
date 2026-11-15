@@ -12,7 +12,7 @@
 #     tests/policies/apiserver.sh start
 set -euo pipefail
 
-state_dir="${POLICY_TEST_STATE:-${TMPDIR:-/tmp}/homelabs-policy-apiserver}"
+state_dir="${POLICY_TEST_STATE:-${TMPDIR:-/tmp}/homelab-policy-apiserver}"
 kubeconfig="${state_dir}/kubeconfig"
 token="policy-test-token"
 base_port=$((20000 + ($$ * 7) % 20000))

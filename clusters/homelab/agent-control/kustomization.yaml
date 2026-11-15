@@ -12,7 +12,7 @@ kind: Kustomization
 labels:
   - includeSelectors: false
     pairs:
-      app.kubernetes.io/part-of: homelabs
+      app.kubernetes.io/part-of: homelab
 resources:
   - clusterrole.yaml
   - clusterrolebinding.yaml
