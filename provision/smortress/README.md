@@ -49,3 +49,11 @@ expected crypttab names, a data keyfile at `/etc/luks/data.key`, `tank` present
 after the first boot, and a host that still boots with `luks-data` left closed.
 
 Operator-facing steps for the real machine live in `docs/manual-steps.md`.
+
+## The reboot trap
+
+The installer reboots with the ISO still attached, and the firmware happily
+boots it again: autoinstall re-runs and wipes the disk it just built. In the
+spike, stop QEMU at the first post-install reboot and start it again with
+`SMORTRESS_SPIKE_BOOT=disk`. On hardware, remove the seed USB before the
+reboot, exactly as you would remove any install medium.
