@@ -78,7 +78,7 @@ the state does not match the config.
 ## State
 
 State is **remote** and never committed: `tofu/backend.tf` points the S3 backend
-at this account's R2 endpoint, in the private `homelabs-tofu-state` bucket under
+at this account's R2 endpoint, in the private `homelab-tofu-state` bucket under
 `cloudflare/terraform.tfstate` (SDLC #622). Before that move it was an
 operator-local file, so a lost checkout lost the only mapping between the config
 and the live objects — the bucket is what makes CI and the operator plan against
@@ -88,13 +88,13 @@ Two credentials reach it, both from the environment and neither in git:
 
 | Variable | What it is | Where CI gets it |
 | --- | --- | --- |
-| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | the R2 key pair, scoped to `homelabs-tofu-state` | `cloudflare` environment secrets `R2_STATE_ACCESS_KEY_ID` / `R2_STATE_SECRET_ACCESS_KEY` |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | the R2 key pair, scoped to `homelab-tofu-state` | `cloudflare` environment secrets `R2_STATE_ACCESS_KEY_ID` / `R2_STATE_SECRET_ACCESS_KEY` |
 | `CLOUDFLARE_API_TOKEN` | the zone token | `cloudflare` environment secret |
 
 Locally, `scripts/tofu-cloudflare.sh` decrypts both from this repository's
 operator store (`secrets/cloudflare.yaml`: `cloudflare-api-token`,
 `r2-state-access-key-id`, `r2-state-secret-access-key`) unless they are already
-exported. The state pair is a separate token scoped to `homelabs-tofu-state`;
+exported. The state pair is a separate token scoped to `homelab-tofu-state`;
 the host's restic pair (`r2-access-key-id` / `r2-secret-access-key`, in
 nix-config) is deliberately not accepted here. `AWS_DEFAULT_REGION` is set to
 `auto`, because R2 has no regions.

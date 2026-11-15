@@ -19,7 +19,7 @@ person, and the alternative — a ciphertext file nobody can edit — is worse.
 `secrets/cloudflare.yaml` holds the Cloudflare credentials the tofu runs need:
 `cloudflare-api-token` (the zone token) and the state-backend pair
 `r2-state-access-key-id` / `r2-state-secret-access-key`. The state token is
-scoped to `homelabs-tofu-state` alone and is deliberately **not** the host's
+scoped to `homelab-tofu-state` alone and is deliberately **not** the host's
 restic pair: state decides what the next apply does, so a backup credential must
 not be able to rewrite it.
 

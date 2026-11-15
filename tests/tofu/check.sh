@@ -301,7 +301,7 @@ else
   bad "the backend endpoint is this account's R2 endpoint" "expected https://${account_id}.r2.cloudflarestorage.com"
 fi
 eq "$(sed -nE 's/^[[:space:]]*bucket[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$backend")" \
-  "homelabs-tofu-state" "the state bucket is the reviewed one"
+  "homelab-tofu-state" "the state bucket is the reviewed one"
 eq "$(sed -nE 's/^[[:space:]]*key[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$backend")" \
   "cloudflare/terraform.tfstate" "the state key names the zone's state"
 for flag in skip_credentials_validation skip_region_validation skip_requesting_account_id skip_s3_checksum use_path_style; do
