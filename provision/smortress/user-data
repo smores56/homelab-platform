@@ -111,8 +111,12 @@ autoinstall:
     - |
       set -eu
       install -m 0400 -o root -g root /run/smortress-keys/data.key /target/etc/luks/data.key
-      sed -i 's|/run/smortress-keys/|/etc/luks/|' /target/etc/crypttab
-      rm -f /run/smortress-keys/data.key
+      # curtin writes "none" even when the volume was created with a keyfile;
+      # name the keyfile so systemd-cryptsetup unlocks without a prompt.
+      awk 'BEGIN { OFS = " " } $1 == "luks-data" { $3 = "/etc/luks/data.key"; $4 = "luks,discard" } { print }' \
+        /target/etc/crypttab > /target/etc/crypttab.new
+      cat /target/etc/crypttab.new > /target/etc/crypttab
+      rm -f /target/etc/crypttab.new /run/smortress-keys/data.key
     - |
       set -eu
       # The bootstrap user has no password; Ansible replaces this with the
