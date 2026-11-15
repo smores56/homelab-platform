@@ -257,9 +257,13 @@ recovery portal is never a prerequisite.
 There is no generation manifest. The ZFS snapshot name is the generation id,
 completeness is the newest snapshot of `<repository_root>/<group>` in every
 required tier whose `paths` cover the group subtree, and restic's authenticated
-repository format is the integrity boundary. The entrypoint restores into a
-scratch root and never accepts `latest` by accident: it queries
-`restic snapshots --json --latest 1`.
+repository format is the integrity boundary. Backups record the staged path
+`/run/data-plane/current/<path>`, so the entrypoint selects the newest covering
+snapshot from a bounded set (`restic snapshots --json --latest 20`), restores
+only `--include <snapshot_root>/<path>` into a temporary directory, and moves it
+to `<target>/<path>`. It prints the real destination and the restored entry
+count, and refuses a destination that already holds data unless
+`homelab_recovery_overwrite=true` (or `--overwrite`) is set.
 
 ```sh
 # Dry run: opens storage, prints the plan. It does not fence writers.
@@ -275,15 +279,21 @@ ansible-playbook -i inventory/hosts.yml playbooks/recover.yml \
   -e homelab_recovery_groups=notes,host-keys
 ```
 
-The restore target must be a scratch directory: the entrypoint refuses a live
-mount or a target holding `.homelab-writer-active` unless
-`homelab_recovery_allow_live=true` is passed after fencing. The sentinel check
-warns, but does not fail, on a missing backup mount or a stopped portal.
+The restore target must be a dedicated scratch mount, never `/`, and must have
+room for the newest covering snapshots: `recover.yml` requires
+`findmnt --target` to equal the scratch path and compares free space with the
+sum of the snapshots' sizes (times 1.1, plus `homelab_recovery_min_free_gb` for
+a snapshot restic recorded no size for). A live restore into `/` requires
+`homelab_recovery_allow_live=true` after fencing writers; the entrypoint then
+refuses unless `/run/homelab/writers-fenced` still exists. `--verify-only`
+proves the repositories and path coverage only; it does not inspect a restored
+tree. The sentinel check warns, but does not fail, on a missing backup mount or
+a stopped portal.
 
 Writers stay disabled after restore until the old writer is fenced or revoked,
-a new epoch exists, old approvals are canceled, and anti-entropy completes. Set
-`homelab_recovery_resume_writers=false` to leave them fenced after a verified
-restore.
+a new epoch exists, old approvals are canceled, and anti-entropy completes. They
+stay disabled until the operator sets `homelab_recovery_resume_writers=true`
+after a verified live restore.
 
 ## Pinned matrix
 

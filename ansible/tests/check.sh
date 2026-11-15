@@ -461,9 +461,12 @@ fi
 for needle in \
   '--allow-live' \
   'findmnt' \
-  'writer marker' \
+  'writer fence' \
+  '--overwrite' \
+  'snapshot_root' \
   'restic snapshots' \
   'required tier' \
+  '--capacity-bytes' \
   '--verify'; do
   if grep -qF -- "$needle" roles/recovery/templates/clean-room-restore.sh.j2; then
     ok "restore safety: $needle"

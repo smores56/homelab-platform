@@ -8,11 +8,13 @@
 #     -e homelab_recovery_confirm=true
 #
 # The order is the safety property: fence every writer, open storage, restore
-# the newest snapshot of every selected group into a scratch target, verify that
-# every required tier holds a covering snapshot, and only then re-enable the
-# writers. There is no generation manifest. A dry run (no
-# -e homelab_recovery_apply=true) touches nothing. The recovery portal is never
-# a prerequisite.
+# the newest snapshot of every selected group onto a dedicated scratch mount,
+# verify that every required tier holds a covering snapshot, and only then
+# re-enable the writers. The scratch mount must be its own mount with room for
+# the snapshots; the entrypoint moves each group's staged subtree to
+# <target>/<path> and prints that destination. There is no generation manifest.
+# A dry run (no -e homelab_recovery_apply=true) touches nothing. The recovery
+# portal is never a prerequisite.
 
 - name: Fence the data-plane writers before any restore
   hosts: data_plane_hosts
@@ -169,9 +171,81 @@
         owner: root
         group: root
         mode: "0750"
-      when:
-        - homelab_recovery_apply | bool
-        - not homelab_recovery_allow_live | bool
+      when: homelab_recovery_apply | bool
+
+    - name: Resolve the mount that holds the scratch target
+      ansible.builtin.command:
+        argv:
+          - findmnt
+          - --target
+          - "{{ homelab_recovery_scratch_target }}"
+          - --output
+          - TARGET
+          - --noheadings
+          - --raw
+      register: recovery_scratch_mount
+      changed_when: false
+      check_mode: false
+      failed_when: false
+      when: homelab_recovery_apply | bool
+
+    - name: Require the scratch target to be a dedicated, non-root mount
+      ansible.builtin.assert:
+        that:
+          - homelab_recovery_scratch_target != '/'
+          - recovery_scratch_mount.rc == 0
+          - recovery_scratch_mount.stdout | trim == homelab_recovery_scratch_target
+        fail_msg: >-
+          {{ homelab_recovery_scratch_target }} must be its own mount (findmnt
+          reports {{ recovery_scratch_mount.stdout | default('') | trim }})
+          and must never be /. A scratch directory on the root filesystem has no
+          independent capacity; mount a dedicated scratch dataset first.
+        quiet: true
+      when: homelab_recovery_apply | bool
+
+    - name: Measure the scratch target's free space
+      ansible.builtin.command:
+        argv:
+          - findmnt
+          - --target
+          - "{{ homelab_recovery_scratch_target }}"
+          - --output
+          - AVAIL
+          - --bytes
+          - --noheadings
+          - --raw
+      register: recovery_scratch_avail
+      changed_when: false
+      check_mode: false
+      when: homelab_recovery_apply | bool
+
+    - name: Compute the bytes the newest covering snapshots need
+      ansible.builtin.command:
+        argv: [/usr/local/sbin/homelab-clean-room-restore, --capacity-bytes]
+      environment:
+        HOMELAB_RESTORE_CONFIRM: restore
+        HOMELAB_RESTORE_ROOT: "{{ homelab_recovery_scratch_target }}"
+        HOMELAB_RESTORE_GROUPS: "{{ homelab_recovery_groups }}"
+        HOMELAB_REQUIRED_TIERS: "{{ homelab_recovery_required_tiers | join(',') }}"
+        HOMELAB_RECOVERY_MIN_FREE_GB: "{{ homelab_recovery_min_free_gb }}"
+      register: recovery_capacity
+      changed_when: false
+      check_mode: false
+      when: homelab_recovery_apply | bool
+
+    - name: Require the scratch target to hold the newest covering snapshots
+      ansible.builtin.assert:
+        that:
+          - recovery_scratch_avail.stdout | int >= recovery_capacity.stdout | int
+        fail_msg: >-
+          {{ homelab_recovery_scratch_target }} has
+          {{ recovery_scratch_avail.stdout | int }} bytes free but the newest
+          covering snapshots need {{ recovery_capacity.stdout | int }} bytes;
+          short by
+          {{ (recovery_capacity.stdout | int) - (recovery_scratch_avail.stdout | int) }}
+          bytes. Grow the scratch dataset or narrow homelab_recovery_groups.
+        quiet: true
+      when: homelab_recovery_apply | bool
 
     - name: Render the restore plan
       ansible.builtin.command:
@@ -182,6 +256,7 @@
         HOMELAB_RESTORE_GROUPS: "{{ homelab_recovery_groups }}"
         HOMELAB_REQUIRED_TIERS: "{{ homelab_recovery_required_tiers | join(',') }}"
         HOMELAB_ALLOW_LIVE: "{{ '1' if homelab_recovery_allow_live | bool else '0' }}"
+        HOMELAB_RESTORE_OVERWRITE: "{{ '1' if homelab_recovery_overwrite | bool else '0' }}"
       register: recovery_plan
       changed_when: false
       check_mode: false
@@ -201,12 +276,16 @@
         HOMELAB_RESTORE_GROUPS: "{{ homelab_recovery_groups }}"
         HOMELAB_REQUIRED_TIERS: "{{ homelab_recovery_required_tiers | join(',') }}"
         HOMELAB_ALLOW_LIVE: "{{ '1' if homelab_recovery_allow_live | bool else '0' }}"
+        HOMELAB_RESTORE_OVERWRITE: "{{ '1' if homelab_recovery_overwrite | bool else '0' }}"
         HOMELAB_RESTORE_APPLY: "1"
       when: homelab_recovery_apply | bool
       changed_when: true
       check_mode: false
 
-    - name: Verify every required tier holds a covering snapshot
+    # Verify-only proves the repositories and their path coverage, not the tree
+    # this run restored. The apply step above prints each real destination and
+    # its entry count; a rollback later re-runs the same restore to the old tree.
+    - name: Verify every required tier still holds a covering snapshot (repositories only)
       ansible.builtin.command:
         argv: [/usr/local/sbin/homelab-clean-room-restore, --verify-only]
       environment:

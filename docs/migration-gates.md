@@ -139,9 +139,14 @@ stays reversible during the rollback window and must be reverted on failure.
 1. Stop the new writers (`systemctl disable --now <units>`); SSH is not one of
    those units.
 2. Make the old boot entry the default (`bootctl set-default <entry>`).
-3. Restore the latest **verified** old generation through
-   `/usr/local/sbin/homelab-clean-room-restore`, with the generation manifest
-   and the restore confirmation.
+3. Restore the latest **verified** old generation with the rollback plan's
+   legacy-repository step:
+   `restic restore <snapshot_id> --repo <repo> --password-file <file>
+   --target <target> --verify`. Its `old_generation` evidence must carry
+   `generation_id`, `repo`, `snapshot_id`, `password_file`, an absolute
+   `target`, and `verified: true`; the target is a scratch path, never `/`, so
+   the current tree stays untouched. This restore is the irreversible step, so
+   an unverified generation is refused outright.
 4. Re-enable the independent SSH unit and re-verify **both** declared SSH
    paths before declaring rollback complete.
 
@@ -203,13 +208,22 @@ ones on its own flags:
 - A plain `site.yml` never starts `homelab-write-broker.service` or the backup
   timers (`homelab-backup-fast.timer`, `homelab-backup-media.timer`);
   `--tags writers` and `--tags backup` are separate, gated steps.
-- `recover.yml` fences every writer and backup timer first, restores each
-  group's newest covering snapshot from nvme→hdd→r2 into a scratch target, and
-  verifies the restored tree before re-enabling the writers. A restore target
-  that is a live mount or holds `.homelab-writer-active` is refused unless
-  `--allow-live` is passed after fencing. `zfs receive` never uses `-F` on the
-  default path. The recovery portal is not a prerequisite; a missing backup
-  mount or a stopped portal is only a warning.
+- `recover.yml` fences every writer and backup timer first, then restores each
+  group's newest covering snapshot from nvme→hdd→r2 onto a dedicated scratch
+  mount. Backups record the staged path `/run/data-plane/current/<path>`, so the
+  entrypoint restores that staged subtree into a temporary directory and moves
+  it to `<scratch>/<path>`, printing the real destination and its entry count. A
+  destination that already holds data is refused unless `--overwrite` is
+  passed. The scratch mount must be its own mount and must have room for the
+  newest covering snapshots (times 1.1, plus a `homelab_recovery_min_free_gb`
+  estimate for a snapshot restic recorded no size for). Restoring into `/`
+  requires `--allow-live` and the `/run/homelab/writers-fenced` fence file that
+  `recover.yml` creates; `--allow-live` never bypasses the non-empty refusal.
+  `--verify-only` proves repository reachability and path coverage only; it does
+  not inspect a restored tree. Writers stay disabled until
+  `homelab_recovery_resume_writers=true` is set after a verified live restore.
+  `zfs receive` never uses `-F` on the default path. The recovery portal is not
+  a prerequisite; a missing backup mount or a stopped portal is only a warning.
 
 ## Commands
 

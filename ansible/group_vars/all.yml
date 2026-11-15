@@ -130,11 +130,17 @@ homelab_backup_timer_units:
 homelab_writer_fence: "{{ data_plane_run_root }}/writers-fenced"
 
 # Recovery playbook knobs. Restores always go to a scratch directory; the live
-# target is only reachable behind an explicit allow-live override, and writers
-# are re-enabled only after the scratch restore verifies.
+# target is only reachable behind an explicit allow-live override plus the
+# writers-fenced file, and writers stay disabled until the operator sets
+# homelab_recovery_resume_writers=true after a verified live restore.
 homelab_recovery_allow_live: false
-homelab_recovery_resume_writers: true
+homelab_recovery_resume_writers: false
+homelab_recovery_overwrite: false
 homelab_recovery_scratch_target: /mnt/recovery-scratch
+# recover.yml requires the scratch target to be its own mount with room for the
+# newest covering snapshots; a snapshot without a restic size counts this many
+# GiB toward the requirement.
+homelab_recovery_min_free_gb: 20
 homelab_recovery_required_tiers:
   - nvme
   - hdd
@@ -372,10 +378,8 @@ nvidia_container_toolkit_version: "1.17.*"
 # asserts on `@sha256:<64 hex>` before it writes a unit. Mirrored locally, and
 # podman runs with --pull=never so a tag can never silently replace a digest.
 data_plane_images:
-  backup_controller: ""
   collector_relay: ""
   event_service: ""
-  recovery_portal: ""
   write_broker: ""
 
 data_plane_state_root: /var/lib/data-plane

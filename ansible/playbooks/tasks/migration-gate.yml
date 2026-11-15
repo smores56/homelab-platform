@@ -75,6 +75,10 @@
     quiet: true
   tags: [always]
 
+# The preflight's single readiness fact is GateReport.ok. Its --json report
+# emits `ok`, not a separate `gate_ready` key (gate_ready is the evidence name
+# the phase gates consume), so assert report.ok only; a defaulted conjunct would
+# either never be emitted or fail the gate on every host.
 - name: Require the plan-driven gate report to hold
   vars:
     report: "{{ homelab_migration_preflight.stdout | trim | from_json }}"
@@ -82,7 +86,6 @@
     that:
       - report is mapping
       - report.get('ok', false) | bool
-      - report.get('gate_ready', true) | bool
     fail_msg: >-
       The backup gate at {{ homelab_backup_plan }} did not hold: every group and
       tier must be fresh and path-covered, every repository must pass a
