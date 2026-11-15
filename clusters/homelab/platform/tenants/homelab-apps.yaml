@@ -45,8 +45,10 @@ spec:
   sourceRef:
     kind: GitRepository
     name: homelab-apps
-  # Namespace-local age key. The controller has no --sops-age-secret global, so
-  # ciphertext in homelab-apps decrypts only with tenant-apps/sops-age.
+  # Namespace-local age Secret holding the shared cluster identity (the same key
+  # every other namespace's sops-age holds). The controller has no
+  # --sops-age-secret global, so ciphertext in homelab-apps decrypts only with
+  # tenant-apps/sops-age; isolation comes from RBAC, not from a distinct key.
   decryption:
     provider: sops
     secretRef:

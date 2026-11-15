@@ -1,13 +1,22 @@
 # How this repository holds secrets
 #
-# Two stores, two audiences, no overlap:
+# Two stores, two audiences:
 #
 #   secrets/*.yaml            operator tooling (tofu runs, scripted applies)
 #                             encrypted to the admin identity only; no host and
 #                             no cluster identity can decrypt it
-#   clusters/**/*.sops.yaml   manifests Flux decrypts in-cluster
-#                             encrypted to the flux-system `sops-age` identity,
-#                             so the controller can read what it deploys
+#   clusters/**/*.yaml        manifests Flux decrypts in-cluster
+#                             encrypted to the shared cluster identity, so the
+#                             controller can read what it deploys
+#
+# There is exactly ONE cluster identity, not one per namespace. Its key material is
+# placed identically into each namespace's `sops-age` Secret (flux-system, broker,
+# tenant-apps); isolation between tenants comes from RBAC and the per-namespace
+# `spec.decryption.secretRef`, not from key uniqueness.
+#
+# That identity does not exist yet, so `^clusters/.*\.yaml$` currently encrypts to
+# the admin identity only. The shared cluster identity MUST be added as an extra
+# recipient on that rule before any ciphertext under clusters/ is committed.
 #
 # The admin identity is the operator's passphrase-wrapped age key. It is added to
 # both rules on purpose: a cluster manifest has to stay editable by the person who
@@ -17,6 +26,12 @@ keys:
 
 creation_rules:
   - path_regex: ^secrets/.*\.yaml$
+    key_groups:
+      - age:
+          - *admin
+  # Admin-only until the shared cluster identity exists; add that recipient here
+  # before the first encrypted cluster manifest lands.
+  - path_regex: ^clusters/.*\.yaml$
     key_groups:
       - age:
           - *admin
