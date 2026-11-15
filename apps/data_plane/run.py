@@ -85,6 +85,16 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--db", default=_env("DATA_PLANE_DB"))
     parser.add_argument("--secret-file", default=_env("DATA_PLANE_SECRET_FILE"))
+    parser.add_argument(
+        "--append-token-file",
+        default=_env("DATA_PLANE_EVENT_APPEND_TOKEN_FILE")
+        or _env("DATA_PLANE_APPEND_TOKEN_FILE"),
+    )
+    parser.add_argument(
+        "--read-token-file",
+        default=_env("DATA_PLANE_EVENT_READ_TOKEN_FILE")
+        or _env("DATA_PLANE_READ_TOKEN_FILE"),
+    )
     parser.add_argument("--schema", default=_env("DATA_PLANE_SCHEMA"))
     parser.add_argument("--catalog", default=_env("DATA_PLANE_CATALOG"))
     parser.add_argument(
@@ -304,10 +314,27 @@ class JournalRecorder:
 
 def _run_event(args: argparse.Namespace) -> int:
     log = EventLog(_required(args.db, "--db (DATA_PLANE_DB)"))
+    append_secret = _read_secret(
+        _required(
+            args.append_token_file,
+            "--append-token-file (DATA_PLANE_EVENT_APPEND_TOKEN_FILE)",
+        )
+    )
+    read_secret = _read_secret(
+        _required(
+            args.read_token_file,
+            "--read-token-file (DATA_PLANE_EVENT_READ_TOKEN_FILE)",
+        )
+    )
+    if append_secret == read_secret:
+        # One credential for both sides lets a producer read its own log and a
+        # reader inject events, which is the split this service exists to make.
+        raise ConfigError("event append and read tokens must differ")
     try:
         service = event_service.EventService(
             log,
-            _read_secret(args.secret_file),
+            append_secret,
+            read_secret,
             consumer_secrets=_load_consumer_secrets(args.consumer_secrets_file),
             max_body_bytes=args.max_body_bytes,
         )

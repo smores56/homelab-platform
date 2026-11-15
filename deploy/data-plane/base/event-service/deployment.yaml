@@ -63,8 +63,10 @@ spec:
             # The file is a contract, not a value: the profile overlay mounts
             # the operator-provisioned Secret at this path. No Secret is created
             # by this tree.
-            - name: DATA_PLANE_SECRET_FILE
-              value: /run/secrets/event/token
+            - name: DATA_PLANE_EVENT_APPEND_TOKEN_FILE
+              value: /run/secrets/event/append-token
+            - name: DATA_PLANE_EVENT_READ_TOKEN_FILE
+              value: /run/secrets/event/read-token
             - name: DATA_PLANE_CONSUMER_SECRETS_FILE
               value: /run/secrets/event/consumers.json
             - name: DATA_PLANE_MAX_BODY_BYTES

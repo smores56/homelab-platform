@@ -23,7 +23,9 @@ environment, held in memory, and never logged.
 ## Run
 
 ```sh
-python -m apps.data_plane.run event  --db state/events.db --secret-file /run/secrets/event
+python -m apps.data_plane.run event  --db state/events.db \
+  --append-token-file /run/secrets/event/append-token \
+  --read-token-file /run/secrets/event/read-token
 python -m apps.data_plane.run relay  --schema relay-schema.json --secret-file /run/secrets/relay
 python -m apps.data_plane.run broker --db state/intents.db --catalog catalog.json \
   --secret-file /run/secrets/identity
@@ -55,7 +57,12 @@ Every flag also has an environment variable: `DATA_PLANE_HOST`,
 
 ## Event service
 
-Auth: `X-Event-Token: v1:<unix-timestamp>:<nonce>:<hex>` where the digest is
+Auth uses two separate tokens, both sent as `X-Event-Token`: the append token
+authorises `POST /events` only, and the read token authorises `GET /events` and
+`GET /events/tail` only. A producer cannot read the log and a reader cannot
+inject events; the service refuses to start when the two tokens are equal.
+
+The header format is `v1:<unix-timestamp>:<nonce>:<hex>` where the digest is
 
 ```
 HMAC-SHA256(secret, "<METHOD>\n<request-target>\n<sha256(body) hex>\n<timestamp>\n<nonce>")
@@ -68,7 +75,7 @@ stale, replayed, or wrong token is 403. `request_token()` in `common.py` is the
 reference signer.
 
 `POST /events/ack` is authenticated with the **consumer's own** secret from the
-service's consumer-to-secret mapping, not the shared service secret: a caller
+service's consumer-to-secret mapping, not either service token: a caller
 cannot acknowledge another consumer.
 
 | Route | Body / query | Result |

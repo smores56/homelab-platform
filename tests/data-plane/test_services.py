@@ -104,7 +104,8 @@ def event_headers(secret: bytes, method: str, path: str, body: bytes = b"") -> d
 
 
 class EventServiceTests(unittest.TestCase):
-    SECRET = b"event-test-secret"
+    APPEND = b"event-test-secret"
+    READ = b"event-read-secret"
     CONSUMERS = {"worker": b"worker-secret", "other": b"other-secret"}
 
     def setUp(self) -> None:
@@ -114,7 +115,7 @@ class EventServiceTests(unittest.TestCase):
         self.addCleanup(self.log.close)
         self.harness = Harness(
             event_service.EventService(
-                self.log, self.SECRET, consumer_secrets=self.CONSUMERS
+                self.log, self.APPEND, self.READ, consumer_secrets=self.CONSUMERS
             )
         )
         self.harness.__enter__()
@@ -127,12 +128,12 @@ class EventServiceTests(unittest.TestCase):
         body_data.setdefault("idempotency_key", key)
         body = json.dumps(body_data).encode()
         return self.harness.request(
-            "POST", path, body=body, headers=event_headers(self.SECRET, "POST", path, body)
+            "POST", path, body=body, headers=event_headers(self.APPEND, "POST", path, body)
         )
 
     def get(self, path: str) -> tuple[int, object]:
         return self.harness.request(
-            "GET", path, headers=event_headers(self.SECRET, "GET", path)
+            "GET", path, headers=event_headers(self.READ, "GET", path)
         )
 
     def test_append_read_and_ack(self) -> None:
@@ -194,11 +195,31 @@ class EventServiceTests(unittest.TestCase):
         self.assertEqual(status, 403)
         self.assertEqual(payload["error"]["code"], "forbidden")
 
+    def test_read_token_cannot_append(self) -> None:
+        body = json.dumps(
+            {"kind": "k", "entity": "e", "idempotency_key": "k1"}
+        ).encode()
+        status, payload = self.harness.request(
+            "POST",
+            "/events",
+            body=body,
+            headers=event_headers(self.READ, "POST", "/events", body),
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(payload["error"]["code"], "forbidden")
+
+    def test_append_token_cannot_read(self) -> None:
+        status, payload = self.harness.request(
+            "GET", "/events", headers=event_headers(self.APPEND, "GET", "/events")
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(payload["error"]["code"], "forbidden")
+
     def test_oversized_body_is_refused_before_parsing(self) -> None:
         small_log = EventLog(Path(self.tmp.name) / "small.db")
         self.addCleanup(small_log.close)
         service = event_service.EventService(
-            small_log, self.SECRET, max_body_bytes=32
+            small_log, self.APPEND, self.READ, max_body_bytes=32
         )
         with Harness(service) as harness:
             body = json.dumps({"kind": "k", "entity": "e" * 64}).encode()
@@ -206,7 +227,7 @@ class EventServiceTests(unittest.TestCase):
                 "POST",
                 "/events",
                 body=body,
-                headers=event_headers(self.SECRET, "POST", "/events", body),
+                headers=event_headers(self.APPEND, "POST", "/events", body),
             )
         self.assertEqual(status, 413)
         self.assertEqual(payload["error"]["code"], "payload_too_large")
@@ -270,13 +291,13 @@ class EventServiceTests(unittest.TestCase):
             "POST",
             "/events/ack",
             body=unknown_body,
-            headers=event_headers(self.SECRET, "POST", "/events/ack", unknown_body),
+            headers=event_headers(self.READ, "POST", "/events/ack", unknown_body),
         )
         self.assertEqual(status, 403)
 
     def test_replayed_and_stale_request_tokens_are_rejected(self) -> None:
         path = "/events?after=0&limit=10"
-        token = common.request_token(self.SECRET, "GET", path)
+        token = common.request_token(self.READ, "GET", path)
         headers = {"X-Event-Token": token}
         first = self.harness.request("GET", path, headers=headers)
         second = self.harness.request("GET", path, headers=headers)
@@ -284,7 +305,7 @@ class EventServiceTests(unittest.TestCase):
         self.assertEqual(second[0], 403)
 
         stale = common.request_token(
-            self.SECRET, "GET", path, timestamp=int(time.time()) - 600
+            self.READ, "GET", path, timestamp=int(time.time()) - 600
         )
         status, payload = self.harness.request(
             "GET", path, headers={"X-Event-Token": stale}
@@ -318,7 +339,7 @@ class TransportHardeningTests(unittest.TestCase):
     def test_server_refuses_beyond_the_connection_budget(self) -> None:
         log = EventLog(":memory:")
         self.addCleanup(log.close)
-        service = event_service.EventService(log, b"secret", consumer_secrets={})
+        service = event_service.EventService(log, b"secret", b"read-secret", consumer_secrets={})
         with Harness(service, max_connections=1) as harness:
             held = socket.create_connection(
                 ("127.0.0.1", harness.server.server_address[1])

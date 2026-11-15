@@ -1,8 +1,10 @@
 """HTTP wrapper over :class:`data_plane.event_log.EventLog`.
 
 The service is a single-writer front end: appends, replay reads, a long-polling
-tail, and durable acknowledgement. Auth is one shared HMAC token header bound
-to the method, the full request target, and the body digest; ``/healthz`` is
+tail, and durable acknowledgement. Auth uses two distinct HMAC tokens in the
+same header, each bound to the method, the full request target, and the body
+digest: the append token reaches ``POST /events`` only and the read token
+reaches ``GET /events`` and ``GET /events/tail`` only. ``/healthz`` is
 unauthenticated so a probe needs no secret.
 
 The long poll waits in the request thread; ``ThreadingHTTPServer`` keeps the
@@ -42,7 +44,8 @@ class EventService:
     """Routes for one ``EventLog`` database."""
 
     log: EventLog
-    secret: bytes | str
+    append_secret: bytes | str
+    read_secret: bytes | str
     consumer_secrets: Mapping[str, bytes | str] | None = None
     max_body_bytes: int = common.MAX_BODY_BYTES
 
@@ -56,12 +59,14 @@ class EventService:
             ("GET", "/healthz"): self.health,
         }
 
-    def _authorize(self, request: Any, body: bytes = b"") -> None:
-        common.require_request_token(request, self.secret, TOKEN_HEADER, body)
+    def _authorize(
+        self, request: Any, secret: bytes | str, body: bytes = b""
+    ) -> None:
+        common.require_request_token(request, secret, TOKEN_HEADER, body)
 
     def append(self, request: Any, query: common.Query) -> tuple[int, Any]:
         body = common.read_body(request, self.max_body_bytes)
-        self._authorize(request, body)
+        self._authorize(request, self.append_secret, body)
         data = common.parse_json_object(body)
         if "event_id" in data:
             # Event ids are server-assigned so a client cannot squat a position.
@@ -87,7 +92,7 @@ class EventService:
         return 201, _event(event)
 
     def read(self, request: Any, query: common.Query) -> tuple[int, Any]:
-        self._authorize(request)
+        self._authorize(request, self.read_secret)
         after = common.query_int(query, "after", default=0, minimum=0)
         limit = common.query_int(
             query, "limit", default=100, minimum=0, maximum=MAX_READ_LIMIT
@@ -99,7 +104,7 @@ class EventService:
         }
 
     def tail(self, request: Any, query: common.Query) -> tuple[int, Any]:
-        self._authorize(request)
+        self._authorize(request, self.read_secret)
         consumer = common.query_str(query, "consumer", required=True)
         timeout = common.query_float(
             query, "timeout", default=0.0, minimum=0.0, maximum=MAX_TAIL_SECONDS
