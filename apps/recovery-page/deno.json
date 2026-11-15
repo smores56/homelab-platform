@@ -1,0 +1,28 @@
+{
+  "nodeModulesDir": "auto",
+  "imports": {
+    "@std/testing/bdd": "jsr:@std/testing@1.0.21/bdd",
+    "@std/expect": "jsr:@std/expect@1.0.20"
+  },
+  "compilerOptions": {
+    "strict": true,
+    "lib": ["deno.window", "dom", "dom.iterable", "es2022"]
+  },
+  "tasks": {
+    "build": "deno run --allow-read --allow-write --allow-run --allow-env scripts/build.ts",
+    "test": "deno test --allow-read=. --allow-write=. --allow-env",
+    "typecheck": "deno check $(find src scripts -name '*.ts' -not -path '*/node_modules/*')",
+    "blob": "deno run --allow-read --allow-write --allow-run --allow-env --allow-net scripts/blob.ts",
+    "smoke": "deno run --allow-read --allow-run --allow-net --allow-env scripts/smoke.ts"
+  },
+  "fmt": {
+    "lineWidth": 100,
+    "exclude": ["dist/", "node_modules/"]
+  },
+  "lint": {
+    "exclude": ["dist/", "node_modules/"],
+    "rules": {
+      "exclude": ["no-window", "no-window-prefix", "no-control-regex"]
+    }
+  }
+}
