@@ -63,6 +63,28 @@
   loop_control:
     label: "{{ item.short }}"
 
+- name: Install the source catalog the broker reads
+  ansible.builtin.copy:
+    src: "{{ data_plane_source_catalog_src }}"
+    dest: "{{ data_plane_config_root }}/sources.json"
+    owner: root
+    group: root
+    mode: "0644"
+
+# The datasets are root-only infrastructure; only the directories a container
+# mounts read-write belong to the container uid. /srv/books stays host-owned:
+# a general-source write needs an owner match, which is a cutover decision.
+- name: Grant the container uid its writable state directories
+  ansible.builtin.file:
+    path: "{{ item.1 }}"
+    state: directory
+    owner: "{{ item.0.container_user | default(data_plane_default_container_user) | split(':') | first }}"
+    group: "{{ item.0.container_user | default(data_plane_default_container_user) | split(':') | last }}"
+    mode: "0700"
+  loop: "{{ data_plane_services | subelements('writable_dirs', skip_missing=True) }}"
+  loop_control:
+    label: "{{ item.1 }}"
+
 - name: Check for retired unit files
   ansible.builtin.stat:
     path: "/etc/systemd/system/{{ item }}.service"
@@ -144,6 +166,70 @@
   loop_control:
     label: "{{ item.name }}"
   notify: Reload systemd
+
+- name: Check each service's podman image store
+  ansible.builtin.command:
+    argv:
+      - podman
+      - image
+      - exists
+      - --root
+      - "{{ data_plane_podman_root }}/{{ item.short }}"
+      - "{{ data_plane_images[item.image_key] }}"
+  loop: "{{ data_plane_services }}"
+  loop_control:
+    label: "{{ item.short }}"
+  register: data_plane_image_present
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Load the image archive into the stores that lack it
+  ansible.builtin.command:
+    argv:
+      - podman
+      - load
+      - --root
+      - "{{ data_plane_podman_root }}/{{ item.item.short }}"
+      - --input
+      - "{{ data_plane_image_archive }}"
+  loop: "{{ data_plane_image_present.results }}"
+  loop_control:
+    label: "{{ item.item.short }}"
+  when:
+    - item.rc != 0
+    - data_plane_image_archive | length > 0
+  changed_when: true
+
+- name: Recheck each service's podman image store
+  ansible.builtin.command:
+    argv:
+      - podman
+      - image
+      - exists
+      - --root
+      - "{{ data_plane_podman_root }}/{{ item.short }}"
+      - "{{ data_plane_images[item.image_key] }}"
+  loop: "{{ data_plane_services }}"
+  loop_control:
+    label: "{{ item.short }}"
+  register: data_plane_image_recheck
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Fail closed on a missing image
+  ansible.builtin.assert:
+    that:
+      - item.rc == 0
+    fail_msg: >-
+      {{ item.item.short }} has no {{ data_plane_images[item.item.image_key] }}
+      in {{ data_plane_podman_root }}/{{ item.item.short }}; set
+      data_plane_image_archive to an OCI archive or preload that store.
+    quiet: true
+  loop: "{{ data_plane_image_recheck.results }}"
+  loop_control:
+    label: "{{ item.item.short }}"
 
 - name: Install the timers
   ansible.builtin.template:

@@ -14,6 +14,10 @@ data_plane_secret_mode: "0640"
 data_plane_retired_units:
   - homelab-collector-relay
 
+# The broker reads one catalog. The cluster tree's checked-in copy is the source
+# of truth; the role installs it at the path DATA_PLANE_CATALOG names.
+data_plane_source_catalog_src: "{{ playbook_dir }}/../../deploy/data-plane/config/source-catalog.json"
+
 # The two host services. Every image is selected by key from
 # data_plane_images and must be digest-pinned. Units run rootful podman with a
 # read-only container root, all capabilities dropped, and no-new-privileges; the
@@ -45,6 +49,10 @@ data_plane_services:
       - src: "{{ data_plane_secret_root }}/event-service/consumers.json"
         dest: /run/secrets/event/consumers.json
     state_dir: "{{ data_plane_state_root }}/event-service"
+    # Dedicated datasets the container writes; the parent state root stays
+    # root-only and this role hands only these directories to the container uid.
+    writable_dirs:
+      - "{{ data_plane_state_root }}/events"
     volumes:
       - "{{ data_plane_state_root }}/events:/var/lib/data-plane/events:rw"
     read_write_paths:
@@ -78,7 +86,10 @@ data_plane_services:
       - src: "{{ data_plane_secret_root }}/write-broker/operator-key"
         dest: /run/secrets/broker/operator-key
     state_dir: "{{ data_plane_state_root }}/write-broker"
+    writable_dirs:
+      - "{{ data_plane_state_root }}/intents"
     volumes:
+      - "{{ data_plane_config_root }}/sources.json:{{ data_plane_config_root }}/sources.json:ro"
       - "{{ data_plane_state_root }}/intents:/var/lib/data-plane/intents:rw"
       - "/srv/books:/srv/books:rw"
     read_write_paths:

@@ -2109,8 +2109,16 @@ prunes. A missing repository is reported by name, not created.
    to `0640 root:65532` for the container uid. A rotation therefore needs the
    full converge before the unit restarts (`--tags secrets` alone leaves the new
    file at `0600`, and a running unit keeps its old inode). The host runs no
-   relay; relays and
-   collectors live in the cluster tree.
+   relay; relays and collectors live in the cluster tree.
+
+   A host unit also cannot pull an image. Every `podman run` uses `--pull=never`
+   and its own `--root`, so put a digest-pinned OCI archive on the host and set
+   `data_plane_image_archive` in `group_vars/all.yml`; the role loads it into
+   each per-service store and fails closed while the image is absent. The broker
+   reads `deploy/data-plane/config/source-catalog.json`, which the role installs
+   at `DATA_PLANE_CATALOG`. Only the dedicated `events` and `intents` datasets
+   are handed to the container uid; `/srv/books` stays host-owned, so a
+   general-source write needs an owner match before cutover.
 
 4. Create every repository, one group at a time. `backup-init` is idempotent and
    creates only the tiers the group lists:

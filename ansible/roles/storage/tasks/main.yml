@@ -9,7 +9,7 @@
       - zfs_datasets | selectattr('recovery_group', 'undefined') | list | length == 0
       - zfs_datasets | map(attribute='recovery_group') | unique
         | difference(recovery_inventory.keys() | list) | length == 0
-      - zfs_datasets | rejectattr('mountpoint', 'match', '^/srv/') | list | length == 0
+      - zfs_datasets | rejectattr('mountpoint', 'match', '^/(srv|var/lib/data-plane)/') | list | length == 0
     fail_msg: "Unclassified dataset in zfs_datasets; add it to recovery_inventory first"
 
 - name: Require a known visibility for every recovery group
@@ -17,10 +17,10 @@
     that:
       - recovery_inventory.values() | selectattr('visibility', 'undefined') | list | length == 0
       - recovery_inventory.values() | map(attribute='visibility')
-        | difference(['personal', 'general', 'public']) | length == 0
+        | difference(['personal', 'general', 'public', 'infrastructure']) | length == 0
     fail_msg: >-
-      Every recovery_inventory entry needs visibility: personal, general or
-      public (a dataset's mode is derived from it)
+      Every recovery_inventory entry needs visibility: personal, general,
+      public or infrastructure (a dataset's mode is derived from it)
 
 - name: Require backup mounts to be locked down and on demand
   ansible.builtin.assert:
@@ -88,17 +88,26 @@
   ansible.builtin.file:
     path: "{{ item.mountpoint }}"
     state: directory
-    owner: "{{ item.owner | default(storage_default_owner) }}"
-    group: "{{ item.group | default(storage_default_group) }}"
+    owner: >-
+      {{ item.owner | default(storage_infrastructure_owner
+         if recovery_inventory[item.recovery_group].visibility == 'infrastructure'
+         else storage_default_owner) }}
+    group: >-
+      {{ item.group | default(storage_infrastructure_group
+         if recovery_inventory[item.recovery_group].visibility == 'infrastructure'
+         else storage_default_group) }}
     # Visibility is authoritative: personal trees stay group-readable only, and
-    # only general/public trees are world-readable. A per-dataset `mode` in
-    # group_vars is not consulted so a wider value cannot leak into a personal
-    # dataset; an unknown visibility falls back to the personal mode.
+    # only general/public trees are world-readable. Infrastructure trees hold
+    # service state and are root-only; the consuming service narrows its own
+    # writable subdirectory. A per-dataset `mode` in group_vars is not consulted
+    # so a wider value cannot leak into a personal dataset; an unknown
+    # visibility falls back to the personal mode.
     mode: >-
-      {{ storage_public_mode
-         if recovery_inventory[item.recovery_group].visibility
-            in ['general', 'public']
-         else storage_personal_mode }}
+      {{ (storage_infrastructure_mode
+          if recovery_inventory[item.recovery_group].visibility == 'infrastructure'
+          else storage_public_mode
+          if recovery_inventory[item.recovery_group].visibility in ['general', 'public']
+          else storage_personal_mode) }}
   loop: "{{ zfs_datasets }}"
   loop_control:
     label: "{{ item.mountpoint }}"

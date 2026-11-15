@@ -385,8 +385,11 @@ data_plane_config_root: /etc/homelab/data-plane
 data_plane_secret_root: /etc/homelab/secrets
 data_plane_podman_root: /var/lib/homelab/podman
 data_plane_run_root: /run/homelab
-data_plane_state_uid: 65532
-data_plane_state_gid: 65532
+# OCI archive on the host that holds the digest-pinned image. Empty means the
+# per-service podman stores must already contain it; the role fails closed
+# instead of pulling, because every unit runs with --pull=never so a tag can
+# never silently replace a digest.
+data_plane_image_archive: ""
 
 # --------------------------------------------------------------------------
 # Recovery

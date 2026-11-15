@@ -171,3 +171,70 @@ class SecretsPlayTests(unittest.TestCase):
         self.assertIn("search(", flat)
         self.assertIn("realpath", flat)
         self.assertNotIn("is not match('(^|/)\\\\.\\\\\\.(/|$)')", flat)
+
+
+class StateAndImageTests(unittest.TestCase):
+    STATE_ROOT_PREFIXES = (
+        ALL_VARS["data_plane_state_root"],
+        "{{ data_plane_state_root }}",
+    )
+
+    def _volume_sources(self, service):
+        sources = []
+        for volume in service.get("volumes", []):
+            source = volume.split(":", 1)[0]
+            if source.startswith(self.STATE_ROOT_PREFIXES):
+                sources.append(source)
+        return sources
+
+    def test_every_writable_volume_belongs_to_the_container_uid(self):
+        for service in SERVICES:
+            writable = set(service.get("writable_dirs", []))
+            for source in self._volume_sources(service):
+                self.assertIn(source, writable, f"{service['short']} {source}")
+            # The writable list is exactly the set of state volumes; a directory
+            # granted to the container is never left host-owned.
+            for path in writable:
+                self.assertTrue(path.startswith(self.STATE_ROOT_PREFIXES), path)
+
+    def test_unit_grants_each_writable_dir(self):
+        self.assertIn(
+            "{% for path in service.writable_dirs | default([]) %}",
+            UNIT_TEMPLATE,
+        )
+        self.assertIn("ReadWritePaths={{ path }}", UNIT_TEMPLATE)
+
+    def test_source_catalog_is_installed_and_mounted(self):
+        copied = [
+            task
+            for task in TASKS
+            if "data_plane_source_catalog_src" in json.dumps(task)
+        ]
+        self.assertTrue(copied, "the host broker catalog is never installed")
+        broker = next(s for s in SERVICES if s["short"] == "write-broker")
+        catalog = broker["environment"]["DATA_PLANE_CATALOG"]
+        self.assertIn(f"{catalog}:{catalog}:ro", broker["volumes"])
+
+    def test_image_store_is_checked_then_loaded_from_the_archive(self):
+        flat = json.dumps(TASKS)
+        self.assertIn("image", flat)
+        self.assertIn("exists", flat)
+        self.assertIn("data_plane_image_archive", flat)
+        self.assertNotIn("--pull=always", UNIT_TEMPLATE)
+
+
+class StorageContractTests(unittest.TestCase):
+    def test_storage_accepts_the_data_plane_tree(self):
+        text = (
+            ROOT / "ansible" / "roles" / "storage" / "tasks" / "main.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("^/(srv|var/lib/data-plane)/", text)
+        self.assertIn("'infrastructure'", text)
+
+    def test_infrastructure_mode_is_root_only(self):
+        defaults = render.load_yaml(
+            ROOT / "ansible" / "roles" / "storage" / "defaults" / "main.yml"
+        )
+        self.assertEqual(defaults["storage_infrastructure_mode"], "0700")
+        self.assertEqual(defaults["storage_infrastructure_owner"], "root")
+        self.assertEqual(defaults["storage_infrastructure_group"], "root")

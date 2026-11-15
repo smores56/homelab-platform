@@ -24,7 +24,7 @@ arrive from the operator or the private inventory.
 | `roles/k3s` | Pinned k3s, containerd handlers, RuntimeClass, kubeconfig mode |
 | `roles/nvidia` | Driver and container-toolkit branch pins; device plugin owns no host config |
 | `roles/kata` | Kata/QEMU packages and the `kata-qemu` RuntimeClass |
-| `roles/data_plane` | Two containerised units, per-service secret mounts, hardening, timers |
+| `roles/data_plane` | Two containerised units, image-store check and archive load, per-service secret mounts, catalog install, hardening, timers |
 | `roles/backup` | Pinned restic, `/etc/homelab/backup.json`, the recursive-snapshot unit, per-group repositories, retention |
 | `roles/recovery` | Sentinel, portal constraints, clean-room entrypoint |
 | `roles/secrets` | Operator-bundle install: validated names, parent directories, `0600 root:root` |

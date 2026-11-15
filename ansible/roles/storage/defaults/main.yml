@@ -7,6 +7,11 @@ storage_default_group: root
 # to the personal mode, so a typo fails closed.
 storage_personal_mode: "0750"
 storage_public_mode: "0755"
+# Service state: never world-readable, and the service that owns it narrows the
+# mode further when it grants the container uid write access.
+storage_infrastructure_mode: "0700"
+storage_infrastructure_owner: root
+storage_infrastructure_group: root
 storage_memory_mode: "0750"
 storage_backup_mode: "0700"
 storage_enforce_inventory: true
