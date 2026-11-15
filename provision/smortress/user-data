@@ -113,7 +113,7 @@ autoinstall:
       install -m 0400 -o root -g root /run/smortress-keys/data.key /target/etc/luks/data.key
       # curtin writes "none" even when the volume was created with a keyfile;
       # name the keyfile so systemd-cryptsetup unlocks without a prompt.
-      awk 'BEGIN { OFS = " " } $1 == "luks-data" { $3 = "/etc/luks/data.key"; $4 = "luks,discard" } { print }' \
+      awk 'BEGIN { OFS = " " } $1 == "luks-data" { $3 = "/etc/luks/data.key"; $4 = "luks,discard,nofail" } { print }' \
         /target/etc/crypttab > /target/etc/crypttab.new
       cat /target/etc/crypttab.new > /target/etc/crypttab
       rm -f /target/etc/crypttab.new /run/smortress-keys/data.key
@@ -130,6 +130,10 @@ autoinstall:
       # Create the data pool once, then leave it to zpool-import-tank.service.
       set -eu
       if zpool list -H -o name tank >/dev/null 2>&1; then exit 0; fi
+      if zpool import -d /dev/mapper tank >/dev/null 2>&1; then
+        zpool set cachefile=none tank
+        exit 0
+      fi
       zpool create -o ashift=12 -O mountpoint=none -O canmount=off \
         -O compression=zstd -O atime=off -O xattr=sa -O acltype=posixacl \
         tank /dev/mapper/luks-data
@@ -139,8 +143,9 @@ autoinstall:
       cat > /target/etc/systemd/system/smortress-provision.service <<'UNIT'
       [Unit]
       Description=Create the ZFS data pool on first boot
-      Requires=dev-mapper-luks\x2ddata.device
-      After=dev-mapper-luks\x2ddata.device
+      Requires=systemd-cryptsetup@luks\x2ddata.service
+      After=systemd-cryptsetup@luks\x2ddata.service
+      ConditionPathExists=/dev/mapper/luks-data
 
       [Service]
       Type=oneshot
