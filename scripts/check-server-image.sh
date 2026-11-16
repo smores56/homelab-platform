@@ -105,6 +105,70 @@ check "decrypt unit is ordered after local-fs" has 'After=local-fs.target' units
 check "zpool unit follows the data cryptsetup unit" has 'After=systemd-cryptsetup@data.service' units/systemd/smortress-zpool.service
 check "HDD unlock cannot block boot" has 'ExecStart=-/usr/libexec/open-hdd' units/systemd/smortress-cryptsetup-hdd.service
 
+# Restic plane (T3). A mount unit that is not installed, a retention filter
+# missing one tag, or a job ordered before its dataset is ready all fail
+# silently on the host, so the shape is asserted here.
+for m in var-lib-restic-ssd.mount var-lib-restic-hdd.mount; do
+  check "Restic mount unit $m exists" test -s "units/systemd/$m"
+  check "image enables $m" has "$m" image/Containerfile
+done
+check "SSD mount is keyed by the wiped disk UUID" has 'What=/dev/disk/by-uuid/e040eab7-3df0-4b7d-96e0-71fb9a5eff93' units/systemd/var-lib-restic-ssd.mount
+check "HDD mount is keyed by its UUID" has 'What=/dev/disk/by-uuid/973b7492-bb88-43c7-bac3-772384e45220' units/systemd/var-lib-restic-hdd.mount
+check "HDD mount bounds the device wait" has 'JobTimeoutSec=45' units/systemd/var-lib-restic-hdd.mount
+check "HDD mount bounds the mount command" has 'TimeoutSec=30' units/systemd/var-lib-restic-hdd.mount
+
+backup_after=$(sed -e :a -e '/\\$/N; s/\\\n/ /; ta' 'units/systemd/smortress-restic-backup@.service' | grep '^After=')
+for group in photos books notes music wallpapers; do
+  if [[ $backup_after == *"zfs-ready@$group.service"* ]]; then
+    ok "backup driver is ordered after zfs-ready@$group"
+  else
+    bad "backup driver is ordered after zfs-ready@$group"
+  fi
+done
+check "backup driver requires the decrypt unit" grep -qE '^Requires=.*sops-decrypt\.service' 'units/systemd/smortress-restic-backup@.service'
+check "verifier requires the decrypt unit" grep -qE '^Requires=.*sops-decrypt\.service' units/systemd/smortress-restic-verify.service
+check "init requires the decrypt unit" grep -qE '^Requires=.*sops-decrypt\.service' units/systemd/smortress-restic-init.service
+
+retention_ok=1
+while IFS= read -r retention_line; do
+  [[ $retention_line == *--keep-* ]] || continue
+  if [[ $retention_line != *'--tag group:'* && $retention_line != *'--tag "group:'* ]] ||
+    [[ $retention_line != *'--tag verified'* ]]; then
+    retention_ok=0
+  fi
+done < <(sed -e :a -e '/\\$/N; s/\\\n/ /; ta' scripts/smortress-restic-backup.sh)
+check "retention requires both group and verified tags" test "$retention_ok" -eq 1
+check "no wildcard retention bucket" lacks '--keep-last' scripts/smortress-restic-backup.sh
+check "no time-window retention bucket" lacks '--keep-within' scripts/smortress-restic-backup.sh
+if grep -qE '(^|[[:space:]])unlock([[:space:]]|$)' scripts/smortress-restic-*.sh; then
+  bad "no routine restic unlock"
+else
+  ok "no routine restic unlock"
+fi
+if grep -qE -- 'forget .*\*|rm -rf[^#]*(/var/lib/restic|/var/lib/smortress/restic)' scripts/smortress-restic-*.sh; then
+  bad "no bulk deletion of snapshots or repository roots"
+else
+  ok "no bulk deletion of snapshots or repository roots"
+fi
+check "failed snapshots are reaped by recorded ID" grep -q 'pending_reap' scripts/smortress-restic-backup.sh
+if grep -qE -- '--password[= ]' scripts/smortress-restic-*.sh; then
+  bad "no restic password on a command line"
+else
+  ok "no restic password on a command line"
+fi
+check "all plane state lives under /var/lib/smortress" has '/var/lib/smortress/restic' scripts/restic-plane-common.sh
+check "state directories are created 0700" has 'install -d -m 0700' scripts/restic-plane-common.sh
+check "R2 uses the new repository path" has 'homelab-restic/smortress' scripts/restic-plane-common.sh
+check "the plane never names the legacy R2 bucket" lacks 'restic-backup' scripts/restic-plane-common.sh
+for unit in smortress-restic-backup-ssd.timer smortress-restic-backup-hdd.timer \
+  smortress-restic-backup-r2.timer smortress-restic-verify.timer \
+  smortress-restic-init.service; do
+  check "image enables $unit" has "$unit" image/Containerfile
+done
+check "R2 timer is daily at midnight" has 'OnCalendar=*-*-* 00:00:00' units/systemd/smortress-restic-backup-r2.timer
+check "local backups run hourly" has 'OnCalendar=*-*-* *:05:00' units/systemd/smortress-restic-backup-ssd.timer
+check "the verifier runs after the hourly driver" has 'OnCalendar=*-*-* *:40:00' units/systemd/smortress-restic-verify.timer
+
 check "ignition sets both image references" test "$(count '@DERIVED_IMAGE@' ignition/smortress.bu)" -ge 2
 check "ignition uses the unverified first stage" has 'ostree-unverified-registry:@DERIVED_IMAGE@' ignition/smortress.bu
 check "ignition uses the signed second stage" has 'ostree-image-signed:docker://@DERIVED_IMAGE@' ignition/smortress.bu

@@ -1,0 +1,28 @@
+[Unit]
+# Driver for one Restic backend: %i is ssd, hdd or r2. It runs every recovery
+# group for that backend, records each result independently, and only then
+# exits non-zero if anything failed.
+#
+# Readiness is per group, not per unit: a failed zfs-ready@<group> must fail
+# only that group's job. The unit therefore orders after every readiness
+# instance and the script itself re-checks the exact dataset before touching it.
+Description=Run due Restic backup jobs for the %i repository
+After=zfs-ready@photos.service zfs-ready@books.service zfs-ready@notes.service \
+      zfs-ready@music.service zfs-ready@wallpapers.service \
+      smortress-restic-init.service \
+      var-lib-restic-ssd.mount var-lib-restic-hdd.mount \
+      sops-decrypt.service network-online.target
+Wants=zfs-ready@photos.service zfs-ready@books.service zfs-ready@notes.service \
+      zfs-ready@music.service zfs-ready@wallpapers.service \
+      smortress-restic-init.service \
+      var-lib-restic-ssd.mount var-lib-restic-hdd.mount network-online.target
+Requires=sops-decrypt.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/smortress-restic-backup %i
+# Safety net only: every restic, zfs and curl call has its own deadline in the
+# script, which is what turns a hang into a recorded failure.
+TimeoutStartSec=21600
+KillSignal=SIGTERM
+TimeoutStopSec=120

@@ -33,6 +33,9 @@ COPY units/quadlet/ /usr/share/smortress/quadlet/
 COPY scripts/zfs-ready.sh scripts/sops-decrypt.sh scripts/init-zpool.sh \
      scripts/open-hdd.sh scripts/access-bootstrap.sh scripts/access-lockdown.sh \
      scripts/fix-crypttab.sh \
+     scripts/restic-plane-common.sh scripts/smortress-restic-backup.sh \
+     scripts/smortress-restic-verify.sh scripts/smortress-restic-init.sh \
+     scripts/smortress-restic-restore-drill.sh \
      /usr/libexec/smortress-src/
 COPY secrets/server/ /etc/smortress/secrets/
 COPY image/cosign.pub /etc/pki/containers/smortress.pub
@@ -83,7 +86,14 @@ RUN set -eux; \
       zfs-ready@books.service \
       zfs-ready@notes.service \
       zfs-ready@music.service \
-      zfs-ready@wallpapers.service; \
+      zfs-ready@wallpapers.service \
+      var-lib-restic-ssd.mount \
+      var-lib-restic-hdd.mount \
+      smortress-restic-init.service \
+      smortress-restic-verify.timer \
+      smortress-restic-backup-ssd.timer \
+      smortress-restic-backup-hdd.timer \
+      smortress-restic-backup-r2.timer; \
     systemctl enable 'zfs-scrub-weekly@tank.timer'; \
     systemctl mask \
       podman-auto-update.timer \

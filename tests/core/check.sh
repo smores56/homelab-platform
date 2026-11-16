@@ -111,5 +111,14 @@ for ref in $(grep -o 'scripts/core/[a-z-]*\.sh' docs/core/t0-gate.md | sort -u);
 done
 ((missing)) || pass 'gate document references existing scripts'
 
+# The Restic plane has its own harness: it stubs restic, zfs, curl and sops so
+# exit codes, tags and the freshness join can be exercised without a disk.
+checks=$((checks + 1))
+if tests/core/restic-plane.sh; then
+  pass 'restic plane checks'
+else
+  fail 'restic plane checks'
+fi
+
 printf '\n%d checks, %d failed\n' "$checks" "$failures"
 ((failures == 0))

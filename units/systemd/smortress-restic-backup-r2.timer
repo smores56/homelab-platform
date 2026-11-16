@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily midnight Restic backup to the R2 repository
+
+[Timer]
+OnCalendar=*-*-* 00:00:00
+AccuracySec=1min
+Persistent=true
+Unit=smortress-restic-backup@r2.service
+
+[Install]
+WantedBy=timers.target

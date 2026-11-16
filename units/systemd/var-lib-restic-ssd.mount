@@ -1,0 +1,20 @@
+[Unit]
+# The 970 after its wipe: ext4, LABEL=restic-ssd, one Restic repository.
+# The UUID is the identity, not the device name; a re-plugged or re-enumerated
+# disk must land here or not mount at all.
+#
+# "Required" refers to the Restic plane: every SSD backup job fails when this
+# mount is absent. Boot is not one of its consumers, so a missing disk is a red
+# destination, never an unbootable host.
+JobTimeoutSec=45
+
+[Mount]
+What=/dev/disk/by-uuid/e040eab7-3df0-4b7d-96e0-71fb9a5eff93
+Where=/var/lib/restic/ssd
+Type=ext4
+# noexec/nodev/nosuid: restic only reads and writes here.
+Options=rw,noatime,nodev,nosuid,noexec
+TimeoutSec=30
+
+[Install]
+WantedBy=local-fs.target

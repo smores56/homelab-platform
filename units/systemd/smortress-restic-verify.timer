@@ -1,0 +1,13 @@
+[Unit]
+Description=Hourly Restic freshness verification
+
+[Timer]
+# After the hourly jobs (and their bounded retries) and after the midnight R2
+# start, so the verifier never judges a run that is still inside its window.
+OnCalendar=*-*-* *:40:00
+AccuracySec=1min
+Persistent=true
+Unit=smortress-restic-verify.service
+
+[Install]
+WantedBy=timers.target

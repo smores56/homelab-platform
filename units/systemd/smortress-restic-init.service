@@ -1,0 +1,18 @@
+[Unit]
+Description=Initialise missing Restic repositories
+# Creates only what is absent. A local repository is never created unless its
+# disk is mounted at the exact path; r2 is skipped until SOPS carries its
+# credentials, and the backup driver then fails closed for that backend.
+After=sops-decrypt.service var-lib-restic-ssd.mount var-lib-restic-hdd.mount \
+      network-online.target
+Wants=var-lib-restic-ssd.mount var-lib-restic-hdd.mount network-online.target
+Requires=sops-decrypt.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/smortress-restic-init
+TimeoutStartSec=3600
+
+[Install]
+WantedBy=multi-user.target

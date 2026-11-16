@@ -1,0 +1,13 @@
+[Unit]
+Description=Verify Restic freshness across all destinations and ping Healthchecks
+After=sops-decrypt.service var-lib-restic-ssd.mount var-lib-restic-hdd.mount \
+      network-online.target
+Wants=var-lib-restic-ssd.mount var-lib-restic-hdd.mount network-online.target
+Requires=sops-decrypt.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/smortress-restic-verify
+# Read-only: the script uses `restic snapshots --no-lock` so a running prune
+# (which holds the exclusive lock) cannot turn a healthy plane red.
+TimeoutStartSec=3600
