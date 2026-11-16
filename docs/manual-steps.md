@@ -3147,7 +3147,7 @@ From a machine on the LAN that is **not** on the tailnet:
 
 ```sh
 curl --max-time 3 http://10.0.0.125:22000
-ssh -o ConnectTimeout=3 smores@10.0.0.125
+ssh -o ConnectTimeout=3 core@10.0.0.125
 ```
 
 Both must time out. A connection there means the default firewalld zone is no
