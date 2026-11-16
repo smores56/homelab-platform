@@ -45,7 +45,7 @@ COPY units/quadlet/immich.network units/quadlet/immich-postgres.container \
      units/quadlet/immich-valkey.container \
      units/quadlet/immich-machine-learning.container \
      units/quadlet/immich-server.container units/quadlet/opdshelf.container \
-     units/quadlet/syncthing.container \
+     units/quadlet/opdshelf.network units/quadlet/syncthing.container \
      /usr/share/containers/systemd/
 COPY secrets/server/ /etc/smortress/secrets/
 COPY image/cosign.pub /etc/pki/containers/smortress.pub

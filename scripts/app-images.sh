@@ -108,3 +108,17 @@ app_image_matches() {
   done < <(app_image_names)
   return 1
 }
+
+# app_image_platform_digests -> read an OCI image index on stdin and print the
+# digest of every manifest a host could select.
+#
+# containers/image verifies the platform manifest it copies, not the index
+# digest, so these are the digests the mirror has to sign in addition to the
+# index. Attestation manifests ("unknown/unknown") are never pulled as images
+# and are skipped. A single-manifest image prints nothing.
+app_image_platform_digests() {
+  jq -r '.manifests[]?
+    | select((.platform.os // "unknown") != "unknown"
+        and (.platform.architecture // "unknown") != "unknown")
+    | .digest'
+}

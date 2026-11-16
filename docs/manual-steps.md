@@ -2992,18 +2992,35 @@ sudo podman pull ghcr.io/smores56/homelab-platform/immich-server@sha256:c716dc20
 ```
 
 A signature that does not verify fails that pull before the image reaches local
-storage.
+storage. The mirror signs the index digest and every platform manifest of it,
+because containers/image verifies the manifest it copies: a pull of an index by
+digest selects one platform, and an index-only signature is rejected with
+`A signature was required, but no signature exists`. The run ends with a
+policy-checked pull of every image to prove exactly that.
 
 ### 40.2 Deploy the image that ships the Quadlets
 
+The running deployment tracks a pinned derived digest, so `bootc upgrade` has
+nothing to move to: it re-reads the same reference and boots the same OS. Point
+it at the digest the `publish-server-image` run for this change printed.
+
 ```sh
+read -r digest   # the sha256:... value from that run's summary
 sudo bootc status
-sudo bootc upgrade --enforce-container-sigpolicy
+sudo bootc switch --enforce-container-sigpolicy \
+  "ghcr.io/smores56/homelab-platform/server@${digest}"
 sudo systemctl reboot
 ```
 
 After the reboot the pool unit creates the new `syncthing` group and the Quadlet
-generator picks up the six containers and the bridge network.
+generator picks up the six containers and the bridge network. A container whose
+network file is missing from the image is dropped by the generator with
+`requested Quadlet unit opdshelf.network was not found` and leaves no unit to
+start, so read the generator's own errors before chasing the containers:
+
+```sh
+journalctl -b | grep -i quadlet-generator
+```
 
 ```sh
 sudo zfs list -o name,mountpoint tank
