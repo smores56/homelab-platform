@@ -349,5 +349,17 @@ while read -r kind _path _mode owner _group _rest; do
   esac
 done < <(grep -vE '^#|^$' "$tmpfiles")
 
+# 10. A stopped container leaves a SIGTERM exit behind, and the applications exit
+#     143 for it (immich-server did: "Main process exited, code=exited,
+#     status=143"). Without declaring that as success, `systemctl stop` marks the
+#     unit failed and it sits in `systemctl --failed` next to real failures.
+for q in "${app_quadlets[@]}"; do
+  if grep -q '^SuccessExitStatus=143$' "$q"; then
+    ok "$q treats a SIGTERM stop as success"
+  else
+    bad "$q treats a SIGTERM stop as success"
+  fi
+done
+
 printf '\n%d checks, %d failed\n' "$((pass + fail))" "$fail"
 ((fail == 0))
