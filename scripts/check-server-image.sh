@@ -94,13 +94,16 @@ for q in "${quadlets[@]}"; do
   check "$q requires its readiness group" grep -qE '^Requires=.*zfs-ready@[a-z]+\.service' "$q"
 done
 
-check "readiness unit exists" has 'ExecStart=/usr/local/libexec/zfs-ready %i' 'units/systemd/zfs-ready@.service'
+check "readiness unit exists" has 'ExecStart=/usr/libexec/zfs-ready %i' 'units/systemd/zfs-ready@.service'
+# /usr/local is a symlink into /var on bootc: a helper installed there does not
+# exist at runtime, which is how the first install failed with 203/EXEC.
+check "no unit runs from /usr/local" lacks '/usr/local/libexec' units/systemd/
 for group in photos books notes music wallpapers; do
   check "image enables zfs-ready@$group" has "zfs-ready@$group.service" image/Containerfile
 done
 check "decrypt unit is ordered after local-fs" has 'After=local-fs.target' units/systemd/sops-decrypt.service
 check "zpool unit follows the data cryptsetup unit" has 'After=systemd-cryptsetup@data.service' units/systemd/smortress-zpool.service
-check "HDD unlock cannot block boot" has 'ExecStart=-/usr/local/libexec/open-hdd' units/systemd/smortress-cryptsetup-hdd.service
+check "HDD unlock cannot block boot" has 'ExecStart=-/usr/libexec/open-hdd' units/systemd/smortress-cryptsetup-hdd.service
 
 check "ignition sets both image references" test "$(count '@DERIVED_IMAGE@' ignition/smortress.bu)" -ge 2
 check "ignition uses the unverified first stage" has 'ostree-unverified-registry:@DERIVED_IMAGE@' ignition/smortress.bu
