@@ -239,8 +239,14 @@ attempt_locked() {
   # backup summary is dead the moment tagging succeeds. The post-tag id is read
   # back from the repository and must be the same snapshot (same tree and time),
   # otherwise nothing is recorded.
-  backup_tree=$(jq -r 'select(.message_type == "summary") | .tree_id // empty' \
-    "$attempt_log" 2>/dev/null | tail -n1)
+  # The tree identifies the snapshot content independently of its id, which
+  # tagging rewrites. The backup summary does not carry it; the snapshot does.
+  backup_tree=$(with_deadline "$deadline" "$restic_bin" -r "$repo" cat snapshot \
+    "$sid" 2>/dev/null | jq -r '.tree // empty' 2>/dev/null) || backup_tree=""
+  if [[ -z $backup_tree ]]; then
+    fail_attempt no-snapshot-id 0 "$sid"
+    return 1
+  fi
   if ! with_deadline "$deadline" "$restic_bin" -r "$repo" tag --add verified \
     "$sid" >/dev/null 2>&1; then
     fail_attempt tag-failed 0 "$sid"

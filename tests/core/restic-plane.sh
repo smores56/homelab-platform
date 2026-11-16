@@ -83,7 +83,9 @@ case $cmd in
     exit "${STUB_BACKUP_EXIT:-0}"
     ;;
   tag) exit "${STUB_TAG_EXIT:-0}" ;;
-  cat) exit "${STUB_CAT_EXIT:-0}" ;;
+  cat)
+    printf '{"tree":"%s"}\n' "${STUB_BACKUP_TREE:-tree1}"
+    exit "${STUB_CAT_EXIT:-0}" ;;
   snapshots)
     if [[ -n ${STUB_SNAPSHOTS_JSON:-} ]]; then
       printf '%s\n' "$STUB_SNAPSHOTS_JSON"
