@@ -7,6 +7,9 @@
 # verified-only rules, and that no secret or falling-open default is committed.
 #
 #   tests/backrest/check.sh
+# Several assertions grep the source for literal $VAR needles; that is the point.
+# shellcheck disable=SC2016
+
 set -uo pipefail
 
 root=$(git rev-parse --show-toplevel)
@@ -33,6 +36,11 @@ bad() {
 note() { printf 'skip %s\n' "$1"; }
 has() { if grep -qF -- "$3" "$2"; then ok "$1"; else bad "$1" "$3 not found in $2"; fi; }
 hasnt() { if grep -qF -- "$3" "$2"; then bad "$1" "$3 found in $2"; else ok "$1"; fi; }
+assert() { # label, command...
+  local label=$1
+  shift
+  if "$@" >/dev/null 2>&1; then ok "$label"; else bad "$label"; fi
+}
 
 for f in "$index" "$entry" "$gate" "$deploy" "$dir/wrangler.json" "$dir/package.json" "$dir/container/Dockerfile"; do
   if [[ -f $f ]]; then ok "exists: $f"; else bad "exists: $f"; fi
@@ -41,18 +49,16 @@ done
 # --- deployment configuration ------------------------------------------------
 if jq -e . "$dir/wrangler.json" >/dev/null 2>&1; then
   ok "wrangler.json is valid JSON"
-  jq -e '.name == "smortress-backrest" and .workers_dev == false' "$dir/wrangler.json" >/dev/null &&
-    ok "isolated worker on a custom domain" || bad "worker name and workers_dev"
-  jq -e '.containers[0].scheduling_policy == "durable_object"' "$dir/wrangler.json" >/dev/null &&
-    ok "durable_object scheduling policy" || bad "durable_object scheduling policy (default is deprecated)"
-  jq -e '.exports.Backrest.type == "durable-object"' "$dir/wrangler.json" >/dev/null &&
-    ok "Durable Object export declared" || bad "Durable Object export declared"
-  jq -e '[.routes[].pattern] == ["backrest.sammohr.dev"]' "$dir/wrangler.json" >/dev/null &&
-    ok "its own hostname, so recovery.sammohr.dev stays the live page" ||
-    bad "route must be backrest.sammohr.dev only"
-  jq -e '(.vars | has("BACKREST_REPO_URI") | not) and (.vars | has("BACKREST_REPO_GUID") | not)' "$dir/wrangler.json" >/dev/null &&
-    ok "repository location is not a checked-in default" ||
-    bad "repository location must not come from wrangler.json"
+  assert "isolated worker on a custom domain" \
+    jq -e '.name == "smortress-backrest" and .workers_dev == false' "$dir/wrangler.json"
+  assert "durable_object scheduling policy" \
+    jq -e '.containers[0].scheduling_policy == "durable_object"' "$dir/wrangler.json"
+  assert "Durable Object export declared" \
+    jq -e '.exports.Backrest.type == "durable-object"' "$dir/wrangler.json"
+  assert "its own hostname, so recovery.sammohr.dev stays the live page" \
+    jq -e '[.routes[].pattern] == ["backrest.sammohr.dev"]' "$dir/wrangler.json"
+  assert "repository location is not a checked-in default" \
+    jq -e '(.vars | has("BACKREST_REPO_URI") | not) and (.vars | has("BACKREST_REPO_GUID") | not)' "$dir/wrangler.json"
   hasnt "no credential in wrangler.json" "$dir/wrangler.json" "api_token"
 else
   bad "wrangler.json is valid JSON"
@@ -122,8 +128,8 @@ has "deploy requires the repository uri" "$deploy" 'BACKREST_REPO_URI is require
 has "deploy requires the repository guid" "$deploy" 'BACKREST_REPO_GUID is required'
 has "deploy validates the guid shape" "$deploy" '=~ ^[0-9a-f]{64}$'
 has "deploy uses podman through wrangler" "$deploy" 'WRANGLER_DOCKER_BIN'
-jq -e '.scripts.deploy == "./scripts/deploy.sh"' "$dir/package.json" >/dev/null &&
-  ok "npm run deploy cannot skip the required inputs" || bad "npm run deploy must use scripts/deploy.sh"
+assert "npm run deploy cannot skip the required inputs" \
+  jq -e '.scripts.deploy == "./scripts/deploy.sh"' "$dir/package.json"
 
 # --- gate matrix -------------------------------------------------------------
 has "denial uses the real restic token" "$gate" 'R2_READ_ACCESS_KEY_ID'
