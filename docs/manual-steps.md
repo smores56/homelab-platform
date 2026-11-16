@@ -3051,6 +3051,13 @@ sudo systemctl start smortress-restic-backup@r2.service
 sudo systemctl start smortress-restic-verify.service
 ```
 
+A unit that fails with `statfs <path>: no such file or directory` mounts a
+directory the image creates through tmpfiles; if `journalctl -b | grep tmpfiles`
+shows `Failed to resolve user`, the entry names a login the image does not
+create. The state directories outside the recovery groups are
+`/var/lib/immich/ml-cache` and `/var/lib/syncthing-versions`, both owned by the
+numeric uid the containers run as.
+
 ### 40.3 Inspect or rotate an application secret
 
 Both application secrets are single-value SOPS files. Viewing one needs the age

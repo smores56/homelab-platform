@@ -85,6 +85,12 @@ jobs:
           # ("invalid policy ... Unknown key \"keyPaths\""), and no entry here
           # pulls anything but an application image.
           sudo install -D -m 0644 image/cosign.pub /etc/pki/containers/smortress.pub
+          # Without the host's registries.d entry containers/image never looks
+          # at the .sig lookaside tag the signatures are stored in, and the pull
+          # fails "A signature was required, but no signature exists".
+          sudo install -D -m 0644 \
+            image/rootfs/etc/containers/registries.d/ghcr.io-smortress.yaml \
+            /etc/containers/registries.d/ghcr.io-smortress.yaml
           jq '{"default": [{"type": "reject"}],
                "transports": {"docker": {"ghcr.io/smores56/homelab-platform":
                  .transports.docker["ghcr.io/smores56/homelab-platform"]}}}' \
