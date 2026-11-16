@@ -2543,6 +2543,18 @@ scratch install.
     ```sh
     sudo tailscale up --ssh --hostname smortress
     sudo firewall-cmd --zone=bootstrap --list-all   # must show no interfaces
+
+    The enrollment unit needs the decrypted auth key, so a host enrolled by hand
+    before the age identity exists has to close the window explicitly:
+
+    ```sh
+    sudo touch /var/lib/smortress/tailscale-enrolled
+    sudo /usr/libexec/access-lockdown
+    sudo firewall-cmd --get-active-zones
+    ```
+
+    The wired interface must no longer appear in a zone of its own; only
+    `tailscale0` (and the `drop` default) may remain.
     sudo firewall-cmd --get-active-zones
     sudo firewall-cmd --zone=tailscale --list-all
     sudo ss -ltnp
