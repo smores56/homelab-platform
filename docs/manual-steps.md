@@ -3041,6 +3041,16 @@ Podman secrets exist only if `smortress-app-secrets.service` succeeded; a
 container that declares one fails to create, not to authenticate, when it did
 not.
 
+The new `syncthing` recovery group has no Restic status until its first backup
+runs, and the `r2` destination is only due at 00:00 UTC, so
+`smortress-restic-verify` fails on `r2/syncthing: no status state` until then.
+Start that backup once the applications are up:
+
+```sh
+sudo systemctl start smortress-restic-backup@r2.service
+sudo systemctl start smortress-restic-verify.service
+```
+
 ### 40.3 Inspect or rotate an application secret
 
 Both application secrets are single-value SOPS files. Viewing one needs the age
