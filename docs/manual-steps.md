@@ -3061,10 +3061,14 @@ numeric uid the containers run as.
 ### 40.3 Inspect or rotate an application secret
 
 Both application secrets are single-value SOPS files. Viewing one needs the age
-identity, which only the operator has:
+identity, which only the operator has. sops looks for it in
+`$HOME/.config/sops/age/keys.txt` and finds nothing there: the identity this host
+staged is root-only at `/var/lib/smortress/age/keys.txt`, so every command here
+passes it explicitly. Without that the decrypt fails with no recipient match.
 
 ```sh
-sudo /usr/bin/sops --decrypt --extract '["password"]' \
+sudo env SOPS_AGE_KEY_FILE=/var/lib/smortress/age/keys.txt \
+  /usr/bin/sops --decrypt --extract '["password"]' \
   /etc/smortress/secrets/immich-db-password.yaml
 ```
 
@@ -3075,7 +3079,7 @@ Change the role first, on the running cluster:
 
 ```sh
 sudo podman exec -i immich-postgres psql -U immich -d immich \
-  -c "ALTER USER immich WITH PASSWORD '$(sudo /usr/bin/sops --decrypt --extract '["password"]' /etc/smortress/secrets/immich-db-password.yaml)'"
+  -c "ALTER USER immich WITH PASSWORD '$(sudo env SOPS_AGE_KEY_FILE=/var/lib/smortress/age/keys.txt /usr/bin/sops --decrypt --extract '["password"]' /etc/smortress/secrets/immich-db-password.yaml)'"
 ```
 
 Then edit the ciphertext, publish a new image, reboot, and recreate the
@@ -3246,7 +3250,7 @@ the server, or rotate the ciphertext — otherwise the server cannot authenticat
 
 ```sh
 sudo podman exec -i drill-pg psql -U immich -d immich \
-  -c "ALTER USER immich WITH PASSWORD '$(sudo /usr/bin/sops --decrypt --extract '["password"]' /etc/smortress/secrets/immich-db-password.yaml)'"
+  -c "ALTER USER immich WITH PASSWORD '$(sudo env SOPS_AGE_KEY_FILE=/var/lib/smortress/age/keys.txt /usr/bin/sops --decrypt --extract '["password"]' /etc/smortress/secrets/immich-db-password.yaml)'"
 ```
 
 **OPDShelf.** Nothing stateful to rebuild; prove the tree serves.
