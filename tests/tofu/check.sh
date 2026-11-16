@@ -112,18 +112,23 @@ for app in ssh memory agent backrest; do
   if grep -q 'cloudflare_zero_trust_access_policy.email.id' <<<"$block"; then ok "${app} allows the owner email"; else bad "${app} allows the owner email"; fi
 done
 
-# The hosted Backrest reader (#707) owns both gate hostnames and stays off the
-# live recovery page until T6.
+# The hosted Backrest reader (#707) has its own hostname and stays off the live
+# recovery page until T6.
 backrest_app=$(extract cloudflare_zero_trust_access_application.backrest)
 if grep -qF 'uri  = "backrest.${var.domain}"' <<<"$backrest_app"; then
   ok "backrest application covers backrest.<zone>"
 else
   bad "backrest application covers backrest.<zone>"
 fi
-if grep -qF 'recovery.${var.domain}"' <<<"$backrest_app"; then
+if grep -qF 'uri  = "recovery.' <<<"$backrest_app"; then
   bad "backrest must not take over the live recovery page before T6"
 else
   ok "recovery.<zone> stays on the public recovery page"
+fi
+if grep -q '^[[:space:]]*"backrest",$' <<<"$(extract cloudflare_zero_trust_access_application.public)"; then
+  bad "backrest must not be a public bypass hostname"
+else
+  ok "backrest is not a public bypass hostname"
 fi
 
 # nanobot.sammohr.dev is retired in favour of agent.sammohr.dev (SDLC #583).

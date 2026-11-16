@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "deploy": "wrangler deploy",
+    "deploy": "./scripts/deploy.sh",
     "dev": "wrangler dev",
     "typecheck": "tsc --noEmit"
   },
