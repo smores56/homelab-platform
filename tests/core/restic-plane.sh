@@ -31,6 +31,11 @@ eq() {
   if [[ $1 == "$2" ]]; then ok "$3"; else bad "$3" "got '$1' want '$2'"; fi
 }
 
+# The harness builds its stub tree from the real group list: the verifier
+# fails closed on a group with no state, so a hardcoded list here would stop
+# testing whichever group was added last without failing.
+mapfile -t groups < <(grep -oP '^groups=\(\K[^)]+' scripts/restic-plane-common.sh | tr ' ' '\n')
+
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
@@ -41,7 +46,7 @@ src=$work/tank
 repos=$work/repos
 secrets=$work/secrets
 install -d -m 0700 "$state" "$src" "$repos/ssd" "$repos/hdd" "$secrets"
-for g in photos books notes music wallpapers; do
+for g in "${groups[@]}"; do
   install -d -m 0755 "$src/$g/.zfs/snapshot"
 done
 printf 'hunter2\n' >"$secrets/restic-password.yaml"
@@ -160,7 +165,7 @@ reset_state() {
   unset STUB_BACKUP_EXIT STUB_BACKUP_ID STUB_TAG_EXIT STUB_ZFS_LIST_EXIT \
     STUB_SNAPSHOTS_JSON STUB_SNAPSHOTS_EXIT STUB_READY_EXIT STUB_CAT_EXIT \
     STUB_MAINT_EXIT STUB_INIT_EXIT STUB_CURL_EXIT RESTIC_HEALTHCHECK_URL
-  for g in photos books notes music wallpapers; do
+  for g in "${groups[@]}"; do
     rm -rf "$src/$g/.zfs/snapshot"/*
   done
 }
@@ -323,7 +328,7 @@ seed_state() {
 
 seed_all_healthy() {
   for b in ssd hdd r2; do
-    for g in photos books notes music wallpapers; do seed_state "$b" "$g"; done
+    for g in "${groups[@]}"; do seed_state "$b" "$g"; done
   done
 }
 
@@ -467,7 +472,7 @@ rm -f "$dec/src/extra.yaml"
 
 # --- 8. units cannot start before the dataset is ready ------------------
 svc=units/systemd/smortress-restic-backup@.service
-for g in photos books notes music wallpapers; do
+for g in "${groups[@]}"; do
   if grep -q "zfs-ready@$g.service" "$svc"; then
     ok "the backup driver is ordered after zfs-ready@$g"
   else
