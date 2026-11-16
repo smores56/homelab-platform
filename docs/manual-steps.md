@@ -2265,3 +2265,85 @@ prunes. A missing repository is reported by name, not created.
     and delete them only after 90 days through the reviewed retention process.
     Until the 970 is converted, rollback is `bootctl set-default` plus a
     verified old-generation restore to scratch — see `docs/migration-gates.md`.
+
+## 36. Core migration T0: freeze, rescue, verify, publish the kit
+
+Feature #701, task #703. The gate, its dispositions and the evidence it expects
+live in `docs/core/t0-gate.md`; the kit contract is
+`docs/core/recovery-kit.md`. Nothing in T1–T6 may repartition or wipe a disk
+until every step below is done and its evidence is posted on #703. This section
+supersedes section 35 and `docs/migration-gates.md` for the new core. Run the
+commands from the `~/repos/github.com/smores56/homelab-platform` checkout on
+`smortress`.
+
+1. Freeze the legacy graph. Flux stops reconciling git, repairing Helm drift and
+   pushing image-automation commits; the applications and the nightly backups
+   keep running. `--apply` records the previous state before patching and fails
+   on any object it cannot verify.
+
+   ```sh
+   sudo scripts/core/freeze-legacy.sh --check
+   sudo scripts/core/freeze-legacy.sh --apply
+   ```
+
+   Abort path: `sudo scripts/core/freeze-legacy.sh --resume` restores exactly
+   the state recorded by the last `--apply`.
+
+2. Rescue what no backup holds. The Syncthing identity and the vault version
+   history live outside `restic's` source path, so the 980 cannot be wiped
+   before these are copied (or the owner declares them disposable in #703).
+
+   ```sh
+   sudo systemctl stop syncthing.service 2>/dev/null || true
+   sudo tar -C /var/lib -c syncthing syncthing-versions \
+     | zstd -T0 -o /var/backup/t0-syncthing-state.tar.zst
+   sudo sha256sum /var/backup/t0-syncthing-state.tar.zst
+   sudo systemctl start syncthing.service 2>/dev/null || true
+   ```
+
+   `/var/backup` is the HDD, which survives the migration; copy the archive into
+   the kit or to another disk before the HDD itself is converted in T3.
+
+3. Refresh both legacy repositories. The unit's `ExecStart` is backup, then
+   `forget --prune` with the configured 14/8/12 policy, then `check`: starting
+   it prunes by policy. Wait for each to finish before starting the next; the
+   verifier refuses to run while one is active.
+
+   ```sh
+   sudo systemctl start restic-backups-local.service
+   sudo systemctl start restic-backups-r2.service
+   journalctl -u restic-backups-local.service -u restic-backups-r2.service -n 40
+   ```
+
+4. Prove they restore. The verifier opens both repositories with the units' own
+   password file and R2 credentials, checks every retained tree is present,
+   reads a sample of packs, restores the small trees plus the live Immich dump,
+   and requires `pg_restore --list` to parse that dump.
+
+   ```sh
+   sudo scripts/core/verify-legacy-backups.sh --keep
+   ```
+
+   `pg_restore` is not on the host's PATH; the script reports the exact
+   `nix shell nixpkgs#postgresql --command pg_restore --list <file>` line if it
+   cannot find one, and that counts as a failure, not a pass.
+
+5. Measure the root-only trees and the secrets (names only), then replace the
+   unmeasured rows in the gate document with the output.
+
+   ```sh
+   sudo scripts/core/legacy-audit.sh --out /var/tmp/t0-audit.md
+   ```
+
+6. Publish the kit. In the Bitwarden item **homelab core recovery** record the
+   legacy Restic password and URIs, the legacy R2 access key pair, the HDD and
+   970 LUKS passphrases, the current 980 root passphrase and the smortress SSH
+   host private key; add the SOPS age identity and the YubiKey restore bundle if
+   they are not already there. Write the paper copy and run the drill in
+   `docs/core/recovery-kit.md` — a kit item that has not opened a repository is
+   not in the kit. T2–T4 add their own items as they create the keys.
+
+7. Record the gate. Paste into #703: the `--apply` output, the two verifier
+   tables, the audit report, the rescue archive checksum and the drill date.
+   The owner re-reads the disposable list in the gate document and confirms it
+   there.
