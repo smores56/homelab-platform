@@ -64,7 +64,7 @@ escape() {
 }
 
 require_file() { [[ -s $1 ]] || die "missing or empty operator file: $1"; }
-read_line() { local v; IFS= read -r v <"$1" || true; printf '%s' "$v"; }
+read_line() { local v=""; IFS= read -r v <"$1" || true; printf '%s' "$v"; }
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
@@ -91,6 +91,10 @@ if $synthetic; then
   tang_thumbprint=$(printf 'A%.0s' {1..43})
 else
   require_file "$repo/image/cosign.pub"
+  for f in derived-image disk core-password-hash root-recovery-passphrase \
+    data-recovery-passphrase tang-thumbprint ssh_authorized_keys; do
+    require_file "$repo/ignition/operator/$f"
+  done
   if $stock; then
     derived_image=$UCORE_IMAGE
   else
