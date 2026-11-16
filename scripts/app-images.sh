@@ -71,6 +71,23 @@ app_image_digest() {
   return 1
 }
 
+# app_image_source NAME -> the reference the mirror copies from: the upstream
+# repository at the pinned digest, with no tag.
+#
+# skopeo refuses a reference that carries both a tag and a digest ("Docker
+# references with both a tag and digest are currently not supported"), so the
+# tag in the table stays documentation. The digest is the pin either way.
+app_image_source() {
+  local name=$1 upstream body
+  upstream=$(app_image_upstream "$name") || return 1
+  body=${upstream%@*}
+  # Only the last path segment may hold a tag: a registry port is not one.
+  case ${body##*/} in
+    *:*) body=${body%:*} ;;
+  esac
+  printf 'docker://%s@%s\n' "$body" "$(app_image_digest "$name")"
+}
+
 # app_image_names -> every name, one per line, in table order.
 app_image_names() {
   local entry _upstream _digest

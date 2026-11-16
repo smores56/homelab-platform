@@ -30,14 +30,10 @@ fi
 # app_repo and the lookup helpers come from the sourced table.
 # shellcheck disable=SC2154
 while IFS= read -r name; do
-  upstream=$(app_image_upstream "$name")
   digest=$(app_image_digest "$name")
-  src=docker://$upstream
-  # An upstream pin may already be a digest (OPDShelf); adding the digest twice
-  # is a parse error, not a stricter reference.
-  if [[ $upstream != *@sha256:* ]]; then
-    src=docker://$upstream@$digest
-  fi
+  # The source is repo@digest, never tag@digest: skopeo rejects a reference that
+  # carries both.
+  src=$(app_image_source "$name")
   dst=docker://$app_repo/$name
 
   echo "mirror-app-images: copying $src"

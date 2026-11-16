@@ -80,6 +80,19 @@ for name in $app_names; do
   fi
 done
 
+# 1b. The reference handed to skopeo is the upstream repository at the pinned
+#     digest and carries no tag: skopeo refuses a name with both ("Docker
+#     references with both a tag and digest are currently not supported"), which
+#     is how the first publish run failed after merge.
+for name in $app_names; do
+  digest=$(app_image_digest "$name")
+  upstream=$(app_image_upstream "$name")
+  # Independent of app_image_source: strip the digest and then the tag with sed.
+  want_repo=$(printf '%s\n' "$upstream" | sed -E 's/@sha256:[0-9a-f]+$//; s/:[^/:]+$//')
+  eq "$(app_image_source "$name")" "docker://$want_repo@$digest" \
+    "$name skopeo source is repo@digest"
+done
+
 # 2. A container that mounts a recovery group is ordered after that group's
 #    readiness unit, and requires nothing it does not mount. One that mounts no
 #    group (the machine learning cache) needs no readiness at all.
