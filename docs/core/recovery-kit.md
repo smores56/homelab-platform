@@ -37,8 +37,8 @@ version that wrote the legacy repositories) or the distro package, and
 | Restic password — new repositories | one password for `ssd`, `hdd`, `r2` | T3 | — |
 | Repository URIs — new | `ssd`, `hdd`, `r2` locations, including the R2 bucket | T3 | — |
 | R2 read-only recovery token | Backrest's only credential; cannot delete offsite data | T4 | — |
-| Backrest login | recovery UI at `recovery.sammohr.dev` | T4 | — |
-| This runbook | printed `docs/core/` set: gate, kit, manual steps | T0 | — |
+| Backrest login | recovery UI at `backrest.sammohr.dev`; `recovery.sammohr.dev` stays the static letter | T4 | — |
+| This runbook | printed `docs/core/` set: gate, kit, backrest, manual steps | T0 | — |
 
 Bitwarden item: **homelab core recovery**. Custom fields for short values;
 attachments for files (age identity, host key, cosign key). The paper copy

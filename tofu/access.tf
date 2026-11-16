@@ -227,3 +227,36 @@ resource "cloudflare_zero_trust_access_application" "public" {
   # wildcard denies the name until someone reads the diff; adding one is a
   # reviewed widening of the public surface.
 }
+
+# The hosted Backrest reader (#707) lives on its own hostname until T6, so
+# `recovery.sammohr.dev` keeps serving the static recovery page. The owner's
+# identity is the browser path; the service-auth policy exists because the gate
+# matrix runs unattended from a laptop, and a service token is the only
+# authorization a curl invocation can present. Access covers the signed
+# same-origin download URLs because they live under this hostname.
+resource "cloudflare_zero_trust_access_application" "backrest" {
+  account_id       = var.account_id
+  name             = "backrest"
+  type             = "self_hosted"
+  session_duration = "720h"
+
+  destinations = [{
+    type = "public"
+    uri  = "backrest.${var.domain}"
+  }]
+
+  policies = [
+    {
+      id         = cloudflare_zero_trust_access_policy.email.id
+      precedence = 1
+    },
+    {
+      id         = cloudflare_zero_trust_access_policy.service_auth.id
+      precedence = 2
+    },
+  ]
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}

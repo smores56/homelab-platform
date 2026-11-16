@@ -163,6 +163,29 @@ jobs:
         # hostnames and the tunnel split. No token, no API call.
         run: tests/tofu/check.sh
 
+  backrest:
+    name: backrest reader
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      # The Worker is the read-only boundary and its typecheck is the only
+      # compiler check on that logic. The static tests cover config shape,
+      # redaction, the verified-only rule and the deploy wrapper.
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.0.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: backrest/package-lock.json
+      - name: install
+        run: npm ci --prefix backrest
+      - name: typecheck
+        run: npm --prefix backrest run typecheck
+      - name: static checks
+        run: tests/backrest/check.sh
+
   shellcheck:
     name: shellcheck
     runs-on: ubuntu-latest
@@ -179,7 +202,8 @@ jobs:
             tests/observability/*.sh tests/agent-control/*.sh \
             clusters/homelab/flux-system/bootstrap.sh \
             clusters/homelab/platform/backup/*.sh provision/*.sh tests/provision/*.sh \
-            scripts/core/*.sh tests/core/*.sh
+            scripts/core/*.sh tests/core/*.sh \
+            backrest/scripts/*.sh backrest/container/entrypoint.sh tests/backrest/*.sh
       - name: provision static checks
         run: tests/provision/check.sh
       - name: core gate static checks

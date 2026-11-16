@@ -2736,3 +2736,204 @@ or reformats them.
    URIs (including the R2 bucket and path), the shared Restic password, the R2
    write token, and the Healthchecks check name. Run the kit drill from a
    machine that is not smortress with only those items.
+
+## 39. Hosted Backrest (T4): seed the gate repository, deploy, and run the matrix
+
+Runs from a laptop with `podman`, `restic`, `jq` and network access. smortress
+stays off for the whole matrix: only R2 and Cloudflare are involved. The gate
+repository is a separate path (`/gate` under the new bucket), so a failed run
+cannot touch production snapshots.
+
+### 39.1 Seed a disposable repository
+
+The 100 GiB payloads are sparse zeros on purpose. Restic stores almost nothing,
+but `restic dump` still delivers 100 GiB to the client, which is what the
+four-hour stream measures. A 5 GiB incompressible file covers random-data
+throughput. Real disk use is about 6 GB; the scan and upload are the cost.
+
+Use the Object Read & Write pair from section 38 for the seeding; the read-only
+pair comes next.
+
+```sh
+export GATE=/var/tmp/backrest-gate
+export RESTIC_REPOSITORY="s3:https://385f7d47e2e8438fbda5d6f76d760434.r2.cloudflarestorage.com/homelab-restic/gate"
+export AWS_DEFAULT_REGION=auto
+export AWS_ACCESS_KEY_ID=$(mise x -- sops -d --extract '["r2_access_key_id"]' secrets/server/r2-credentials.yaml)
+export AWS_SECRET_ACCESS_KEY=$(mise x -- sops -d --extract '["r2_secret_access_key"]' secrets/server/r2-credentials.yaml)
+read -rsp 'gate restic password: ' RESTIC_PASSWORD && export RESTIC_PASSWORD
+
+restic init
+mkdir -p "$GATE/tree"
+for i in $(seq -w 0 99); do truncate -s 1G "$GATE/tree/part-$i.bin"; done
+truncate -s 100G "$GATE/big.bin"
+head -c 5G /dev/urandom >"$GATE/random.bin"
+restic backup --host backrest-gate --tag verified "$GATE"
+export REPO_GUID=$(restic cat config --json | jq -r .id)
+export BIG_SHA256=$(sha256sum "$GATE/big.bin" | cut -d' ' -f1)
+printf 'guid=%s\nbig=%s\n' "$REPO_GUID" "$BIG_SHA256"
+```
+
+The matrix uses `/var/tmp/backrest-gate/random.bin` (file check),
+`/var/tmp/backrest-gate/tree` (directory check), and the same two paths for the
+long streams.
+
+### 39.2 Read-only R2 token
+
+Dashboard → R2 → Manage API tokens → Create, **Object Read only**, scoped to
+`homelab-restic`. This is Backrest's only credential. Keep it in Bitwarden.
+
+```sh
+read -rsp 'read-only access key id: ' R2_READ_ACCESS_KEY_ID && export R2_READ_ACCESS_KEY_ID
+read -rsp 'read-only secret: ' R2_READ_SECRET_ACCESS_KEY && export R2_READ_SECRET_ACCESS_KEY
+```
+
+### 39.3 Access service token
+
+Zero Trust → Access → Service Auth → Create. Store the pair in Bitwarden. The
+`service auth` policy is account-wide, so this token also reaches `ssh`,
+`memory` and `agent` if it leaks; rotate it in the same place if that happens.
+
+### 39.4 Apply the Access application
+
+`tofu/access.tf` declares the `backrest` application. Merging the change runs
+`tofu-apply` (it triggers on `tofu/**` changes to `main`); a manual dispatch is
+`gh workflow run tofu-apply.yml`.
+
+### 39.5 Worker secrets and the first deploy
+
+Run from the repository root. `put_secret` reads stdin, so no secret ever
+appears in argv.
+
+```sh
+put_secret() { (cd backrest && mise x node@22 -- npx wrangler secret put "$1"); }
+
+(cd backrest && mise x node@22 -- npm ci)
+systemctl --user start podman.socket   # wrangler drives rootless podman through this socket
+
+printf '%s' "$RESTIC_PASSWORD" | put_secret RESTIC_PASSWORD
+printf '%s' "$R2_READ_ACCESS_KEY_ID" | put_secret R2_ACCESS_KEY_ID
+printf '%s' "$R2_READ_SECRET_ACCESS_KEY" | put_secret R2_SECRET_ACCESS_KEY
+
+# The operator's password stays in Bitwarden and on paper; only its bcrypt hash
+# reaches Cloudflare.
+read -rsp 'backrest operator password: ' pw
+operator_bcrypt=$(printf '%s' "$pw" | backrest/scripts/hash-password.sh)
+unset pw
+printf '%s' "$operator_bcrypt" | put_secret BACKREST_OPERATOR_BCRYPT
+
+# A service account the Worker uses to index snapshots. It is not a human login.
+bootstrap=$(openssl rand -base64 32)
+bootstrap_bcrypt=$(printf '%s' "$bootstrap" | backrest/scripts/hash-password.sh)
+printf '%s' "$bootstrap" | put_secret BACKREST_BOOTSTRAP_PASSWORD
+printf '%s' "$bootstrap_bcrypt" | put_secret BACKREST_BOOTSTRAP_BCRYPT
+unset bootstrap bootstrap_bcrypt
+
+BACKREST_REPO_ID=r2 \
+BACKREST_REPO_URI="$RESTIC_REPOSITORY" \
+BACKREST_REPO_GUID="$REPO_GUID" \
+  mise x node@22 -- backrest/scripts/deploy.sh
+```
+
+The first request after a deploy is the cold start: the image renders the
+config, the Worker waits for port 9898, reindexes the snapshot set, and only
+then proxies. Watch it with `(cd backrest && mise x node@22 -- npx wrangler
+tail)`; a restic download attempt would appear there and is a gate failure.
+
+### 39.6 Run the matrix
+
+```sh
+export BACKREST_URL=https://backrest.sammohr.dev
+export BACKREST_BOOTSTRAP_USER=bootstrap
+read -rsp 'bootstrap password: ' BACKREST_BOOTSTRAP_PASSWORD && export BACKREST_BOOTSTRAP_PASSWORD
+export BACKREST_REPO_ID=r2
+read -rsp 'Access client id: ' CF_ACCESS_CLIENT_ID && export CF_ACCESS_CLIENT_ID
+read -rsp 'Access client secret: ' CF_ACCESS_CLIENT_SECRET && export CF_ACCESS_CLIENT_SECRET
+export RESTIC_REPOSITORY RESTIC_PASSWORD
+export BACKREST_GATE_SMALL_FILE=$GATE/random.bin
+export BACKREST_GATE_SMALL_DIR=$GATE/tree
+
+backrest/scripts/gate.sh matrix
+backrest/scripts/gate.sh stream "$GATE/big.bin" sha "$BIG_SHA256"
+backrest/scripts/gate.sh stream "$GATE/tree" tar
+BACKREST_CANCEL_AFTER=30 backrest/scripts/gate.sh cancel "$GATE/big.bin"
+```
+
+`matrix` proves the config shape, the credential redaction, verified-only
+listing, the small streams, every restic write denial and every proxy write
+refusal. The two `stream` runs are the four-hour budget; the `sha` run must
+print the seeded hash, and the `tar` run must parse the whole stream.
+
+Interruption is the one check that needs the platform: start the 100 GiB stream,
+find the container with `(cd backrest && mise x node@22 -- npx wrangler
+containers list)`, open a shell with `wrangler containers ssh <ID>`, and run
+`kill 1`. The client must see a truncated, failed download — never a silent
+success — and the next request must start cleanly.
+
+### 39.7 Record the verdict
+
+Paste the output, byte counts and failure text on issue #707. On a pass,
+redeploy with the production repository URI and GUID from section 38, run
+`gate.sh matrix` once more, and delete the `/gate` path afterwards. On a
+failure, use 39.8; it is preauthorized.
+
+### 39.8 VPS fallback (preauthorized)
+
+Same image, same environment contract, same Access and R2 policy. Only the
+hosting changes: a tunnel instead of the Worker route, and persistent
+`/data` and `/cache` volumes.
+
+```sh
+# On the laptop: build and publish the same image the Worker uses.
+podman build -t ghcr.io/smores56/backrest:vps backrest/container
+gh auth token | podman login ghcr.io -u smores56 --password-stdin
+podman push ghcr.io/smores56/backrest:vps
+```
+
+```sh
+# On the VPS, as root.
+install -d -m 0700 /etc/backrest
+$EDITOR /etc/backrest/env
+#   BACKREST_INSTANCE=backrest-recovery
+#   BACKREST_REPO_ID=r2
+#   BACKREST_REPO_URI=<production URI>
+#   BACKREST_REPO_GUID=<GUID>
+#   RESTIC_PASSWORD=<restic password>
+#   R2_ACCESS_KEY_ID=<read-only key>
+#   R2_SECRET_ACCESS_KEY=<read-only secret>
+#   BACKREST_OPERATOR_USER=operator
+#   BACKREST_OPERATOR_BCRYPT=<base64 bcrypt>
+#   BACKREST_BOOTSTRAP_USER=bootstrap
+#   BACKREST_BOOTSTRAP_BCRYPT=<base64 bcrypt>
+chmod 600 /etc/backrest/env
+
+cat >/etc/systemd/system/backrest.service <<'EOF'
+[Unit]
+Description=Backrest recovery reader
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Restart=always
+EnvironmentFile=/etc/backrest/env
+ExecStart=/usr/bin/podman run --rm --name backrest \
+  -p 127.0.0.1:9898:9898 \
+  -v backrest-data:/data -v backrest-cache:/cache \
+  --env-file /etc/backrest/env \
+  ghcr.io/smores56/backrest:vps /backrest
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+podman volume create backrest-data
+podman volume create backrest-cache
+systemctl daemon-reload
+systemctl enable --now backrest.service
+curl -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:9898/   # any status means listening
+```
+
+Point the hostname at the VPS with a dedicated cloudflared tunnel
+(`cloudflared tunnel run --token <token>`, token in Bitwarden) and a reviewed
+tofu diff that moves `backrest.sammohr.dev` from the Worker route to the tunnel.
+The Access application does not change. Then run 39.6 again against the same
+hostname — the matrix is the acceptance criterion, not the platform.

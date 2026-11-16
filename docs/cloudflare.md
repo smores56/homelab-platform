@@ -204,8 +204,10 @@ zone with no application of its own is reachable only by the owner's identity.
 
 - **Protected applications** keep the email allow policy and add `service auth`
   (`non_identity`, any valid service token) where an unattended client connects:
-  `ssh` (`cloudflared access ssh`), `memory` (the MCP wrapper's device) and
-  `agent` (a blessed device's proxy). `kanbei` keeps the email policy alone and
+  `ssh` (`cloudflared access ssh`), `memory` (the MCP wrapper's device),
+  `agent` (a blessed device's proxy) and `backrest` (the hosted recovery reader
+  at `backrest.sammohr.dev`; its Worker also refuses every write RPC and strips
+  the repository credentials, see `docs/core/backrest.md`). `kanbei` keeps the email policy alone and
   adds `allow_authenticate_via_warp`, so a device that already runs the
   Cloudflare One client skips the login; a device without it gets the ordinary
   Access redirect. `nanobot` is retired (SDLC #583): the cluster serves the same app on
