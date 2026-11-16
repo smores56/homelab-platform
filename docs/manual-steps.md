@@ -2586,3 +2586,153 @@ scratch install.
 
 14. Repeat steps 5–12 on the scratch disk before the production wipe. Record
     the `bootc rollback` output and the two reboot-stage journals in #705.
+
+## 38. Restic plane (T3): R2 token, Healthchecks, first init, first drill
+
+This section brings the three repositories up. It assumes section 37 finished:
+the derived image boots, the age identity is staged at
+`/var/lib/smortress/age/keys.txt`, and `secrets/server/restic-password.yaml`
+decrypts. The 970 and the 5 TB HDD are already wiped and formatted
+(`LABEL=restic-ssd`, `LABEL=restic-hdd`); nothing in this section repartitions
+or reformats them.
+
+1. Confirm both mounts by UUID. A missing HDD is expected to be survivable; a
+   missing 970 is a failure of this step.
+
+   ```sh
+   sudo blkid -L restic-ssd
+   sudo blkid -L restic-hdd
+   sudo systemctl start var-lib-restic-ssd.mount var-lib-restic-hdd.mount
+   findmnt -no SOURCE,TARGET,FSTYPE /var/lib/restic/ssd
+   findmnt -no SOURCE,TARGET,FSTYPE /var/lib/restic/hdd
+   sudo systemctl list-timers 'smortress-restic-*'
+   ```
+
+   The first must report `e040eab7-3df0-4b7d-96e0-71fb9a5eff93` and the second
+   `973b7492-bb88-43c7-bac3-772384e45220`. Four timers must be listed: SSD and
+   HDD hourly, R2 daily at midnight, and the verifier at `:40`.
+
+2. Confirm the R2 write credentials. The bucket `homelab-restic` and the path
+   `/smortress` already exist, and `secrets/server/r2-credentials.yaml` is
+   committed ciphertext with exactly two keys, `r2_access_key_id` and
+   `r2_secret_access_key` — the Object Read & Write pair for the backup jobs.
+   (The read-only pair is T4's.) The file is already listed in
+   `image/rootfs/etc/smortress/secrets.manifest` as `root root 0400`; there is
+   nothing to add unless the pair is rotated.
+
+   To rotate, create a new Object Read & Write token scoped to `homelab-restic`
+   and edit the ciphertext in place; sops applies the `secrets/server/*.yaml`
+   creation rule from `.sops.yaml` (host and admin keys), so the host can still
+   decrypt it:
+
+   ```sh
+   nix shell nixpkgs#sops -c sops secrets/server/r2-credentials.yaml
+   ```
+
+   Replace both values and save. Publish and deploy per section 37 step 2
+   (`sudo bootc upgrade --enforce-container-sigpolicy`) so `/run` carries the
+   new key; a token rotated without a deployment leaves the old key in use
+   until the next boot. Do not create a second credentials file, and do not
+   touch the legacy migration bucket.
+
+3. Create the Healthchecks.io check and commit its ping URL. In the
+   Healthchecks.io dashboard create one check named `smortress restic
+   freshness`, period **1 hour**, grace **30 minutes**, and attach the Pushover
+   integration. Copy its ping URL (`https://hc-ping.com/<uuid>`), then:
+
+   ```sh
+   ( umask 077
+     printf 'restic-ping-url: %s\n' 'https://hc-ping.com/<uuid>' >/tmp/hc.yaml
+     nix shell nixpkgs#sops -c sops --encrypt --input-type yaml --output-type yaml \
+       --filename-override secrets/server/healthchecks.yaml /tmp/hc.yaml \
+       >secrets/server/healthchecks.yaml
+     rm -f /tmp/hc.yaml
+   )
+   ```
+
+   Add this line to `image/rootfs/etc/smortress/secrets.manifest`:
+
+   ```text
+   healthchecks.yaml       root  root  0400
+   ```
+
+   Publish the image with section 37 step 2 and deploy it with
+   `sudo bootc upgrade --enforce-container-sigpolicy`. The URL is a capability:
+   never commit it plaintext, and treat a leaked URL as a rotated check.
+
+4. Prove decryption, then initialise. `restic-init` never re-initialises an
+   existing repository and refuses to create one under an unmounted mountpoint.
+
+   ```sh
+   sudo systemctl restart sops-decrypt.service
+   sudo cat /run/smortress/secrets/restic-password.yaml   # the password only
+   sudo test -s /run/smortress/secrets/r2-credentials.yaml && echo r2-ok
+   sudo test -s /run/smortress/secrets/healthchecks.yaml && echo hc-ok
+   sudo /usr/libexec/smortress-restic-init
+   ```
+
+   Expected: `ssd: created /var/lib/restic/ssd/restic`,
+   `hdd: created /var/lib/restic/hdd/restic`, `r2: created
+   s3:https://.../homelab-restic/smortress`. A second run must print "already
+   initialised" for each and change nothing.
+
+5. First backup per destination, then freshness. The first R2 upload can exceed
+   the 4-hour per-attempt deadline; run that one by hand with a day-long bound
+   and let the daily timer take over afterwards.
+
+   ```sh
+   sudo /usr/libexec/smortress-restic-backup ssd
+   sudo /usr/libexec/smortress-restic-backup hdd
+   sudo env RESTIC_DEADLINE_R2=86400 /usr/libexec/smortress-restic-backup r2
+   sudo /usr/libexec/smortress-restic-verify
+   ```
+
+   Each snapshot must carry `group:<name>`, `host:smortress` and `verified`:
+
+   ```sh
+   for b in ssd hdd; do
+     sudo env RESTIC_PASSWORD_FILE=/run/smortress/secrets/restic-password.yaml \
+       restic -r "/var/lib/restic/$b/restic" snapshots --json \
+       | jq -r '.[] | "\(.id) \(.tags | join(",")) \(.paths | join(","))"'
+   done
+   ```
+
+   `restic-check` without reading data proves nothing about restorability, so
+   continue to step 6 before calling this done.
+
+6. First restore drill, one group from each destination. The helper selects
+   only `verified` snapshots and refuses a non-empty target.
+
+   ```sh
+   sudo /usr/libexec/smortress-restic-restore-drill ssd photos --list
+   sudo /usr/libexec/smortress-restic-restore-drill ssd photos
+   sudo /usr/libexec/smortress-restic-restore-drill hdd books
+   sudo /usr/libexec/smortress-restic-restore-drill r2 notes
+   ```
+
+   Open a file from each restored tree under
+   `<target>/var/tank/<group>/.zfs/snapshot/<backend>/`, check its contents and
+   ownership against the live path, then remove the target. A drill is only
+   evidence once a restored file was opened and matched.
+
+7. Prove the failure boundaries. These must not stop unrelated backups or turn
+   a missing disk into a failed boot.
+
+   ```sh
+   sudo umount /var/lib/restic/hdd
+   sudo env RESTIC_ATTEMPTS=1 /usr/libexec/smortress-restic-backup hdd
+   jq -r '.last_attempt | "\(.result) \(.reason)"' \
+     /var/lib/smortress/restic/state/hdd-photos.json
+   sudo /usr/libexec/smortress-restic-verify; echo "verify exit $?"
+   sudo systemctl start var-lib-restic-hdd.mount
+   ```
+
+   The job must print `failure repo-not-mounted`, the verifier must exit
+   non-zero, and the SSD jobs must still succeed. To prove readiness isolation,
+   `sudo zfs unmount tank/books` and restart `zfs-ready@books.service`; only the
+   `books` jobs may fail.
+
+8. Record the new kit rows in `docs/core/recovery-kit.md`: the three repository
+   URIs (including the R2 bucket and path), the shared Restic password, the R2
+   write token, and the Healthchecks check name. Run the kit drill from a
+   machine that is not smortress with only those items.
