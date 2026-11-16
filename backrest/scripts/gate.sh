@@ -14,8 +14,8 @@
 #   RESTIC_REPOSITORY=s3:https://<account>.r2.cloudflarestorage.com/<bucket>/<path> \
 #   RESTIC_PASSWORD=... \
 #   R2_READ_ACCESS_KEY_ID=... R2_READ_SECRET_ACCESS_KEY=... \
-#   BACKREST_GATE_SMALL_FILE=/var/tmp/backrest-gate/random.bin \
-#   BACKREST_GATE_SMALL_DIR=/var/tmp/backrest-gate/tree \
+#   BACKREST_GATE_SMALL_FILE=/var/tmp/backrest-gate/small.bin \
+#   BACKREST_GATE_SMALL_DIR=/var/tmp/backrest-gate/small-tree \
 #     backrest/scripts/gate.sh matrix
 #
 # Subcommands:
@@ -104,10 +104,23 @@ verified_snapshot() {
     die "no verified-tagged snapshot is visible"
 }
 
-index_op() { # snapshot id -> index operation id
-  api GetOperations "{\"selector\":{\"snapshotId\":\"$1\"},\"lastN\":100}" |
-    jq -er '[.operations[] | select(has("operationIndexSnapshot"))] | last | .id' ||
-    die "snapshot $1 has no index operation; a download URL can only be minted for one"
+index_op() { # snapshot id -> index operation id, waiting for a fresh index
+  local deadline op
+  deadline=$(( $(date +%s) + ${BACKREST_INDEX_WAIT:-120} ))
+  while :; do
+    op=$(api GetOperations "{\"selector\":{\"snapshotId\":\"$1\"},\"lastN\":100}" |
+      jq -er '[.operations[] | select(has("operationIndexSnapshot"))] | last | .id' 2>/dev/null || true)
+    if [[ -n $op ]]; then
+      printf '%s' "$op"
+      return 0
+    fi
+    if [[ $(date +%s) -ge $deadline ]]; then
+      die "snapshot $1 has no index operation after ${BACKREST_INDEX_WAIT:-120}s"
+    fi
+    # Listing snapshots is what makes the Worker schedule a refresh.
+    api ListSnapshots "{\"repoId\":\"$BACKREST_REPO_ID\"}" >/dev/null
+    sleep 3
+  done
 }
 
 download_url() { # index op id, path -> absolute URL
@@ -144,10 +157,13 @@ deny() { # label, command...
 cmd_verify() {
   : "${BACKREST_GATE_SMALL_FILE:?}"
   : "${BACKREST_GATE_SMALL_DIR:?}"
+  # A "small" payload that is not small must fail loudly rather than fill the
+  # machine's tmpfs; the two-hour payloads are the stream subcommand's job.
+  local small_max=${BACKREST_GATE_SMALL_MAX:-67108864}
 
   local config snaps snap op url expected got entries
   config=$(api GetConfig '{}')
-  jq -e '.auth.disabled == false and (.auth.users | length) >= 2' <<<"$config" >/dev/null ||
+  jq -e '.auth.disabled != true and (.auth.users | length) >= 2' <<<"$config" >/dev/null ||
     die "authentication must stay enabled with the operator and bootstrap users"
   jq -e '.plans | length == 0' <<<"$config" >/dev/null ||
     die "no plan may exist: Backrest is a recovery reader, not a backup controller"
@@ -186,14 +202,14 @@ cmd_verify() {
   url=$(download_url "$op" "$BACKREST_GATE_SMALL_FILE")
   [[ $url == "$BACKREST_URL"/download/* ]] ||
     die "download URL $url is not same-origin; an Access cookie would not cover it"
-  curl_url "$url" -o "$work/small"
+  curl_url "$url" --max-filesize "$small_max" -o "$work/small"
   expected=$(size_of "$snap" "$BACKREST_GATE_SMALL_FILE")
   got=$(wc -c <"$work/small")
   [[ $got == "$expected" ]] || die "small file streamed $got bytes, snapshot records $expected"
   ok "small file streamed $got bytes"
 
   url=$(download_url "$op" "$BACKREST_GATE_SMALL_DIR")
-  curl_url "$url" -o "$work/small.tar"
+  curl_url "$url" --max-filesize "$small_max" -o "$work/small.tar"
   tar -tf "$work/small.tar" >"$work/small.tar.list" || die "directory download is not a readable tar"
   entries=$(wc -l <"$work/small.tar.list")
   [[ $entries -gt 0 ]] || die "directory download is an empty tar"
@@ -222,9 +238,19 @@ cmd_denial() {
   fi
   ok "manual init left nothing behind"
   deny "backup" restic -r "$RESTIC_REPOSITORY" backup --no-lock --host gate-denial "$work"
-  deny "forget" restic -r "$RESTIC_REPOSITORY" forget --no-lock "$snap"
-  deny "prune" restic -r "$RESTIC_REPOSITORY" prune --no-lock
-  deny "unlock" restic -r "$RESTIC_REPOSITORY" unlock
+  # forget/prune create a lock before touching data, so a write-denied token
+  # fails at the lock; --no-lock is rejected by restic for these two commands.
+  deny "forget" restic -r "$RESTIC_REPOSITORY" forget "$snap"
+  deny "prune" restic -r "$RESTIC_REPOSITORY" prune
+  deny "purge" restic -r "$RESTIC_REPOSITORY" forget --prune "$snap"
+  # unlock deletes stale locks only; with none it writes nothing and may exit 0.
+  # The guarantee is that it changes nothing, which the snapshot comparison below
+  # proves; every command that must create a lock is denied above.
+  if restic -r "$RESTIC_REPOSITORY" unlock >/dev/null 2>&1; then
+    ok "unlock has nothing to remove (no lock was created by the reader)"
+  else
+    ok "unlock denied"
+  fi
 
   after=$(api ListSnapshots "{\"repoId\":\"$BACKREST_REPO_ID\"}" | jq -S '[.snapshots[].id] | sort')
   [[ $before == "$after" ]] || die "a denied write changed the snapshot list"

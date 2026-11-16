@@ -2767,15 +2767,21 @@ mkdir -p "$GATE/tree"
 for i in $(seq -w 0 99); do truncate -s 1G "$GATE/tree/part-$i.bin"; done
 truncate -s 100G "$GATE/big.bin"
 head -c 5G /dev/urandom >"$GATE/random.bin"
+head -c 1M /dev/urandom >"$GATE/small.bin"
+mkdir -p "$GATE/small-tree"
+head -c 256K /dev/urandom >"$GATE/small-tree/a.bin"
+head -c 128K /dev/urandom >"$GATE/small-tree/b.bin"
+printf 'gate small tree\n' >"$GATE/small-tree/readme.txt"
 restic backup --host backrest-gate --tag verified "$GATE"
 export REPO_GUID=$(restic cat config --json | jq -r .id)
 export BIG_SHA256=$(sha256sum "$GATE/big.bin" | cut -d' ' -f1)
 printf 'guid=%s\nbig=%s\n' "$REPO_GUID" "$BIG_SHA256"
 ```
 
-The matrix uses `/var/tmp/backrest-gate/random.bin` (file check),
-`/var/tmp/backrest-gate/tree` (directory check), and the same two paths for the
-long streams.
+The matrix's *small* payloads are `/var/tmp/backrest-gate/small.bin` and
+`/var/tmp/backrest-gate/small-tree`; the four-hour streams use `big.bin` and
+`tree`. Never point the small checks at the big payloads: the harness caps them
+at 64 MiB on purpose.
 
 ### 39.2 Read-only R2 token
 
@@ -2834,9 +2840,12 @@ BACKREST_REPO_GUID="$REPO_GUID" \
   mise x node@22 -- backrest/scripts/deploy.sh
 ```
 
-The first request after a deploy is the cold start: the image renders the
-config, the Worker waits for port 9898, reindexes the snapshot set, and only
-then proxies. Watch it with `(cd backrest && mise x node@22 -- npx wrangler
+`deploy.sh` pins the image by the digest the Cloudflare registry reports, because
+wrangler cannot read podman's push digest and Cloudflare rejects the mismatch. It
+also carries a small podman shim for wrangler's Docker-only flags, so no manual
+`DOCKER_HOST` juggling is needed. The first request after a deploy is the cold
+start: the image renders the config, the Worker waits for port 9898, reindexes
+the snapshot set, and only then proxies. Watch it with `(cd backrest && mise x node@22 -- npx wrangler
 tail)`; a restic download attempt would appear there and is a gate failure.
 
 ### 39.6 Run the matrix
@@ -2849,8 +2858,8 @@ export BACKREST_REPO_ID=r2
 read -rsp 'Access client id: ' CF_ACCESS_CLIENT_ID && export CF_ACCESS_CLIENT_ID
 read -rsp 'Access client secret: ' CF_ACCESS_CLIENT_SECRET && export CF_ACCESS_CLIENT_SECRET
 export RESTIC_REPOSITORY RESTIC_PASSWORD
-export BACKREST_GATE_SMALL_FILE=$GATE/random.bin
-export BACKREST_GATE_SMALL_DIR=$GATE/tree
+export BACKREST_GATE_SMALL_FILE=$GATE/small.bin
+export BACKREST_GATE_SMALL_DIR=$GATE/small-tree
 
 backrest/scripts/gate.sh matrix
 backrest/scripts/gate.sh stream "$GATE/big.bin" sha "$BIG_SHA256"

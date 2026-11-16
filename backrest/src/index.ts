@@ -122,6 +122,7 @@ export class Backrest extends DurableObject<Env> {
 	private ready = false;
 	private booting: Promise<void> | undefined;
 	private starting: Promise<void> | undefined;
+	private indexing: Promise<void> | undefined;
 
 	constructor(ctx: DurableObjectState, env: Env) {
 		super(ctx, env);
@@ -306,6 +307,9 @@ export class Backrest extends DurableObject<Env> {
 		const live = await this.liveSnapshotIds(container);
 		if (live.length === 0) return;
 
+		let indexed = await this.indexedSnapshotIds(container);
+		if (live.every((id) => indexed.has(id))) return;
+
 		await this.rpc(container, "DoRepoTask", {
 			repoId: this.env.BACKREST_REPO_ID,
 			task: "TASK_INDEX_SNAPSHOTS",
@@ -313,13 +317,23 @@ export class Backrest extends DurableObject<Env> {
 
 		const deadline = Date.now() + INDEX_TIMEOUT_MS;
 		while (Date.now() < deadline) {
-			const indexed = await this.indexedSnapshotIds(container);
+			indexed = await this.indexedSnapshotIds(container);
 			if (live.every((id) => indexed.has(id))) return;
 			await sleep(POLL_MS);
 		}
 		throw new Error(
 			`index did not complete within ${INDEX_TIMEOUT_MS}ms (${live.length} snapshots live)`,
 		);
+	}
+
+	// A backup can land while the reader is awake, and a download URL needs an
+	// index operation for that snapshot. Listing snapshots therefore schedules a
+	// bounded, single-flight refresh instead of waiting for the next wake.
+	private ensureIndexed(container: Container): Promise<void> {
+		this.indexing ??= this.reindex(container).finally(() => {
+			this.indexing = undefined;
+		});
+		return this.indexing;
 	}
 
 	private async ensureReady(): Promise<Container> {
@@ -402,6 +416,14 @@ export class Backrest extends DurableObject<Env> {
 			// is cancelled, Backrest's request context is cancelled, and the
 			// restic dump it started is killed.
 			const response = await container.getTcpPort(PORT).fetch(proxied);
+
+			if (url.pathname === "/v1.Backrest/ListSnapshots") {
+				this.ctx.waitUntil(
+					this.ensureIndexed(container).catch((error) =>
+						console.error("index refresh failed", error),
+					),
+				);
+			}
 
 			if (
 				url.pathname === "/v1.Backrest/ListSnapshots" ||

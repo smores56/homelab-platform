@@ -22,10 +22,13 @@ browser -- Access (owner identity) -- Worker -- Durable Object -- container (Bac
   `backrest` application adds the `service auth` policy so the matrix can run
   without a browser. That policy is account-wide — any service token in the
   account is accepted, which `docs/cloudflare.md` already documents.
-- `wrangler deploy` builds the container image locally and uploads it to the
-  Cloudflare registry. Podman works through `WRANGLER_DOCKER_BIN` plus
-  `DOCKER_HOST`; the docs still call that unsupported, so a failed build is a
-  tooling problem, not a design problem.
+- `deploy.sh` builds the image, pushes it with `wrangler containers build -p`,
+  asks the registry for the digest it stored, and deploys a config whose image
+  reference is that digest. Two podman quirks are why it does not simply call
+  `wrangler deploy`: wrangler passes Docker-only flags (`--provenance`) and a
+  Dockerfile on stdin, and it reads a *local* digest after a podman push while
+  the registry stores a different one — Cloudflare then rejects the image with
+  "does not exist in this account".
 
 ### Why `durable_object`
 
@@ -75,7 +78,9 @@ another. A four-hour stream is the only honest test.
 - Nothing is indexed at startup, and `TASK_INDEX_SNAPSHOTS` creates no operation
   of its own, so its task id is useless. Readiness is the indexed snapshot set
   catching up with the live `restic snapshots` list, and `GetDownloadURL` only
-  works once that has happened.
+  works once that has happened. Listing snapshots while awake also schedules a
+  bounded, single-flight refresh, so a backup that lands mid-session becomes
+  downloadable instead of waiting for the next wake.
 - `restic dump`, `ls`, `snapshots`, `stats`, and `cat` all take read locks, so
   `--no-lock` must be a repository-wide flag for a write-denied token.
 
@@ -116,7 +121,7 @@ pass the same matrix if Cloudflare fails.
 
 | Check | Command / evidence |
 | --- | --- |
-| automated redeploy | `backrest/scripts/deploy.sh` twice; second run serves without manual steps |
+| automated redeploy | `backrest/scripts/deploy.sh` twice; the second run serves without manual steps |
 | cold start without binary egress | image ships `/bin/restic`; `BACKREST_RESTIC_COMMAND` set; no restic download in `wrangler tail` |
 | reindex before readiness | first request after a wake lists snapshots and can mint a download URL |
 | authentication | `gate.sh verify`: Access-only request is refused by Backrest; config shape asserted |

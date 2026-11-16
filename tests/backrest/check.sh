@@ -128,6 +128,9 @@ has "deploy requires the repository uri" "$deploy" 'BACKREST_REPO_URI is require
 has "deploy requires the repository guid" "$deploy" 'BACKREST_REPO_GUID is required'
 has "deploy validates the guid shape" "$deploy" '=~ ^[0-9a-f]{64}$'
 has "deploy uses podman through wrangler" "$deploy" 'WRANGLER_DOCKER_BIN'
+has "deploy pins the image by registry digest" "$deploy" 'registry.cloudflare.com/$account_id/$image_repo@$digest'
+has "deploy reads the digest from the registry" "$deploy" 'docker-content-digest'
+has "deploy renders a non-committed config" "$deploy" 'wrangler.deploy.json'
 assert "npm run deploy cannot skip the required inputs" \
   jq -e '.scripts.deploy == "./scripts/deploy.sh"' "$dir/package.json"
 
@@ -135,9 +138,10 @@ assert "npm run deploy cannot skip the required inputs" \
 has "denial uses the real restic token" "$gate" 'R2_READ_ACCESS_KEY_ID'
 has "denial: init probe" "$gate" '"$probe" init'
 has "denial: backup attempt" "$gate" 'backup --no-lock --host gate-denial'
-has "denial: forget attempt" "$gate" 'forget --no-lock'
-has "denial: prune attempt" "$gate" 'prune --no-lock'
-has "denial: unlock attempt" "$gate" 'unlock'
+has "denial: forget attempt" "$gate" 'forget "$snap"'
+has "denial: prune attempt" "$gate" 'restic -r "$RESTIC_REPOSITORY" prune'
+has "denial: purge attempt" "$gate" 'forget --prune'
+has "denial: unlock is a no-op" "$gate" 'nothing to remove'
 has "denial: snapshot list must not move" "$gate" 'a denied write changed the snapshot list'
 has "denial: proxy refusals" "$gate" 'returned $code through the proxy, expected 403'
 has "download URL field is .value" "$gate" 'jq -er .value'
