@@ -90,9 +90,7 @@ jobs:
           # referrer bundle cosign >=3 writes by default. Sign legacy, then prove
           # the `.sig` tag exists, because `cosign verify` alone reads the bundle
           # and would pass while the host rejects the image.
-          cosign sign --key env://COSIGN_PRIVATE_KEY --yes \
-            --registry-referrers-mode=legacy --use-signing-config=false \
-            "$image@$digest"
+          cosign sign --key env://COSIGN_PRIVATE_KEY --yes "$image@$digest"
           # The lookaside tag is <repo>:<sha256-hex>.sig, not repo:tag:<hex>.sig.
           skopeo inspect --raw "docker://${IMAGE_REPO}:${digest/:/-}.sig" >/dev/null
           cosign verify --key image/cosign.pub "$image@$digest"
