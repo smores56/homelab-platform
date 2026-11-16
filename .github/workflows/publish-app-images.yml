@@ -1,0 +1,87 @@
+# Mirrors and signs the pinned application images into our GHCR namespace.
+#
+# The host runs a default-reject signature policy and trusts only
+# ghcr.io/smores56/homelab-platform signed by image/cosign.pub, so an
+# application image that is not in that namespace cannot start. The digests are
+# preserved, so what lands is byte-identical to upstream.
+#
+# Push happens on a pin change; the dispatch exists for re-signing after a key
+# rotation. The signing key is an environment secret; a pull_request run never
+# sees it.
+name: publish-app-images
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/app-images.sh"
+      - "scripts/mirror-app-images.sh"
+      - ".github/workflows/publish-app-images.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-app-images
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: mirror, sign, verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: server-image
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      - name: install skopeo
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends skopeo
+      - name: install pinned cosign
+        run: |
+          set -euo pipefail
+          . image/pins.env
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -fsSLo "$RUNNER_TEMP/bin/cosign" \
+            "https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/cosign-linux-amd64"
+          echo "${COSIGN_SHA256}  $RUNNER_TEMP/bin/cosign" | sha256sum -c -
+          chmod 0755 "$RUNNER_TEMP/bin/cosign"
+          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
+      - name: the environment key matches the committed public key
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -s image/cosign.pub
+          cosign public-key --key env://COSIGN_PRIVATE_KEY >"$RUNNER_TEMP/cosign.pub"
+          diff -u image/cosign.pub "$RUNNER_TEMP/cosign.pub"
+      - name: mirror, sign and verify every pinned image
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          export DOCKER_CONFIG="$RUNNER_TEMP/docker-config"
+          mkdir -p "$DOCKER_CONFIG"
+          printf '%s' "$GH_TOKEN" | skopeo login --authfile "$DOCKER_CONFIG/config.json" \
+            ghcr.io -u "${{ github.actor }}" --password-stdin
+          AUTHFILE="$DOCKER_CONFIG/config.json" scripts/mirror-app-images.sh
+      - name: summary
+        run: |
+          {
+            echo "### Application images"
+            echo
+            echo "Mirrored and signed under \`ghcr.io/smores56/homelab-platform\`:"
+            echo
+            # shellcheck source=./app-images.sh disable=SC1091
+            source scripts/app-images.sh
+            while IFS= read -r name; do
+              echo "- \`$(app_image_ref "$name")\`"
+            done < <(app_image_names)
+          } >>"$GITHUB_STEP_SUMMARY"

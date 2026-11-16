@@ -1,0 +1,7 @@
+# OPDShelf's own network. The catalog is the one application that needs nothing
+# from another container and grants nothing to one, so it does not share a
+# bridge with Immich: the only reachable surface is its published loopback port.
+[Unit]
+Description=Smortress OPDShelf network
+
+[Network]

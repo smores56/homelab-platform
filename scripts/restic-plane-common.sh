@@ -10,7 +10,7 @@
 # shellcheck disable=SC2034  # sourced library: consumers use a subset
 
 restic_host=${RESTIC_HOST:-smortress}
-groups=(photos books notes music wallpapers)
+groups=(photos books notes music wallpapers syncthing)
 backends=(ssd hdd r2)
 
 restic_base=${RESTIC_BASE:-/var/lib/restic}

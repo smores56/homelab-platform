@@ -1,0 +1,44 @@
+# The OPDS catalog. The library tree is the catalog: no database, no ingest
+# step, and `.opdshelf/` sits inside the library root, so one dataset carries
+# content, edits, covers and thumbnails as one recovery point.
+#
+# WATCH=false is deliberate: inotify is unreliable over a bind-mounted dataset,
+# and a request-time rescan is cheap for a tree this size.
+#
+# The image reads ADMIN_PASSWORD from the environment only (no `_FILE`
+# variant), so the value reaches it as a Podman secret of type env, created from
+# the decrypted SOPS file by smortress-app-secrets.service. BASE_URL is left
+# unset: the server derives it from the Host header, which Tailscale Serve
+# forwards unchanged.
+[Unit]
+Description=OPDShelf catalog (books recovery group)
+Requires=zfs-ready@books.service sops-decrypt.service smortress-app-secrets.service
+After=network-online.target zfs-ready@books.service sops-decrypt.service smortress-app-secrets.service
+Wants=network-online.target
+
+[Container]
+Image=ghcr.io/smores56/homelab-platform/opdshelf@sha256:b82f94f72b41686fd9169a2269d65550f411a97dfa341a330df88b0bfab0af35
+ContainerName=smortress-opdshelf
+Network=opdshelf.network
+User=1000:1000
+Secret=opdshelf-admin-password,type=env,target=ADMIN_PASSWORD
+Environment=PORT=8083
+Environment=BOOKS_DIR=/books
+Environment=DATA_DIR=/books/.opdshelf
+Environment=ADMIN_USERNAME=smores56
+Environment=WATCH=false
+Environment=SCAN_INTERVAL=600
+Environment=MAX_UPLOAD_MB=512
+Environment=TZ=UTC
+Volume=/var/tank/books:/books:z
+PublishPort=127.0.0.1:8083:8083
+ReadOnly=true
+NoNewPrivileges=true
+DropCapability=ALL
+
+[Service]
+Restart=on-failure
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,44 @@
+# Syncthing identity, configuration and the vault folder it serves.
+#
+# Host networking, and no PublishPort at all, because the sync protocol is not
+# HTTP and cannot go through Tailscale Serve. The boundary is therefore the
+# firewall, not Podman: the default zone is `drop`, and the tailscale zone
+# permits 22000/tcp and 22000/udp on tailscale0 only, so a LAN peer cannot reach
+# the sync port. The GUI stays on loopback and is fronted by Tailscale Serve.
+#
+# Identity and configuration live in their own childless dataset, separately
+# from the notes group that holds the folder: a restore can bring the identity
+# back, pause the peers, and only then designate a primary.
+#
+# CAP_CHOWN is the one capability the image needs: the container starts as root,
+# its entrypoint chowns HOME, then su-exec drops to uid 1000. That is why there
+# is no User= here: setting one would skip that branch and leave the capability
+# inert, and a restored, root-owned tree would stay unwritable.
+[Unit]
+Description=Syncthing service (syncthing and notes recovery groups)
+Requires=zfs-ready@syncthing.service zfs-ready@notes.service
+After=network-online.target zfs-ready@syncthing.service zfs-ready@notes.service
+Wants=network-online.target
+
+[Container]
+Image=ghcr.io/smores56/homelab-platform/syncthing@sha256:2b71da7c0d0a91a6ae5285ad079226fecc0a365d08b27720e1f7037b018f7546
+ContainerName=smortress-syncthing
+Network=host
+Environment=HOME=/var/syncthing
+Environment=STHOMEDIR=/var/syncthing/config
+Environment=STGUIADDRESS=127.0.0.1:8384
+Environment=PUID=1000
+Environment=PGID=1000
+Volume=/var/tank/syncthing:/var/syncthing:z
+Volume=/var/tank/notes:/var/tank/notes:z
+Volume=/var/lib/syncthing-versions:/var/lib/syncthing-versions:z
+AddCapability=CHOWN
+ReadOnly=true
+NoNewPrivileges=true
+
+[Service]
+Restart=on-failure
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,35 @@
+# Immich's queue and cache. Append-only under /data/valkey on the photos group,
+# so a restart re-reads the queue instead of rebuilding it from the database.
+# Snapshots are off: Restic is the history, and an RDB dump inside the group
+# would only double the churn. Quadlet drops an empty Exec argument when it
+# re-serialises the command line, so `--save ""` has to be reached through a
+# shell: without that, valkey reads `--save --appendfsync ...` and refuses to
+# start.
+#
+# --dir is the dataset root, not a valkey/ subdirectory: valkey refuses to start
+# when its dir is missing, and a group restored from the logical dump has only
+# the library. The append-only files land in /data/appendonlydir, which valkey
+# creates itself.
+[Unit]
+Description=Immich Valkey queue (photos recovery group)
+Requires=zfs-ready@photos.service sops-decrypt.service
+After=network-online.target zfs-ready@photos.service sops-decrypt.service
+Wants=network-online.target
+
+[Container]
+Image=ghcr.io/smores56/homelab-platform/immich-valkey@sha256:3add1a336a920ea54770a001ab6feb3da5fceea96a40373a3a2cd469b815f0b7
+ContainerName=smortress-immich-valkey
+Network=immich.network
+User=1000:1000
+Exec=/bin/sh -c 'exec valkey-server --dir /data --appendonly yes --appendfsync everysec --save ""'
+Volume=/var/tank/photos:/data:z
+ReadOnly=true
+NoNewPrivileges=true
+DropCapability=ALL
+
+[Service]
+Restart=on-failure
+TimeoutStartSec=1800
+
+[Install]
+WantedBy=multi-user.target
