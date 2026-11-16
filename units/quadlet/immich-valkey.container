@@ -28,6 +28,8 @@ NoNewPrivileges=true
 DropCapability=ALL
 
 [Service]
+# 143 is SIGTERM, which a deliberate stop sends: not a failure.
+SuccessExitStatus=143
 Restart=on-failure
 TimeoutStartSec=1800
 
