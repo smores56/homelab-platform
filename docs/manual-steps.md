@@ -3201,7 +3201,7 @@ sudo podman cp "$(group photos)/db-dumps/immich.dump" drill-pg:/tmp/immich.dump
 sudo podman exec drill-pg pg_isready -U immich -d immich
 sudo podman exec drill-pg pg_restore -U immich -d immich --no-owner --clean --if-exists \
   /tmp/immich.dump
-sudo podman exec drill-pg psql -U immich -d immich -c 'select count(*) from assets;'
+sudo podman exec drill-pg psql -U immich -d immich -c 'select count(*) from asset;'
 ```
 
 The count must be non-zero and match what the phone shows. Then start a throwaway
@@ -3237,7 +3237,7 @@ sudo podman run --rm -d --name drill-pg --network drillnet --network-alias drill
   --user 1000:1000 -e PGDATA=/data/postgres \
   -v /var/tmp/drill-pg:/data:z \
   ghcr.io/smores56/homelab-platform/immich-postgres@sha256:79b95b795f0911e95ffa4d092a2162c4d81a984d5629bc8f786afe0bc0657671
-sudo podman exec drill-pg psql -U immich -d immich -c 'select count(*) from assets;'
+sudo podman exec drill-pg psql -U immich -d immich -c 'select count(*) from asset;'
 ```
 
 That cluster carries the password that was current when the snapshot was taken.
