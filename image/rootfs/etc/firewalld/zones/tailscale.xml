@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<zone>
+  <short>Tailscale</short>
+  <description>Only the Tailscale interface. SSH is the only service at T2; each application port is added to this zone when its Quadlet is installed. Nothing listens on the LAN.</description>
+  <interface name="tailscale0"/>
+  <service name="ssh"/>
+</zone>

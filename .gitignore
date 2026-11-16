@@ -14,3 +14,12 @@ crash.log
 # Python bytecode from the local observability checks
 __pycache__/
 *.pyc
+
+# Operator values for the Ignition renderer (public keys, disk id, passphrases)
+ignition/operator/
+
+# Local build output
+/build/
+
+# Rendered Ignition (contains first-boot passphrases)
+ignition/*.ign

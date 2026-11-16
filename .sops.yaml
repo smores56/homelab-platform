@@ -16,6 +16,13 @@ keys:
   - &admin age1skuwunreduvw8gtkzyf9atsyjnku388ly8c252h3qger84fg5d7q4kf6xs
 
 creation_rules:
+  # Image-carried ciphertext (T2). Same admin identity: the host stages that
+  # passphrase-wrapped key root-only under /var, so the boot decrypt unit reads
+  # exactly what the operator edits here. Ciphertext only; no key in the image.
+  - path_regex: ^secrets/server/.*\.yaml$
+    key_groups:
+      - age:
+          - *admin
   - path_regex: ^secrets/.*\.yaml$
     key_groups:
       - age:

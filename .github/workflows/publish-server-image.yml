@@ -1,0 +1,106 @@
+# Builds, pushes, signs and verifies the smortress derived bootc image.
+#
+# The signing key is an environment secret; the public half is committed at
+# image/cosign.pub and baked into the image and its Ignition policy. This
+# workflow is push/workflow_dispatch only: a pull_request run never sees it.
+name: publish-server-image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "image/**"
+      - "units/**"
+      - "secrets/**"
+      - "scripts/**"
+      - ".github/workflows/publish-server-image.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-server-image
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: build, push, sign, verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: server-image
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      - name: install podman
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends podman
+      - name: install pinned cosign
+        run: |
+          set -euo pipefail
+          . image/pins.env
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -fsSLo "$RUNNER_TEMP/bin/cosign" \
+            "https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/cosign-linux-amd64"
+          echo "${COSIGN_SHA256}  $RUNNER_TEMP/bin/cosign" | sha256sum -c -
+          chmod 0755 "$RUNNER_TEMP/bin/cosign"
+          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
+      - name: the environment key matches the committed public key
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -s image/cosign.pub
+          cosign public-key --key env://COSIGN_PRIVATE_KEY >"$RUNNER_TEMP/cosign.pub"
+          diff -u image/cosign.pub "$RUNNER_TEMP/cosign.pub"
+      - name: permit the digest-pinned base pull for the builder
+        # The runtime policy is the one that matters and is baked into the image.
+        # The builder has no uCore public key, and the base is digest-pinned in
+        # image/pins.env, so this bypass is limited to the build container.
+        run: |
+          mkdir -p "$HOME/.config/containers"
+          printf '%s' '{"default":[{"type":"insecureAcceptAnything"}]}' \
+            >"$HOME/.config/containers/policy.json"
+      - name: build
+        run: scripts/build-image.sh
+      - name: push, sign and verify the pushed digest
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          . image/pins.env
+          tag="sha-${GITHUB_SHA::12}"
+          image="${IMAGE_REPO}:${tag}"
+          authfile="$RUNNER_TEMP/auth.json"
+          export DOCKER_CONFIG="$RUNNER_TEMP/docker-config"
+          mkdir -p "$DOCKER_CONFIG"
+          printf '%s' "$GH_TOKEN" | podman login --authfile "$authfile" \
+            ghcr.io -u "${{ github.actor }}" --password-stdin
+          cp "$authfile" "$DOCKER_CONFIG/config.json"
+          podman push --authfile "$authfile" --digestfile "$RUNNER_TEMP/digest" "$image"
+          digest=$(cat "$RUNNER_TEMP/digest")
+          [[ $digest =~ ^sha256:[0-9a-f]{64}$ ]]
+          # bootc/containers-image reads the legacy lookaside tag, not the OCI 1.1
+          # referrer bundle cosign >=3 writes by default. Sign legacy, then prove
+          # the `.sig` tag exists, because `cosign verify` alone reads the bundle
+          # and would pass while the host rejects the image.
+          cosign sign --key env://COSIGN_PRIVATE_KEY --yes \
+            --registry-referrers-mode=legacy --use-signing-config=false \
+            "$image@$digest"
+          skopeo inspect --raw "docker://$image:${digest/:/-}.sig" >/dev/null
+          cosign verify --key image/cosign.pub "$image@$digest"
+          {
+            echo "### Derived server image"
+            echo
+            echo "- \`$image\`"
+            echo "- \`${IMAGE_REPO}@${digest}\`"
+            echo
+            echo "Pin the digest in \`ignition/operator/derived-image\`."
+          } >>"$GITHUB_STEP_SUMMARY"
+          echo "pin: ${IMAGE_REPO}@${digest}"

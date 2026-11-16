@@ -1,0 +1,13 @@
+[Unit]
+Description=Create or import the tank ZFS pool on the encrypted data device
+After=systemd-cryptsetup@data.service
+Requires=systemd-cryptsetup@data.service
+Before=zfs-mount.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/libexec/init-zpool
+
+[Install]
+WantedBy=multi-user.target

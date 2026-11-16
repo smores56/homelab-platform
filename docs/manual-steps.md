@@ -2347,3 +2347,230 @@ commands from the `~/repos/github.com/smores56/homelab-platform` checkout on
    tables, the audit report, the rescue archive checksum and the drill date.
    The owner re-reads the disposable list in the gate document and confirms it
    there.
+
+## 37. Core server image (T2): sign, install, verify, roll back
+
+This section creates the T2 signing key, publishes the derived image, installs
+smortress through the uCore auto-rebase path, stages the kit secrets and proves
+the failure boundaries. Run it once per image-generation change and once per
+scratch install.
+
+1. Create the cosign signing key. The private key and password go into the
+   Bitwarden item **homelab core recovery**; only the public key is committed.
+
+   ```sh
+   install -d -m 0700 "$HOME/.config/smortress"
+   export COSIGN_PASSWORD="$(nix shell nixpkgs#openssl -c openssl rand -base64 32)"
+   nix shell nixpkgs#cosign -c cosign generate-key-pair \
+     --output-key-prefix "$HOME/.config/smortress/cosign"
+   install -m 0644 "$HOME/.config/smortress/cosign.pub" image/cosign.pub
+   gh api -X PUT "repos/smores56/homelab-platform/environments/server-image" \
+     --input - <<<'{}' >/dev/null
+   gh secret set COSIGN_PRIVATE_KEY --env server-image \
+     <"$HOME/.config/smortress/cosign.key"
+   printf '%s' "$COSIGN_PASSWORD" | gh secret set COSIGN_PASSWORD --env server-image
+   ```
+
+   Record `COSIGN_PASSWORD` and attach `cosign.key` to the Bitwarden item. If
+   the key is rotated, re-sign every digest that is still deployed before
+   replacing `image/cosign.pub`.
+
+2. Refresh the base pin, publish the image and pin its digest. `refresh-pins.sh
+   --write` is the only step that reads the uCore tag; review the diff it makes.
+
+   ```sh
+   nix shell nixpkgs#skopeo -c scripts/refresh-pins.sh --write
+   git diff image/pins.env
+   gh workflow run publish-server-image.yml
+   gh run list --workflow publish-server-image.yml --limit 1
+   gh run watch "$(gh run list --workflow publish-server-image.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
+   read -r digest   # paste the sha256:... value from the run summary
+   printf '%s\n' "ghcr.io/smores56/homelab-platform/server@${digest}" \
+     >ignition/operator/derived-image
+   ```
+
+   `render-ignition.sh` refuses anything that is not
+   `<registry>/<repo>@sha256:<64 hex>`.
+
+3. Stage the operator values. None of these files is committed
+   (`ignition/operator/` is gitignored).
+
+   ```sh
+   install -d -m 0700 ignition/operator
+   install -m 0644 "$HOME/.ssh/id_ed25519.pub" ignition/operator/ssh_authorized_keys
+   nix shell nixpkgs#openssl -c openssl passwd -6 >ignition/operator/core-password-hash
+   chmod 0600 ignition/operator/core-password-hash
+   ( umask 077
+     nix shell nixpkgs#openssl -c openssl rand -base64 48 \
+       >ignition/operator/root-recovery-passphrase
+     nix shell nixpkgs#openssl -c openssl rand -base64 48 \
+       >ignition/operator/data-recovery-passphrase
+   )
+   curl -sf http://10.0.0.193:7654/adv >/tmp/tang-adv.json
+   nix shell nixpkgs#jose -c jose fmt -j /tmp/tang-adv.json -g payload -y -o - \
+     | nix shell nixpkgs#jose -c jose jwk thp -i - -a S256 \
+     | head -n1 >ignition/operator/tang-thumbprint
+   chmod 0600 ignition/operator/tang-thumbprint
+   rm -f /tmp/tang-adv.json
+   lsblk -o NAME,SIZE,MODEL,SERIAL
+   read -r disk     # the /dev/disk/by-id path of the 931.5G 980
+   printf '%s\n' "$disk" >ignition/operator/disk
+   ```
+
+   Put the two passphrase files and the core password in the recovery kit before
+   the install. The disk path must be the 931.5G 980's `/dev/disk/by-id` name;
+   the 970 and the 5 TB HDD are not install targets.
+
+4. Render and validate Ignition. The rendered file contains the passphrases:
+   keep it mode 0600 and remove it after the install.
+
+   ```sh
+   nix shell nixpkgs#butane -c scripts/render-ignition.sh --check
+   nix shell nixpkgs#butane -c scripts/render-ignition.sh
+   stat -c '%a %n' ignition/smortress.ign
+   ```
+
+   The first command must print `render-ignition: butane accepted`; the second
+   prints the exact `coreos-installer install` command to run.
+
+5. Install from the Fedora CoreOS live ISO. Boot the amd64 live media, copy the
+   repository and the rendered file to it, and run:
+
+   ```sh
+   sudo coreos-installer install "$(cat ignition/operator/disk)" \
+     --ignition-file ignition/smortress.ign \
+     --append-karg ip=dhcp --append-karg rd.neednet=1
+   sudo systemctl reboot
+   ```
+
+   Remove the installation media. Two automatic reboots follow: the unsigned
+   rebase and the signed rebase. Keep the network up.
+
+6. Prove the transition, then hand over to bootc.
+
+   ```sh
+   sudo rpm-ostree status
+   sudo journalctl -u ucore-unsigned-autorebase.service \
+     -u ucore-signed-autorebase.service --no-pager
+   sudo bootc status
+   sudo bootc switch --enforce-container-sigpolicy "$(cat ignition/operator/derived-image)"
+   sudo bootc upgrade --enforce-container-sigpolicy
+   sudo bootc rollback
+   ```
+
+   `rpm-ostree status` must show the derived digest and the signed reference
+   before `bootc switch`. `bootc rollback` reverts the OS deployment only; it
+   does not undo `/var`, ZFS changes or database migrations.
+
+7. Verify the signature policy from a separate machine. The host enforces it
+   through bootc; this command proves the committed public key matches the
+   signed digest.
+
+   ```sh
+   nix shell nixpkgs#cosign -c cosign verify \
+     --key image/cosign.pub "$(cat ignition/operator/derived-image)"
+   ```
+
+8. Prove Tang+TPM2 and console recovery.
+
+   ```sh
+   sudo clevis luks list -d /dev/disk/by-partlabel/root
+   sudo cryptsetup luksDump /dev/disk/by-partlabel/root
+   ```
+
+   The Clevis list must show one `sss` binding with threshold 2, and the LUKS
+   dump must show the recovery keyslot. Then reboot with the wired NIC unplugged (Tang unreachable) and enter the root
+   recovery passphrase at the console prompt; the system must boot and the data
+   LUKS must open from `/etc/luks/data` without a second prompt.
+
+8.1 Confirm the LUKS key files stayed off `/boot`. Ignition writes
+   `/etc/luks/{root,data}`; Dracut must not copy either into the unencrypted
+   initramfs, or the passphrase and the pool key sit on an unencrypted
+   partition.
+
+   ```sh
+   sudo lsinitrd /boot/ostree/*/initramfs-*.img | grep -E '/etc/luks|/etc/crypttab' || true
+   ```
+
+   Neither path may appear. If `/etc/luks/root` does, delete the file, change the
+   root crypttab key field to `none` (Clevis still unlocks it), and rebuild:
+   `sudo dracut -f`. If `/etc/luks/data` does, move the key to
+   `/var/lib/smortress/luks-data`, point the data crypttab entry at it with
+   `noauto`, open it after root with
+   `sudo systemctl start systemd-cryptsetup@data.service` from a unit ordered
+   before `smortress-zpool.service`, and recheck. Repeat the check after every
+   kernel update.
+
+ . "9. Stage the age identity" and prove the decrypt unit. The file at
+   `/var/lib/smortress/age/keys.txt` must be the unwrapped `AGE-SECRET-KEY-...`
+   identity, not the passphrase-wrapped kit container.
+
+   ```sh
+   sudo install -d -m 0700 -o root -g root /var/lib/smortress/age
+   # write the kit's age identity to a local temporary file first, then:
+   sudo install -m 0600 -o root -g root /path/to/kit-age-identity \
+     /var/lib/smortress/age/keys.txt
+   sudo systemctl restart sops-decrypt.service
+   sudo cat /run/smortress/secrets/canary.yaml
+   ```
+
+   The last command must print `canary: sops-decrypt-ok`. Remove the temporary
+   identity file. Then restart the Quadlets; they must start only after the
+   unit succeeds.
+
+10. Configure and open the HDD.
+
+    ```sh
+    ls -l /dev/disk/by-id/ata-*
+    read -r hdd
+    printf '%s\n' "$hdd" >/tmp/hdd-device
+    sudo install -m 0644 -o root -g root /tmp/hdd-device /etc/smortress/hdd-device
+    nix shell nixpkgs#openssl -c openssl rand -base64 48 \
+      | sudo install -m 0600 -o root -g root /dev/stdin \
+        /var/lib/smortress/keys/hdd.key
+    sudo cryptsetup luksAddKey "$(cat /etc/smortress/hdd-device)" \
+      /var/lib/smortress/keys/hdd.key
+    sudo systemctl start smortress-cryptsetup-hdd.service
+    ls -l /dev/mapper/luks-hdd
+    ```
+
+    The `luksAddKey` prompt accepts the existing HDD passphrase from the kit.
+    Remove the HDD and reboot once: boot must complete, the unit must log the
+    absence, and T3's freshness alert must be the only failure.
+
+11. Prove the network boundary.
+
+    ```sh
+    sudo tailscale up --ssh --hostname smortress
+    sudo firewall-cmd --zone=bootstrap --list-all   # must show no interfaces
+    sudo firewall-cmd --get-active-zones
+    sudo firewall-cmd --zone=tailscale --list-all
+    sudo ss -ltnp
+    ```
+
+    `tailscale0` must be the only interface in the `tailscale` zone; the default
+    zone is `drop`. From a LAN host that is not on Tailscale, `ssh core@<lan-ip>`
+    and every application port must fail. From a Tailscale peer they work.
+
+12. Prove per-group readiness isolates failures.
+
+    ```sh
+    sudo systemctl status zfs-ready@photos.service
+    sudo zfs unmount tank/photos
+    sudo systemctl restart zfs-ready@photos.service
+    sudo zfs mount tank/photos
+    sudo systemctl restart zfs-ready@photos.service
+    ```
+
+    The middle restart must fail with `zfs-ready: nothing is mounted at
+    /var/tank/photos`; the last must succeed. A consumer of `photos` must be
+    down between the two, while `zfs-ready@books` and unrelated backups stay up.
+
+13. Update the kit and run the drill. Record the cosign key/password, the root
+    and data recovery passphrases, the HDD passphrase and the age identity in
+    the Bitwarden item and on the paper copy; run the drill in
+    `docs/core/recovery-kit.md` with only kit material. A row without the drill
+    is not a kit item.
+
+14. Repeat steps 5–12 on the scratch disk before the production wipe. Record
+    the `bootc rollback` output and the two reboot-stage journals in #705.

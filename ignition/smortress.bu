@@ -1,0 +1,139 @@
+# Smortress install config for the uCore auto-rebase path.
+#
+# Derived from ucore/examples/ucore-autorebase.butane at
+# 75ec7d8d10bc8af6fe23a284ea108bacd50f3173, with both image references pointing
+# at our derived image. Stage 1 rebases through the unverified registry
+# reference; stage 2 uses the signed reference once the derived image's policy
+# (and its public key) is running.
+#
+# Networking is the FCOS default DHCP profile on the wired NIC. The install
+# command appends `ip=dhcp rd.neednet=1` so dracut can reach Tang before root
+# is opened; no mutable network manager unit or sync unit is configured here.
+#
+# Rendered by scripts/render-ignition.sh. The rendered file contains the two
+# LUKS recovery passphrases and must be mode 0600, used once, then destroyed.
+# FCOS removes /boot/ignition after provisioning.
+variant: fcos
+version: 1.7.0
+
+passwd:
+  users:
+    - name: core
+      ssh_authorized_keys_local:
+        - ignition/operator/ssh_authorized_keys
+      password_hash: '@CORE_PASSWORD_HASH@'
+
+storage:
+  directories:
+    - path: /etc/ucore-autorebase
+      mode: 0754
+  # FCOS owns p1 BIOS-BOOT, p2 EFI-SYSTEM, p3 boot and p4 root. The approved
+  # "two encrypted storage roots" intent is kept: p4 is the LUKS root and a new
+  # p5 carries the LUKS data device. Renumbering the FCOS boot partitions is not
+  # supported by the raw-image installer.
+  disks:
+    - device: '@DISK_BY_ID@'
+      partitions:
+        - label: root
+          number: 4
+          size_mib: 102400
+          resize: true
+        - label: luks-data
+          number: 5
+          size_mib: 0
+  luks:
+    # Root unlock: Clevis SSS with Tang and TPM2, threshold 2, plus a recovery
+    # passphrase keyslot. Ignition does not persist the inline keyfile for a
+    # Clevis device, so the passphrase exists only in the kit and this config.
+    - name: root
+      label: luks-root
+      device: /dev/disk/by-partlabel/root
+      key_file:
+        inline: '@ROOT_RECOVERY_PASSPHRASE@'
+      clevis:
+        tang:
+          - url: '@TANG_URL@'
+            thumbprint: '@TANG_THUMBPRINT@'
+        tpm2: true
+        threshold: 2
+      discard: true
+      wipe_volume: true
+    # Data unlock: a root-only keyfile stored on the encrypted root. Ignition
+    # writes it to /etc/luks/data (0600 root) and generates the crypttab entry,
+    # so the data LUKS opens after root without a second prompt. The same value
+    # is the offline data recovery passphrase in the kit.
+    - name: data
+      label: luks-data
+      device: /dev/disk/by-partlabel/luks-data
+      key_file:
+        inline: '@DATA_RECOVERY_PASSPHRASE@'
+      discard: true
+      wipe_volume: true
+  filesystems:
+    - device: /dev/mapper/root
+      format: xfs
+      label: root
+      wipe_filesystem: true
+  files:
+    - path: /etc/hostname
+      mode: 0644
+      overwrite: true
+      contents:
+        inline: smortress
+    - path: /etc/pki/containers/smortress.pub
+      mode: 0644
+      overwrite: true
+      contents:
+        local: image/cosign.pub
+    - path: /etc/containers/policy.json
+      mode: 0644
+      overwrite: true
+      contents:
+        local: image/rootfs/etc/containers/policy.json
+    - path: /etc/containers/registries.d/ghcr.io-smortress.yaml
+      mode: 0644
+      overwrite: true
+      contents:
+        local: image/rootfs/etc/containers/registries.d/ghcr.io-smortress.yaml
+
+systemd:
+  units:
+    # BEGIN AUTOREBASE — removed by `render-ignition.sh --stock`, which installs
+    # onto the pinned base and leaves the switch to `bootc switch` later.
+    - name: ucore-unsigned-autorebase.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=uCore autorebase to the derived unsigned OCI reference and reboot
+        ConditionPathExists=!/etc/ucore-autorebase/unverified
+        ConditionPathExists=!/etc/ucore-autorebase/signed
+        After=network-online.target
+        Wants=network-online.target
+        [Service]
+        Type=oneshot
+        StandardOutput=journal+console
+        ExecStart=/usr/bin/rpm-ostree rebase --bypass-driver ostree-unverified-registry:@DERIVED_IMAGE@
+        ExecStart=/usr/bin/touch /etc/ucore-autorebase/unverified
+        ExecStart=/usr/bin/systemctl disable ucore-unsigned-autorebase.service
+        ExecStart=/usr/bin/systemctl reboot
+        [Install]
+        WantedBy=multi-user.target
+    - name: ucore-signed-autorebase.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=uCore autorebase to the derived signed OCI reference and reboot
+        ConditionPathExists=/etc/ucore-autorebase/unverified
+        ConditionPathExists=!/etc/ucore-autorebase/signed
+        After=network-online.target
+        Wants=network-online.target
+        [Service]
+        Type=oneshot
+        StandardOutput=journal+console
+        ExecStart=/usr/bin/rpm-ostree rebase --bypass-driver ostree-image-signed:docker://@DERIVED_IMAGE@
+        ExecStart=/usr/bin/touch /etc/ucore-autorebase/signed
+        ExecStart=/usr/bin/systemctl disable ucore-signed-autorebase.service
+        ExecStart=/usr/bin/systemctl reboot
+        [Install]
+        WantedBy=multi-user.target
+    # END AUTOREBASE

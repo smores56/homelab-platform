@@ -1,0 +1,16 @@
+[Unit]
+Description=Decrypt SOPS ciphertext into /run/smortress/secrets
+# Boot-ordered: after the root filesystem (and therefore the age identity on
+# /var) is available, before Quadlets that require it. A missing identity or a
+# missing ciphertext fails the unit, so every depending container fails closed.
+After=local-fs.target
+Before=multi-user.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+UMask=0077
+ExecStart=/usr/local/libexec/sops-decrypt
+
+[Install]
+WantedBy=multi-user.target

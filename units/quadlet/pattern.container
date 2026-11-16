@@ -1,0 +1,37 @@
+# Quadlet base pattern. Copy, rename and pin an application image before use.
+#
+# This file is deliberately not installed into the image and has no [Install]
+# section: a placeholder must never start. T5 copies it to
+# /etc/containers/systemd/<app>.container, replaces the image digest, and
+# selects the recovery group the application actually consumes.
+#
+# Invariants this pattern demonstrates:
+#   * Requires only its own group's readiness unit and the decrypt unit.
+#   * Publishes on loopback only; Tailscale Serve fronts it on tailscale0.
+#   * Mounts the ZFS dataset with SELinux relabelling (:z).
+#   * Reads a decrypted secret as a file, never through an environment variable.
+#   * Does not enable Podman auto-update for stateful data.
+#   * Uses an image the default-reject policy already trusts. T5 must sign its
+#     application image with the smortress cosign key and push it under
+#     ghcr.io/smores56/homelab-platform, or add that registry's key to policy.
+
+[Unit]
+Description=Smortress application Quadlet pattern (photos group)
+Requires=zfs-ready@photos.service sops-decrypt.service
+After=network-online.target zfs-ready@photos.service sops-decrypt.service
+Wants=network-online.target
+
+[Container]
+Image=quay.io/toolbx-images/alpine-toolbox@sha256:78e87959f390afb385c3ce2f0b3a2a508b9f08da2001815d294709ac0c087631
+ContainerName=smortress-pattern
+PublishPort=127.0.0.1:8080:8080
+Volume=/var/tank/photos:/data:z
+Volume=/run/smortress/secrets/canary.yaml:/run/secrets/canary.yaml:ro,z
+ReadOnly=true
+NoNewPrivileges=true
+DropCapability=ALL
+Exec=sleep infinity
+
+[Service]
+Restart=on-failure
+TimeoutStartSec=60

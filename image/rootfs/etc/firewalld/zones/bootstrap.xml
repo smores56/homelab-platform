@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<zone>
+  <short>Bootstrap</short>
+  <description>Temporary access zone. The wired interfaces sit here only until the host has enrolled in the tailnet, so a bring-up failure does not strand a headless machine. smortress-tailscale-up.service removes every interface from this zone once enrollment succeeds; from then on only tailscale0 carries traffic and the default zone is drop.</description>
+  <service name="ssh"/>
+</zone>
