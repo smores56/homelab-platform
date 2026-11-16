@@ -1,0 +1,19 @@
+[Unit]
+# Bring-up access. Unlike the steady state, this unit deliberately opens SSH on
+# the wired interfaces so a machine whose tailnet enrollment failed is still
+# reachable without a keyboard. It is skipped as soon as the enrollment marker
+# exists, and smortress-tailscale-up.service removes the interfaces from the
+# zone when it succeeds, so the window closes by itself.
+Description=Allow SSH on wired interfaces until tailnet enrollment
+ConditionPathExists=!/var/lib/smortress/tailscale-enrolled
+Wants=firewalld.service
+After=firewalld.service
+Before=smortress-tailscale-up.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'for i in /sys/class/net/*; do n=${i##*/}; case "$n" in lo|tailscale*) continue;; esac; firewall-cmd --permanent --zone=bootstrap --add-interface="$n" >/dev/null || true; done; firewall-cmd --reload'
+
+[Install]
+WantedBy=multi-user.target

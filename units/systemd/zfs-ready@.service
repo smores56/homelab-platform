@@ -1,0 +1,12 @@
+[Unit]
+Description=Verify ZFS recovery group %i is mounted at /var/tank/%i
+After=zfs-mount.service smortress-zpool.service
+Wants=smortress-zpool.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/libexec/zfs-ready %i
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,13 @@
+[Unit]
+Description=Unlock the HDD Restic volume with its root-only keyfile (non-blocking)
+After=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Leading '-' is the nofail contract: an absent or unconfigured HDD is logged
+# and alerted through backup staleness, never turned into a failed boot.
+ExecStart=-/usr/local/libexec/open-hdd
+
+[Install]
+WantedBy=multi-user.target

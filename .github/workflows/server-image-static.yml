@@ -1,0 +1,62 @@
+# Static checks for the core server image. Runs on pull requests and holds no
+# secret: the real build/sign job is publish-server-image.yml.
+name: server-image-static
+
+on:
+  pull_request:
+    paths:
+      - "image/**"
+      - "ignition/**"
+      - "units/**"
+      - "secrets/**"
+      - "scripts/**"
+      - "tests/fixtures/**"
+      - "docs/core/server-image.md"
+      - ".github/workflows/server-image-static.yml"
+  push:
+    branches: [main]
+    paths:
+      - "image/**"
+      - "ignition/**"
+      - "units/**"
+      - "secrets/**"
+      - "scripts/**"
+      - "tests/fixtures/**"
+      - "docs/core/server-image.md"
+      - ".github/workflows/server-image-static.yml"
+
+permissions: read-all
+
+concurrency:
+  group: server-image-static-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static:
+    name: static checks and butane render
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      - name: install pinned butane
+        run: |
+          set -euo pipefail
+          . image/pins.env
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -fsSLo "$RUNNER_TEMP/bin/butane" \
+            "https://github.com/coreos/butane/releases/download/v${BUTANE_VERSION}/butane-x86_64-unknown-linux-gnu"
+          echo "${BUTANE_SHA256}  $RUNNER_TEMP/bin/butane" | sha256sum -c -
+          chmod 0755 "$RUNNER_TEMP/bin/butane"
+          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
+      - name: repository and image static checks
+        run: scripts/check-server-image.sh
+      - name: shellcheck new scripts
+        run: shellcheck scripts/*.sh
+      - name: render Ignition from fixtures
+        run: scripts/render-ignition.sh --synthetic --check
+      - name: render the uCore-media variant
+        # --stock drops the autorebase units; it must stay renderable and must
+        # not be reachable from a plain render.
+        run: scripts/render-ignition.sh --synthetic --stock --check

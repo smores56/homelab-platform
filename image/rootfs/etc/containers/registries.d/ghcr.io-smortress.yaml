@@ -1,0 +1,6 @@
+# Fetch cosign signatures stored as OCI 1.1 referrers / .sig tags from GHCR.
+# Without this, containers/image refuses to look for the signature at all and
+# bootc's --enforce-container-sigpolicy rejects our derived image.
+docker:
+  ghcr.io/smores56/homelab-platform:
+    use-sigstore-attachments: true

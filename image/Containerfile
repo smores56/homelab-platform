@@ -1,0 +1,98 @@
+# Derived uCore bootc image for smortress. Built by scripts/build-image.sh and
+# published by .github/workflows/publish-server-image.yml.
+#
+# The base is a digest-pinned uCore stable-nvidia image. Everything this file
+# adds is non-secret configuration, systemd units, Quadlets, SOPS ciphertext
+# and hash-pinned host binaries. No signing key, age identity or LUKS key ever
+# enters the image.
+
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+ARG BASE_IMAGE
+ARG SOPS_VERSION
+ARG SOPS_SHA256
+ARG AGE_VERSION
+ARG AGE_SHA256
+ARG RESTIC_VERSION
+ARG RESTIC_SHA256
+
+LABEL org.opencontainers.image.title="smortress server image" \
+      org.opencontainers.image.description="Derived uCore bootc image for the smortress core" \
+      org.opencontainers.image.source="https://github.com/smores56/homelab-platform" \
+      org.opencontainers.image.base.name="${BASE_IMAGE}" \
+      org.opencontainers.image.vendor="smores56"
+
+# Runtime helpers, units and ciphertext. The public cosign key is the only
+# signature-related material in the image; the policy references it by path.
+COPY image/rootfs/ /
+COPY units/systemd/ /usr/lib/systemd/system/
+COPY units/quadlet/ /usr/share/smortress/quadlet/
+COPY scripts/zfs-ready.sh scripts/sops-decrypt.sh scripts/init-zpool.sh \
+     scripts/open-hdd.sh /usr/local/libexec/
+COPY secrets/server/ /etc/smortress/secrets/
+COPY image/cosign.pub /etc/pki/containers/smortress.pub
+
+RUN set -eux; \
+    chmod 0755 /usr/local/libexec/*.sh; \
+    chmod 0644 /etc/pki/containers/smortress.pub /etc/smortress/secrets.manifest; \
+    chmod 0600 /etc/smortress/secrets/*.yaml
+
+# Host binaries: release artifacts with a pinned SHA-256, not distribution
+# packages, so the version that boots matches the version reviewed here.
+RUN set -eux; \
+    curl -fsSLo /tmp/sops \
+      "https://github.com/getsops/sops/releases/download/v${SOPS_VERSION}/sops-v${SOPS_VERSION}.linux.amd64"; \
+    echo "${SOPS_SHA256}  /tmp/sops" | sha256sum -c -; \
+    install -m 0755 /tmp/sops /usr/bin/sops; \
+    curl -fsSLo /tmp/age.tar.gz \
+      "https://github.com/FiloSottile/age/releases/download/v${AGE_VERSION}/age-v${AGE_VERSION}-linux-amd64.tar.gz"; \
+    echo "${AGE_SHA256}  /tmp/age.tar.gz" | sha256sum -c -; \
+    tar -xzf /tmp/age.tar.gz -C /tmp; \
+    install -m 0755 /tmp/age/age /tmp/age/age-keygen /usr/bin/; \
+    curl -fsSLo /tmp/restic.bz2 \
+      "https://github.com/restic/restic/releases/download/v${RESTIC_VERSION}/restic_${RESTIC_VERSION}_linux_amd64.bz2"; \
+    echo "${RESTIC_SHA256}  /tmp/restic.bz2" | sha256sum -c -; \
+    bzip2 -dc /tmp/restic.bz2 > /usr/bin/restic; \
+    chmod 0755 /usr/bin/restic; \
+    rm -rf /tmp/sops /tmp/age /tmp/age.tar.gz /tmp/restic.bz2
+
+# bootc images enable units with systemctl at build time. rpm-ostree and zincati
+# automatic updates are masked: a deployment change lands in a maintenance
+# window through bootc, and stateful Podman images are never auto-updated.
+RUN set -eux; \
+    systemctl enable \
+      zfs.target \
+      zfs-import-scan.service \
+      zfs-mount.service \
+      zfs-zed.service \
+      smortress-zpool.service \
+      smortress-cryptsetup-hdd.service \
+      smortress-access-bootstrap.service \
+      firewalld.service \
+      smortress-tailscale-up.service \
+      sops-decrypt.service \
+      tailscaled.service \
+      zfs-ready@photos.service \
+      zfs-ready@books.service \
+      zfs-ready@notes.service \
+      zfs-ready@music.service \
+      zfs-ready@wallpapers.service; \
+    systemctl enable 'zfs-scrub-weekly@tank.timer'; \
+    systemctl mask \
+      podman-auto-update.timer \
+      bootc-fetch-apply-updates.timer \
+      rpm-ostreed-automatic.timer \
+      zincati.service
+
+# Only tailscale0 carries SSH and application traffic; everything else lands
+# in the drop zone. The zone file binds tailscale0 and lists the permitted
+# services; ports are added there, never published on 0.0.0.0/::.
+RUN firewall-offline-cmd --set-default-zone=drop
+
+# Fail the build if the base is not digest-pinned or the policy no longer
+# rejects by default.
+RUN set -eux; \
+    case "${BASE_IMAGE}" in *@sha256:*) ;; *) echo "BASE_IMAGE is not digest-pinned" >&2; exit 1 ;; esac; \
+    jq -e '.default[0].type == "reject"' /etc/containers/policy.json >/dev/null; \
+    jq -e '.transports.docker["ghcr.io/smores56/homelab-platform"][0].keyPath == "/etc/pki/containers/smortress.pub"' /etc/containers/policy.json >/dev/null
