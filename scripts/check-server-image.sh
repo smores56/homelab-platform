@@ -55,6 +55,12 @@ else
   ok "no private key, age identity or tailscale key in the tree"
 fi
 
+if git ls-files -- 'ignition/*.ign' 'ignition/operator/*' 2>/dev/null | grep -q .; then
+  bad "no rendered Ignition or operator value is tracked"
+else
+  ok "no rendered Ignition or operator value is tracked"
+fi
+
 # Quadlets: digest-pinned images, loopback-only publication, dependency wiring.
 shopt -s nullglob
 quadlets=(units/quadlet/*.container)
