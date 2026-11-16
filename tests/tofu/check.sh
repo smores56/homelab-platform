@@ -96,7 +96,7 @@ eq "$bypass_uses" "1" "the bypass policy is attached to exactly one resource (th
 
 public_app=$(extract cloudflare_zero_trust_access_application.public)
 if grep -q 'for_each = local.public_apps' <<<"$public_app"; then ok "public applications iterate local.public_apps"; else bad "public applications iterate local.public_apps"; fi
-for host in recovery photos music opds ntfy; do
+for host in photos music opds ntfy; do
   if grep -qE "^[[:space:]]*\"${host}\",$" "$work/code.tf"; then ok "public application: $host"; else bad "public application: $host"; fi
 done
 
@@ -112,18 +112,18 @@ for app in ssh memory agent backrest; do
   if grep -q 'cloudflare_zero_trust_access_policy.email.id' <<<"$block"; then ok "${app} allows the owner email"; else bad "${app} allows the owner email"; fi
 done
 
-# The hosted Backrest reader (#707) has its own hostname and stays off the live
-# recovery page until T6.
+# The hosted Backrest reader (#707) owns recovery.sammohr.dev; the static letter
+# and its Pages domain are retired.
 backrest_app=$(extract cloudflare_zero_trust_access_application.backrest)
-if grep -qF 'uri  = "backrest.${var.domain}"' <<<"$backrest_app"; then
-  ok "backrest application covers backrest.<zone>"
+if grep -qF 'uri  = "recovery.${var.domain}"' <<<"$backrest_app"; then
+  ok "backrest serves recovery.<zone>"
 else
-  bad "backrest application covers backrest.<zone>"
+  bad "backrest serves recovery.<zone>"
 fi
-if grep -qF 'uri  = "recovery.' <<<"$backrest_app"; then
-  bad "backrest must not take over the live recovery page before T6"
+if grep -qE '^resource "cloudflare_(pages_domain|dns_record)" "recovery"' tofu/pages.tf; then
+  bad "the Pages domain and DNS record are retired"
 else
-  ok "recovery.<zone> stays on the public recovery page"
+  ok "the Pages domain and DNS record are retired"
 fi
 if grep -q '^[[:space:]]*"backrest",$' <<<"$(extract cloudflare_zero_trust_access_application.public)"; then
   bad "backrest must not be a public bypass hostname"
@@ -284,8 +284,7 @@ else
 fi
 
 echo "== preserved objects"
-for addr in cloudflare_pages_project.recovery cloudflare_pages_domain.recovery \
-  cloudflare_dns_record.recovery cloudflare_r2_bucket_cors.restic \
+for addr in cloudflare_pages_project.recovery cloudflare_r2_bucket_cors.restic \
   cloudflare_notification_policy.tunnel_health cloudflare_notification_policy.service_token_expiry \
   cloudflare_ruleset.dav_rate_limit cloudflare_zero_trust_access_policy.email \
   cloudflare_zero_trust_access_policy.service_auth; do

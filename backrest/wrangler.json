@@ -9,7 +9,7 @@
   },
   "routes": [
     {
-      "pattern": "backrest.sammohr.dev",
+      "pattern": "recovery.sammohr.dev",
       "custom_domain": true
     }
   ],

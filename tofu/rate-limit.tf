@@ -6,9 +6,9 @@
 # is chosen for media; split a service out lower if the plan gains rule slots.
 #
 # The host list is the three media/reader applications in access.tf, not every
-# public application: `recovery` is a static Pages deployment, not a proxied
-# origin, and `agent-hooks` is a webhook receiver whose deliveries are
-# individually authenticated and deduped. A shared per-IP budget would drop a
+# public application: `agent-hooks` is a webhook receiver whose deliveries are
+# individually authenticated and deduped, and `recovery` is now an
+# Access-protected Backrest origin with its own login. A shared per-IP budget would drop a
 # legitimate burst of deliveries from one provider, and the source cannot be
 # identified before the request is parsed, so the receiver imposes no limit and
 # this rule does not cover it.

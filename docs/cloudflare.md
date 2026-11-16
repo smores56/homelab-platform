@@ -189,7 +189,6 @@ zone with no application of its own is reachable only by the owner's identity.
 
   | Hostname | Why public |
   | --- | --- |
-  | `recovery.sammohr.dev` | the data-recovery letter; its reader has no credentials by definition |
   | `photos.sammohr.dev` | mobile clients cannot complete an Access login |
   | `music.sammohr.dev` | same, for the Navidrome clients |
   | `opds.sammohr.dev` | OPDS readers and the web reader; app login and the per-IP rate limit are the gates |
@@ -206,7 +205,7 @@ zone with no application of its own is reachable only by the owner's identity.
   (`non_identity`, any valid service token) where an unattended client connects:
   `ssh` (`cloudflared access ssh`), `memory` (the MCP wrapper's device),
   `agent` (a blessed device's proxy) and `backrest` (the hosted recovery reader
-  at `backrest.sammohr.dev`; its Worker also refuses every write RPC and strips
+  at `recovery.sammohr.dev`; its Worker also refuses every write RPC and strips
   the repository credentials, see `docs/core/backrest.md`). `kanbei` keeps the email policy alone and
   adds `allow_authenticate_via_warp`, so a device that already runs the
   Cloudflare One client skips the login; a device without it gets the ordinary

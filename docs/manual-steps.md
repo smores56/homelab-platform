@@ -2851,7 +2851,7 @@ tail)`; a restic download attempt would appear there and is a gate failure.
 ### 39.6 Run the matrix
 
 ```sh
-export BACKREST_URL=https://backrest.sammohr.dev
+export BACKREST_URL=https://recovery.sammohr.dev
 export BACKREST_BOOTSTRAP_USER=bootstrap
 read -rsp 'bootstrap password: ' BACKREST_BOOTSTRAP_PASSWORD && export BACKREST_BOOTSTRAP_PASSWORD
 export BACKREST_REPO_ID=r2
@@ -2943,6 +2943,6 @@ curl -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:9898/   # any status
 
 Point the hostname at the VPS with a dedicated cloudflared tunnel
 (`cloudflared tunnel run --token <token>`, token in Bitwarden) and a reviewed
-tofu diff that moves `backrest.sammohr.dev` from the Worker route to the tunnel.
+tofu diff that moves `recovery.sammohr.dev` from the Worker route to the tunnel.
 The Access application does not change. Then run 39.6 again against the same
 hostname — the matrix is the acceptance criterion, not the platform.

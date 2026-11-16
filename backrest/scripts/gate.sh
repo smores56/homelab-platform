@@ -6,7 +6,7 @@
 # small file and directory streams, every write denial, a four-hour stream, and
 # cancellation.
 #
-#   BACKREST_URL=https://backrest.sammohr.dev \
+#   BACKREST_URL=https://recovery.sammohr.dev \
 #   BACKREST_BOOTSTRAP_USER=bootstrap \
 #   BACKREST_BOOTSTRAP_PASSWORD=... \
 #   BACKREST_REPO_ID=r2 \

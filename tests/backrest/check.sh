@@ -55,8 +55,8 @@ if jq -e . "$dir/wrangler.json" >/dev/null 2>&1; then
     jq -e '.containers[0].scheduling_policy == "durable_object"' "$dir/wrangler.json"
   assert "Durable Object export declared" \
     jq -e '.exports.Backrest.type == "durable-object"' "$dir/wrangler.json"
-  assert "its own hostname, so recovery.sammohr.dev stays the live page" \
-    jq -e '[.routes[].pattern] == ["backrest.sammohr.dev"]' "$dir/wrangler.json"
+  assert "serves recovery.sammohr.dev" \
+    jq -e '[.routes[].pattern] == ["recovery.sammohr.dev"]' "$dir/wrangler.json"
   assert "repository location is not a checked-in default" \
     jq -e '(.vars | has("BACKREST_REPO_URI") | not) and (.vars | has("BACKREST_REPO_GUID") | not)' "$dir/wrangler.json"
   hasnt "no credential in wrangler.json" "$dir/wrangler.json" "api_token"

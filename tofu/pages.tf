@@ -6,29 +6,13 @@
 # reach smortress and 404.
 
 # The project name is the public default host (<name>.pages.dev). Renaming it replaces the
-# project: Cloudflare rebuilds it empty and the domain binding below moves over.
+# project: Cloudflare rebuilds it empty.
+#
+# `recovery.sammohr.dev` moved to the hosted Backrest reader in T4 (#707): the static
+# letter and its custom domain are gone, and the Worker owns the hostname. The project
+# itself stays until T6 so the Pages deployment can still be inspected; nothing serves it.
 resource "cloudflare_pages_project" "recovery" {
   account_id        = var.account_id
   name              = "sam-mohr-data-recovery"
   production_branch = "main"
-}
-
-# The provider does not create the DNS record for a Pages domain; the record below is
-# part of the same change.
-resource "cloudflare_pages_domain" "recovery" {
-  account_id   = var.account_id
-  project_name = cloudflare_pages_project.recovery.name
-  name         = "recovery.${var.domain}"
-}
-
-resource "cloudflare_dns_record" "recovery" {
-  # The project subdomain follows the project name above; keep the two in step.
-  zone_id = data.cloudflare_zone.this.zone_id
-  name    = "recovery.${var.domain}"
-  type    = "CNAME"
-  content = "sam-mohr-data-recovery.pages.dev"
-  proxied = true
-  ttl     = 1
-
-  depends_on = [cloudflare_pages_domain.recovery]
 }

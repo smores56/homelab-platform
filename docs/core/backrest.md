@@ -1,9 +1,9 @@
 # Hosted Backrest recovery reader (T4)
 
 Backrest is the browser recovery path for the R2 repository. It is a *reader*:
-one repository, a read-only credential, no plans, and no scheduling. The
-existing recovery page stays live on `recovery.sammohr.dev` until T6; this
-service lives on `backrest.sammohr.dev`.
+one repository, a read-only credential, no plans, and no scheduling. It replaced
+the static recovery letter on `recovery.sammohr.dev`; the old Pages project is
+kept but serves nothing.
 
 ## Deployment
 

@@ -180,8 +180,6 @@ resource "cloudflare_zero_trust_access_application" "agent" {
 locals {
   # Public hostnames: each one gets an explicit bypass application so the
   # wildcard's default stays deny rather than being widened for an app.
-  #   recovery    - the data-recovery letter; its reader has no credentials by
-  #                 definition, and it is static on Pages, not behind a tunnel.
   #   photos      - mobile clients cannot complete an Access login.
   #   music       - ditto, for the Navidrome clients.
   #   opds        - OPDS readers and the web reader; the app's own login is the
@@ -196,7 +194,6 @@ locals {
   #                 app's own auth is the gate: deny-all default, no signup, and
   #                 ntfy's per-visitor request limiter.
   public_apps = toset([
-    "recovery",
     "photos",
     "music",
     "opds",
@@ -228,12 +225,12 @@ resource "cloudflare_zero_trust_access_application" "public" {
   # reviewed widening of the public surface.
 }
 
-# The hosted Backrest reader (#707) lives on its own hostname until T6, so
-# `recovery.sammohr.dev` keeps serving the static recovery page. The owner's
-# identity is the browser path; the service-auth policy exists because the gate
-# matrix runs unattended from a laptop, and a service token is the only
-# authorization a curl invocation can present. Access covers the signed
-# same-origin download URLs because they live under this hostname.
+# The hosted Backrest reader (#707) took over `recovery.sammohr.dev` when the
+# static letter was retired. The owner's identity is the browser path; the
+# service-auth policy exists because the recovery gate runs unattended from a
+# laptop, and a service token is the only authorization a curl invocation can
+# present. Access covers the signed same-origin download URLs because they live
+# under this hostname.
 resource "cloudflare_zero_trust_access_application" "backrest" {
   account_id       = var.account_id
   name             = "backrest"
@@ -242,7 +239,7 @@ resource "cloudflare_zero_trust_access_application" "backrest" {
 
   destinations = [{
     type = "public"
-    uri  = "backrest.${var.domain}"
+    uri  = "recovery.${var.domain}"
   }]
 
   policies = [
