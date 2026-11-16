@@ -1,0 +1,12 @@
+[Unit]
+Description=Keep the data LUKS device out of the initramfs
+ConditionPathExists=/etc/crypttab
+After=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/fix-crypttab
+
+[Install]
+WantedBy=multi-user.target

@@ -28,13 +28,18 @@ LABEL org.opencontainers.image.title="smortress server image" \
 COPY image/rootfs/ /
 COPY units/systemd/ /usr/lib/systemd/system/
 COPY units/quadlet/ /usr/share/smortress/quadlet/
+# /usr/local is a symlink to /var on bootc, so helpers go under /usr/libexec
+# and lose the .sh suffix that the units would otherwise have to know about.
 COPY scripts/zfs-ready.sh scripts/sops-decrypt.sh scripts/init-zpool.sh \
-     scripts/open-hdd.sh /usr/local/libexec/
+     scripts/open-hdd.sh scripts/access-bootstrap.sh scripts/access-lockdown.sh \
+     scripts/fix-crypttab.sh \
+     /usr/libexec/smortress-src/
 COPY secrets/server/ /etc/smortress/secrets/
 COPY image/cosign.pub /etc/pki/containers/smortress.pub
 
 RUN set -eux; \
-    chmod 0755 /usr/local/libexec/*.sh; \
+    for f in /usr/libexec/smortress-src/*.sh; do install -m 0755 "$f" "/usr/libexec/$(basename "${f%.sh}")"; done; \
+    rm -rf /usr/libexec/smortress-src; \
     chmod 0644 /etc/pki/containers/smortress.pub /etc/smortress/secrets.manifest; \
     chmod 0600 /etc/smortress/secrets/*.yaml
 
@@ -69,6 +74,7 @@ RUN set -eux; \
       smortress-zpool.service \
       smortress-cryptsetup-hdd.service \
       smortress-access-bootstrap.service \
+      smortress-crypttab-fix.service \
       firewalld.service \
       smortress-tailscale-up.service \
       sops-decrypt.service \

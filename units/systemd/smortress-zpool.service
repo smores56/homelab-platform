@@ -1,13 +1,22 @@
 [Unit]
 Description=Create or import the tank ZFS pool on the encrypted data device
-After=systemd-cryptsetup@data.service
+# DefaultDependencies=no: the default basic.target ordering pulls in local-fs,
+# and zfs-mount.service sits inside local-fs and must start *after* the pool
+# exists. Together that is an ordering cycle, and systemd resolves it by
+# deleting zfs-mount.service, which is the opposite of what we want. Ordering
+# is therefore explicit: the data LUKS device, then the pool, then zfs-mount.
+DefaultDependencies=no
+After=systemd-cryptsetup@data.service cryptsetup.target zfs-import-scan.service
 Requires=systemd-cryptsetup@data.service
 Before=zfs-mount.service
+Wants=zfs-mount.service
+Before=basic.target
+Conflicts=shutdown.target
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/local/libexec/init-zpool
+ExecStart=/usr/libexec/init-zpool
 
 [Install]
 WantedBy=multi-user.target

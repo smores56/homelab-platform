@@ -6,7 +6,7 @@ Wants=smortress-zpool.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/local/libexec/zfs-ready %i
+ExecStart=/usr/libexec/zfs-ready %i
 
 [Install]
 WantedBy=multi-user.target

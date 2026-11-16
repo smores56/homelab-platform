@@ -7,7 +7,7 @@ Type=oneshot
 RemainAfterExit=yes
 # Leading '-' is the nofail contract: an absent or unconfigured HDD is logged
 # and alerted through backup staleness, never turned into a failed boot.
-ExecStart=-/usr/local/libexec/open-hdd
+ExecStart=-/usr/libexec/open-hdd
 
 [Install]
 WantedBy=multi-user.target

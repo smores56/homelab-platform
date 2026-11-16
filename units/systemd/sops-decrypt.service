@@ -10,7 +10,7 @@ Before=multi-user.target
 Type=oneshot
 RemainAfterExit=yes
 UMask=0077
-ExecStart=/usr/local/libexec/sops-decrypt
+ExecStart=/usr/libexec/sops-decrypt
 
 [Install]
 WantedBy=multi-user.target

@@ -1,19 +1,21 @@
 [Unit]
 # Bring-up access. Unlike the steady state, this unit deliberately opens SSH on
-# the wired interfaces so a machine whose tailnet enrollment failed is still
-# reachable without a keyboard. It is skipped as soon as the enrollment marker
-# exists, and smortress-tailscale-up.service removes the interfaces from the
-# zone when it succeeds, so the window closes by itself.
-Description=Allow SSH on wired interfaces until tailnet enrollment
+# the wired LAN so a machine whose tailnet enrollment failed is still reachable
+# without a keyboard. It is skipped as soon as the enrollment marker exists, and
+# smortress-tailscale-up.service closes the window when enrollment succeeds.
+#
+# The zone is applied to the NetworkManager connection, not to the interface:
+# NM re-asserts its own zone on every activation, which is how the first
+# bring-up lost SSH even though firewalld had the interface bound.
+Description=Allow SSH on the wired LAN until tailnet enrollment
 ConditionPathExists=!/var/lib/smortress/tailscale-enrolled
-Wants=firewalld.service
-After=firewalld.service
-Before=smortress-tailscale-up.service
+Wants=NetworkManager.service firewalld.service
+After=NetworkManager.service firewalld.service network-online.target
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/bin/sh -c 'for i in /sys/class/net/*; do n=${i##*/}; case "$n" in lo|tailscale*) continue;; esac; firewall-cmd --permanent --zone=bootstrap --add-interface="$n" >/dev/null || true; done; firewall-cmd --reload'
+ExecStart=/usr/libexec/access-bootstrap
 
 [Install]
 WantedBy=multi-user.target
