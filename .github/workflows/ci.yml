@@ -183,6 +183,10 @@ jobs:
         run: npm ci --prefix backrest
       - name: typecheck
         run: npm --prefix backrest run typecheck
+      - name: unit tests
+        # Node strips the .ts types the wire module is written in; no extra
+        # toolchain (deno, ts-node) is needed on the runner.
+        run: npm --prefix backrest test
       - name: static checks
         run: tests/backrest/check.sh
 

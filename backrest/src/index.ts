@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { readUint64Field, redactConfigProto } from "./wire";
 
 // The Worker is a read-only proxy in front of Backrest. Cloudflare Access is
 // the outer gate and Backrest's password is the inner one, but neither is the
@@ -60,12 +61,45 @@ export default {
 	},
 };
 
-function jsonError(status: number, error: string, detail?: string): Response {
-	const body = detail === undefined ? { error } : { error, detail };
+// Connect clients read only `code` and `message` from an error body. Any other
+// shape falls back to the HTTP-derived code with an empty message, which is how
+// a refused download surfaced as an unknown failure.
+function jsonError(status: number, code: string, message: string, detail?: string): Response {
+	const body: Record<string, string> = { code, message };
+	if (detail !== undefined) body.detail = detail;
 	return new Response(JSON.stringify(body), {
 		status,
 		headers: { "content-type": "application/json", "cache-control": "no-store" },
 	});
+}
+
+// The Web UI speaks the Connect protocol in protobuf (application/proto) while
+// curl and the gate use JSON. op_id is field 1 of GetDownloadURLRequest, and
+// int64 ids are decimal strings in protobuf JSON, so both paths produce the
+// same text for isVerified().
+async function opIdFromRequest(request: Request): Promise<string> {
+	const contentType = request.headers.get("content-type") ?? "";
+	const body = new Uint8Array(await request.clone().arrayBuffer());
+	if (contentType.includes("json")) {
+		try {
+			const parsed = JSON.parse(new TextDecoder().decode(body)) as { opId?: string | number };
+			return String(parsed.opId ?? "");
+		} catch {
+			return "";
+		}
+	}
+	if (contentType.includes("proto")) return readUint64Field(body, 1) ?? "";
+	return "";
+}
+
+// The transform is a denylist (Backrest will add fields), so the real secret
+// values are the check: if either survives a rewrite, the response is refused.
+function containsSecret(
+	body: string | Uint8Array,
+	secrets: Array<string | undefined>,
+): boolean {
+	const text = typeof body === "string" ? body : new TextDecoder().decode(body);
+	return secrets.some((secret) => secret !== undefined && secret !== "" && text.includes(secret));
 }
 
 function sleep(ms: number): Promise<void> {
@@ -428,21 +462,30 @@ export class Backrest extends DurableObject<Env> {
 		const rpc = /^\/v1\.([A-Za-z]+)\/([A-Za-z]+)$/.exec(url.pathname);
 		if (!rpc) {
 			// Static assets, the SPA, and signed /download/<jwt>/ streams.
-			if (url.pathname === "/metrics") return jsonError(403, "read-only reader");
+			if (url.pathname === "/metrics") {
+				return jsonError(403, "permission_denied", "read-only reader");
+			}
 			if (method !== "GET" && method !== "HEAD") {
-				return jsonError(405, "read-only reader");
+				return jsonError(405, "permission_denied", "read-only reader");
 			}
 			return undefined;
 		}
 		const [, service, name] = rpc;
 		if (service === "Authentication") {
-			return name === "Login" ? undefined : jsonError(403, "read-only reader");
+			return name === "Login"
+				? undefined
+				: jsonError(403, "permission_denied", "read-only reader");
 		}
-		if (service !== "Backrest") return jsonError(404, "not found");
+		if (service !== "Backrest") return jsonError(404, "unimplemented", "not found");
 		if (!ALLOWED_RPCS.has(name)) {
-			return jsonError(403, "read-only reader", `${name} is not available on this instance`);
+			return jsonError(
+				403,
+				"permission_denied",
+				"read-only reader",
+				`${name} is not available on this instance`,
+			);
 		}
-		if (method !== "POST") return jsonError(405, "read-only reader");
+		if (method !== "POST") return jsonError(405, "permission_denied", "read-only reader");
 		return undefined;
 	}
 
@@ -459,10 +502,9 @@ export class Backrest extends DurableObject<Env> {
 			// snapshots are eligible. The op id is read from a clone so the
 			// request body is still available to the proxy.
 			if (url.pathname === "/v1.Backrest/GetDownloadURL") {
-				const payload = (await request.clone().json()) as { opId?: string | number };
-				const opId = String(payload.opId ?? "");
+				const opId = await opIdFromRequest(request);
 				if (opId === "" || !(await this.isVerified(container, opId))) {
-					return jsonError(409, "snapshot is not verified");
+					return jsonError(409, "failed_precondition", "snapshot is not verified");
 				}
 			}
 
@@ -480,20 +522,54 @@ export class Backrest extends DurableObject<Env> {
 				);
 			}
 
-			if (
-				url.pathname === "/v1.Backrest/ListSnapshots" ||
-				url.pathname === "/v1.Backrest/GetConfig"
-			) {
-				const body = await response.text();
-				const transformed =
-					url.pathname === "/v1.Backrest/ListSnapshots" ? onlyVerified(body) : redactConfig(body);
-				return new Response(transformed, {
-					status: response.status,
-					headers: {
-						"content-type": "application/json",
-						"cache-control": "no-store",
-					},
-				});
+			// Only a successful response is rewritten, in the format the caller
+			// asked for. Backrest's own 401 is text/plain: Connect maps that to
+			// unauthenticated and shows the login form, but a body relabelled
+			// application/json made the client parse "Unauthorized" and fail the
+			// whole page before login.
+			const contentType = response.headers.get("content-type") ?? "";
+			const jsonTransform =
+				url.pathname === "/v1.Backrest/ListSnapshots"
+					? onlyVerified
+					: url.pathname === "/v1.Backrest/GetConfig"
+						? redactConfig
+						: undefined;
+			if (jsonTransform !== undefined && response.ok) {
+				const isConfig = url.pathname === "/v1.Backrest/GetConfig";
+				let transformed: string | Uint8Array | undefined;
+				if (contentType.includes("application/json")) {
+					transformed = jsonTransform(await response.text());
+				} else if (isConfig && contentType.includes("application/proto")) {
+					try {
+						transformed = redactConfigProto(new Uint8Array(await response.arrayBuffer()));
+					} catch (error) {
+						console.error("could not read the protobuf config", String(error));
+						return jsonError(503, "unavailable", "backrest unavailable");
+					}
+				}
+				if (transformed !== undefined) {
+					// Fail closed: the real secrets are in env, so a transform that
+					// ever stops covering a field is caught instead of leaking it.
+					if (
+						isConfig &&
+						containsSecret(transformed, [
+							this.env.RESTIC_PASSWORD,
+							this.env.R2_SECRET_ACCESS_KEY,
+						])
+					) {
+						console.error("GetConfig redaction did not remove the repository credentials");
+						return jsonError(503, "unavailable", "backrest unavailable");
+					}
+					const headers = new Headers(response.headers);
+					headers.set("content-type", contentType);
+					headers.set("cache-control", "no-store");
+					headers.delete("content-length");
+					return new Response(transformed, {
+						status: response.status,
+						statusText: response.statusText,
+						headers,
+					});
+				}
 			}
 
 			return response;
@@ -502,6 +578,7 @@ export class Backrest extends DurableObject<Env> {
 			console.error("backrest proxy failure", detail);
 			return jsonError(
 				503,
+				"unavailable",
 				"backrest unavailable",
 				this.env.BACKREST_DEBUG === "1" ? detail : undefined,
 			);

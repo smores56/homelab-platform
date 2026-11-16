@@ -17,6 +17,7 @@ cd "$root" || exit 1
 
 dir=backrest
 index=$dir/src/index.ts
+wire=$dir/src/wire.ts
 entry=$dir/container/entrypoint.sh
 gate=$dir/scripts/gate.sh
 deploy=$dir/scripts/deploy.sh
@@ -108,6 +109,20 @@ has "config redaction drops restic env" "$index" 'delete repo.env'
 has "snapshots are filtered to verified" "$index" 'snapshot.tags.includes("verified")'
 has "downloads are refused for unverified snapshots" "$index" '"snapshot is not verified"'
 
+# connect-web calls response.json() on a non-2xx body labelled as JSON, so
+# relabelling Backrest's text/plain 401 broke the UI before its login form.
+# Only a successful body may be rewritten, and only in the caller's format.
+has "only successful bodies are rewritten" "$index" 'jsonTransform !== undefined && response.ok'
+has "rewrites keep the upstream headers" "$index" 'new Headers(response.headers)'
+has "error bodies carry a Connect code" "$index" 'failed_precondition'
+has "download ids are read from protobuf requests" "$index" 'readUint64Field'
+
+# The Web UI negotiates application/proto, so JSON-only redaction never ran for
+# it. The wire module drops Repo.password (field 3) and Repo.env (field 4).
+has "protobuf config redaction drops the repo password and env" "$wire" 'inner.number !== 3 && inner.number !== 4'
+has "protobuf redaction is applied to GetConfig" "$index" 'redactConfigProto'
+has "a rewritten config is checked against the real secrets" "$index" 'containsSecret'
+
 # Indexing has no operation of its own (TASK_INDEX_SNAPSHOTS has a nil ProtoOp),
 # so readiness must compare live snapshots with indexed ones.
 has "readiness compares live and indexed snapshots" "$index" 'live.every((id) => indexed.has(id))'
@@ -153,6 +168,8 @@ has "directory streams are checked as tar" "$gate" 'tar -tf -'
 has "same-origin download URL is asserted" "$gate" 'is not same-origin'
 has "anonymous access is probed" "$gate" 'Access-only'
 has "redaction is asserted" "$gate" 'GetConfig still exposes repository credentials'
+has "the protobuf config path is probed" "$gate" 'protobuf GetConfig is redacted'
+has "the anonymous refusal keeps its content type" "$gate" 'text/plain refusal'
 has "four-hour stream budget" "$gate" 'BACKREST_STREAM_TIMEOUT:-14400'
 has "streamed files are hash-checked" "$gate" 'does not match $expected'
 has "cancellation is exercised" "$gate" 'context canceled'
@@ -205,6 +222,16 @@ if command -v npx >/dev/null 2>&1 && [[ -d $dir/node_modules ]]; then
   fi
 else
   note "typecheck: run 'cd backrest && npm ci && npm run typecheck' (node not installed here)"
+fi
+
+if command -v npm >/dev/null 2>&1 && [[ -d $dir/node_modules ]]; then
+  if (cd "$dir" && npm test >/dev/null 2>&1); then
+    ok "protobuf wire unit tests"
+  else
+    bad "protobuf wire unit tests"
+  fi
+else
+  note "unit tests: run 'cd backrest && npm test' (node not installed here)"
 fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

@@ -189,6 +189,33 @@ cmd_verify() {
   fi
   ok "anonymous (Access-only) request is refused by Backrest"
 
+  # The refusal must stay text/plain. connect-web turns a text/plain 401 into
+  # unauthenticated and shows its login form; a body relabelled application/json
+  # made it JSON.parse "Unauthorized" and fail the whole page instead.
+  if ! curl --config "$work/access.cfg" -o /dev/null -D - \
+    -H 'Content-Type: application/proto' --data-binary '' \
+    "$BACKREST_URL/v1.Backrest/GetConfig" | tr -d '\r' | grep -qi '^content-type: text/plain'; then
+    die "anonymous GetConfig must keep Backrest's text/plain refusal"
+  fi
+  ok "anonymous refusal keeps its text/plain content type"
+
+  # The Web UI negotiates the Connect protocol in protobuf. A JSON-only probe
+  # would miss the path the browser actually uses, which is how the config
+  # redaction shipped broken.
+  local proto_type
+  proto_type=$(curl --config "$work/auth.cfg" -o "$work/config.pb" -w '%{content_type}' \
+    -H 'Content-Type: application/proto' --data-binary '' \
+    "$BACKREST_URL/v1.Backrest/GetConfig")
+  [[ $proto_type == application/proto ]] ||
+    die "protobuf GetConfig answered $proto_type; connect-web cannot parse that"
+  if grep -aq 'AWS_SECRET_ACCESS_KEY' "$work/config.pb"; then
+    die "protobuf GetConfig still exposes the R2 secret key"
+  fi
+  if [[ -n ${RESTIC_PASSWORD:-} ]] && grep -aqF -- "$RESTIC_PASSWORD" "$work/config.pb"; then
+    die "protobuf GetConfig still exposes the restic password"
+  fi
+  ok "protobuf GetConfig is redacted and keeps its content type"
+
   snaps=$(api ListSnapshots "{\"repoId\":\"$BACKREST_REPO_ID\"}")
   jq -e 'all(.snapshots[]; (.tags // []) | index("verified") != null)' <<<"$snaps" >/dev/null ||
     die "ListSnapshots returned a snapshot without the verified tag"

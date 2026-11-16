@@ -96,9 +96,21 @@ Backrest has no read-only role, and its admin API is one request away from
   and the rest return 403 even for an authenticated session.
 - It refuses non-GET/HEAD requests outside those RPCs, so `/metrics` and any
   future mutating route are closed by default.
-- It removes `repos[].password` and `repos[].env` from `GetConfig`.
-- It filters `ListSnapshots` to `verified` snapshots and refuses
-  `GetDownloadURL` for an operation whose snapshot is not verified.
+- It removes `repos[].password` and `repos[].env` from `GetConfig` in both
+  wire formats: JSON for `curl` and `gate.sh`, protobuf for the Web UI (which
+  negotiates the Connect protocol in `application/proto`). It then re-checks
+  the result against the real secrets in `env` and fails closed if either
+  survives, so a Backrest release that adds a credential field is refused
+  rather than leaked.
+- It filters `ListSnapshots` to `verified` snapshots for JSON callers, and
+  refuses `GetDownloadURL` for an operation whose snapshot is not verified in
+  both formats (the op id is read from the protobuf request too). The Web UI's
+  protobuf listing is not filtered — its response is passed through — so the
+  operator rule "only `verified` counts" is enforced at download time.
+- A non-2xx response is passed through untouched with its own content type.
+  Backrest's `401` is `text/plain`, which Connect maps to `unauthenticated` and
+  turns into the login form; relabelling it `application/json` made the client
+  `JSON.parse` "Unauthorized" and fail the page before login.
 
 The bootstrap user exists only so the Worker can mint those index operations;
 it is a machine credential, not a human login. The operator's password never
@@ -128,7 +140,7 @@ pass the same matrix if Cloudflare fails.
 | cold start without binary egress | image ships `/bin/restic`; `BACKREST_RESTIC_COMMAND` set; no restic download in `wrangler tail` |
 | reindex before readiness | first request after a wake lists snapshots and can mint a download URL |
 | authentication | `gate.sh verify`: Access-only request is refused by Backrest; config shape asserted |
-| redaction | `gate.sh verify`: no repo password or R2 key in `GetConfig` |
+| redaction | `gate.sh verify`: no repo password or R2 key in `GetConfig`, JSON and protobuf |
 | verified-only | `gate.sh verify`: `ListSnapshots` returns only `verified` tags |
 | small file and small directory | `gate.sh verify` |
 | 100 GiB file | `gate.sh stream <path> sha` with the seeded hash |
