@@ -36,8 +36,11 @@ and is never referenced by this plane.
 
 ## Recovery groups and snapshot paths
 
-The groups are the five childless datasets: `photos`, `books`, `notes`, `music`,
-`wallpapers`, mounted at `/var/tank/<group>`.
+The groups are the six childless datasets: `photos`, `books`, `notes`, `music`,
+`wallpapers` and `syncthing`, mounted at `/var/tank/<group>`. `syncthing` holds
+the service identity and configuration, separately from the `notes` group it
+serves, so a restore can bring the identity back without also rolling the
+content back to the same instant.
 
 A job snapshots **its own** dataset and passes exactly that dataset's staging
 path to restic:

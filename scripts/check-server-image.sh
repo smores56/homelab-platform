@@ -89,9 +89,13 @@ for q in "${quadlets[@]}"; do
       bad "$q publishes outside loopback and the Tailscale ranges: $port"
     fi
   done < <(grep -E '^PublishPort=' "$q" || true)
-  check "$q requires the decrypt unit" grep -qE '^Requires=.*sops-decrypt\.service' "$q"
-  check "$q starts after the decrypt unit" grep -qE '^After=.*sops-decrypt\.service' "$q"
-  check "$q requires its readiness group" grep -qE '^Requires=.*zfs-ready@[a-z]+\.service' "$q"
+  # A container that mounts a decrypted secret, directly or as a Podman secret,
+  # must never start before the decrypt unit; one that uses no secret (the
+  # machine learning cache, Syncthing's own config) has nothing to wait for.
+  if grep -qE '^(Secret=|Volume=/run/smortress/secrets)' "$q"; then
+    check "$q requires the decrypt unit" grep -qE '^Requires=.*sops-decrypt\.service' "$q"
+    check "$q starts after the decrypt unit" grep -qE '^After=.*sops-decrypt\.service' "$q"
+  fi
 done
 
 check "readiness unit exists" has 'ExecStart=/usr/libexec/zfs-ready %i' 'units/systemd/zfs-ready@.service'
@@ -103,7 +107,7 @@ check "no unit runs from /usr/local" lacks '/usr/local/libexec' units/systemd/
 for u in units/systemd/smortress-restic-backup@.service units/systemd/smortress-restic-verify.service units/systemd/smortress-restic-init.service; do
   check "$u sets RESTIC_CACHE_DIR" has "RESTIC_CACHE_DIR" "$u"
 done
-for group in photos books notes music wallpapers; do
+for group in photos books notes music wallpapers syncthing; do
   check "image enables zfs-ready@$group" has "zfs-ready@$group.service" image/Containerfile
 done
 check "decrypt unit is ordered after local-fs" has 'After=local-fs.target' units/systemd/sops-decrypt.service
@@ -123,7 +127,7 @@ check "HDD mount bounds the device wait" has 'JobTimeoutSec=45' units/systemd/va
 check "HDD mount bounds the mount command" has 'TimeoutSec=30' units/systemd/var-lib-restic-hdd.mount
 
 backup_after=$(sed -e :a -e '/\\$/N; s/\\\n/ /; ta' 'units/systemd/smortress-restic-backup@.service' | grep '^After=')
-for group in photos books notes music wallpapers; do
+for group in photos books notes music wallpapers syncthing; do
   if [[ $backup_after == *"zfs-ready@$group.service"* ]]; then
     ok "backup driver is ordered after zfs-ready@$group"
   else
@@ -205,6 +209,35 @@ if grep -rInE '0\.0\.0\.0|\[::\]' units image/rootfs 2>/dev/null | grep -v 'Publ
 else
   ok "no wildcard listener address in units or rootfs"
 fi
+
+# Applications (T5). The image ships the Quadlets and the units that make them
+# work, and every application image must be our signed mirror at the pinned
+# digest: the default-reject policy has no other path to a running container.
+for q in immich.network immich-server.container immich-postgres.container \
+  immich-valkey.container immich-machine-learning.container opdshelf.container \
+  syncthing.container; do
+  check "image installs units/quadlet/$q" has "units/quadlet/$q" image/Containerfile
+done
+check "quadlets live where the generator scans" has '/usr/share/containers/systemd/' image/Containerfile
+check "the placeholder is not installed as a runnable quadlet" \
+  lacks 'units/quadlet/pattern.container /usr/share/containers/systemd' image/Containerfile
+for unit in smortress-app-secrets.service smortress-tailscale-serve.service \
+  smortress-immich-dump.timer; do
+  check "image enables $unit" has "$unit" image/Containerfile
+done
+# shellcheck source=app-images.sh disable=SC1091
+source scripts/app-images.sh
+for name in $(app_image_names); do
+  if grep -qF -- "Image=$(app_image_ref "$name")" units/quadlet/*.container; then
+    ok "$name runs the signed mirror at its pinned digest"
+  else
+    bad "$name runs the signed mirror at its pinned digest"
+  fi
+done
+check "Syncthing's sync port is permitted on the tailscale zone" \
+  has '<port port="22000" protocol="tcp"/>' image/rootfs/etc/firewalld/zones/tailscale.xml
+check "Syncthing's QUIC port is permitted on the tailscale zone" \
+  has '<port port="22000" protocol="udp"/>' image/rootfs/etc/firewalld/zones/tailscale.xml
 
 # Repository-wide CI rules that new files must not evade.
 probe "workflow actions are SHA-pinned" scripts/check-action-pins.sh

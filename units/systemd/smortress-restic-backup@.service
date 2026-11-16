@@ -9,11 +9,13 @@
 Description=Run due Restic backup jobs for the %i repository
 After=zfs-ready@photos.service zfs-ready@books.service zfs-ready@notes.service \
       zfs-ready@music.service zfs-ready@wallpapers.service \
+      zfs-ready@syncthing.service \
       smortress-restic-init.service \
       var-lib-restic-ssd.mount var-lib-restic-hdd.mount \
       sops-decrypt.service network-online.target
 Wants=zfs-ready@photos.service zfs-ready@books.service zfs-ready@notes.service \
       zfs-ready@music.service zfs-ready@wallpapers.service \
+      zfs-ready@syncthing.service \
       smortress-restic-init.service \
       var-lib-restic-ssd.mount var-lib-restic-hdd.mount network-online.target
 Requires=sops-decrypt.service

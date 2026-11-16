@@ -2946,3 +2946,265 @@ Point the hostname at the VPS with a dedicated cloudflared tunnel
 tofu diff that moves `recovery.sammohr.dev` from the Worker route to the tunnel.
 The Access application does not change. Then run 39.6 again against the same
 hostname — the matrix is the acceptance criterion, not the platform.
+
+## 40. Applications (T5): publish images, expose them, prove restores
+
+These steps make Immich, OPDShelf and Syncthing run from the derived image and
+prove that each one restores on scratch storage. Background and invariants are in
+`docs/core/applications.md`; the recovery groups are in
+`docs/core/restic-plane.md`. Prerequisites: the derived image from section 37 is
+booted, the age identity is staged root-only under `/var` (section 37), and the
+tailnet has MagicDNS and HTTPS certificates enabled.
+
+### 40.1 Publish and sign the application images
+
+The host's default-reject policy accepts an application image only when it is
+signed by the smortress cosign key and pushed under
+`ghcr.io/smores56/homelab-platform`, so the images have to be mirrored before the
+Quadlets can start. The workflow does the copy, the signature and the
+verification; it needs the `server-image` environment's signing key.
+
+```sh
+gh workflow run publish-app-images.yml --repo smores56/homelab-platform
+gh run watch --repo smores56/homelab-platform
+```
+
+A green run prints every mirrored reference. Any digest mismatch or a missing
+`.sig` lookaside tag fails the run instead of leaving a half-mirrored set.
+
+```sh
+skopeo inspect --no-tags --format '{{.Digest}}' \
+  docker://ghcr.io/smores56/homelab-platform/immich-server@sha256:c716dc20f957aafd89fa9d284a2ec63e25c9e2d8d8e87c6197d540a3dce237db
+```
+
+That must print the same digest back. On the host the policy is what enforces it:
+
+```sh
+sudo podman pull ghcr.io/smores56/homelab-platform/immich-server@sha256:c716dc20f957aafd89fa9d284a2ec63e25c9e2d8d8e87c6197d540a3dce237db
+```
+
+A signature that does not verify fails that pull before the image reaches local
+storage.
+
+### 40.2 Deploy the image that ships the Quadlets
+
+```sh
+sudo bootc status
+sudo bootc upgrade --enforce-container-sigpolicy
+sudo systemctl reboot
+```
+
+After the reboot the pool unit creates the new `syncthing` group and the Quadlet
+generator picks up the six containers and the bridge network.
+
+```sh
+sudo zfs list -o name,mountpoint tank
+systemctl list-units --all 'immich-*' 'opdshelf*' 'syncthing*'
+sudo podman ps --format '{{.Names}}	{{.Status}}'
+```
+
+`immich-server`, `immich-postgres`, `immich-valkey`,
+`immich-machine-learning`, `opdshelf` and `syncthing` should all be `Up`. A unit
+that failed to start names its reason: `systemctl status <unit>` then
+`journalctl -u <unit> -n 50 --no-pager`.
+
+```sh
+systemctl status smortress-app-secrets.service zfs-ready@syncthing.service
+```
+
+Podman secrets exist only if `smortress-app-secrets.service` succeeded; a
+container that declares one fails to create, not to authenticate, when it did
+not.
+
+### 40.3 Inspect or rotate an application secret
+
+Both application secrets are single-value SOPS files. Viewing one needs the age
+identity, which only the operator has:
+
+```sh
+sudo /usr/bin/sops --decrypt --extract '["password"]' \
+  /etc/smortress/secrets/immich-db-password.yaml
+```
+
+To rotate, edit the ciphertext in the repository, publish a new image, reboot,
+and recreate the containers so they pick up the new Podman secret:
+
+```sh
+sops secrets/server/immich-db-password.yaml
+git commit -am 'chore(core): rotate the Immich database password'
+git push
+sudo bootc upgrade --enforce-container-sigpolicy && sudo systemctl reboot
+```
+
+`sudo systemctl restart immich-postgres.service immich-server.service
+opdshelf.service` recreates those containers in place, which is enough after a
+`systemctl restart smortress-app-secrets.service`.
+
+### 40.4 Declare the Serve routes
+
+Serve needs HTTPS certificates for the tailnet, which is an admin-console toggle,
+not a host setting. Once it is on:
+
+```sh
+sudo systemctl start smortress-tailscale-serve.service
+tailscale serve status
+```
+
+The status output must show three routes: 443 to `http://127.0.0.1:2283` (Immich),
+8443 to `http://127.0.0.1:8083` (OPDShelf) and 10000 to `http://127.0.0.1:8384`
+(Syncthing GUI). Nothing here is Funnel.
+
+### 40.5 Verify the applications and the closed LAN
+
+From a tailnet device (laptop or phone):
+
+```sh
+curl -fsS -o /dev/null -w '%{http_code}\n' https://smortress.<tailnet>.ts.net/api/server/ping
+curl -fsS -o /dev/null -w '%{http_code}\n' https://smortress.<tailnet>.ts.net:8443/healthz
+curl -fsS -o /dev/null -w '%{http_code}\n' https://smortress.<tailnet>.ts.net:10000/rest/noauth/health
+```
+
+All three must answer 200. On the phone: no exit node, global DNS override off,
+ordinary internet and LAN traffic working while Immich and OPDShelf load.
+
+From a machine on the LAN that is **not** on the tailnet:
+
+```sh
+curl --max-time 3 http://10.0.0.125:22000
+ssh -o ConnectTimeout=3 smores@10.0.0.125
+```
+
+Both must time out. A connection there means the default firewalld zone is no
+longer `drop` or a Quadlet published an address it should not have.
+
+### 40.6 Prove the restores on scratch storage
+
+Sign in to smortress over Tailscale and stop the applications first: a drill that
+runs beside the live cluster proves nothing about a cold restore.
+
+```sh
+sudo systemctl stop immich-server.service immich-machine-learning.service immich-postgres.service \
+  immich-valkey.service opdshelf.service syncthing.service
+```
+
+Pick a `verified` snapshot per group (only those are complete restore points) and
+restore it into scratch space:
+
+```sh
+sudo /usr/libexec/smortress-restic-restore-drill ssd photos --target /var/tmp/drill-photos
+sudo /usr/libexec/smortress-restic-restore-drill ssd books --target /var/tmp/drill-books
+sudo /usr/libexec/smortress-restic-restore-drill ssd syncthing --target /var/tmp/drill-syncthing
+sudo /usr/libexec/smortress-restic-restore-drill ssd notes --target /var/tmp/drill-notes
+sudo chown -R 1000:1000 /var/tmp/drill-photos /var/tmp/drill-books \
+  /var/tmp/drill-syncthing /var/tmp/drill-notes
+```
+
+Every application runs as uid 1000 and each group root is owned by that uid
+(the pool unit sets it). A restored tree is root-owned, because the restore
+runs as root: the `chown` above is what makes it a tree the application can
+actually write, and a real restore needs the same step.
+
+**Immich, logical restore.** This is the path the cutover uses and the one that
+survives a version change.
+
+```sh
+sudo install -d -o 1000 -g 1000 -m 0700 /var/tmp/drill-pg
+sudo podman network create drillnet
+sudo podman run --rm -d --name drill-pg --network drillnet --network-alias drill-pg \
+  --user 1000:1000 -e PGDATA=/data/postgres -e POSTGRES_USER=immich -e POSTGRES_DB=immich \
+  -e POSTGRES_PASSWORD_FILE=/run/secrets/pw \
+  --secret immich-db-password,type=mount,target=/run/secrets/pw \
+  -v /var/tmp/drill-pg:/data \
+  ghcr.io/smores56/homelab-platform/immich-postgres@sha256:79b95b795f0911e95ffa4d092a2162c4d81a984d5629bc8f786afe0bc0657671
+sudo podman cp /var/tmp/drill-photos/db-dumps/immich.dump drill-pg:/tmp/immich.dump
+sudo podman exec drill-pg pg_isready -U immich -d immich
+sudo podman exec drill-pg pg_restore -U immich -d immich --no-owner --clean --if-exists \
+  /tmp/immich.dump
+sudo podman exec drill-pg psql -U immich -d immich -c 'select count(*) from assets;'
+```
+
+The count must be non-zero and match what the phone shows. Then start a throwaway
+server against the restored library:
+
+```sh
+sudo podman run --rm -d --name drill-immich --network drillnet \
+  -p 127.0.0.1:12283:2283 --user 1000:1000 \
+  -e DB_HOSTNAME=drill-pg -e DB_PORT=5432 -e DB_USERNAME=immich -e DB_DATABASE_NAME=immich \
+  -e DB_PASSWORD_FILE=/run/secrets/pw -e IMMICH_MEDIA_LOCATION=/data/library \
+  -e IMMICH_MACHINE_LEARNING_URL=http://127.0.0.1:3003 \
+  --secret immich-db-password,type=mount,target=/run/secrets/pw \
+  -v /var/tmp/drill-photos:/data \
+  ghcr.io/smores56/homelab-platform/immich-server@sha256:c716dc20f957aafd89fa9d284a2ec63e25c9e2d8d8e87c6197d540a3dce237db
+curl -fsS http://127.0.0.1:12283/api/server/ping
+```
+
+`{"res":"pong"}` plus a non-zero asset count is the proof that the dump, the
+library and the version agree.
+
+**Immich, physical restore.** Restore the cluster files instead of the dump:
+
+```sh
+sudo podman rm -f drill-immich drill-pg
+sudo rm -rf /var/tmp/drill-pg
+sudo install -d -o 1000 -g 1000 -m 0700 /var/tmp/drill-pg
+sudo cp -a /var/tmp/drill-photos/postgres/. /var/tmp/drill-pg/
+sudo chown -R 1000:1000 /var/tmp/drill-pg
+sudo podman run --rm -d --name drill-pg --network drillnet --network-alias drill-pg \
+  --user 1000:1000 -e PGDATA=/data/postgres \
+  -v /var/tmp/drill-pg:/data \
+  ghcr.io/smores56/homelab-platform/immich-postgres@sha256:79b95b795f0911e95ffa4d092a2162c4d81a984d5629bc8f786afe0bc0657671
+sudo podman exec drill-pg psql -U immich -d immich -c 'select count(*) from assets;'
+```
+
+That cluster carries the password that was current when the snapshot was taken.
+After a real physical restore, set it from the decrypted secret before starting
+the server, or rotate the ciphertext — otherwise the server cannot authenticate:
+
+```sh
+sudo podman exec -i drill-pg psql -U immich -d immich \
+  -c "ALTER USER immich WITH PASSWORD '$(sudo /usr/bin/sops --decrypt --extract '["password"]' /etc/smortress/secrets/immich-db-password.yaml)'"
+```
+
+**OPDShelf.** Nothing stateful to rebuild; prove the tree serves.
+
+```sh
+sudo podman run --rm -d --name drill-opds -p 127.0.0.1:18083:8083 \
+  --user 1000:1000 -e PORT=8083 -e BOOKS_DIR=/books -e DATA_DIR=/books/.opdshelf \
+  -e WATCH=false \
+  --secret opdshelf-admin-password,type=env,target=ADMIN_PASSWORD \
+  -v /var/tmp/drill-books:/books \
+  ghcr.io/smores56/homelab-platform/opdshelf@sha256:b82f94f72b41686fd9169a2269d65550f411a97dfa341a330df88b0bfab0af35
+curl -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:18083/healthz
+curl -fsS http://127.0.0.1:18083/ | head -5
+sudo podman rm -f drill-opds
+```
+
+**Syncthing.** Restore the identity and the folder, and let nothing sync until a
+primary is designated.
+
+```sh
+sudo podman run --rm -d --name drill-syncthing --network host \
+  -e HOME=/var/syncthing -e STHOMEDIR=/var/syncthing/config \
+  -e STGUIADDRESS=127.0.0.1:18384 \
+  -v /var/tmp/drill-syncthing/config:/var/syncthing/config \
+  -v /var/tmp/drill-notes:/var/tank/notes \
+  ghcr.io/smores56/homelab-platform/syncthing@sha256:2b71da7c0d0a91a6ae5285ad079226fecc0a365d08b27720e1f7037b018f7546
+curl -fsS http://127.0.0.1:18384/rest/noauth/health
+```
+
+The GUI on `127.0.0.1:18384` must list the restored folder. Pause every folder
+there before a peer is allowed to connect; only then is the restored tree the
+primary. The drill config keeps the restored `<listenAddress>`, so stop the drill
+before the real service starts.
+
+```sh
+sudo podman rm -f drill-syncthing drill-pg
+sudo podman network rm drillnet
+sudo rm -rf /var/tmp/drill-photos /var/tmp/drill-books /var/tmp/drill-syncthing \
+  /var/tmp/drill-notes /var/tmp/drill-pg
+sudo systemctl start immich-postgres.service immich-valkey.service immich-machine-learning.service \
+  immich-server.service opdshelf.service syncthing.service
+```
+
+The T6 cutover reuses these drills: it restores the same groups from each of
+the three destinations before the legacy stack is retired.

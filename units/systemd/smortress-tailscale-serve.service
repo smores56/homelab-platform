@@ -1,0 +1,22 @@
+[Unit]
+# Declare the Tailscale Serve routes that front the three loopback-published
+# applications. Serve state lives in tailscaled's state file, which is not a
+# recovery group, so the routes are re-declared at every boot; the script is
+# idempotent. Every route is Funnel-free: tailnet clients only.
+#
+# This unit needs an enrolled tailnet. Without one it fails visibly rather than
+# skipping, because a host whose applications answer on no route is a fault, not
+# a configuration choice.
+Description=Declare Tailscale Serve routes for the applications
+Requires=tailscaled.service
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/tailscale-serve
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

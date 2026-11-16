@@ -1,0 +1,7 @@
+# Immich's internal network. The four containers resolve each other by
+# ContainerName here, and nothing on this network is published: only the API is,
+# on loopback (units/quadlet/immich-server.container).
+[Unit]
+Description=Smortress Immich network
+
+[Network]

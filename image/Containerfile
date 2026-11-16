@@ -27,7 +27,7 @@ LABEL org.opencontainers.image.title="smortress server image" \
 # signature-related material in the image; the policy references it by path.
 COPY image/rootfs/ /
 COPY units/systemd/ /usr/lib/systemd/system/
-COPY units/quadlet/ /usr/share/smortress/quadlet/
+COPY units/quadlet/pattern.container /usr/share/smortress/quadlet/pattern.container
 # /usr/local is a symlink to /var on bootc, so helpers go under /usr/libexec
 # and lose the .sh suffix that the units would otherwise have to know about.
 COPY scripts/zfs-ready.sh scripts/sops-decrypt.sh scripts/init-zpool.sh \
@@ -36,7 +36,17 @@ COPY scripts/zfs-ready.sh scripts/sops-decrypt.sh scripts/init-zpool.sh \
      scripts/restic-plane-common.sh scripts/smortress-restic-backup.sh \
      scripts/smortress-restic-verify.sh scripts/smortress-restic-init.sh \
      scripts/smortress-restic-restore-drill.sh \
+     scripts/app-secrets.sh scripts/immich-dump.sh scripts/tailscale-serve.sh \
      /usr/libexec/smortress-src/
+# Application Quadlets. The generator scans /usr/share/containers/systemd at
+# boot, and a quadlet is a generated unit, so nothing here is enabled with
+# systemctl: the [Install] section is what starts it.
+COPY units/quadlet/immich.network units/quadlet/immich-postgres.container \
+     units/quadlet/immich-valkey.container \
+     units/quadlet/immich-machine-learning.container \
+     units/quadlet/immich-server.container units/quadlet/opdshelf.container \
+     units/quadlet/syncthing.container \
+     /usr/share/containers/systemd/
 COPY secrets/server/ /etc/smortress/secrets/
 COPY image/cosign.pub /etc/pki/containers/smortress.pub
 
@@ -87,6 +97,10 @@ RUN set -eux; \
       zfs-ready@notes.service \
       zfs-ready@music.service \
       zfs-ready@wallpapers.service \
+      zfs-ready@syncthing.service \
+      smortress-app-secrets.service \
+      smortress-tailscale-serve.service \
+      smortress-immich-dump.timer \
       var-lib-restic-ssd.mount \
       var-lib-restic-hdd.mount \
       smortress-restic-init.service \

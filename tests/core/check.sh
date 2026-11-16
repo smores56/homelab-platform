@@ -120,5 +120,15 @@ else
   fail 'restic plane checks'
 fi
 
+# The application Quadlets have their own harness: it proves every image is the
+# signed mirror at the pinned digest, and that readiness, Serve routes, Podman
+# secrets and the firewall boundary line up.
+checks=$((checks + 1))
+if tests/core/app-quadlets.sh; then
+  pass 'application quadlet checks'
+else
+  fail 'application quadlet checks'
+fi
+
 printf '\n%d checks, %d failed\n' "$checks" "$failures"
 ((failures == 0))

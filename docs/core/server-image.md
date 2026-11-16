@@ -21,12 +21,18 @@ rollback path. Operator-only actions are in `docs/manual-steps.md` section 37.
 | `/usr/lib/systemd/system/sops-decrypt.service` | Boot-ordered decrypt into `/run/smortress/secrets`. |
 | `/usr/lib/systemd/system/smortress-zpool.service` | Creates or imports `tank` on the encrypted data device. |
 | `/usr/lib/systemd/system/smortress-cryptsetup-hdd.service` | Opens the HDD LUKS with its keyfile; non-blocking by contract. |
-| `/etc/firewalld/zones/tailscale.xml` | Binds `tailscale0`, permits SSH; the default zone is `drop`. |
+| `/etc/firewalld/zones/tailscale.xml` | Binds `tailscale0`, permits SSH and Syncthing's 22000/tcp+udp; the default zone is `drop`. |
 | `/usr/share/smortress/quadlet/pattern.container` | Quadlet base pattern; not enabled, no `[Install]`. |
+| `/usr/share/containers/systemd/*.container` | The application Quadlets (T5). A quadlet is a generated unit, so `[Install]` is what starts it; the image never runs `systemctl enable` for one. |
+| `/usr/lib/systemd/system/smortress-app-secrets.service` | Turns the decrypted application secrets into Podman secrets before any container that declares one starts. |
+| `/usr/lib/systemd/system/smortress-tailscale-serve.service` | Re-declares the Tailscale Serve routes at boot; Serve state is not backed up. |
+| `/usr/lib/systemd/system/smortress-immich-dump.{service,timer}` | The logical Immich restore point inside the photos group, at 23:00 UTC. |
 
 `units/quadlet/pattern.container` is the canonical copy in the repository; the
-image ships it read-only for T5 to copy. A placeholder container must never be
-started automatically.
+image ships it read-only as the base for a new application. A placeholder
+container must never be started automatically. The six application Quadlets in
+`units/quadlet/*.container` are installed into `/usr/share/containers/systemd`
+and start from their own `[Install]` section; see `docs/core/applications.md`.
 
 ## Base pin
 
@@ -190,9 +196,9 @@ Secure Boot stays off.
 
 `smortress-zpool.service` creates `tank` with `cachefile=none`, `ashift=12`,
 `compression=zstd`, `atime=off`, `xattr=sa`, `acltype=posixacl`, and creates the
-childless groups `photos`, `books`, `notes`, `music` and `wallpapers` under
-`/var/tank`. Later boots import the pool; a missing data device fails this unit
-and its consumers, not the OS.
+childless groups `photos`, `books`, `notes`, `music`, `wallpapers` and
+`syncthing` under `/var/tank`. Later boots import the pool; a missing data device
+fails this unit and its consumers, not the OS.
 
 `zfs-ready@<group>.service` runs `scripts/zfs-ready.sh <group>`, which checks
 `zfs get mounted`, the dataset mountpoint and an exact `/proc/self/mountinfo`

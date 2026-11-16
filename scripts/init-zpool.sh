@@ -6,7 +6,7 @@ set -euo pipefail
 
 readonly device=/dev/mapper/data
 readonly pool=tank
-readonly groups=(photos books notes music wallpapers)
+readonly groups=(photos books notes music wallpapers syncthing)
 
 if [[ ! -e $device ]]; then
   echo "init-zpool: $device is missing; data LUKS was not opened" >&2
@@ -43,6 +43,11 @@ for group in "${groups[@]}"; do
     zfs set mountpoint="/var/tank/$group" "$dataset"
   fi
   zfs mount "$dataset" 2>/dev/null || true
+  # Every application runs as uid 1000, so the group root belongs to that uid:
+  # it is what lets a restored dump-only group create postgres/, appendonlydir/
+  # or .opdshelf/ without a manual chown. Restic still reads as root.
+  chown 1000:1000 "/var/tank/$group"
+  chmod 0755 "/var/tank/$group"
 done
 
 echo "init-zpool: $pool is present with ${#groups[@]} recovery groups"

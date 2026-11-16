@@ -1,0 +1,41 @@
+# Immich's database. PGDATA is /data/postgres inside the photos recovery group,
+# so the live cluster and the library share one recovery point; the logical dump
+# in /data/db-dumps is the same dataset, not a second one.
+#
+# User=1000 matches the ownership the restored tree already has and is what
+# Immich's own rootless compose uses. The image entrypoint seds its config
+# template into /etc/postgresql at every start, so that directory is a tmpfs even
+# though the rest of the root filesystem is read-only.
+[Unit]
+Description=Immich PostgreSQL 17 cluster (photos recovery group)
+Requires=zfs-ready@photos.service sops-decrypt.service smortress-app-secrets.service
+After=network-online.target zfs-ready@photos.service sops-decrypt.service smortress-app-secrets.service
+Wants=network-online.target
+
+[Container]
+Image=ghcr.io/smores56/homelab-platform/immich-postgres@sha256:79b95b795f0911e95ffa4d092a2162c4d81a984d5629bc8f786afe0bc0657671
+ContainerName=smortress-immich-postgres
+Network=immich.network
+User=1000:1000
+Secret=immich-db-password,type=mount,target=/run/secrets/immich-db-password,uid=1000,gid=1000,mode=0400
+Environment=POSTGRES_USER=immich
+Environment=POSTGRES_DB=immich
+Environment=POSTGRES_PASSWORD_FILE=/run/secrets/immich-db-password
+Environment=PGDATA=/data/postgres
+Environment=TZ=UTC
+Volume=/var/tank/photos:/data:z
+# The image entrypoint seds its config template into /etc/postgresql at every
+# start, so that directory is a tmpfs even though the rest of the root
+# filesystem is read-only. Podman's tmpfs options do not accept uid/gid, so the
+# mode is world-writable with the sticky bit, exactly what the image sets itself.
+Tmpfs=/etc/postgresql:rw,nosuid,nodev,mode=1777,size=64m
+ReadOnly=true
+NoNewPrivileges=true
+DropCapability=ALL
+
+[Service]
+Restart=on-failure
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target

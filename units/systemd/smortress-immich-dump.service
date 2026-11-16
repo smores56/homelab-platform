@@ -1,0 +1,15 @@
+[Unit]
+# The logical Immich restore point, written inside the photos recovery group.
+# Both the physical cluster and this dump are therefore in the same Restic
+# snapshot, and a database dump failure cannot stop the filesystem backup: this
+# is its own unit, not part of the backup driver.
+Description=Dump the Immich database into the photos recovery group
+Requires=zfs-ready@photos.service immich-postgres.service
+After=zfs-ready@photos.service immich-postgres.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/immich-dump
+# pg_dump of a library-sized database stays well inside this; the script's own
+# timeout is the per-attempt deadline, this is the outer bound.
+TimeoutStartSec=1800

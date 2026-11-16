@@ -1,0 +1,30 @@
+# Immich's machine learning worker: smart search, faces, OCR. CPU only, and it
+# is the only Immich container that needs egress, because the models download
+# from Hugging Face on first use. The cache lives under /var/lib, outside every
+# recovery group: it is regenerable, and putting a multi-gigabyte model cache
+# inside a recovery point would only inflate it.
+[Unit]
+Description=Immich machine learning worker
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=ghcr.io/smores56/homelab-platform/immich-machine-learning@sha256:d76fe88b69282c09a97eac4f82dafa82cfd77bce274bc742591cde974f87dacb
+ContainerName=smortress-immich-machine-learning
+Network=immich.network
+User=1000:1000
+Environment=MACHINE_LEARNING_CACHE_FOLDER=/cache
+Environment=TRANSFORMERS_CACHE=/cache
+Environment=MACHINE_LEARNING_MODEL_REVISION=v2
+Environment=TZ=UTC
+Volume=/var/lib/immich/ml-cache:/cache:z
+ReadOnly=true
+NoNewPrivileges=true
+DropCapability=ALL
+
+[Service]
+Restart=on-failure
+TimeoutStartSec=900
+
+[Install]
+WantedBy=multi-user.target
