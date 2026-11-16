@@ -2736,3 +2736,124 @@ or reformats them.
    URIs (including the R2 bucket and path), the shared Restic password, the R2
    write token, and the Healthchecks check name. Run the kit drill from a
    machine that is not smortress with only those items.
+
+## 39. Hosted Backrest (T4): seed the gate repository, deploy, and run the matrix
+
+Runs from a machine with `podman` and network. smortress stays off for the whole
+matrix: only R2 and Cloudflare are involved. The gate repository is separate
+(`/gate` under the new bucket) so a failed run cannot touch production snapshots.
+
+### 39.1 Seed a disposable repository
+
+The 100 GiB payload is sparse zeros on purpose. Restic stores almost nothing,
+but `restic dump` still delivers 100 GiB to the client, which is what the
+four-hour stream measures. A 5 GiB incompressible file covers random-data
+throughput.
+
+```sh
+export GATE=/var/tmp/backrest-gate
+export RESTIC_REPOSITORY="s3:https://385f7d47e2e8438fbda5d6f76d760434.r2.cloudflarestorage.com/homelab-restic/gate"
+export AWS_DEFAULT_REGION=auto
+# RESTIC_PASSWORD is the gate-only restic password; it must match the value put
+# into the Worker secret below.
+read -rsp 'gate restic password: ' RESTIC_PASSWORD && export RESTIC_PASSWORD
+
+restic init
+mkdir -p "$GATE/tree"
+for i in $(seq -w 0 99); do truncate -s 1G "$GATE/tree/part-$i.bin"; done
+truncate -s 100G "$GATE/big.bin"
+head -c 5G /dev/urandom >"$GATE/random.bin"
+restic backup --host backrest-gate --tag verified "$GATE"
+restic cat config --json | jq -r .id   # BACKREST_REPO_GUID
+sha256sum "$GATE/big.bin"              # expected hash for gate.sh stream
+```
+
+The small paths the matrix uses are `$GATE/random.bin` (file check),
+`$GATE/tree` (directory check), `/var/tmp/backrest-gate/big.bin` (long file
+stream) and `/var/tmp/backrest-gate/tree` (long directory stream).
+
+### 39.2 Read-only R2 token
+
+Dashboard → R2 → Manage API tokens → Create, **Object Read only**, scoped to the
+`homelab-restic` bucket. Store it in Bitwarden; it is never committed and never
+kept on smortress.
+
+### 39.3 Access service token
+
+Zero Trust → Access → Service Auth → Create. Keep the Client ID and Secret in
+Bitwarden. Only the gate uses it; the browser path stays the owner's identity.
+
+### 39.4 Apply the Access application
+
+`tofu/access.tf` now declares the `backrest` application. Merging the change runs
+`tofu-apply` (it triggers on `tofu/**` changes to `main`); a manual dispatch is
+`gh workflow run tofu-apply.yml`.
+
+### 39.5 Worker secrets and the first deploy
+
+```sh
+cd backrest
+mise x node@22 -- npm ci
+systemctl --user start podman.socket   # rootless; wrangler talks to it directly
+
+# The operator's password stays in Bitwarden and on paper; only its bcrypt hash
+# reaches Cloudflare.
+read -rsp 'backrest operator password: ' pw
+printf '%s' "$pw" | backrest/scripts/hash-password.sh   # -> BACKREST_OPERATOR_BCRYPT
+unset pw
+
+# A service account the Worker uses to index snapshots. Its plaintext and hash
+# are both Worker secrets; it is not a human login.
+openssl rand -base64 32                                  # -> BACKREST_BOOTSTRAP_PASSWORD
+printf '%s' "$bootstrap" | backrest/scripts/hash-password.sh   # -> BACKREST_BOOTSTRAP_BCRYPT
+
+for name in RESTIC_PASSWORD R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY \
+            BACKREST_OPERATOR_BCRYPT BACKREST_BOOTSTRAP_BCRYPT BACKREST_BOOTSTRAP_PASSWORD; do
+  read -rsp "$name: " value
+  printf '%s' "$value" | mise x node@22 -- npx wrangler secret put "$name"
+  unset value
+done
+
+WRANGLER_DOCKER_BIN=$(command -v podman) \
+DOCKER_HOST="unix://$XDG_RUNTIME_DIR/podman/podman.sock" \
+  mise x node@22 -- npx wrangler deploy \
+    --var BACKREST_REPO_ID:r2 \
+    --var BACKREST_REPO_URI:"$RESTIC_REPOSITORY" \
+    --var BACKREST_REPO_GUID:"$REPO_GUID"
+```
+
+The first request after a deploy is the cold start: the Worker seeds config,
+waits for port 9898, reindexes, and only then proxies. Watch it with
+`mise x node@22 -- npx wrangler tail`; a restic download attempt would appear
+there and is a gate failure (the image bundles `/bin/restic`).
+
+### 39.6 Run the matrix
+
+```sh
+export BACKREST_URL=https://backrest.sammohr.dev
+export BACKREST_BOOTSTRAP_USER=bootstrap BACKREST_BOOTSTRAP_PASSWORD=...
+export BACKREST_REPO_ID=r2
+export CF_ACCESS_CLIENT_ID=... CF_ACCESS_CLIENT_SECRET=...
+export BACKREST_GATE_SMALL_FILE=/var/tmp/backrest-gate/random.bin
+export BACKREST_GATE_SMALL_DIR=/var/tmp/backrest-gate/tree
+
+backrest/scripts/gate.sh matrix
+backrest/scripts/gate.sh stream /var/tmp/backrest-gate/big.bin <sha256 from 39.1>
+backrest/scripts/gate.sh stream /var/tmp/backrest-gate/tree
+BACKREST_CANCEL_AFTER=30 backrest/scripts/gate.sh cancel /var/tmp/backrest-gate/big.bin
+```
+
+Interruption is the one check that needs the platform: start the big stream,
+then terminate the container's main process from a container shell
+(`wrangler containers list`, `wrangler containers ssh <ID>`, `kill 1`). The
+client must see a truncated, failed download — never a silent success — and the
+next request must start cleanly.
+
+### 39.7 Record the verdict
+
+Paste the command output, byte counts, durations, and failure text on issue
+#707. On a pass, redeploy with the production repository URI and GUID from T3 and
+run `gate.sh matrix` once more; the gate payload path (`/gate`) is deleted after
+that. On a failure, the preauthorized VPS fallback takes over: same image, same
+`--no-lock`/`--no-cache` flags, same Access and R2 policy, with persistent
+`/config` and `/cache`.

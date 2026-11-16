@@ -1,0 +1,47 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "smortress-backrest",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-01",
+  "workers_dev": false,
+  "observability": {
+    "enabled": true
+  },
+  "routes": [
+    {
+      "pattern": "backrest.sammohr.dev",
+      "custom_domain": true
+    }
+  ],
+  "containers": [
+    {
+      "class_name": "Backrest",
+      "scheduling_policy": "durable_object",
+      "images": {
+        "backrest": {
+          "dockerfile": "./container/Dockerfile",
+          "build_context": "./container"
+        }
+      }
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "BACKREST",
+        "class_name": "Backrest"
+      }
+    ]
+  },
+  "exports": {
+    "Backrest": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    }
+  },
+  "vars": {
+    "BACKREST_INSTANCE": "backrest-recovery",
+    "BACKREST_OPERATOR_USER": "operator",
+    "BACKREST_BOOTSTRAP_USER": "bootstrap"
+  }
+}
