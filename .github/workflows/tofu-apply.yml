@@ -120,7 +120,9 @@ jobs:
           esac
 
       - name: stop on a destructive plan
-        if: steps.plan.outputs.changes == 'true'
+        # A merge never applies one; the owner's dispatch is the deliberate
+        # approval this message asks for, so the dispatch itself must pass.
+        if: steps.plan.outputs.changes == 'true' && github.event_name != 'workflow_dispatch'
         run: |
           set -euo pipefail
           # Replacements and destroys are the plans where the diff does not tell

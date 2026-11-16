@@ -371,6 +371,11 @@ else
 fi
 if grep -qE 'must be replaced|will be destroyed' "$apply"; then
   ok "the apply workflow stops instead of applying a destructive plan"
+  if grep -q "github.event_name != 'workflow_dispatch'" "$apply"; then
+    ok "an owner dispatch can apply a destructive plan"
+  else
+    bad "an owner dispatch can apply a destructive plan"
+  fi
 else
   bad "the apply workflow stops instead of applying a destructive plan"
 fi
