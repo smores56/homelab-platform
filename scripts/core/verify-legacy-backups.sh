@@ -2,33 +2,52 @@
 # Prove the legacy repositories still restore (SDLC #703, T0 of #701).
 #
 # The old HDD repository and the old R2 repository are the only copies of the
-# data the new core has not backed up yet, so both must be re-verified before a
-# single disk is repartitioned. This script is read-only and bounded:
+# retained trees, so both must be re-verified before a single disk is
+# repartitioned. What this does:
 #
-#   * `snapshots`, `stats`, `cat config` — metadata only
-#   * `check --read-data-subset=<n>%` — a sampled read of real packs
-#   * `restore --include ...` of a small set of trees into root-only scratch
-#   * the newest Immich dump restored and checked as a PostgreSQL archive
+#   * metadata reads with `--no-lock` (cat config, snapshots, stats, ls)
+#   * `check --read-data-subset=<n>%` — sampled pack reads; this one must lock
+#   * presence of every retained tree in the snapshot
+#   * a restore of the small trees plus the live Immich dump
+#   * the dump parsed as a PostgreSQL custom archive
 #
-# It never runs `init`, `forget`, `prune` or `unlock`, and it refuses to run
-# while a backup unit is active. Repository URLs, the password file and the R2
-# credentials are read from the systemd units themselves, so the verification
-# uses exactly the configuration the nightly job uses.
+# It never runs `init`, `forget`, `prune` or `unlock`. Repository URLs, the
+# password file and the R2 credentials are read from the systemd units, so the
+# verification uses exactly the configuration the nightly job uses.
 #
 # Usage (as root on smortress):
 #   sudo scripts/core/verify-legacy-backups.sh
-#   sudo scripts/core/verify-legacy-backups.sh --repo r2 --subset 2% --keep
+#   sudo scripts/core/verify-legacy-backups.sh --repo local --keep
 set -euo pipefail
 
 readonly SELF=${0##*/}
-readonly SCRATCH_PARENT=/var/tmp
-readonly SAMPLE_INCLUDES=(/var/lib/data/books /var/lib/data/db /var/lib/data/vault)
+readonly SCRATCH_ROOT=/var/tmp
+readonly DUMP_PATH=/var/lib/data/immich/db-dumps/immich.dump
+
+# Trees the new core retains. Presence is checked for every one of them; the
+# restore sample is only the subset small enough to copy twice.
+readonly RETAINED_TREES=(
+  /var/lib/data/immich
+  /var/lib/data/photos
+  /var/lib/data/books
+  /var/lib/data/music
+  /var/lib/data/wallpapers
+  /var/lib/data/vault
+  /var/lib/data/todo
+)
+readonly SAMPLE_INCLUDES=(
+  /var/lib/data/books
+  /var/lib/data/vault
+  /var/lib/data/todo
+)
 
 repo_sel=all
 subset=1%
 scratch=""
+scratch_owned=0
 do_restore=1
 keep=0
+force=0
 restic_bin=${RESTIC:-}
 failures=0
 checks=0
@@ -39,12 +58,14 @@ usage: verify-legacy-backups.sh [options]
 
   --repo local|r2|all   repository selection (default: all)
   --subset N%|N         check --read-data-subset value (default: 1%)
-  --scratch DIR         restore target (default: /var/tmp/t0-restore.<utc>)
+  --scratch DIR         restore target; must be empty and under /var/tmp
+                        (default: a directory this script creates)
   --keep                keep the restore tree instead of deleting it
   --no-restore          check repositories only, restore nothing
+  --force               run even if a restic timer fires within two hours
   -h, --help            this text
 
-Exit status: 0 when every executed check passed, 1 when any check failed.
+Exit status: 0 when every check passed, 1 when any check failed.
 EOF
 }
 
@@ -68,6 +89,10 @@ while (($#)); do
     ;;
   --no-restore)
     do_restore=0
+    shift
+    ;;
+  --force)
+    force=1
     shift
     ;;
   -h | --help)
@@ -104,12 +129,31 @@ record() { # record <status> <label> [detail]
   printf '| %s | %s | %s |\n' "$1" "$2" "${3:-}"
 }
 
-# `check` takes a lock, and a shared cache must not move under a live backup.
+# `check` takes a lock; a timer firing mid-verification would then collide with
+# it and fail the *nightly* run instead of this one.
+next_timer_minutes() {
+  local json now_us
+  json=$(systemctl list-timers --no-pager --output=json 'restic-*' 2>/dev/null || true)
+  now_us=$(($(date +%s) * 1000000))
+  printf '%s' "$json" | sed 's/},{/}\n{/g' |
+    sed -n 's/.*"next":\([0-9][0-9]*\).*/\1/p' |
+    while read -r next; do
+      minutes=$(((next - now_us) / 60000000))
+      ((minutes < 0)) || echo "$minutes"
+    done | sort -n | sed -n 1p
+}
+
 for unit in restic-backups-local.service restic-backups-r2.service; do
   if systemctl is-active --quiet "$unit"; then
     fail_fatal "$unit is running; wait for it to finish"
   fi
 done
+if ((force == 0)); then
+  minutes_left=$(next_timer_minutes)
+  if [[ -n $minutes_left ]] && ((minutes_left < 120)); then
+    fail_fatal "a restic timer fires in ${minutes_left} min; rerun after it finishes or pass --force"
+  fi
+fi
 
 # The binary the units use, so the version matches what wrote the data.
 discover_restic() {
@@ -118,7 +162,7 @@ discover_restic() {
   for unit in restic-backups-local.service restic-backups-r2.service; do
     systemctl cat "$unit" >/dev/null 2>&1 || continue
     path=$(systemctl show -p ExecStart "$unit" |
-      grep -o 'path=[^ ;]*/restic' | head -1 | cut -d= -f2)
+      grep -o 'path=[^ ;]*/restic' | sed -n 1p | cut -d= -f2)
     if [[ -n $path && -x $path ]]; then
       restic_bin=$path
       return
@@ -128,8 +172,7 @@ discover_restic() {
   [[ -n $restic_bin ]] || fail_fatal "no restic binary found; set RESTIC=/path/to/restic"
 }
 
-# RESTIC_* from the unit's Environment, AWS_* from its EnvironmentFile. Returns
-# one KEY=VALUE per line; nothing else is exported.
+# RESTIC_* from the unit's Environment, AWS_* from its EnvironmentFile.
 unit_env() {
   local unit=$1 file
   systemctl cat "$unit" >/dev/null 2>&1 || return 0
@@ -142,18 +185,16 @@ unit_env() {
   fi
 }
 
-latest_json() { "$restic_bin" snapshots --last --json 2>/dev/null | head -c 8192; }
-
 field() { # field <json> <name>
   printf '%s' "$1" | grep -o "\"$2\": *\"[^\"]*\"" | head -1 | sed 's/.*: *"//; s/"$//'
 }
 
-restore_sample() { # restore_sample <snapshot> <target>
+restore_sample() { # restore_sample <snap> <target>
   local snap=$1 target=$2
   local -a includes=()
   local path
-  for path in "${SAMPLE_INCLUDES[@]}"; do
-    if "$restic_bin" ls "$snap" "$path" >/dev/null 2>&1; then
+  for path in "${SAMPLE_INCLUDES[@]}" "$DUMP_PATH"; do
+    if "$restic_bin" ls --no-lock "$snap" "$path" >/dev/null 2>&1; then
       includes+=("--include" "$path")
     fi
   done
@@ -161,7 +202,7 @@ restore_sample() { # restore_sample <snapshot> <target>
     record FAIL "sample restore" "none of the sample paths exist in the snapshot"
     return
   fi
-  if ! "$restic_bin" restore "$snap" --target "$target" "${includes[@]}" \
+  if ! "$restic_bin" restore --no-lock "$snap" --target "$target" "${includes[@]}" \
     >"$target/restore.log" 2>&1; then
     record FAIL "sample restore" "see $target/restore.log"
     return
@@ -172,7 +213,7 @@ restore_sample() { # restore_sample <snapshot> <target>
   for inc in "${SAMPLE_INCLUDES[@]}"; do
     [[ -d $target$inc ]] || continue
     restored=$(find "$target$inc" -type f | wc -l)
-    listed=$("$restic_bin" ls --long "$snap" "$inc" 2>/dev/null | grep -c '^-' || true)
+    listed=$("$restic_bin" ls --long --no-lock "$snap" "$inc" 2>/dev/null | grep -c '^-' || true)
     if ((restored == 0)); then
       record FAIL "restored $inc" "no files restored"
     elif ((listed > 0)) && ((restored == listed)); then
@@ -182,9 +223,9 @@ restore_sample() { # restore_sample <snapshot> <target>
     fi
   done
 
-  local dump=$target/var/lib/data/db/immich.dump
+  local dump=$target$DUMP_PATH
   if [[ ! -f $dump ]]; then
-    record FAIL "Immich dump restored" "no dump at $dump"
+    record FAIL "Immich dump restored" "no $DUMP_PATH in this snapshot"
     return
   fi
   local magic
@@ -201,15 +242,16 @@ restore_sample() { # restore_sample <snapshot> <target>
     pg_restore=$(find /nix/store -maxdepth 4 -type f -path '*-postgresql-*/bin/pg_restore' \
       2>/dev/null | sort | tail -1 || true)
   fi
-  if [[ -n $pg_restore && -x $pg_restore ]]; then
-    entries=$("$pg_restore" --list "$dump" 2>/dev/null | grep -c '^[0-9]' || true)
-    if ((entries > 0)); then
-      record PASS "pg_restore --list" "$entries archive entries"
-    else
-      record FAIL "pg_restore --list" "no entries"
-    fi
+  if [[ -z $pg_restore || ! -x $pg_restore ]]; then
+    record FAIL "pg_restore --list" \
+      "pg_restore absent; run 'nix shell nixpkgs#postgresql --command pg_restore --list $dump'"
+    return
+  fi
+  entries=$("$pg_restore" --list "$dump" 2>/dev/null | grep -c '^[0-9]' || true)
+  if ((entries > 0)); then
+    record PASS "pg_restore --list" "$entries archive entries"
   else
-    record PARTIAL "pg_restore --list" "no pg_restore on this host; magic check only"
+    record FAIL "pg_restore --list" "no entries"
   fi
 }
 
@@ -236,7 +278,7 @@ check_repo() { # check_repo <name> <unit>
   fi
 
   local target=$scratch/$name
-  mkdir -p "$target"
+  mkdir -p "$target" && chmod 700 "$target"
   export RESTIC_REPOSITORY=$repository
   export RESTIC_PASSWORD_FILE=$password_file
   export RESTIC_CACHE_DIR=$scratch/cache-$name
@@ -250,7 +292,7 @@ check_repo() { # check_repo <name> <unit>
   done <<<"$env_lines"
 
   local config
-  if config=$("$restic_bin" cat config 2>/dev/null); then
+  if config=$("$restic_bin" cat config --no-lock 2>/dev/null); then
     record PASS "repository opens" "id $(field "$config" id)"
   else
     record FAIL "repository opens" "restic cat config failed"
@@ -259,9 +301,10 @@ check_repo() { # check_repo <name> <unit>
     return
   fi
 
-  local snaps snap_time
-  if snaps=$(latest_json) && [[ -n $snaps ]]; then
-    record PASS "latest snapshot listed" "$(field "$snaps" short_id) at $(field "$snaps" time) on $(field "$snaps" hostname)"
+  local snaps snap_time stat_line
+  if snaps=$("$restic_bin" snapshots --last --json --no-lock 2>/dev/null) && [[ -n $snaps ]]; then
+    record PASS "latest snapshot listed" \
+      "$(field "$snaps" short_id) at $(field "$snaps" time) on $(field "$snaps" hostname)"
   else
     record FAIL "latest snapshot listed" "restic snapshots failed"
     unset RESTIC_REPOSITORY RESTIC_PASSWORD_FILE RESTIC_CACHE_DIR AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
@@ -269,7 +312,8 @@ check_repo() { # check_repo <name> <unit>
     return
   fi
 
-  local now then_ age_hours
+  local snap now then_ age_hours
+  snap=$(field "$snaps" short_id)
   snap_time=$(field "$snaps" time)
   now=$(date -u +%s)
   then_=$(date -u -d "$snap_time" +%s 2>/dev/null || echo "$now")
@@ -280,11 +324,21 @@ check_repo() { # check_repo <name> <unit>
     record FAIL "latest snapshot is recent" "${age_hours}h old; the nightly job runs 03:30"
   fi
 
-  if "$restic_bin" stats --json latest >/dev/null 2>&1; then
-    record PASS "stats readable" "$("$restic_bin" stats latest 2>/dev/null | tail -1)"
+  if stat_line=$("$restic_bin" stats --json latest --no-lock 2>/dev/null); then
+    record PASS "stats readable" "restore size $(printf '%s' "$stat_line" | grep -o '"total_size":[0-9]*' | cut -d: -f2) bytes"
   else
     record FAIL "stats readable" "restic stats failed"
   fi
+
+  local tree entries
+  for tree in "${RETAINED_TREES[@]}"; do
+    entries=$("$restic_bin" ls --no-lock "$snap" "$tree" 2>/dev/null | wc -l)
+    if ((entries > 0)); then
+      record PASS "retained $tree present" "$entries entries"
+    else
+      record FAIL "retained $tree present" "absent from snapshot $snap"
+    fi
+  done
 
   if "$restic_bin" check --read-data-subset="$subset" >"$target/check.log" 2>&1; then
     record PASS "check --read-data-subset=$subset" "packs verified, no errors"
@@ -293,7 +347,7 @@ check_repo() { # check_repo <name> <unit>
   fi
 
   if ((do_restore)); then
-    restore_sample "$(field "$snaps" short_id)" "$target"
+    restore_sample "$snap" "$target"
   fi
 
   unset RESTIC_REPOSITORY RESTIC_PASSWORD_FILE RESTIC_CACHE_DIR AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
@@ -302,12 +356,29 @@ check_repo() { # check_repo <name> <unit>
 
 discover_restic
 run_id=$(date -u '+%Y%m%dT%H%M%SZ')
-scratch=${scratch:-$SCRATCH_PARENT/t0-restore.$run_id}
-mkdir -p "$scratch"
-chmod 700 "$scratch"
 
-echo "$SELF: $("$restic_bin" version | head -1)"
-echo "$SELF: scratch $scratch"
+if [[ -n $scratch ]]; then
+  [[ $scratch == "$SCRATCH_ROOT"/* ]] ||
+    fail_fatal "--scratch must be under $SCRATCH_ROOT; refusing to touch $scratch"
+  if [[ -e $scratch ]] && [[ -n $(ls -A "$scratch" 2>/dev/null) ]]; then
+    fail_fatal "--scratch $scratch is not empty; refusing to reuse it"
+  fi
+  mkdir -p "$scratch" && chmod 700 "$scratch"
+elif ((do_restore)); then
+  scratch=$(mktemp -d "$SCRATCH_ROOT/t0-restore.XXXXXX")
+  scratch_owned=1
+fi
+
+if ((do_restore)); then
+  free_bytes=$(df --output=avail -B1 "$scratch" | tail -1)
+  if ((free_bytes < 8 * 1024 * 1024 * 1024)); then
+    fail_fatal "$scratch has $((free_bytes / 1024 / 1024)) MiB free; the restore needs 8 GiB"
+  fi
+  chmod 700 "$scratch"
+fi
+
+echo "$SELF: $("$restic_bin" version | sed -n 1p)"
+echo "$SELF: scratch ${scratch:-(none)}"
 
 units=()
 if [[ $repo_sel == local || $repo_sel == all ]]; then
@@ -322,15 +393,18 @@ for entry in "${units[@]}"; do
   check_repo "${entry%%:*}" "${entry#*:}"
 done
 
-printf '## Summary\n\n%s checks, %s failed. Restore tree: `%s`\n' "$checks" "$failures" "$scratch"
+printf '## Summary\n\n%s checks, %s failed. Restore tree: `%s`\n' \
+  "$checks" "$failures" "${scratch:-(none)}"
 
 if ((failures > 0)); then
   echo "$SELF: FAIL; the legacy repositories are not proven restorable" >&2
   exit 1
 fi
-if ((keep == 0)); then
+if ((keep == 1)); then
+  echo "$SELF: PASS; kept $scratch"
+elif ((scratch_owned == 1)); then
   rm -rf "$scratch"
   echo "$SELF: PASS; removed $scratch"
 else
-  echo "$SELF: PASS; kept $scratch"
+  echo "$SELF: PASS; left the operator-supplied $scratch in place"
 fi
