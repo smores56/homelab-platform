@@ -108,7 +108,10 @@ reaches Cloudflare — only its bcrypt hash does.
 
 A wake is: start the container with the environment, wait for port 9898, read
 the live snapshot list, run `TASK_INDEX_SNAPSHOTS`, and wait until every live
-snapshot has an index operation. Concurrent requests share one bootstrap
+snapshot has an index operation. A container survives a deployment with the
+config it was started with, so the Worker compares the running config with the
+deployment and replaces a stale container instead of indexing the wrong
+repository. Concurrent requests share one bootstrap
 promise. The whole sequence is bounded (3 min to listen, 10 min to index), and
 every internal call carries its own `AbortSignal` so one hung request cannot
 stretch the deadline. Failure is a 503 with a generic message; the detail goes

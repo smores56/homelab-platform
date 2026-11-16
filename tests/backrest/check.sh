@@ -114,6 +114,9 @@ has "readiness compares live and indexed snapshots" "$index" 'live.every((id) =>
 has "indexed set comes from the operation log" "$index" 'operationIndexSnapshot'
 hasnt "readiness never waits on a task id" "$index" 'scheduled.operationId'
 has "readiness is single-flight" "$index" 'this.booting ??='
+has "listing snapshots schedules an index" "$index" 'ensureIndexed'
+has "a stale container is replaced" "$index" 'stale configuration'
+has "the running config is compared with the deployment" "$index" 'configMatches'
 has "internal calls carry a timeout" "$index" 'AbortSignal.timeout(timeoutMs)'
 
 if grep -Eq 'INACTIVITY_TIMEOUT_MS = 6 \* 60 \* 60 \* 1000' "$index"; then

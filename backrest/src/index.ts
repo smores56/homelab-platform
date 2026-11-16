@@ -316,9 +316,16 @@ export class Backrest extends DurableObject<Env> {
 		});
 
 		const deadline = Date.now() + INDEX_TIMEOUT_MS;
+		let ticks = 0;
 		while (Date.now() < deadline) {
 			indexed = await this.indexedSnapshotIds(container);
-			if (live.every((id) => indexed.has(id))) return;
+			if (live.every((id) => indexed.has(id))) {
+				console.log(`indexed ${live.length} snapshots`);
+				return;
+			}
+			if (++ticks % 10 === 0) {
+				console.log(`indexing: ${indexed.size}/${live.length} snapshots indexed`);
+			}
 			await sleep(POLL_MS);
 		}
 		throw new Error(
@@ -336,13 +343,61 @@ export class Backrest extends DurableObject<Env> {
 		return this.indexing;
 	}
 
+	private async configMatches(container: Container): Promise<boolean> {
+		try {
+			const config = (await this.rpc(container, "GetConfig", {})) as {
+				repos?: Array<{ guid?: string; uri?: string }>;
+			};
+			const repo = config.repos?.[0];
+			return (
+				repo?.guid === this.env.BACKREST_REPO_GUID && repo?.uri === this.env.BACKREST_REPO_URI
+			);
+		} catch (error) {
+			// A container started with older secrets answers 401 here; treat that
+			// as stale too, because the running config cannot be repaired.
+			console.warn("config probe failed", String(error));
+			return false;
+		}
+	}
+
+	private async waitUntilStopped(container: Container): Promise<void> {
+		const deadline = Date.now() + 60_000;
+		while (Date.now() < deadline) {
+			if (!container.running) return;
+			await sleep(POLL_MS);
+		}
+		throw new Error("container did not stop");
+	}
+
 	private async ensureReady(): Promise<Container> {
-		const container = await this.ensureStarted();
+		let container = await this.ensureStarted();
 		if (this.ready) return container;
 
 		this.booting ??= (async () => {
 			await this.waitForHttp(container);
+			// A deployment changes the repository and secrets, but a container
+			// survives a deploy with the config it was started with. Reusing it
+			// would index and list the wrong repository forever.
+			if (!(await this.configMatches(container))) {
+				console.warn("running container has a stale configuration; restarting it");
+				container.destroy();
+				await this.waitUntilStopped(container);
+				this.starting = undefined;
+				container = await this.ensureStarted();
+				await this.waitForHttp(container);
+				// The replaced instance may still be reported as running for a
+				// moment; wait for the new config instead of failing the request.
+				const deadline = Date.now() + 60_000;
+				while (!(await this.configMatches(container))) {
+					if (Date.now() >= deadline) {
+						throw new Error("container kept a stale configuration after a restart");
+					}
+					await sleep(POLL_MS);
+				}
+			}
+			console.log("container ready; indexing snapshots");
 			await this.reindex(container);
+			console.log("reader ready");
 			this.ready = true;
 		})().finally(() => {
 			this.booting = undefined;
