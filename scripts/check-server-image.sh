@@ -223,10 +223,14 @@ fi
 # Applications (T5). The image ships the Quadlets and the units that make them
 # work, and every application image must be our signed mirror at the pinned
 # digest: the default-reject policy has no other path to a running container.
-for q in immich.network immich-server.container immich-postgres.container \
-  immich-valkey.container immich-machine-learning.container opdshelf.container \
-  syncthing.container; do
-  check "image installs units/quadlet/$q" has "units/quadlet/$q" image/Containerfile
+# The list is derived, not written out: a network file left out of the image
+# makes the generator drop the container that requests it, which is how
+# opdshelf.network reached the first T5 boot missing.
+shopt -s nullglob
+for q in units/quadlet/*.container units/quadlet/*.network; do
+  unit=${q#units/quadlet/}
+  [[ $unit == pattern.container ]] && continue
+  check "image installs units/quadlet/$unit" has "units/quadlet/$unit" image/Containerfile
 done
 check "quadlets live where the generator scans" has '/usr/share/containers/systemd/' image/Containerfile
 check "the placeholder is not installed as a runnable quadlet" \

@@ -27,6 +27,19 @@ if [[ ! -s image/cosign.pub ]]; then
   exit 1
 fi
 
+# containers/image verifies the manifest it copies, and reads the legacy
+# lookaside tag rather than the OCI 1.1 referrer bundle cosign >=3 writes by
+# default. For an index the manifest it copies is the platform manifest a plain
+# podman or Quadlet pull selects, so the index signature alone leaves the host
+# rejecting the image with "A signature was required, but no signature exists".
+sign_and_prove() {
+  local ref=$1 digest=${1##*@}
+  "$cosign_bin" sign --key env://COSIGN_PRIVATE_KEY --yes "$ref"
+  "$skopeo_bin" inspect --raw --authfile "$authfile" \
+    "docker://${ref%@*}:${digest/:/-}.sig" >/dev/null
+  "$cosign_bin" verify --key image/cosign.pub "$ref"
+}
+
 # app_repo and the lookup helpers come from the sourced table.
 # shellcheck disable=SC2154
 while IFS= read -r name; do
@@ -45,13 +58,13 @@ while IFS= read -r name; do
     exit 1
   fi
 
-  "$cosign_bin" sign --key env://COSIGN_PRIVATE_KEY --yes "$app_repo/$name@$digest"
-  # containers-image reads the legacy lookaside tag, not the OCI 1.1 referrer
-  # bundle cosign >=3 writes by default, so prove the tag exists before claiming
-  # the host will accept the image.
-  "$skopeo_bin" inspect --raw --authfile "$authfile" \
-    "docker://$app_repo/$name:${digest/:/-}.sig" >/dev/null
-  "$cosign_bin" verify --key image/cosign.pub "$app_repo/$name@$digest"
+  sign_and_prove "$app_repo/$name@$digest"
+  index=$(mktemp)
+  "$skopeo_bin" inspect --raw --authfile "$authfile" "docker://$app_repo/$name@$digest" >"$index"
+  while IFS= read -r platform; do
+    sign_and_prove "$app_repo/$name@$platform"
+  done < <(app_image_platform_digests <"$index")
+  rm -f "$index"
   # The host has no registry credential: bootc pulls with an unverified
   # reference and the Quadlets pull with the default-reject policy, both
   # anonymously. A private package would 401 on the first boot after deploy, so

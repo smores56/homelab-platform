@@ -93,6 +93,33 @@ for name in $app_names; do
     "$name skopeo source is repo@digest"
 done
 
+# 1c. containers/image verifies the platform manifest it copies, not the index
+#     digest, so the mirror has to sign every pullable manifest of an index and
+#     not just the index. Signing the index alone left every Quadlet pull on the
+#     first T5 boot failing with "A signature was required, but no signature
+#     exists".
+fixture='{"manifests":[
+  {"digest":"sha256:aa","platform":{"os":"linux","architecture":"amd64"}},
+  {"digest":"sha256:bb","platform":{"os":"linux","architecture":"arm64"}},
+  {"digest":"sha256:cc","platform":{"os":"unknown","architecture":"unknown"}}]}'
+eq "$(printf '%s' "$fixture" | app_image_platform_digests | paste -sd' ')" \
+  "sha256:aa sha256:bb" "platform digests skip attestation manifests"
+eq "$(printf '{"schemaVersion":2,"layers":[]}' | app_image_platform_digests)" "" \
+  "a single-manifest image yields no platform digests"
+
+# 1d. Every unit the generator has to convert ships in the image. A network file
+#     left out of the Containerfile makes the generator drop the container that
+#     requests it, and opdshelf.network did exactly that on the first T5 boot.
+for u in units/quadlet/*.container units/quadlet/*.network; do
+  unit=${u#units/quadlet/}
+  [[ $unit == pattern.container ]] && continue
+  if grep -qF "units/quadlet/$unit" image/Containerfile; then
+    ok "image installs $unit"
+  else
+    bad "image installs $unit"
+  fi
+done
+
 # 2. A container that mounts a recovery group is ordered after that group's
 #    readiness unit, and requires nothing it does not mount. One that mounts no
 #    group (the machine learning cache) needs no readiness at all.
