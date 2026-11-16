@@ -93,7 +93,8 @@ jobs:
           cosign sign --key env://COSIGN_PRIVATE_KEY --yes \
             --registry-referrers-mode=legacy --use-signing-config=false \
             "$image@$digest"
-          skopeo inspect --raw "docker://$image:${digest/:/-}.sig" >/dev/null
+          # The lookaside tag is <repo>:<sha256-hex>.sig, not repo:tag:<hex>.sig.
+          skopeo inspect --raw "docker://${IMAGE_REPO}:${digest/:/-}.sig" >/dev/null
           cosign verify --key image/cosign.pub "$image@$digest"
           {
             echo "### Derived server image"
