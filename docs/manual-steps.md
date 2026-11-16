@@ -2265,3 +2265,59 @@ prunes. A missing repository is reported by name, not created.
     and delete them only after 90 days through the reviewed retention process.
     Until the 970 is converted, rollback is `bootctl set-default` plus a
     verified old-generation restore to scratch — see `docs/migration-gates.md`.
+
+## 36. Core migration T0: freeze, inventory, verify, publish the kit
+
+Feature #701, task #703. The gate and its dispositions live in
+`docs/core/t0-gate.md`; the kit contract is `docs/core/recovery-kit.md`.
+Nothing in T1–T6 may repartition or wipe a disk until every step below is done
+and its evidence is posted on #703. Run the commands from the
+`~/repos/github.com/smores56/homelab-platform` checkout on `smortress`.
+
+1. Freeze the legacy graph. Flux stops reconciling git, repairing Helm drift and
+   pushing image-automation commits; the applications and the nightly backups
+   keep running. `--resume` is the only supported way to undo it.
+
+   ```sh
+   sudo scripts/core/freeze-legacy.sh --check
+   sudo scripts/core/freeze-legacy.sh --apply
+   ```
+
+2. Refresh both legacy repositories, dump first. Wait for each unit to finish
+   before starting the next; the verifier refuses to run while one is active.
+
+   ```sh
+   sudo systemctl start restic-db-dump.service
+   sudo systemctl start restic-backups-local.service
+   sudo systemctl start restic-backups-r2.service
+   journalctl -u restic-backups-local.service -u restic-backups-r2.service -n 40
+   ```
+
+3. Prove they restore. The verifier opens both repositories with the units' own
+   password file and R2 credentials, reads a sample of every pack, restores the
+   small trees, and checks the newest Immich dump as a PostgreSQL archive. It
+   never runs `init`, `forget`, `prune` or `unlock`.
+
+   ```sh
+   sudo scripts/core/verify-legacy-backups.sh --keep
+   ```
+
+4. Measure the root-only trees (`/var/lib/data/photos`, `vault`, `todo`, and the
+   `db` dump), then replace the unmeasured rows in the gate document with the
+   output.
+
+   ```sh
+   sudo scripts/core/legacy-audit.sh --out /var/tmp/t0-audit.md
+   ```
+
+5. Publish the kit. In the Bitwarden item **homelab core recovery** record the
+   legacy Restic password, the legacy R2 access key pair, the HDD LUKS
+   passphrase and the 980 root passphrase; add the SOPS age identity and the
+   YubiKey restore bundle if they are not already there. Write the paper copy
+   and run the drill in `docs/core/recovery-kit.md` — a kit item that has not
+   opened a repository is not in the kit. T2–T4 add their own items as they
+   create the keys.
+
+6. Record the gate. Paste into #703: the `--apply` output, the two verifier
+   tables, the audit report and the drill date. The owner re-reads the
+   disposable list in the gate document and confirms it there.
