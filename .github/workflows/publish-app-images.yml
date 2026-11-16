@@ -75,18 +75,27 @@ jobs:
       - name: prove a policy-checked, anonymous pull of every image
         run: |
           set -euo pipefail
-          # The host's policy verbatim, and the key it names. A podman or Quadlet
-          # pull selects one platform of an index, and that platform manifest is
-          # what the policy verifies: the private key run above is what makes it
-          # pass, and signing only the index is what this step caught.
+          # The entry under test is the host's own, with the key it names. A
+          # podman or Quadlet pull selects one platform of an index, and that
+          # platform manifest is what the policy verifies: signing only the
+          # index is what this step caught.
+          #
+          # The rest of the committed policy is dropped because the runner's
+          # skopeo predates the `keyPaths` key that the ublue entry uses
+          # ("invalid policy ... Unknown key \"keyPaths\""), and no entry here
+          # pulls anything but an application image.
           sudo install -D -m 0644 image/cosign.pub /etc/pki/containers/smortress.pub
+          jq '{"default": [{"type": "reject"}],
+               "transports": {"docker": {"ghcr.io/smores56/homelab-platform":
+                 .transports.docker["ghcr.io/smores56/homelab-platform"]}}}' \
+            image/rootfs/etc/containers/policy.json >"$RUNNER_TEMP/policy.json"
           # shellcheck source=./app-images.sh disable=SC1091
           source scripts/app-images.sh
           empty="$RUNNER_TEMP/empty-auth.json"
           printf '{}' >"$empty"
           while IFS= read -r name; do
             skopeo copy --retry-times 2 --authfile "$empty" \
-              --policy image/rootfs/etc/containers/policy.json \
+              --policy "$RUNNER_TEMP/policy.json" \
               "docker://$(app_image_ref "$name")" "dir:$RUNNER_TEMP/pull"
             rm -rf "$RUNNER_TEMP/pull"
             echo "policy-checked anonymous pull ok: $name"
