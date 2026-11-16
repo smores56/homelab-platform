@@ -3107,6 +3107,25 @@ The status output must show three routes: 443 to `http://127.0.0.1:2283` (Immich
 8443 to `http://127.0.0.1:8083` (OPDShelf) and 10000 to `http://127.0.0.1:8384`
 (Syncthing GUI). Nothing here is Funnel.
 
+Syncthing refuses a proxied Host header: the GUI is bound to localhost, so it
+rejects anything whose `Host` is not localhost with `403`, which is every request
+the Serve proxy forwards (`https://smortress.<tailnet>.ts.net:10000`). Turn the
+check off through its own API, with the key from the config it writes on the
+`syncthing` dataset:
+
+```sh
+key=$(sudo sed -n 's:.*<apikey>\(.*\)</apikey>.*:\1:p' /var/tank/syncthing/config/config.xml)
+sudo curl -fsS -X PATCH -H "X-API-Key: $key" -H 'Content-Type: application/json' \
+  -d '{"insecureSkipHostcheck": true}' http://127.0.0.1:8384/rest/config/gui
+curl -fsS -o /dev/null -w '%{http_code}\n' \
+  https://smortress.<tailnet>.ts.net:10000/rest/noauth/health
+```
+
+The last command answers `200` only after that patch, and the patch persists in
+`config.xml`; a restored config needs it again if the snapshot predates it. The
+GUI has no password of its own, so the tailnet-only Serve route is the whole
+access control on it.
+
 ### 40.5 Verify the applications and the closed LAN
 
 From a tailnet device (laptop or phone):
