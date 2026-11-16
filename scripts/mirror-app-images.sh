@@ -56,5 +56,14 @@ while IFS= read -r name; do
   "$skopeo_bin" inspect --raw --authfile "$authfile" \
     "docker://$app_repo/$name:${digest/:/-}.sig" >/dev/null
   "$cosign_bin" verify --key image/cosign.pub "$app_repo/$name@$digest"
-  echo "mirror-app-images: $name is signed at $digest"
+  # The host has no registry credential: bootc pulls with an unverified
+  # reference and the Quadlets pull with the default-reject policy, both
+  # anonymously. A private package would 401 on the first boot after deploy, so
+  # the push is not finished until an anonymous read works.
+  if ! "$skopeo_bin" inspect --no-tags --format '{{.Digest}}' "docker://$app_repo/$name@$digest" \
+      >/dev/null 2>&1; then
+    echo "mirror-app-images: $name is not anonymously pullable; make the package public" >&2
+    exit 1
+  fi
+  echo "mirror-app-images: $name is signed and publicly readable at $digest"
 done < <(app_image_names)

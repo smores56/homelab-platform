@@ -96,6 +96,16 @@ for q in "${quadlets[@]}"; do
     check "$q requires the decrypt unit" grep -qE '^Requires=.*sops-decrypt\.service' "$q"
     check "$q starts after the decrypt unit" grep -qE '^After=.*sops-decrypt\.service' "$q"
   fi
+  if grep -q '^Secret=' "$q"; then
+    check "$q requires the app-secrets unit" grep -qE '^Requires=.*smortress-app-secrets\.service' "$q"
+  fi
+  # The generator's RequiresMountsFor is satisfied by an empty directory; the
+  # readiness instance is what checks /proc/self/mountinfo. Every dataset a
+  # container mounts must therefore have its instance required here.
+  while IFS= read -r group; do
+    [[ -n $group ]] || continue
+    check "$q requires zfs-ready@$group" grep -q "zfs-ready@$group\.service" "$q"
+  done < <(sed -n 's|^Volume=/var/tank/\([a-z]*\).*|\1|p' "$q" | sort -u)
 done
 
 check "readiness unit exists" has 'ExecStart=/usr/libexec/zfs-ready %i' 'units/systemd/zfs-ready@.service'

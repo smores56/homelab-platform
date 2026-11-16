@@ -2977,7 +2977,15 @@ skopeo inspect --no-tags --format '{{.Digest}}' \
   docker://ghcr.io/smores56/homelab-platform/immich-server@sha256:c716dc20f957aafd89fa9d284a2ec63e25c9e2d8d8e87c6197d540a3dce237db
 ```
 
-That must print the same digest back. On the host the policy is what enforces it:
+That must print the same digest back, and so must the same command with no
+credential at all — which is how the host pulls it. GHCR packages are private by
+default: for each of the six packages, open
+`https://github.com/users/smores56/packages/container/<name>/settings`, choose
+Change visibility → Public, and confirm the unauthenticated inspect above still
+answers. The mirror script fails its own run when a package is not anonymously
+readable, because a private package is a failed pull on the first boot after the
+deploy, not a deploy-time error. On the host the policy is what enforces the
+rest:
 
 ```sh
 sudo podman pull ghcr.io/smores56/homelab-platform/immich-server@sha256:c716dc20f957aafd89fa9d284a2ec63e25c9e2d8d8e87c6197d540a3dce237db
@@ -3026,8 +3034,18 @@ sudo /usr/bin/sops --decrypt --extract '["password"]' \
   /etc/smortress/secrets/immich-db-password.yaml
 ```
 
-To rotate, edit the ciphertext in the repository, publish a new image, reboot,
-and recreate the containers so they pick up the new Podman secret:
+Rotating a value that a container reads is one step; rotating a password the
+database already stores is two. Postgres sets the `immich` role's password once,
+at `initdb`, so changing only the secret makes the server fail authentication.
+Change the role first, on the running cluster:
+
+```sh
+sudo podman exec -i immich-postgres psql -U immich -d immich \
+  -c "ALTER USER immich WITH PASSWORD '$(sudo /usr/bin/sops --decrypt --extract '["password"]' /etc/smortress/secrets/immich-db-password.yaml)'"
+```
+
+Then edit the ciphertext, publish a new image, reboot, and recreate the
+containers so they pick up the new Podman secret:
 
 ```sh
 sops secrets/server/immich-db-password.yaml
@@ -3038,7 +3056,8 @@ sudo bootc upgrade --enforce-container-sigpolicy && sudo systemctl reboot
 
 `sudo systemctl restart immich-postgres.service immich-server.service
 opdshelf.service` recreates those containers in place, which is enough after a
-`systemctl restart smortress-app-secrets.service`.
+`systemctl restart smortress-app-secrets.service`. The OPDShelf password has no
+such second copy: rotating the ciphertext is the whole change.
 
 ### 40.4 Declare the Serve routes
 
@@ -3079,44 +3098,53 @@ longer `drop` or a Quadlet published an address it should not have.
 
 ### 40.6 Prove the restores on scratch storage
 
-Sign in to smortress over Tailscale and stop the applications first: a drill that
-runs beside the live cluster proves nothing about a cold restore.
+Sign in to smortress over Tailscale and stop the applications **and the dump
+timer**. A drill that runs beside the live cluster proves nothing about a cold
+restore, and the 21:00 timer would otherwise start Postgres on the live dataset
+in the middle of one.
 
 ```sh
+sudo systemctl stop smortress-immich-dump.timer
 sudo systemctl stop immich-server.service immich-machine-learning.service immich-postgres.service \
   immich-valkey.service opdshelf.service syncthing.service
 ```
 
-Pick a `verified` snapshot per group (only those are complete restore points) and
-restore it into scratch space:
+`smortress-restic-restore-drill` writes the tree under
+`<target>/var/tank/<group>/.zfs/snapshot/<backend>`, because that is the path the
+snapshot recorded. Set the variables the rest of this section uses; `group` prints
+the restored path of one group.
 
 ```sh
-sudo /usr/libexec/smortress-restic-restore-drill ssd photos --target /var/tmp/drill-photos
-sudo /usr/libexec/smortress-restic-restore-drill ssd books --target /var/tmp/drill-books
-sudo /usr/libexec/smortress-restic-restore-drill ssd syncthing --target /var/tmp/drill-syncthing
-sudo /usr/libexec/smortress-restic-restore-drill ssd notes --target /var/tmp/drill-notes
-sudo chown -R 1000:1000 /var/tmp/drill-photos /var/tmp/drill-books \
-  /var/tmp/drill-syncthing /var/tmp/drill-notes
+drill=/var/tmp/drill
+group() { printf '%s' "$drill/$1/var/tank/$1/.zfs/snapshot/ssd"; }
+sudo /usr/libexec/smortress-restic-restore-drill ssd photos --target "$drill/photos"
+sudo /usr/libexec/smortress-restic-restore-drill ssd books --target "$drill/books"
+sudo /usr/libexec/smortress-restic-restore-drill ssd syncthing --target "$drill/syncthing"
+sudo /usr/libexec/smortress-restic-restore-drill ssd notes --target "$drill/notes"
+sudo chown -R 1000:1000 "$drill"
+sudo chcon -R -t container_file_t "$drill"
 ```
 
-Every application runs as uid 1000 and each group root is owned by that uid
-(the pool unit sets it). A restored tree is root-owned, because the restore
-runs as root: the `chown` above is what makes it a tree the application can
-actually write, and a real restore needs the same step.
+Every application runs as uid 1000 and each group root is owned by that uid (the
+pool unit sets it at dataset creation). A restored tree is root-owned and
+unlabelled, because the restore runs as root and Restic does not carry
+`security.selinux`: the `chown` and `chcon` above are what make it a tree the
+application can write and Podman may mount. A real restore needs the same two
+steps before the application starts.
 
 **Immich, logical restore.** This is the path the cutover uses and the one that
 survives a version change.
 
 ```sh
 sudo install -d -o 1000 -g 1000 -m 0700 /var/tmp/drill-pg
-sudo podman network create drillnet
+sudo podman network create drillnet 2>/dev/null || true
 sudo podman run --rm -d --name drill-pg --network drillnet --network-alias drill-pg \
   --user 1000:1000 -e PGDATA=/data/postgres -e POSTGRES_USER=immich -e POSTGRES_DB=immich \
   -e POSTGRES_PASSWORD_FILE=/run/secrets/pw \
   --secret immich-db-password,type=mount,target=/run/secrets/pw \
-  -v /var/tmp/drill-pg:/data \
+  -v /var/tmp/drill-pg:/data:z \
   ghcr.io/smores56/homelab-platform/immich-postgres@sha256:79b95b795f0911e95ffa4d092a2162c4d81a984d5629bc8f786afe0bc0657671
-sudo podman cp /var/tmp/drill-photos/db-dumps/immich.dump drill-pg:/tmp/immich.dump
+sudo podman cp "$(group photos)/db-dumps/immich.dump" drill-pg:/tmp/immich.dump
 sudo podman exec drill-pg pg_isready -U immich -d immich
 sudo podman exec drill-pg pg_restore -U immich -d immich --no-owner --clean --if-exists \
   /tmp/immich.dump
@@ -3133,25 +3161,28 @@ sudo podman run --rm -d --name drill-immich --network drillnet \
   -e DB_PASSWORD_FILE=/run/secrets/pw -e IMMICH_MEDIA_LOCATION=/data/library \
   -e IMMICH_MACHINE_LEARNING_URL=http://127.0.0.1:3003 \
   --secret immich-db-password,type=mount,target=/run/secrets/pw \
-  -v /var/tmp/drill-photos:/data \
+  -v "$(group photos):/data:z" \
   ghcr.io/smores56/homelab-platform/immich-server@sha256:c716dc20f957aafd89fa9d284a2ec63e25c9e2d8d8e87c6197d540a3dce237db
 curl -fsS http://127.0.0.1:12283/api/server/ping
 ```
 
 `{"res":"pong"}` plus a non-zero asset count is the proof that the dump, the
-library and the version agree.
+library and the version agree. A restored library is not proven by a running
+server: open one asset through the restore and compare it.
 
-**Immich, physical restore.** Restore the cluster files instead of the dump:
+**Immich, physical restore.** Restore the cluster files instead of the dump. The
+data directory goes in a `postgres/` subdirectory so `PGDATA` stays
+`/data/postgres`, exactly as on the live host:
 
 ```sh
 sudo podman rm -f drill-immich drill-pg
 sudo rm -rf /var/tmp/drill-pg
-sudo install -d -o 1000 -g 1000 -m 0700 /var/tmp/drill-pg
-sudo cp -a /var/tmp/drill-photos/postgres/. /var/tmp/drill-pg/
+sudo install -d -o 1000 -g 1000 -m 0700 /var/tmp/drill-pg/postgres
+sudo cp -a "$(group photos)/postgres/." /var/tmp/drill-pg/postgres/
 sudo chown -R 1000:1000 /var/tmp/drill-pg
 sudo podman run --rm -d --name drill-pg --network drillnet --network-alias drill-pg \
   --user 1000:1000 -e PGDATA=/data/postgres \
-  -v /var/tmp/drill-pg:/data \
+  -v /var/tmp/drill-pg:/data:z \
   ghcr.io/smores56/homelab-platform/immich-postgres@sha256:79b95b795f0911e95ffa4d092a2162c4d81a984d5629bc8f786afe0bc0657671
 sudo podman exec drill-pg psql -U immich -d immich -c 'select count(*) from assets;'
 ```
@@ -3172,12 +3203,16 @@ sudo podman run --rm -d --name drill-opds -p 127.0.0.1:18083:8083 \
   --user 1000:1000 -e PORT=8083 -e BOOKS_DIR=/books -e DATA_DIR=/books/.opdshelf \
   -e WATCH=false \
   --secret opdshelf-admin-password,type=env,target=ADMIN_PASSWORD \
-  -v /var/tmp/drill-books:/books \
+  -v "$(group books):/books:z" \
   ghcr.io/smores56/homelab-platform/opdshelf@sha256:b82f94f72b41686fd9169a2269d65550f411a97dfa341a330df88b0bfab0af35
 curl -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:18083/healthz
-curl -fsS http://127.0.0.1:18083/ | head -5
+curl -fsS -u "smores56:$OPDS_PASSWORD" http://127.0.0.1:18083/ | head -5
 sudo podman rm -f drill-opds
 ```
+
+The catalog answers only with the admin password, which is the behaviour being
+proven; read it into `OPDS_PASSWORD` from the decrypted secret rather than
+typing it into a shell history.
 
 **Syncthing.** Restore the identity and the folder, and let nothing sync until a
 primary is designated.
@@ -3186,8 +3221,8 @@ primary is designated.
 sudo podman run --rm -d --name drill-syncthing --network host \
   -e HOME=/var/syncthing -e STHOMEDIR=/var/syncthing/config \
   -e STGUIADDRESS=127.0.0.1:18384 \
-  -v /var/tmp/drill-syncthing/config:/var/syncthing/config \
-  -v /var/tmp/drill-notes:/var/tank/notes \
+  -v "$(group syncthing)/config:/var/syncthing/config:z" \
+  -v "$(group notes):/var/tank/notes:z" \
   ghcr.io/smores56/homelab-platform/syncthing@sha256:2b71da7c0d0a91a6ae5285ad079226fecc0a365d08b27720e1f7037b018f7546
 curl -fsS http://127.0.0.1:18384/rest/noauth/health
 ```
@@ -3200,11 +3235,11 @@ before the real service starts.
 ```sh
 sudo podman rm -f drill-syncthing drill-pg
 sudo podman network rm drillnet
-sudo rm -rf /var/tmp/drill-photos /var/tmp/drill-books /var/tmp/drill-syncthing \
-  /var/tmp/drill-notes /var/tmp/drill-pg
+sudo rm -rf "$drill" /var/tmp/drill-pg
 sudo systemctl start immich-postgres.service immich-valkey.service immich-machine-learning.service \
   immich-server.service opdshelf.service syncthing.service
+sudo systemctl start smortress-immich-dump.timer
 ```
 
-The T6 cutover reuses these drills: it restores the same groups from each of
-the three destinations before the legacy stack is retired.
+The T6 cutover reuses these drills: it restores the same groups from each of the
+three destinations before the legacy stack is retired.

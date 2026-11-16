@@ -9,8 +9,8 @@
 # a configuration choice.
 Description=Declare Tailscale Serve routes for the applications
 Requires=tailscaled.service
-After=network-online.target tailscaled.service
-Wants=network-online.target
+After=network-online.target tailscaled.service smortress-tailscale-up.service
+Wants=network-online.target smortress-tailscale-up.service
 
 [Service]
 Type=oneshot

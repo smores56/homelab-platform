@@ -15,6 +15,7 @@ on:
     branches: [main]
     paths:
       - "scripts/app-images.sh"
+      - "scripts/mirror-app-images.sh"
       - ".github/workflows/publish-app-images.yml"
   workflow_dispatch:
 

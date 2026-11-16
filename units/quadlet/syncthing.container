@@ -10,8 +10,10 @@
 # from the notes group that holds the folder: a restore can bring the identity
 # back, pause the peers, and only then designate a primary.
 #
-# CAP_CHOWN is the one capability the image needs: its entrypoint chowns HOME
-# before dropping to uid 1000. Everything after that runs unprivileged.
+# CAP_CHOWN is the one capability the image needs: the container starts as root,
+# its entrypoint chowns HOME, then su-exec drops to uid 1000. That is why there
+# is no User= here: setting one would skip that branch and leave the capability
+# inert, and a restored, root-owned tree would stay unwritable.
 [Unit]
 Description=Syncthing service (syncthing and notes recovery groups)
 Requires=zfs-ready@syncthing.service zfs-ready@notes.service

@@ -19,6 +19,7 @@ Wants=network-online.target
 [Container]
 Image=ghcr.io/smores56/homelab-platform/opdshelf@sha256:b82f94f72b41686fd9169a2269d65550f411a97dfa341a330df88b0bfab0af35
 ContainerName=smortress-opdshelf
+Network=opdshelf.network
 User=1000:1000
 Secret=opdshelf-admin-password,type=env,target=ADMIN_PASSWORD
 Environment=PORT=8083

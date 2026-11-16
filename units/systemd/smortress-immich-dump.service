@@ -9,6 +9,8 @@ After=zfs-ready@photos.service immich-postgres.service
 
 [Service]
 Type=oneshot
+# The dump is the whole database; nothing outside root may read it.
+UMask=0077
 ExecStart=/usr/libexec/immich-dump
 # pg_dump of a library-sized database stays well inside this; the script's own
 # timeout is the per-attempt deadline, this is the outer bound.

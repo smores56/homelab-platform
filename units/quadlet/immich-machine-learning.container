@@ -24,7 +24,7 @@ DropCapability=ALL
 
 [Service]
 Restart=on-failure
-TimeoutStartSec=900
+TimeoutStartSec=1800
 
 [Install]
 WantedBy=multi-user.target

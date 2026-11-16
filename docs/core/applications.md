@@ -126,10 +126,11 @@ Four containers on the `immich.network` bridge plus one timer:
 - `smortress-immich-server` — API and web UI, `127.0.0.1:2283`, served at the
   root of an HTTPS port because Immich does not support a subpath.
 
-`smortress-immich-dump.timer` runs `pg_dump -Fc --no-owner` at 23:00 UTC into
+`smortress-immich-dump.timer` runs `pg_dump -Fc --no-owner` at 21:00 UTC into
 `/data/db-dumps/immich.dump`, written to a temporary name and renamed, so a
-failed dump leaves the previous one intact. 23:00 UTC puts a same-day dump inside
-the midnight R2 snapshot while leaving four hours of margin. The dump is its own
+failed dump leaves the previous one intact. 21:00 UTC puts a same-day dump inside
+the midnight R2 snapshot with three hours of margin for a library-sized database.
+The dump is root-only (`UMask=0077`): it is the whole database. The dump is its own
 unit, not part of the backup driver: a dump failure must not stop the filesystem
 snapshot, and the filesystem snapshot must not wait for the database.
 
@@ -164,8 +165,11 @@ cannot reach the sync protocol, the GUI, or SSH.
   paths.
 - Version history: `/var/lib/syncthing-versions`, outside every group, exactly as
   the legacy host kept it.
-- `AddCapability=CHOWN` is the one capability in the set: the image entrypoint
-  chowns `HOME` before dropping to uid 1000.
+- `AddCapability=CHOWN` is the one capability in the set, and it is why the unit
+  sets no `User=`: the container starts as root, the image entrypoint chowns
+  `HOME` and `su-exec` drops to uid 1000. A `User=` would skip that branch and
+  leave the capability inert, so a restored root-owned tree would stay
+  unwritable.
 
 `<listenAddress>` is configuration, not a unit directive: it comes from the
 restored `config.xml`. It stays at the image default (all addresses on 22000),
@@ -222,9 +226,14 @@ successful start — it is proven by serving representative data from it.
 - The Immich database password is one credential for one cluster; a physical
   restore of an older snapshot needs it rotated (see above).
 - Syncthing's sync port is opened at the tailnet boundary by firewalld, not by a
-  published port, so `podman` alone does not describe the exposure. The static
-  checks assert both halves; an operator who changes the zone must re-read this
-  document.
+  published port, so `podman inspect` alone does not describe the exposure. The
+  static checks assert both halves; an operator who changes the zone must
+  re-read this document.
+- `:z` on a dataset root relabels the live tree on **every** container start,
+  and a Restic restore leaves files unlabelled. The restore runbook therefore
+  re-applies both ownership and label (`chown` + `chcon`) before the application
+  starts, and the unit timeouts are sized for a first start that has to relabel.
+  Snapshots are not touched: ZFS keeps `.zfs` hidden from directory walks.
 - The machine learning container needs egress on first use and caches models
   outside the backup. A cold restore re-downloads them; smart search degrades
   until it finishes.

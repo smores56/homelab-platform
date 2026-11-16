@@ -123,7 +123,7 @@ done
 #    published port: it runs in the host network namespace.
 published=$(
   {
-    grep -h '^PublishPort=127\.0\.0\.1:' "${app_quadlets[@]}" | cut -d: -f3
+    grep -h '^PublishPort=127\.0\.0\.1:' "${app_quadlets[@]}" | cut -d: -f2
     grep -h '^Environment=STGUIADDRESS=127\.0\.0\.1:' "${app_quadlets[@]}" | cut -d: -f2
   } | sort -u
 )
@@ -154,7 +154,8 @@ else
   ok 'syncthing publishes no port'
 fi
 if grep -q '<port port="22000" protocol="tcp"/>' image/rootfs/etc/firewalld/zones/tailscale.xml &&
-  grep -q '<port port="22000" protocol="udp"/>' image/rootfs/etc/firewalld/zones/tailscale.xml; then
+  grep -q '<port port="22000" protocol="udp"/>' image/rootfs/etc/firewalld/zones/tailscale.xml &&
+  grep -q '<interface name="tailscale0"/>' image/rootfs/etc/firewalld/zones/tailscale.xml; then
   ok 'firewall permits 22000 on the tailscale zone only'
 else
   bad 'firewall permits 22000 on the tailscale zone only'
@@ -164,11 +165,27 @@ if grep -qE '^(AutoUpdate=|Pull=always)' "${app_quadlets[@]}"; then
 else
   ok 'no application image auto-updates'
 fi
-if grep -q '^\[Install\]' "${app_quadlets[@]}" &&
-  ! grep -qE 'systemctl enable (immich|opdshelf|syncthing)' image/Containerfile; then
-  ok 'quadlets start from [Install], not from build-time enable'
+# A quadlet is a generated unit: [Install] is the only thing that starts it, and
+# the check has to be per file or one good file hides five that never start.
+for q in "${app_quadlets[@]}"; do
+  if grep -q '^\[Install\]' "$q" && grep -q '^WantedBy=multi-user.target' "$q"; then
+    ok "$q starts from [Install]"
+  else
+    bad "$q starts from [Install]"
+  fi
+done
+if grep -qE 'systemctl enable (immich|opdshelf|syncthing)' image/Containerfile; then
+  bad 'no application unit is enabled at build time'
 else
-  bad 'quadlets start from [Install], not from build-time enable'
+  ok 'no application unit is enabled at build time'
+fi
+
+# 2. Every published port is loopback only, and the Serve route matches the host
+#    port rather than the container port.
+if grep -h '^PublishPort=' "${app_quadlets[@]}" | grep -qv '^PublishPort=127\.0\.0\.1:'; then
+  bad 'every publish is loopback-only' "$(grep -h '^PublishPort=' "${app_quadlets[@]}" | grep -v '^PublishPort=127\.0\.0\.1:')"
+else
+  ok 'every publish is loopback-only'
 fi
 
 # 6. The logical Immich dump lands in the photos group and completes before the
@@ -178,15 +195,45 @@ if grep -q '/var/tank/photos/db-dumps' scripts/immich-dump.sh; then
 else
   bad 'immich dump writes inside the photos group'
 fi
-if grep -q 'OnCalendar=\*-\*-\* 23:00:00' units/systemd/smortress-immich-dump.timer; then
-  ok 'immich dump runs before the midnight R2 job'
+dump_hour=$(sed -n 's/^OnCalendar=\*-\*-\* \([0-9][0-9]\):[0-9][0-9]:00$/\1/p' \
+  units/systemd/smortress-immich-dump.timer)
+r2_hour=$(sed -n 's/^OnCalendar=\*-\*-\* \([0-9][0-9]\):[0-9][0-9]:00$/\1/p' \
+  units/systemd/smortress-restic-backup-r2.timer)
+# The R2 job is at midnight, so "before" means a small positive distance across
+# the day boundary: 21:00 -> 00:00 is three hours, 01:00 -> 00:00 is twenty-three.
+if [[ -n $dump_hour && -n $r2_hour ]]; then
+  gap=$(((10#$r2_hour - 10#$dump_hour + 24) % 24))
+  if ((gap >= 1 && gap <= 4)); then
+    ok "immich dump (${dump_hour}:00) precedes the R2 job (${r2_hour}:00) by ${gap}h"
+  else
+    bad 'immich dump precedes the R2 job' "gap=${gap}h dump=$dump_hour r2=$r2_hour"
+  fi
 else
-  bad 'immich dump runs before the midnight R2 job'
+  bad 'immich dump precedes the R2 job' "dump=$dump_hour r2=$r2_hour"
 fi
 if grep -q 'Requires=.*zfs-ready@photos.service' units/systemd/smortress-immich-dump.service; then
   ok 'immich dump requires its dataset'
 else
   bad 'immich dump requires its dataset'
+fi
+
+# 6b. The dump is the whole database, and OPDShelf must not share Immich's
+#    bridge; Syncthing must let its entrypoint do the privilege drop.
+if grep -q '^UMask=0077' units/systemd/smortress-immich-dump.service; then
+  ok 'immich dump is root-only'
+else
+  bad 'immich dump is root-only'
+fi
+if grep -q '^Network=opdshelf.network' units/quadlet/opdshelf.container &&
+  grep -q '^Description=Smortress OPDShelf network' units/quadlet/opdshelf.network; then
+  ok 'opdshelf has its own network'
+else
+  bad 'opdshelf has its own network'
+fi
+if grep -q '^User=' units/quadlet/syncthing.container; then
+  bad 'syncthing lets its entrypoint drop privileges'
+else
+  ok 'syncthing lets its entrypoint drop privileges'
 fi
 
 # 7. The recovery-group vocabulary is one list in three places.

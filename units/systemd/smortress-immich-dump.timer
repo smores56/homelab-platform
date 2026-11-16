@@ -2,10 +2,11 @@
 Description=Dump the Immich database before the daily offsite snapshot
 
 [Timer]
-# 23:00 UTC: the dump completes before the midnight R2 run, so the daily offsite
-# snapshot always carries a dump from the same day. Not persistent: a missed
-# dump must not fire during a restore drill.
-OnCalendar=*-*-* 23:00:00
+# 21:00 UTC: the dump completes before the midnight R2 run, so the daily offsite
+# snapshot always carries a dump from the same day, with three hours of margin
+# for a library-sized database. Not persistent: a missed dump must not fire
+# during a restore drill.
+OnCalendar=*-*-* 21:00:00
 AccuracySec=1m
 Persistent=false
 Unit=smortress-immich-dump.service

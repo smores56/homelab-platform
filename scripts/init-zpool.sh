@@ -43,11 +43,18 @@ for group in "${groups[@]}"; do
     zfs set mountpoint="/var/tank/$group" "$dataset"
   fi
   zfs mount "$dataset" 2>/dev/null || true
-  # Every application runs as uid 1000, so the group root belongs to that uid:
-  # it is what lets a restored dump-only group create postgres/, appendonlydir/
-  # or .opdshelf/ without a manual chown. Restic still reads as root.
-  chown 1000:1000 "/var/tank/$group"
-  chmod 0755 "/var/tank/$group"
+  # An unmounted dataset leaves an empty directory on the root filesystem; give
+  # it the application's ownership only when the dataset really is mounted under
+  # it, so nothing here can carry a permission onto the wrong tree.
+  if mountpoint -q "/var/tank/$group"; then
+    # Every application runs as uid 1000, so the group root belongs to that uid:
+    # it is what lets a restored dump-only group create postgres/, appendonlydir/
+    # or .opdshelf/ without a manual chown. Restic still reads as root.
+    chown 1000:1000 "/var/tank/$group"
+    chmod 0755 "/var/tank/$group"
+  else
+    echo "init-zpool: $dataset is not mounted at /var/tank/$group" >&2
+  fi
 done
 
 echo "init-zpool: $pool is present with ${#groups[@]} recovery groups"
