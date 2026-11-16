@@ -14,14 +14,20 @@
 # maintains it.
 keys:
   - &admin age1skuwunreduvw8gtkzyf9atsyjnku388ly8c252h3qger84fg5d7q4kf6xs
+  # The host identity from the restore kit (ssh host key -> age). It is staged
+  # root-only under /var on smortress, so image ciphertext must be readable by
+  # it; the admin key stays in the rule so the operator can still edit it.
+  - &smortress age19k8s634eqfnptm8fngc8c3yl5cyk5t4wqgaukya4j6kjtvzm2q9sq674ru
 
 creation_rules:
-  # Image-carried ciphertext (T2). Same admin identity: the host stages that
-  # passphrase-wrapped key root-only under /var, so the boot decrypt unit reads
-  # exactly what the operator edits here. Ciphertext only; no key in the image.
+  # Image-carried ciphertext (T2). The host stages its own identity root-only
+  # under /var from the restore kit, so the boot decrypt unit must be able to
+  # read these files; the admin key is included so the operator can edit them
+  # without the host. Ciphertext only; no key in the image.
   - path_regex: ^secrets/server/.*\.yaml$
     key_groups:
       - age:
+          - *smortress
           - *admin
   - path_regex: ^secrets/.*\.yaml$
     key_groups:
