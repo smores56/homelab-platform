@@ -19,6 +19,9 @@ Wants=zfs-ready@photos.service zfs-ready@books.service zfs-ready@notes.service \
 Requires=sops-decrypt.service
 
 [Service]
+# No HOME under systemd; restic needs an explicit cache directory.
+CacheDirectory=smortress-restic
+Environment=RESTIC_CACHE_DIR=/var/cache/smortress-restic
 Type=oneshot
 ExecStart=/usr/libexec/smortress-restic-backup %i
 # Safety net only: every restic, zfs and curl call has its own deadline in the

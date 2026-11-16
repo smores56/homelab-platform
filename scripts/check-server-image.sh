@@ -98,6 +98,11 @@ check "readiness unit exists" has 'ExecStart=/usr/libexec/zfs-ready %i' 'units/s
 # /usr/local is a symlink into /var on bootc: a helper installed there does not
 # exist at runtime, which is how the first install failed with 203/EXEC.
 check "no unit runs from /usr/local" lacks '/usr/local/libexec' units/systemd/
+
+# systemd units have no HOME; restic must be told where its cache lives.
+for u in units/systemd/smortress-restic-backup@.service units/systemd/smortress-restic-verify.service units/systemd/smortress-restic-init.service; do
+  check "$u sets RESTIC_CACHE_DIR" has "RESTIC_CACHE_DIR" "$u"
+done
 for group in photos books notes music wallpapers; do
   check "image enables zfs-ready@$group" has "zfs-ready@$group.service" image/Containerfile
 done

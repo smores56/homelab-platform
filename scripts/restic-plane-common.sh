@@ -115,6 +115,11 @@ repo_for() {
 load_backend_env() {
   local backend=$1 id secret region
   export RESTIC_PASSWORD_FILE=$password_file
+  # systemd units have no HOME, and restic refuses to guess a cache directory.
+  # An explicit cache also keeps the repository lock and index cache off /tmp.
+  cache_dir=${RESTIC_CACHE_DIR:-/var/cache/smortress-restic}
+  mkdir -p "$cache_dir"
+  export RESTIC_CACHE_DIR=$cache_dir
   case $backend in
     r2)
       id=$(yaml_value "$r2_secret" r2_access_key_id) || return 1

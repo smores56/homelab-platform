@@ -9,6 +9,9 @@ Wants=var-lib-restic-ssd.mount var-lib-restic-hdd.mount network-online.target
 Requires=sops-decrypt.service
 
 [Service]
+# No HOME under systemd; restic needs an explicit cache directory.
+CacheDirectory=smortress-restic
+Environment=RESTIC_CACHE_DIR=/var/cache/smortress-restic
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/libexec/smortress-restic-init
