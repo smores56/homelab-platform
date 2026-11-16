@@ -150,12 +150,12 @@ reap_pending() {
   local ids id list
   ids=$(jq -r '.pending_reap[]?' "$state" 2>/dev/null) || return 0
   [[ -n $ids ]] || return 0
-  list=$(with_deadline "$deadline" "$restic_bin" -r "$repo" snapshots --json \
+  list=$(with_deadline "$deadline" "$restic_bin" -r "$repo" snapshots --json --no-lock \
     --host "$restic_host" --path "$staging_path" 2>/dev/null) || return 0
   while IFS= read -r id; do
     [[ -n $id ]] || continue
     if jq -e --arg id "$id" 'any(.[]; .id == $id)' >/dev/null 2>&1 <<<"$list"; then
-      if ! with_deadline "$deadline" "$restic_bin" -r "$repo" forget "$id" >/dev/null 2>&1; then
+      if ! restic_with_lock "$deadline" "$repo" forget "$id" >/dev/null 2>&1; then
         continue
       fi
       say "$backend/$group: reaped recorded failed snapshot $id"
@@ -211,7 +211,15 @@ attempt_locked() {
   fi
   staging_created=1
 
-  if with_deadline "$deadline" "$restic_bin" -r "$repo" backup \
+  # .zfs/snapshot entries are automounted on first lookup. Without touching it
+  # here, restic stats the path before the mount exists and --one-file-system
+  # prunes the whole tree as cross-device, recording an empty backup.
+  if ! with_deadline 60 ls -A "$staging_path" >/dev/null 2>&1; then
+    fail_attempt snapshot-create
+    return 1
+  fi
+
+  if restic_with_lock "$deadline" "$repo" backup \
     --host "$restic_host" --tag "group:$group" --tag "host:$restic_host" \
     --one-file-system --json "$staging_path" >"$attempt_log" 2>"$attempt_err"; then
     rc=0
@@ -247,7 +255,7 @@ attempt_locked() {
     fail_attempt no-snapshot-id 0 "$sid"
     return 1
   fi
-  if ! with_deadline "$deadline" "$restic_bin" -r "$repo" tag --add verified \
+  if ! restic_with_lock "$deadline" "$repo" tag --add verified \
     "$sid" >/dev/null 2>&1; then
     fail_attempt tag-failed 0 "$sid"
     return 1
@@ -334,21 +342,21 @@ run_maintenance() {
 
   if ((due)); then
     for g in "${groups[@]}"; do
-      if ! with_deadline "$deadline_maintenance" "$restic_bin" -r "$repo" forget \
+      if ! restic_with_lock "$deadline_maintenance" "$repo" forget \
         --host "$restic_host" --path "$(staging_for "$g" "$backend")" \
         --tag "group:$g" --tag verified \
         --keep-daily 14 --keep-weekly 8 --keep-monthly 12 >>"$log" 2>&1; then
         rc=1
       fi
     done
-    with_deadline "$deadline_maintenance" "$restic_bin" -r "$repo" prune \
+    restic_with_lock "$deadline_maintenance" "$repo" prune \
       >>"$log" 2>&1 || rc=1
     : >"$stamp"
     chmod 0600 "$stamp"
   fi
 
   if ((check_due)); then
-    if with_deadline "$deadline_maintenance" "$restic_bin" -r "$repo" \
+    if restic_with_lock "$deadline_maintenance" "$repo" \
       check --read-data-subset=1/30 >>"$log" 2>&1; then
       : >"$check_stamp"
       chmod 0600 "$check_stamp"

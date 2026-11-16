@@ -70,7 +70,7 @@ i=0
 args=("$@")
 while ((i < ${#args[@]})); do
   case ${args[i]} in
-    -r) i=$((i + 2)); continue ;;
+    -r|--retry-lock) i=$((i + 2)); continue ;;
     -*) i=$((i + 1)); continue ;;
     *) cmd=${args[i]}; break ;;
   esac
@@ -82,7 +82,12 @@ case $cmd in
         "$STUB_BACKUP_ID" "${STUB_BACKUP_TREE:-tree1}"
     exit "${STUB_BACKUP_EXIT:-0}"
     ;;
-  tag) exit "${STUB_TAG_EXIT:-0}" ;;
+  tag)
+    if [[ -n ${STUB_TAG_EXIT_ONCE:-} ]]; then
+      c="$STUB_LOG/tag-count"; n=$(cat "$c" 2>/dev/null || echo 0)
+      if ((n == 0)); then echo 1 >"$c"; exit "$STUB_TAG_EXIT_ONCE"; fi
+    fi
+    exit "${STUB_TAG_EXIT:-0}" ;;
   cat)
     printf '{"tree":"%s"}\n' "${STUB_BACKUP_TREE:-tree1}"
     exit "${STUB_CAT_EXIT:-0}" ;;
@@ -224,6 +229,16 @@ run scripts/smortress-restic-backup.sh ssd --group photos --no-maintenance
 if ((rc != 0)); then ok "tagging failure fails the run"; else bad "tagging failure fails the run"; fi
 eq "$(state_json ssd-photos '.last_attempt.reason')" tag-failed "tagging failure is its own reason"
 eq "$(state_json ssd-photos '.pending_reap[0]')" complete2 "an untagged snapshot is reaped by recorded ID"
+
+# restic exit 11 is a lock failure: remove only stale locks, then retry once.
+reset_state
+export STUB_BACKUP_EXIT=0 STUB_BACKUP_ID="lock1" STUB_VERIFIED_ID="lock1v" STUB_TAG_EXIT_ONCE=11
+run scripts/smortress-restic-backup.sh ssd --group photos --no-maintenance
+eq "$rc" 0 "a stale lock is retried after unlocking"
+if grep -q ' unlock' "$log/restic"; then ok "stale locks are removed before the retry"; else bad "stale locks are removed before the retry"; fi
+export STUB_TAG_EXIT_ONCE=""
+reset_state
+export STUB_BACKUP_ID="" STUB_VERIFIED_ID=""
 
 # --- 2. stale staging reconciliation ------------------------------------
 reset_state

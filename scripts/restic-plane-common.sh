@@ -218,3 +218,18 @@ state_init() {
   sync "$file" 2>/dev/null || true
   return 0
 }
+
+# Restic write commands need a lock. A stale lock from a killed job or a reboot
+# surfaces as exit 11; `restic unlock` removes only locks whose process is gone,
+# so retrying once after that is safe even while another group is backing up.
+restic_with_lock() { # restic_with_lock <deadline> <repo> <restic args...>
+  local deadline=$1 repo=$2 rc=0
+  shift 2
+  with_deadline "$deadline" "$restic_bin" -r "$repo" --retry-lock 2m "$@" || rc=$?
+  if ((rc == 11)); then
+    with_deadline 120 "$restic_bin" -r "$repo" unlock >/dev/null 2>&1 || true
+    rc=0
+    with_deadline "$deadline" "$restic_bin" -r "$repo" --retry-lock 2m "$@" || rc=$?
+  fi
+  return $rc
+}

@@ -110,8 +110,13 @@ fi
 target=$(cd -- "$target" && pwd)
 
 say "$backend/$group: restoring $snapshot into $target"
-if ! with_deadline "$deadline" "$restic_bin" -r "$repo" restore "$snapshot" \
-  --target "$target" --verify; then
+# restic restore clears xattrs on every file it writes, and SELinux denies
+# removing security.selinux even for root (lremovexattr, not setxattr). A dump
+# piped through tar --no-xattrs restores content, modes and ownership without
+# needing CAP_MAC_ADMIN; the label is reapplied by the system on the real target.
+if ! with_deadline "$deadline" bash -o pipefail -c \
+  '"$1" -r "$2" dump "$3" "$4" | tar -xf - --no-xattrs -C "$5"' _ \
+  "$restic_bin" "$repo" "$snapshot" "$staging" "$target"; then
   warn "restore failed; $target holds an incomplete tree"
   exit 1
 fi
