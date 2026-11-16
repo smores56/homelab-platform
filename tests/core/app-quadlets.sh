@@ -329,5 +329,25 @@ for registry in $(for name in $app_names; do app_image_upstream "$name"; done |
   fi
 done
 
+# 9. The state directories the containers mount outside a recovery group are
+#    created by tmpfiles, and every container runs as uid 1000. An entry naming
+#    a login the image never creates is dropped ("Failed to resolve user
+#    'smores': Unknown user") and podman then fails the unit with
+#    "statfs <path>: no such file or directory", which is how the second T5 boot
+#    lost immich-machine-learning and syncthing.
+tmpfiles=image/rootfs/etc/tmpfiles.d/smortress.conf
+for dir in /var/lib/immich/ml-cache /var/lib/syncthing-versions; do
+  line=$(grep -E "^d[[:space:]]+${dir}[[:space:]]" "$tmpfiles" || true)
+  read -r _kind _path mode owner group _rest <<<"$line"
+  eq "$mode/$owner/$group" "0750/1000/1000" "tmpfiles creates $dir for uid 1000"
+done
+while read -r kind _path _mode owner _group _rest; do
+  [[ $kind == d ]] || continue
+  case $owner in
+    root | 0 | 1000) ok "tmpfiles entry $_path names a real owner" ;;
+    *) bad "tmpfiles entry $_path names a real owner" "$owner" ;;
+  esac
+done < <(grep -vE '^#|^$' "$tmpfiles")
+
 printf '\n%d checks, %d failed\n' "$((pass + fail))" "$fail"
 ((fail == 0))
