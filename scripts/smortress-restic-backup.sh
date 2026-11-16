@@ -234,11 +234,28 @@ attempt_locked() {
 
   # Only an exit 0 snapshot becomes eligible; tagging is a separate command
   # with its own deadline, and its failure makes the run failed.
+  #
+  # `restic tag` rewrites the snapshot, so its id changes: the id from the
+  # backup summary is dead the moment tagging succeeds. The post-tag id is read
+  # back from the repository and must be the same snapshot (same tree and time),
+  # otherwise nothing is recorded.
+  backup_tree=$(jq -r 'select(.message_type == "summary") | .tree_id // empty' \
+    "$attempt_log" 2>/dev/null | tail -n1)
   if ! with_deadline "$deadline" "$restic_bin" -r "$repo" tag --add verified \
     "$sid" >/dev/null 2>&1; then
     fail_attempt tag-failed 0 "$sid"
     return 1
   fi
+  verified_json=$(with_deadline "$deadline" "$restic_bin" -r "$repo" snapshots \
+    --json --no-lock --host "$restic_host" --path "$staging_path" \
+    --tag verified --latest 1 2>/dev/null) || verified_json=""
+  verified_sid=$(printf '%s' "$verified_json" | jq -r '.[0].id // empty' 2>/dev/null) || verified_sid=""
+  verified_tree=$(printf '%s' "$verified_json" | jq -r '.[0].tree // empty' 2>/dev/null) || verified_tree=""
+  if [[ -z $verified_sid || -z $verified_tree || $verified_tree != "$backup_tree" ]]; then
+    fail_attempt tag-failed 0 "$sid"
+    return 1
+  fi
+  sid=$verified_sid
   if ! finish_attempt success 0 "" "$sid"; then
     warn "$backend/$group: snapshot $sid verified but the result was not persisted; treating the run as failed"
     cleanup_staging

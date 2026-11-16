@@ -78,7 +78,8 @@ done
 case $cmd in
   backup)
     [[ -n ${STUB_BACKUP_ID:-} ]] &&
-      printf '{"message_type":"summary","snapshot_id":"%s"}\n' "$STUB_BACKUP_ID"
+      printf '{"message_type":"summary","snapshot_id":"%s","tree_id":"%s"}\n' \
+        "$STUB_BACKUP_ID" "${STUB_BACKUP_TREE:-tree1}"
     exit "${STUB_BACKUP_EXIT:-0}"
     ;;
   tag) exit "${STUB_TAG_EXIT:-0}" ;;
@@ -94,8 +95,10 @@ case $cmd in
     done
     rest=${path#*/tank/}
     group=${rest%%/*}
-    printf '[{"id":"%s","time":"%s","hostname":"smortress","paths":["%s"],"tags":["group:%s","host:smortress","verified"]}]\n' \
-      "${STUB_HEALTHY_ID:-strepo}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$path" "$group"
+    printf '[{"id":"%s","tree":"%s","time":"%s","hostname":"smortress","paths":["%s"],"tags":["group:%s","host:smortress","verified"]}]\n' \
+      "${STUB_VERIFIED_ID:-${STUB_BACKUP_ID:-strepo}}" \
+      "${STUB_VERIFIED_TREE:-${STUB_BACKUP_TREE:-tree1}}" \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$path" "$group"
     exit 0
     ;;
   forget | prune | check) exit "${STUB_MAINT_EXIT:-0}" ;;
@@ -197,6 +200,21 @@ if [[ ! -e $src/photos/.zfs/snapshot/ssd ]] || [[ -z $(ls -A "$src/photos/.zfs/s
 else
   bad "the staging snapshot was destroyed"
 fi
+
+# restic tag rewrites the snapshot, so the id changes; recording the pre-tag id
+# makes the freshness verifier report a snapshot that no longer exists.
+reset_state
+export STUB_BACKUP_EXIT=0 STUB_BACKUP_ID="pretag1" STUB_VERIFIED_ID="tagged1"
+run scripts/smortress-restic-backup.sh ssd --group photos --no-maintenance
+eq "$rc" 0 "a tagged snapshot succeeds"
+eq "$(state_json ssd-photos .final.snapshot)" tagged1 "the post-tag snapshot ID is the one recorded"
+if grep -q -- "tag --add verified pretag1" "$log/restic"; then
+  ok "the tag is applied to the pre-tag snapshot"
+else
+  bad "the tag is applied to the pre-tag snapshot"
+fi
+reset_state
+export STUB_BACKUP_ID="" STUB_VERIFIED_ID=""
 
 reset_state
 export STUB_BACKUP_EXIT=0 STUB_BACKUP_ID="complete2" STUB_TAG_EXIT=1
