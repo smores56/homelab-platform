@@ -207,11 +207,14 @@ jobs:
             clusters/homelab/flux-system/bootstrap.sh \
             clusters/homelab/platform/backup/*.sh provision/*/*.sh tests/provision/*.sh \
             scripts/core/*.sh tests/core/*.sh \
-            backrest/scripts/*.sh backrest/container/entrypoint.sh tests/backrest/*.sh
+            backrest/scripts/*.sh backrest/container/entrypoint.sh tests/backrest/*.sh \
+            tests/apps/*.sh
       - name: provision static checks
         run: tests/provision/check.sh
       - name: core gate static checks
         run: tests/core/check.sh
+      - name: apps schema checks
+        run: tests/apps/check.sh
 
   action-pins:
     name: action SHA pins
