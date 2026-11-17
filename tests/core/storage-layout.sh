@@ -36,6 +36,26 @@ source scripts/storage-layout.sh
 eq "$pool" smortress 'the pool is smortress'
 eq "${#dataset_order[@]}" "${#dataset_mount[@]}" 'every dataset in the table is in the creation order'
 
+quota_orphan=0
+for key in "${!dataset_quota[@]}"; do
+  [[ -n ${dataset_mount[$key]:-} ]] || {
+    quota_orphan=$((quota_orphan + 1))
+    printf '     quota on an unknown dataset: %s\n' "$key"
+  }
+  [[ ${dataset_quota[$key]} =~ ^[0-9]+[KMGT]$ ]] || quota_orphan=$((quota_orphan + 1))
+done
+eq "$(dataset_owner_for raw/files)" 1000:1000 'core datasets belong to uid 1000'
+eq "$(dataset_mode_for raw/files)" 0750 'core datasets are unreadable by the tenant'
+eq "$(dataset_owner_for raw/apps)" 1001:1001 'the tenant dataset belongs to the tenant uid'
+eq "$(dataset_mode_for raw/apps)" 0700 'the tenant dataset is private to the tenant'
+owner_orphan=0
+for key in "${!dataset_root_owner[@]}" "${!dataset_root_mode[@]}"; do
+  [[ -n ${dataset_mount[$key]:-} ]] || owner_orphan=$((owner_orphan + 1))
+done
+eq "$owner_orphan" 0 'every ownership override names a known dataset'
+eq "$quota_orphan" 0 'every dataset quota is on a known dataset and well formed'
+eq "${dataset_quota[raw/apps]:-}" 200G 'the tenant dataset carries its own quota'
+
 foreign=0
 for key in "${dataset_order[@]}"; do
   mountpoint=$(mountpoint_for "$key")

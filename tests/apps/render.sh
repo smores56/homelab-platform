@@ -91,6 +91,8 @@ contains "$alpha" 'SecurityLabelLevel=s0:c' 'a per-app MCS level is set'
 contains "$alpha" 'Environment=TZ=UTC' 'declared env reaches the unit'
 contains "$alpha" 'Secret=app-alpha-api-key,type=mount,target=/run/secrets/api-key' 'secrets mount under their own name'
 contains "$alpha" 'WantedBy=default.target' 'the unit is a rootless user unit'
+contains "$alpha" 'PodmanArgs=--signature-policy=/usr/share/smortress/apps-policy.json' \
+  'the unit names the root-owned tenant policy'
 lacks "$alpha" '0.0.0.0' 'nothing binds every address'
 lacks "$alpha" 'Network=host' 'nothing uses the host network'
 
@@ -127,6 +129,33 @@ if jq -e '.apps.alpha.basePath == "/apps/alpha" and .apps.alpha.egress == "none"
 else
   bad 'the plan names the Serve path, egress class and quota' "$(head -c 500 "$out/plan.json" 2>/dev/null)"
 fi
+
+alpha_project=$(jq -r '.apps.alpha.projectId' "$out/plan.json" 2>/dev/null)
+beta_project=$(jq -r '.apps.beta.projectId' "$out/plan.json" 2>/dev/null)
+if [[ $alpha_project =~ ^[0-9]+$ ]] && ((alpha_project >= 1 && alpha_project <= 4294967295)); then
+  ok 'the plan gives each app a ZFS project id'
+else
+  bad 'the plan gives each app a ZFS project id' "got '$alpha_project'"
+fi
+if [[ -n $alpha_project && $alpha_project != "$beta_project" ]]; then
+  ok 'two apps get different project ids'
+else
+  bad 'two apps get different project ids' "alpha='$alpha_project' beta='$beta_project'"
+fi
+# An app arriving must not move another app's quota accounting.
+mkdir -p "$tree/apps/gamma"
+cat >"$tree/apps/gamma/app.toml" <<EOF
+image = "ghcr.io/example/gamma@sha256:$digest"
+port = 7070
+egress = "internet"
+EOF
+"$validator" render --root "$tree" --secrets "$tree/secrets.sops.json" --out "$work/gamma" >/dev/null 2>&1
+if [[ $(jq -r '.apps.alpha.projectId' "$work/gamma/plan.json") == "$alpha_project" ]]; then
+  ok 'an unrelated app does not move an existing project id'
+else
+  bad 'an unrelated app does not move an existing project id'
+fi
+rm -rf "$tree/apps/gamma"
 
 # Determinism: a second render of the same tree is byte-identical, so a deploy
 # can diff it.
@@ -170,6 +199,31 @@ if [[ -z $(ls -A "$work/badout") ]]; then
 else
   bad 'a rejected tree writes no files' "$(ls -A "$work/badout")"
 fi
+
+# A symlinked target would let the deploy write into a directory it does not own.
+linkout=$work/linkout
+mkdir -p "$work/realout"
+ln -s "$work/realout" "$linkout"
+if "$validator" render --root "$tree" --secrets "$tree/secrets.sops.json" --out "$linkout" >/dev/null 2>&1; then
+  bad 'a symlinked output directory is refused'
+else
+  ok 'a symlinked output directory is refused'
+fi
+if [[ -z $(ls -A "$work/realout") ]]; then ok 'the symlink target stays untouched'; else bad 'the symlink target stays untouched'; fi
+
+# A network file this renderer wrote is removed when the last no-egress app
+# becomes internet, so the marker must match what render_network emits.
+nonet=$work/nonet
+mkdir -p "$nonet"
+"$validator" render --root "$tree" --secrets "$tree/secrets.sops.json" --out "$nonet" >/dev/null 2>&1
+sed -i 's/^egress = "none"$/egress = "internet"/' "$tree/apps/alpha/app.toml"
+if "$validator" render --root "$tree" --secrets "$tree/secrets.sops.json" --out "$nonet" >/dev/null 2>&1 &&
+  [[ ! -f $nonet/smortress-apps.network ]]; then
+  ok 'a stale network file is removed with the last no-egress app'
+else
+  bad 'a stale network file is removed with the last no-egress app' "$(cat "$work/render.log" 2>/dev/null)"
+fi
+sed -i 's/^egress = "internet"$/egress = "none"/' "$tree/apps/alpha/app.toml"
 
 # --- ownership of the output directory -----------------------------------
 

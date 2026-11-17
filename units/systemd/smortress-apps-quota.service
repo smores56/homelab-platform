@@ -1,0 +1,20 @@
+[Unit]
+# Bound the tenant before any of its containers start: the dataset quota from
+# the storage table, then one project quota per app from the rendered plan. The
+# applier re-asserts both on every deploy; this is what makes a reboot match.
+Description=Apply the apps tenant dataset and project quotas
+DefaultDependencies=no
+Requires=zfs-ready@raw-apps.service
+After=zfs-ready@raw-apps.service local-fs.target
+# Before logind: a tenant container must not start against an unbounded dataset.
+Conflicts=shutdown.target
+Before=systemd-logind.service shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/apps-quota
+TimeoutStartSec=120
+
+[Install]
+WantedBy=sysinit.target

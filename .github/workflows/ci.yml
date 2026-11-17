@@ -215,10 +215,18 @@ jobs:
         run: tests/core/check.sh
       - name: storage layout checks
         run: tests/core/storage-layout.sh
+      - name: Serve route checks
+        run: tests/core/tailscale-serve.sh
+      - name: apps tenant egress checks
+        run: tests/core/apps-egress.sh
+      - name: apps tenant user checks
+        run: tests/core/apps-user.sh
       - name: apps schema checks
         run: tests/apps/check.sh
       - name: apps render checks
         run: tests/apps/render.sh
+      - name: apps quota checks
+        run: tests/apps/quota.sh
 
   action-pins:
     name: action SHA pins
