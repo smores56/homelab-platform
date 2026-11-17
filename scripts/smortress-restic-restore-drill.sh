@@ -125,10 +125,13 @@ for path in "${staging_paths[@]}"; do
   fi
 done
 
+{
+  printf '\nRestored into:\n'
+  for path in "${staging_paths[@]}"; do
+    printf '  %s%s\n' "$target" "$path"
+  done
+} >&2
 cat <<EOF
-
-Restored into:
-  $target/$(mountpoint_for "$(unit_keys "$unit" | head -n1)")/.zfs/snapshot/$backend
 
 Check the contents, not the exit status: compare a known file and ownership,
 then remove the tree:

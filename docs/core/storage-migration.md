@@ -194,14 +194,23 @@ Re-link the dotfiles as `smores` (the absolute symlinks under `~` still point at
 Only after D passes, in this order: the old Restic path family, then the attic.
 
 ```sh
+# `restic forget` with a filter needs a policy; retire by explicit id instead.
 for b in ssd hdd; do
-  for g in photos books notes music wallpapers syncthing; do
+  repo=/var/lib/restic/$b/restic
+  ids=$(
     sudo env RESTIC_PASSWORD_FILE=/run/smortress/secrets/restic-password.yaml \
-      restic -r /var/lib/restic/$b/restic forget --host smortress \
-      --path "/var/tank/$g/.zfs/snapshot/$b" --tag "group:$g" --tag verified --prune
-  done
+      restic -r "$repo" snapshots --json --no-lock --host smortress \
+      | jq -r '.[] | select((.tags // []) | index("host:smortress")) | select((.tags // []) | index("verified")) | select(.paths | any(startswith("/var/tank/"))) | .id'
+  )
+  if [[ -n $ids ]]; then
+    sudo env RESTIC_PASSWORD_FILE=/run/smortress/secrets/restic-password.yaml \
+      restic -r "$repo" forget $ids
+    sudo env RESTIC_PASSWORD_FILE=/run/smortress/secrets/restic-password.yaml \
+      restic -r "$repo" prune
+  fi
 done
-sudo zfs destroy -r smortress/attic
+sudo env RESTIC_PASSWORD_FILE=/run/smortress/secrets/restic-password.yaml \
+  restic -r /var/lib/restic/ssd/restic snapshots | grep -c '/var/tank' || true   # 0
 ```
 
 R2 keeps its old-family snapshots until the same `forget` runs against it with
