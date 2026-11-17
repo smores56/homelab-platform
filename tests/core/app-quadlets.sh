@@ -303,10 +303,10 @@ else
 fi
 # The matched text is the source line, so $mountpoint is deliberately literal.
 # shellcheck disable=SC2016
-if grep -q 'chown 1000:1000 "$mountpoint"' scripts/init-zpool.sh; then
-  ok 'the pool unit gives each dataset root to uid 1000'
+if grep -q 'chown "$(dataset_owner_for "$key")" "$mountpoint"' scripts/init-zpool.sh; then
+  ok 'the pool unit takes each dataset root owner from the table'
 else
-  bad 'the pool unit gives each dataset root to uid 1000'
+  bad 'the pool unit takes each dataset root owner from the table'
 fi
 
 # Quadlet drops an empty Exec argument, so valkey's `--save ""` must stay inside
@@ -363,7 +363,7 @@ done
 while read -r kind _path _mode owner _group _rest; do
   [[ $kind == d ]] || continue
   case $owner in
-    root | 0 | 1000) ok "tmpfiles entry $_path names a real owner" ;;
+    root | 0 | 1000 | apps) ok "tmpfiles entry $_path names a real owner" ;;
     *) bad "tmpfiles entry $_path names a real owner" "$owner" ;;
   esac
 done < <(grep -vE '^#|^$' "$tmpfiles")

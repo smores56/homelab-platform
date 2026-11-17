@@ -5,7 +5,8 @@ from the derived image. This document covers what each container is allowed to
 read and write, how its image reaches the host, how it is reached from the
 tailnet, and what its restore actually consists of. Operator steps are in
 `docs/manual-steps.md` section 40; the Restic units they rely on are in
-`docs/core/restic-plane.md`.
+`docs/core/restic-plane.md`. Agent-managed tenant apps from `homelab-apps` are a
+separate, unprivileged plane: see `docs/core/apps-tenant.md`.
 
 There is no second control plane: a deployment change is an image change plus a
 maintenance-window reboot, and `podman-auto-update.timer` is masked. A Quadlet

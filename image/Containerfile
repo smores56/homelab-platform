@@ -37,7 +37,7 @@ COPY scripts/storage-layout.sh scripts/zfs-ready.sh scripts/sops-decrypt.sh scri
      scripts/smortress-restic-verify.sh scripts/smortress-restic-init.sh \
      scripts/smortress-restic-restore-drill.sh \
      scripts/app-secrets.sh scripts/immich-dump.sh scripts/tailscale-serve.sh \
-     scripts/apps-quota.sh \
+     scripts/apps-quota.sh scripts/apps-user.sh \
      /usr/libexec/smortress-src/
 # Application Quadlets. The generator scans /usr/share/containers/systemd at
 # boot, and a quadlet is a generated unit, so nothing here is enabled with
@@ -106,6 +106,7 @@ RUN set -eux; \
       zfs-ready@state-syncthing-config.service \
       zfs-ready@state-opdshelf.service \
       smortress-app-secrets.service \
+      smortress-apps-user.service \
       smortress-apps-quota.service \
       smortress-apps-egress.service \
       smortress-tailscale-serve.service \

@@ -219,6 +219,8 @@ jobs:
         run: tests/core/tailscale-serve.sh
       - name: apps tenant egress checks
         run: tests/core/apps-egress.sh
+      - name: apps tenant user checks
+        run: tests/core/apps-user.sh
       - name: apps schema checks
         run: tests/apps/check.sh
       - name: apps render checks

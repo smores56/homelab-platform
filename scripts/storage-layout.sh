@@ -61,6 +61,21 @@ declare -A dataset_quota=(
   [raw/apps]=200G
 )
 
+#: Dataset root ownership and mode. Every core dataset belongs to uid 1000 and
+#: is 0750, so the unprivileged tenant user cannot read application data; the
+#: tenant's own dataset belongs to the tenant and is private to it.
+declare -A dataset_root_owner=(
+  [raw/apps]=apps:apps
+)
+declare -A dataset_root_mode=(
+  [raw/apps]=0700
+)
+: "${dataset_root_owner_default:=1000:1000}"
+: "${dataset_root_mode_default:=0750}"
+
+dataset_owner_for() { printf '%s\n' "${dataset_root_owner[$1]:-$dataset_root_owner_default}"; }
+dataset_mode_for() { printf '%s\n' "${dataset_root_mode[$1]:-$dataset_root_mode_default}"; }
+
 #: Restore units, in backup order, and the datasets each one restores together.
 declare -A unit_datasets=(
   [files]="raw/files state/syncthing-config"

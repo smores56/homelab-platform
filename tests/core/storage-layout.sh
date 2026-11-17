@@ -44,6 +44,15 @@ for key in "${!dataset_quota[@]}"; do
   }
   [[ ${dataset_quota[$key]} =~ ^[0-9]+[KMGT]$ ]] || quota_orphan=$((quota_orphan + 1))
 done
+eq "$(dataset_owner_for raw/files)" 1000:1000 'core datasets belong to uid 1000'
+eq "$(dataset_mode_for raw/files)" 0750 'core datasets are unreadable by the tenant'
+eq "$(dataset_owner_for raw/apps)" apps:apps 'the tenant dataset belongs to the tenant'
+eq "$(dataset_mode_for raw/apps)" 0700 'the tenant dataset is private to the tenant'
+owner_orphan=0
+for key in "${!dataset_root_owner[@]}" "${!dataset_root_mode[@]}"; do
+  [[ -n ${dataset_mount[$key]:-} ]] || owner_orphan=$((owner_orphan + 1))
+done
+eq "$owner_orphan" 0 'every ownership override names a known dataset'
 eq "$quota_orphan" 0 'every dataset quota is on a known dataset and well formed'
 eq "${dataset_quota[raw/apps]:-}" 200G 'the tenant dataset carries its own quota'
 
