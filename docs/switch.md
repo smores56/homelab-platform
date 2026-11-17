@@ -29,22 +29,61 @@ sudo ostree admin pin 0
 rpm-ostree status          # the current deployment is now pinned
 ```
 
-## 2. Switch
+## 2. Verify the artifact, then switch to its digest
+
+`bootc switch --enforce-container-sigpolicy` checks the *host's* policy, and a
+pre-switch Fedora Atomic host has no `/etc/containers/policy.json` — so the
+flag cannot verify anything here and the runbook does not use it. Instead the
+pull is verified before the switch, with the same policy the image ships, and
+the switch targets the exact digest that was verified. From the first boot
+onward the image's own policy enforces every upgrade.
 
 ```sh
-sudo bootc switch --enforce-container-sigpolicy ghcr.io/smores56/smorespro-image:latest
+# Stage the shipped policy against the committed key and pull in a scratch dir.
+tmp=$(mktemp -d)
+mkdir -p "$tmp/registries.d"
+curl -fsSLo "$tmp/cosign.pub" \
+  https://raw.githubusercontent.com/smores56/smorespro-image/main/image/cosign.pub
+curl -fsSLo "$tmp/policy.json" \
+  https://raw.githubusercontent.com/smores56/smorespro-image/main/image/rootfs/etc/containers/policy.json
+jq --arg k "$tmp/cosign.pub" \
+  '.transports.docker["ghcr.io/smores56/smorespro-image"][0].keyPath=$k' \
+  "$tmp/policy.json" >"$tmp/policy.local.json"
+curl -fsSLo "$tmp/registries.d/smorespro.yaml" \
+  https://raw.githubusercontent.com/smores56/smorespro-image/main/image/rootfs/etc/containers/registries.d/ghcr.io-smorespro-image.yaml
+skopeo copy --policy "$tmp/policy.local.json" --registries.d "$tmp/registries.d" \
+  docker://ghcr.io/smores56/smorespro-image:latest "dir:$tmp/out"
+digest=$(skopeo inspect --format '{{.Digest}}' docker://ghcr.io/smores56/smorespro-image:latest)
+echo "verified digest: $digest"
+```
+
+A failure here means the signature or the key does not match; stop.
+
+Then drop the layered packages. `bootc` refuses to touch a deployment with
+local rpm-ostree modifications, and the pinned deployment keeps its layers as
+the rollback target.
+
+```sh
+sudo rpm-ostree reset
+sudo bootc switch "ghcr.io/smores56/smorespro-image@$digest"
 sudo systemctl reboot
 ```
 
-The switch drops the current layered packages (`tailscale`, `rsync`, and any
-older layer). That is intended: the image ships `tailscale`, `rsync`, `git`,
-and the desktop stack. `/etc` three-way merges, `/var` and the LUKS/btrfs
-layout are untouched.
+If `bootc switch` reports that this host is not bootc-managed, the equivalent
+ostree-native command is:
+
+```sh
+sudo rpm-ostree rebase "ostree-unverified-image:registry:ghcr.io/smores56/smorespro-image@$digest"
+```
+
+The reset drops the layered packages from the booted deployment; the pinned
+deployment keeps them, which is what makes it a real rollback target. `/etc`
+three-way merges, `/var` and the LUKS/btrfs layout are untouched.
 
 ## 3. First boot checklist
 
 ```sh
-bootc status                      # booted image is the published digest
+bootc status                      # booted image is the verified digest
 ```
 
 Then, in the session:
