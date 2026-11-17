@@ -62,28 +62,56 @@ sudo ./scripts/init-zpool.sh
 sudo zfs list -o name,mountpoint
 ```
 
-### B3. Move every tree
+### B3. Copy the data (state first)
+
+Media and state live inside the same old dataset, so take the state out before
+the bulk copy — copying a whole `photos` tree first would put `postgres/` and
+`db-dumps/` inside the raw dataset. Copy, do not move: the attic in B4 keeps the
+original until the drills pass.
 
 ```sh
-for pair in photos:/var/srv/photos books:/var/srv/books music:/var/srv/music \
-  wallpapers:/var/srv/wallpapers notes:/var/srv/files; do
+# Immich state: the old PGDATA becomes the new dataset root
+sudo rsync -aHAX /var/tank/photos/postgres/ /var/lib/immich/postgres/
+sudo rsync -aHAX /var/tank/photos/db-dumps/ /var/lib/immich/dumps/
+
+# Syncthing identity and version history
+sudo rsync -aHAX /var/tank/syncthing/config/ /var/lib/syncthing/config/
+sudo rsync -aHAX /var/lib/syncthing-versions/ /var/lib/syncthing/versions/
+
+# The media tree's *contents* are the /srv/photos dataset root, because the
+# Quadlet mounts that root at /data/library.
+sudo rsync -aHAX /var/tank/photos/library/ /var/srv/photos/
+
+# The vault: its contents become /srv/files, which is the Syncthing folder.
+# On a host where the notes dataset is already empty this is a no-op.
+if [[ -d /var/tank/notes/vault ]]; then
+  sudo rsync -aHAX /var/tank/notes/vault/ /var/srv/files/
+elif [[ -n $(ls -A /var/tank/notes 2>/dev/null) ]]; then
+  sudo rsync -aHAX /var/tank/notes/ /var/srv/files/
+fi
+
+# Empty or small groups
+for pair in books:/var/srv/books music:/var/srv/music wallpapers:/var/srv/wallpapers; do
   src=/var/tank/${pair%%:*}; dst=${pair#*:}
-  [[ -n $(ls -A "$src" 2>/dev/null) ]] || continue
-  sudo rsync -aHAX --remove-source-files "$src/" "$dst/"
+  [[ -n $(ls -A "$src" 2>/dev/null) ]] && sudo rsync -aHAX "$src/" "$dst/"
 done
 
-sudo rsync -aHAX --remove-source-files /var/tank/photos/postgres/ /var/lib/immich/postgres/
-sudo rsync -aHAX --remove-source-files /var/tank/photos/db-dumps/ /var/lib/immich/dumps/
-sudo rsync -aHAX --remove-source-files /var/tank/books/.opdshelf/ /var/lib/opdshelf/
-sudo rsync -aHAX --remove-source-files /var/tank/syncthing/config/ /var/lib/syncthing/config/
-sudo rsync -aHAX /var/tank/syncthing-versions/ /var/lib/syncthing/versions/
+# Platform state (age identity, HDD keyfile)
 sudo install -d -m 0700 /var/lib/homelab/age /var/lib/homelab/keys
 [[ -d /var/lib/smortress/age ]] && sudo cp -a /var/lib/smortress/age/. /var/lib/homelab/age/
 [[ -d /var/lib/smortress/keys ]] && sudo cp -a /var/lib/smortress/keys/. /var/lib/homelab/keys/
 ```
 
-Prove each move before the next: `sudo diff -qr <src> <dst>` empty, `du -sh`
-equal. Nothing below is destructive until every diff passes.
+Valkey's `appendonlydir/` is deliberately not copied: it lives in an unbacked
+directory now and only holds in-flight jobs, so valkey starts empty.
+
+Prove each copy before the next step; all three must print nothing:
+
+```sh
+sudo diff -qr --no-dereference /var/tank/photos/postgres /var/lib/immich/postgres
+sudo diff -qr --no-dereference /var/tank/photos/library  /var/srv/photos
+sudo diff -qr --no-dereference /var/tank/syncthing/config /var/lib/syncthing/config
+```
 
 ### B4. Retire the old datasets into an attic
 
@@ -93,7 +121,9 @@ Not `destroy`: the attic is the rollback path until the drills pass.
 sudo zfs create -o mountpoint=none -o canmount=off smortress/attic
 for d in photos books notes music wallpapers syncthing; do
   sudo zfs rename smortress/$d smortress/attic/$d
-  sudo zfs set canmount=off mountpoint=none smortress/attic/$d
+  # mountpoint=none unmounts the old tree; without it /var/tank stays busy
+  sudo zfs set mountpoint=none smortress/attic/$d
+  sudo zfs set canmount=off smortress/attic/$d
 done
 sudo rmdir /var/tank
 sudo zfs list -o name,mountpoint,canmount
