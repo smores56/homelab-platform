@@ -24,6 +24,9 @@ LABEL org.opencontainers.image.title="smorespro image" \
 # iwlwifi-mld-firmware is not optional: this laptop's CNVi radio is MLD-only,
 # and fedora-bootc ships no iwlwifi firmware package at all.
 #
+# glibc-langpack-en is not optional: the base ships /etc/locale.conf with
+# LANG=en_US.UTF-8 and no langpacks, so every bash prints a setlocale warning.
+#
 # Brave Origin is not in Fedora: it ships only from Brave's own RPM repository
 # (the official vendor package), so the RUN writes that repo before installing
 # it, then disables it so nothing else in the image silently trusts it. The
@@ -34,7 +37,7 @@ RUN set -eux; \
       xdg-desktop-portal xdg-desktop-portal-gtk xdg-desktop-portal-gnome \
       pipewire wireplumber pipewire-alsa pipewire-utils alsa-ucm rtkit \
       mesa-dri-drivers mesa-vulkan-drivers mesa-libEGL mesa-libgbm libglvnd-egl \
-      default-fonts-core-sans dconf gsettings-desktop-schemas \
+      default-fonts-core-sans glibc-langpack-en dconf gsettings-desktop-schemas \
       gnome-keyring libsecret flatpak \
       NetworkManager-wifi NetworkManager-bluetooth wpa_supplicant bluez \
       iwlwifi-mld-firmware \
