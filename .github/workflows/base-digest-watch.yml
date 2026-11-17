@@ -1,0 +1,67 @@
+# Opens an issue when the pinned Fedora bootc base has a newer digest. It never
+# commits and never rebuilds: a base refresh stays a reviewed change to
+# image/pins.env, made with scripts/refresh-pins.sh --write.
+name: base-digest-watch
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  watch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+
+      - name: install skopeo
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends skopeo
+
+      - name: check the pin
+        id: check
+        run: |
+          set +e
+          ./scripts/refresh-pins.sh --check >"$RUNNER_TEMP/check" 2>&1
+          status=$?
+          cat "$RUNNER_TEMP/check"
+          case $status in
+            0) echo "drift=false" >>"$GITHUB_OUTPUT" ;;
+            1) echo "drift=true" >>"$GITHUB_OUTPUT" ;;
+            *) echo "refresh-pins.sh failed (status $status)" >&2; exit "$status" ;;
+          esac
+
+      - name: open or update the issue
+        if: steps.check.outputs.drift == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          title="Newer fedora-bootc base digest available"
+          detail=$(cat "$RUNNER_TEMP/check")
+          body=$(cat <<'BODY'
+          $title
+
+          Refresh with `scripts/refresh-pins.sh --write`, commit `image/pins.env`, and let publish.yml rebuild.
+
+          ```
+          $detail
+          ```
+          BODY
+          )
+          body=${body//\$title/$title}
+          body=${body//\$detail/$detail}
+          existing=$(gh issue list --state open --search "$title in:title" --json number --jq '.[0].number // empty')
+          if [[ -n $existing ]]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi
