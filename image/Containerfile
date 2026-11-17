@@ -42,6 +42,8 @@ COPY scripts/storage-layout.sh scripts/zfs-ready.sh scripts/sops-decrypt.sh scri
 # Application Quadlets. The generator scans /usr/share/containers/systemd at
 # boot, and a quadlet is a generated unit, so nothing here is enabled with
 # systemctl: the [Install] section is what starts it.
+COPY units/systemd/user@1001.service.d/ /usr/lib/systemd/system/user@1001.service.d/
+COPY units/systemd/user-1001.slice.d/ /usr/lib/systemd/system/user-1001.slice.d/
 COPY units/quadlet/immich.network units/quadlet/immich-postgres.container \
      units/quadlet/immich-valkey.container \
      units/quadlet/immich-machine-learning.container \
@@ -51,9 +53,11 @@ COPY units/quadlet/immich.network units/quadlet/immich-postgres.container \
 COPY secrets/server/ /etc/smortress/secrets/
 COPY image/cosign.pub /etc/pki/containers/smortress.pub
 
+COPY scripts/apps-schema.py /usr/libexec/apps-schema
 RUN set -eux; \
     for f in /usr/libexec/smortress-src/*.sh; do install -m 0755 "$f" "/usr/libexec/$(basename "${f%.sh}")"; done; \
     rm -rf /usr/libexec/smortress-src; \
+    chmod 0755 /usr/libexec/apps-schema; \
     chmod 0644 /etc/pki/containers/smortress.pub /etc/smortress/secrets.manifest; \
     chmod 0600 /etc/smortress/secrets/*.yaml
 

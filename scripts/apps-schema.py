@@ -107,6 +107,7 @@ LOOPBACK_SPAN = 10000
 #: reach nothing outside their own namespace and the loopback publish still
 #: exists for Serve.
 INTERNAL_NETWORK = "smortress-apps"
+APPS_POLICY = "/usr/share/smortress/apps-policy.json"
 MEMORY_MAX = "1G"
 TASKS_MAX = 256
 CPU_QUOTA = "200%"
@@ -189,6 +190,8 @@ def check_definition(
             ceiling = quota_bytes(QUOTA_CEILING)
             if size is None:
                 add("quota must be a whole number with a K, M, G or T unit")
+            elif size <= 0:
+                add("quota must be greater than zero")
             elif ceiling is not None and size > ceiling:
                 add(f"quota exceeds the platform ceiling of {QUOTA_CEILING}")
 
@@ -290,8 +293,9 @@ def stable_ports(names: list[str]) -> dict[str, int]:
     """One loopback port per app, stable while other apps come and go.
 
     The name is hashed rather than indexed, so adding or removing an unrelated
-    app does not move a port; the probe only walks on a collision, and it walks
-    in sorted-name order, so the result stays deterministic.
+    app does not move a port except when a new name's start collides with an
+    existing one; the probe then walks in sorted-name order, so the result
+    stays deterministic and the plan is regenerated in one pass.
     """
     taken: set[int] = set()
     ports: dict[str, int] = {}
@@ -311,9 +315,11 @@ def stable_ports(names: list[str]) -> dict[str, int]:
 def project_ids(names: list[str]) -> dict[str, int]:
     """One ZFS project id per app, stable while other apps come and go.
 
-    Quota accounting lives on the project id, so it must not move when an
-    unrelated app appears or disappears; the hash starts the search and the
-    probe walks in sorted-name order for determinism.
+    Quota accounting lives on the project id, so it should not move when an
+    unrelated app appears or disappears. The hash starts the search, which
+    makes that true except when a new name's start collides with an existing
+    one; the probe then walks in sorted-name order for determinism, and the
+    quota applier refuses to reuse an id that is still stamped on data.
     """
     used: set[int] = set()
     ids: dict[str, int] = {}
@@ -376,6 +382,10 @@ def render_unit(name: str, data: dict[str, Any], loopback: int, level: tuple[int
         f"PublishPort=127.0.0.1:{loopback}:{data['port']}",
         f"Volume={DATA_ROOT}/{name}:/data:Z",
         "ReadOnly=true",
+        # The tenant may run any digest-pinned image; the schema refuses tags.
+        # The policy is root-owned and named here, so the tenant cannot widen
+        # or narrow it by editing its own home.
+        f"PodmanArgs=--signature-policy={APPS_POLICY}",
         "NoNewPrivileges=true",
         "DropCapability=ALL",
         f"SecurityLabelLevel=s0:c{first},c{second}",
@@ -427,7 +437,6 @@ def render_plan(
         "network": network_for(data["egress"]),
         "projectId": project,
         "quota": data.get("quota", QUOTA_DEFAULT),
-        "reachable": True,
         "secretNames": {secret: f"app-{name}-{secret}" for secret in secrets},
         "unitName": f"{name}.container",
     }
@@ -447,6 +456,88 @@ def render_files(definitions: list[tuple[str, dict[str, Any]]]) -> dict[str, str
         files[f"{INTERNAL_NETWORK}.network"] = render_network()
     files["plan.json"] = json.dumps({"version": 1, "apps": plan}, indent=2, sort_keys=True) + "\n"
     return files
+
+
+def verify_plan(plan: Path) -> list[str]:
+    """Re-validate a rendered plan, independently of how it was produced.
+
+    The plan is root-owned and every consumer acts on it, so each of them runs
+    this against the file it is about to trust: a foreign path, a port outside
+    the platform range, a duplicate project id, a quota above the ceiling, or a
+    non-object entry must fail closed. Prints one problem per line.
+    """
+    problems: list[str] = []
+
+    def add(message: str) -> None:
+        problems.append(f"{plan}: {message}")
+
+    try:
+        data = json.loads(plan.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        add(f"not readable as JSON: {exc}")
+        return problems
+    if not isinstance(data, dict):
+        add("not a JSON object")
+        return problems
+    apps = data.get("apps")
+    if not isinstance(apps, dict):
+        add("has no apps object")
+        return problems
+
+    projects: dict[int, str] = {}
+    for name in sorted(apps):
+        where = f"apps.{name}"
+        entry = apps[name]
+        if not isinstance(entry, dict):
+            add(f"{where} is not an object")
+            continue
+        if not APP_NAME.fullmatch(name):
+            add(f"{where} is not a valid app name")
+        base = entry.get("basePath")
+        if base != f"/apps/{name}":
+            add(f"{where}.basePath is {base!r}, want /apps/{name}")
+        port = entry.get("loopbackPort")
+        if isinstance(port, bool) or not isinstance(port, int):
+            add(f"{where}.loopbackPort is not an integer: {port!r}")
+        elif not LOOPBACK_BASE <= port < LOOPBACK_BASE + LOOPBACK_SPAN:
+            add(f"{where}.loopbackPort {port} is outside {LOOPBACK_BASE}-{LOOPBACK_BASE + LOOPBACK_SPAN - 1}")
+        project = entry.get("projectId")
+        if isinstance(project, bool) or not isinstance(project, int):
+            add(f"{where}.projectId is not an integer: {project!r}")
+        elif not 1 <= project <= 2**32 - 1:
+            add(f"{where}.projectId {project} is out of range")
+        elif project in projects:
+            add(f"{where}.projectId {project} is also used by {projects[project]}")
+        else:
+            projects[project] = name
+        quota = entry.get("quota")
+        if not isinstance(quota, str) or not QUOTA.fullmatch(quota):
+            add(f"{where}.quota is not a quota: {quota!r}")
+        elif quota_bytes(quota) is None or quota_bytes(quota) <= 0:
+            add(f"{where}.quota is not a positive size: {quota!r}")
+        elif quota_bytes(quota) > quota_bytes(QUOTA_CEILING):
+            add(f"{where}.quota {quota} exceeds the platform ceiling {QUOTA_CEILING}")
+        image = entry.get("image")
+        if not isinstance(image, str) or not IMAGE_REF.fullmatch(image):
+            add(f"{where}.image is not a digest-pinned reference: {image!r}")
+        data_path = entry.get("dataPath")
+        if data_path != str(DATA_ROOT / name):
+            add(f"{where}.dataPath is {data_path!r}, want {DATA_ROOT / name}")
+        network = entry.get("network")
+        if network not in {"pasta", INTERNAL_NETWORK}:
+            add(f"{where}.network is not a tenant network: {network!r}")
+        mcs = entry.get("mcs")
+        if not isinstance(mcs, str) or not re.fullmatch(r"s0:c[0-9]+,c[0-9]+", mcs):
+            add(f"{where}.mcs is not an MCS level: {mcs!r}")
+        secrets = entry.get("secretNames")
+        if not isinstance(secrets, dict) or not all(
+            isinstance(key, str) and isinstance(value, str) for key, value in secrets.items()
+        ):
+            add(f"{where}.secretNames is not a name map")
+        unit = entry.get("unitName")
+        if unit != f"{name}.container":
+            add(f"{where}.unitName is {unit!r}, want {name}.container")
+    return problems
 
 
 MARKER = "# Rendered from apps/"
@@ -478,6 +569,11 @@ def render(root: Path, out: Path, secrets: Path | None, check: bool) -> int:
 
     files = render_files(definitions)
 
+    # The deploy writes as root into a directory the tenant owns; a symlink
+    # there could redirect the write into the rootful generator's directory.
+    if out.is_symlink():
+        print(f"{out}: --out must not be a symlink", file=sys.stderr)
+        return 1
     if out.exists() and not out.is_dir():
         print(f"{out}: --out must be a directory", file=sys.stderr)
         return 1
@@ -556,8 +652,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     render_cmd.add_argument("--check", action="store_true", help="fail on drift instead of writing")
 
+    verify_cmd = sub.add_parser("verify-plan", help="re-validate a rendered plan.json")
+    verify_cmd.add_argument("--plan", type=Path, required=True)
+
     args = parser.parse_args(argv)
-    if args.secrets is not None and not args.secrets.is_file():
+    if args.command in {"validate", "render"} and args.secrets is not None and not args.secrets.is_file():
         print(f"{args.secrets}: tenant SOPS file is not a file", file=sys.stderr)
         return 1
     if args.command == "validate":
@@ -567,6 +666,11 @@ def main(argv: list[str] | None = None) -> int:
         return 1 if problems else 0
     if args.command == "render":
         return render(args.root, args.out, args.secrets, args.check)
+    if args.command == "verify-plan":
+        problems = verify_plan(args.plan)
+        for problem in problems:
+            print(problem)
+        return 1 if problems else 0
     return 2
 
 

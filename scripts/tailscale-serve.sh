@@ -14,13 +14,8 @@
 set -euo pipefail
 
 tailscale_bin=${TAILSCALE_BIN:-tailscale}
+schema=${APPS_SCHEMA:-/usr/libexec/apps-schema}
 plan=${APPS_PLAN:-/var/lib/homelab/apps/plan.json}
-
-# Same grammar the renderer enforces, repeated because this file acts on the
-# plan without trusting that it was rendered by a trusted revision.
-app_name_re='^[a-z]([a-z0-9-]{0,29}[a-z0-9])?$'
-loopback_min=20000
-loopback_max=29999
 
 fail() {
   echo "tailscale-serve: $*" >&2
@@ -36,34 +31,37 @@ declare -A core_routes=(
   [10000]=8384
 )
 
-# Validate the whole plan before touching Serve: a plan that names a foreign
-# path or port must leave the previous routes untouched, not apply half of it.
+# Validate the whole plan through the shipped verifier before touching Serve:
+# a plan that names a foreign path, a malformed entry or an out-of-range port
+# must leave the previous routes untouched, not apply half of it. The verifier
+# is the renderer's own, so the two definitions cannot drift apart.
 declare -A app_routes=()
+plan_ok=true
 if [[ -e $plan ]]; then
-  [[ -f $plan ]] || fail "$plan is not a regular file"
-  jq -e 'type == "object" and ((.apps // {}) | type) == "object"' "$plan" >/dev/null 2>&1 \
-    || fail "$plan is not a tenant plan"
-  while IFS=$'\t' read -r name path port kind reachable; do
-    [[ $reachable == true ]] || continue
-    [[ $name =~ $app_name_re ]] || fail "invalid app name in $plan: $name"
-    [[ $path == "/apps/$name" ]] || fail "app $name: base path is $path, not /apps/$name"
-    [[ $kind == number ]] || fail "app $name: loopback port is not a number: $port"
-    ((port >= loopback_min && port <= loopback_max)) \
-      || fail "app $name: loopback port $port is outside $loopback_min-$loopback_max"
-    app_routes[$path]=$port
-  done < <(
-    jq -r '(.apps // {}) | to_entries[]
-      | [.key, (.value.basePath // ""), (.value.loopbackPort // "" | tostring),
-         (.value.loopbackPort | type), (.value.reachable // false)]
-      | @tsv' "$plan"
-  )
+  if [[ ! -f $plan ]] || ! "$schema" verify-plan --plan "$plan"; then
+    # A bad plan must not take the core applications' routes down with it: the
+    # declarations below still run, and the unit fails afterwards.
+    plan_ok=false
+    echo "tailscale-serve: $plan is not a valid tenant plan; core routes only" >&2
+  elif ! rows=$(jq -r '(.apps // {}) | to_entries[]
+      | [.value.basePath, (.value.loopbackPort | tostring)] | @tsv' "$plan"); then
+    plan_ok=false
+    echo "tailscale-serve: could not read $plan; core routes only" >&2
+  else
+    while IFS=$'\t' read -r path port; do
+      [[ -n $path && -n $port ]] || continue
+      app_routes[$path]=$port
+    done <<<"$rows"
+  fi
 fi
 
 status=$("$tailscale_bin" serve status --json) || fail "cannot read Serve status"
 
-# An app that left the plan, or the whole tenant, leaves no route behind. Only
-# `/apps/` handlers on 443 are ours: the root paths belong to the core apps.
+# Every app in the plan is routed; an app that left the plan, or the whole
+# tenant, leaves no route behind. Only `/apps/` handlers on 443 are ours: the
+# root paths belong to the core apps.
 while IFS= read -r path; do
+  $plan_ok || break
   [[ -n $path ]] || continue
   [[ -n ${app_routes[$path]+x} ]] && continue
   if ! "$tailscale_bin" serve --https=443 --set-path="$path" off; then
@@ -82,6 +80,8 @@ for https in "${!core_routes[@]}"; do
     fail "could not serve $backend on https/$https"
   fi
 done
+
+$plan_ok || fail "$plan is not a valid tenant plan"
 
 for path in "${!app_routes[@]}"; do
   backend=http://127.0.0.1:${app_routes[$path]}

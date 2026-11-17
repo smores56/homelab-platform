@@ -52,9 +52,6 @@ required=(
   169.254.0.0/16
   127.0.0.0/8
   100.64.0.0/10
-  ::1/128
-  fe80::/10
-  fd7a:115c:a1e0::/48
 )
 missing=0
 for cidr in "${required[@]}"; do
@@ -79,11 +76,35 @@ fi
 
 # Pasta forwards the tenant's DNS to the host resolver as the tenant uid, so
 # port 53 to a local address must stay open or no app can resolve a name.
-if grep -qE 'meta skuid 1001 fib daddr type local udp dport 53 accept' "$rules" &&
-  grep -qE 'meta skuid 1001 fib daddr type local tcp dport 53 accept' "$rules"; then
-  ok 'the host resolver stays reachable for DNS'
+if grep -qE 'meta skuid 1001 udp dport 53 accept' "$rules" &&
+  grep -qE 'meta skuid 1001 tcp dport 53 accept' "$rules"; then
+  ok 'DNS is reachable wherever the resolver lives'
 else
-  bad 'the host resolver stays reachable for DNS'
+  bad 'DNS is reachable wherever the resolver lives'
+fi
+
+if grep -qE 'meta skuid 1001 meta nfproto ipv6 drop' "$rules"; then
+  ok 'IPv6 egress is dropped entirely'
+else
+  bad 'IPv6 egress is dropped entirely'
+fi
+
+# A missing uid on any drop rule would take out traffic for every user.
+unbound=$(grep -E '[[:space:]]drop$' "$rules" | grep -v '^[[:space:]]*}' \
+  | grep -v 'meta skuid 1001' || true)
+if [[ -z $unbound ]]; then
+  ok 'every drop rule is bound to the tenant uid'
+else
+  bad 'every drop rule is bound to the tenant uid' "$unbound"
+fi
+
+# The DNS accepts must precede the local-address drop or DNS dies again.
+dns_line=$(grep -nE '(udp|tcp) dport 53 accept' "$rules" | head -1 | cut -d: -f1)
+local_line=$(grep -nE 'fib daddr type local drop' "$rules" | cut -d: -f1)
+if [[ -n $dns_line && -n $local_line ]] && ((dns_line < local_line)); then
+  ok 'the DNS exception is evaluated before the drops'
+else
+  bad 'the DNS exception is evaluated before the drops' "dns=$dns_line local=$local_line"
 fi
 
 # The internet class keeps the public internet, so the policy must not accept
@@ -121,11 +142,12 @@ else
   bad 'the unit loads the shipped ruleset' "$(cat "$unit")"
 fi
 
-# The rule set must be in force before any tenant container can run.
-if grep -qE '^Before=.*smortress-apps-apply' "$unit"; then
-  ok 'the rule set is in force before tenant containers'
+# The rule set must be in force before a lingering user manager (and any
+# tenant Quadlet it starts) can run.
+if grep -q '^Before=.*systemd-logind.service' "$unit"; then
+  ok 'the rule set is in force before a user manager can start'
 else
-  bad 'the rule set is in force before tenant containers' "$(cat "$unit")"
+  bad 'the rule set is in force before a user manager can start' "$(cat "$unit")"
 fi
 
 # A real parser is better than greps. A user + network namespace gives nft the

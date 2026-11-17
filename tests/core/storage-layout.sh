@@ -46,7 +46,7 @@ for key in "${!dataset_quota[@]}"; do
 done
 eq "$(dataset_owner_for raw/files)" 1000:1000 'core datasets belong to uid 1000'
 eq "$(dataset_mode_for raw/files)" 0750 'core datasets are unreadable by the tenant'
-eq "$(dataset_owner_for raw/apps)" apps:apps 'the tenant dataset belongs to the tenant'
+eq "$(dataset_owner_for raw/apps)" 1001:1001 'the tenant dataset belongs to the tenant uid'
 eq "$(dataset_mode_for raw/apps)" 0700 'the tenant dataset is private to the tenant'
 owner_orphan=0
 for key in "${!dataset_root_owner[@]}" "${!dataset_root_mode[@]}"; do

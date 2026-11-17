@@ -89,9 +89,10 @@ because rebuilding them costs time and nothing else: `/var/lib/immich/ml-cache`
 jobs) and `/var/lib/syncthing/versions` (the version history). They are created
 by tmpfiles with uid 1000 and survive a restore as empty directories.
 
-Every dataset root is owned by uid 1000, because that is the uid the
-applications run as. The pool unit sets it at dataset creation, which is what
-lets a restore write a tree without a manual `chown`. A dataset restored by
+Every core dataset root is owned by uid 1000 and mode 0750, because that is the
+uid the applications run as and the tenant user must not read it; `raw/apps` is
+owned by the tenant (1001:1001) at 0700. The pool unit sets both at dataset
+creation, which is what lets a restore write a tree without a manual `chown`. A dataset restored by
 Restic is root-owned, so the restore runbook chowns it back before the
 application starts: root restoring files is correct, and serving them as root
 is not.

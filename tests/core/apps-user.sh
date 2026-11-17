@@ -58,15 +58,33 @@ if grep -qE '^f /var/lib/systemd/linger/apps ' "$tmpfiles"; then
 else
   bad 'the tenant user manager starts without a login'
 fi
+dropin=units/systemd/user@1001.service.d/50-smortress-apps.conf
+if [[ -f $dropin ]] && grep -q '^Requires=.*smortress-apps-user.service' "$dropin" \
+  && grep -q 'smortress-apps-egress.service' "$dropin" \
+  && grep -q 'smortress-apps-quota.service' "$dropin"; then
+  ok 'the tenant user manager requires every prerequisite'
+else
+  bad 'the tenant user manager requires every prerequisite'
+fi
+if grep -q 'user@1001.service.d' image/Containerfile; then
+  ok 'the image ships the user manager drop-in'
+else
+  bad 'the image ships the user manager drop-in'
+fi
+if grep -q '/usr/libexec/apps-schema' image/Containerfile; then
+  ok 'the image ships the plan verifier'
+else
+  bad 'the image ships the plan verifier'
+fi
 if grep -q 'smortress-apps-user.service' image/Containerfile; then
   ok 'the image enables the provisioning unit'
 else
   bad 'the image enables the provisioning unit'
 fi
-if grep -qE '^Before=.*smortress-apps-apply' "$unit"; then
-  ok 'provisioning finishes before any tenant container starts'
+if grep -q '^Before=.*systemd-logind.service' "$unit"; then
+  ok 'provisioning finishes before a user manager can start'
 else
-  bad 'provisioning finishes before any tenant container starts'
+  bad 'provisioning finishes before a user manager can start' "$(cat "$unit")"
 fi
 
 # --- behaviour with a fake account and fake files ----------------------------
@@ -90,18 +108,17 @@ chmod +x "$work/bin/id"
 run() {
     PATH=$work/bin:$PATH \
         SUBUID_FILE=$work/subids/subuid SUBGID_FILE=$work/subids/subgid \
-        APPS_POLICY_DIR=$work/policy APPS_OWNER=$(id -u):$(id -g) \
-        APPS_REQUIRE_BINS='' APPS_SUBID_RANGE=200000-265535 \
+        APPS_REQUIRE_BINS='' APPS_SUBID_RANGE=200000:65536 \
         bash "$script" >"$work/stdout" 2>"$work/stderr"
 }
 
 if run; then ok 'provisioning succeeds with the account present'; else bad 'provisioning succeeds with the account present' "$(cat "$work/stderr")"; fi
-if grep -qx 'apps:200000-265535' "$work/subids/subuid" 2>/dev/null; then
+if grep -qx 'apps:200000:65536' "$work/subids/subuid" 2>/dev/null; then
   ok 'the tenant gets a subuid range'
 else
   bad 'the tenant gets a subuid range' "$(cat "$work/subids/subuid" 2>&1)"
 fi
-if grep -qx 'apps:200000-265535' "$work/subids/subgid" 2>/dev/null; then
+if grep -qx 'apps:200000:65536' "$work/subids/subgid" 2>/dev/null; then
   ok 'the tenant gets a subgid range'
 else
   bad 'the tenant gets a subgid range' "$(cat "$work/subids/subgid" 2>&1)"
@@ -112,15 +129,40 @@ if [[ $(grep -c '^apps:' "$work/subids/subuid") == 1 ]]; then
 else
   bad 'a second run adds no duplicate range' "$(cat "$work/subids/subuid")"
 fi
-if jq -e '.default[0].type == "insecureAcceptAnything"' "$work/policy/policy.json" >/dev/null 2>&1; then
-  ok 'the tenant policy admits its pinned images'
+# A root provisioner must never write into the tenant-owned home: it would
+# follow a symlink the tenant planted.
+if grep -q '/var/home/apps' "$script"; then
+  if grep -qE 'install -d|mktemp|chown' "$script"; then
+    bad 'provisioning never writes into the tenant home'
+  else
+    ok 'provisioning never writes into the tenant home'
+  fi
 else
-  bad 'the tenant policy admits its pinned images' "$(cat "$work/policy/policy.json" 2>&1)"
+  ok 'provisioning never writes into the tenant home'
 fi
-if [[ $(stat -c %a "$work/policy/policy.json" 2>/dev/null) == 600 ]]; then
-  ok 'the policy is private to the tenant'
+
+# The tenant's looser image policy is root-owned and named by the renderer.
+if [[ -f image/rootfs/usr/share/smortress/apps-policy.json ]] &&
+  jq -e '.default[0].type == "insecureAcceptAnything"' image/rootfs/usr/share/smortress/apps-policy.json >/dev/null 2>&1; then
+  ok 'the tenant image policy is shipped and root-owned'
 else
-  bad 'the policy is private to the tenant'
+  bad 'the tenant image policy is shipped and root-owned'
+fi
+
+# A range that already belongs to another account is refused.
+printf 'other:200000:65536\n' >"$work/subids/subuid"
+if run; then bad 'an overlapping allocation is refused'; else ok 'an overlapping allocation is refused'; fi
+if grep -q 'overlaps' "$work/stderr"; then ok 'the overlap is named'; else bad 'the overlap is named' "$(cat "$work/stderr")"; fi
+printf 'other:0:1\n' >"$work/subids/subuid"
+
+# A malformed line from an older revision is replaced, not trusted.
+printf 'apps:200000-265535\n' >"$work/subids/subuid"
+printf 'apps:200000:65536\n' >"$work/subids/subgid"
+if run; then ok 'a malformed existing allocation is repaired'; else bad 'a malformed existing allocation is repaired' "$(cat "$work/stderr")"; fi
+if grep -qx 'apps:200000:65536' "$work/subids/subuid"; then
+  ok 'the repaired line uses start:count'
+else
+  bad 'the repaired line uses start:count' "$(cat "$work/subids/subuid")"
 fi
 
 if FAKE_MISSING_USER=1 PATH=$work/bin:$PATH SUBUID_FILE=$work/subids/x SUBGID_FILE=$work/subids/y \

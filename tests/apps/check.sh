@@ -170,6 +170,8 @@ egress = \"lan\"")" 'egress'
 
 expect_fail 'a quota above the ceiling is refused' "$(app example "$minimal
 quota = \"500G\"")" 'ceiling'
+expect_fail 'a zero quota is refused' "$(app example "$minimal
+quota = \"0G\"")" 'greater than zero'
 expect_fail 'a quota without a unit is refused' "$(app example "$minimal
 quota = \"10\"")" 'quota'
 expect_fail 'a fractional quota is refused' "$(app example "$minimal

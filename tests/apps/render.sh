@@ -91,6 +91,8 @@ contains "$alpha" 'SecurityLabelLevel=s0:c' 'a per-app MCS level is set'
 contains "$alpha" 'Environment=TZ=UTC' 'declared env reaches the unit'
 contains "$alpha" 'Secret=app-alpha-api-key,type=mount,target=/run/secrets/api-key' 'secrets mount under their own name'
 contains "$alpha" 'WantedBy=default.target' 'the unit is a rootless user unit'
+contains "$alpha" 'PodmanArgs=--signature-policy=/usr/share/smortress/apps-policy.json' \
+  'the unit names the root-owned tenant policy'
 lacks "$alpha" '0.0.0.0' 'nothing binds every address'
 lacks "$alpha" 'Network=host' 'nothing uses the host network'
 
@@ -197,6 +199,17 @@ if [[ -z $(ls -A "$work/badout") ]]; then
 else
   bad 'a rejected tree writes no files' "$(ls -A "$work/badout")"
 fi
+
+# A symlinked target would let the deploy write into a directory it does not own.
+linkout=$work/linkout
+mkdir -p "$work/realout"
+ln -s "$work/realout" "$linkout"
+if "$validator" render --root "$tree" --secrets "$tree/secrets.sops.json" --out "$linkout" >/dev/null 2>&1; then
+  bad 'a symlinked output directory is refused'
+else
+  ok 'a symlinked output directory is refused'
+fi
+if [[ -z $(ls -A "$work/realout") ]]; then ok 'the symlink target stays untouched'; else bad 'the symlink target stays untouched'; fi
 
 # --- ownership of the output directory -----------------------------------
 

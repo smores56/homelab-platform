@@ -65,7 +65,9 @@ declare -A dataset_quota=(
 #: is 0750, so the unprivileged tenant user cannot read application data; the
 #: tenant's own dataset belongs to the tenant and is private to it.
 declare -A dataset_root_owner=(
-  [raw/apps]=apps:apps
+  # Numeric on purpose: init-zpool runs before systemd-sysusers has created the
+  # account, and a name it cannot resolve would abort dataset creation.
+  [raw/apps]=1001:1001
 )
 declare -A dataset_root_mode=(
   [raw/apps]=0700

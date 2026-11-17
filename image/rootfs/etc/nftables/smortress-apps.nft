@@ -1,6 +1,6 @@
 # Egress policy for the apps tenant (SDLC #726, T7 of #701).
 #
-# A tenant app with egress = "internet" may reach the public internet and
+# A tenant app with egress = "internet" may reach the public IPv4 internet and
 # nothing else. Every destination that is this host's own networks, the tailnet,
 # or a cloud metadata service is dropped for the tenant uid, so a definition
 # cannot use the internet class to reach the core applications, the agent, or a
@@ -16,11 +16,17 @@ table inet smortress_apps_egress {
     chain output {
         type filter hook output priority filter; policy accept;
 
-        # Pasta forwards the tenant's DNS to the host resolver as the tenant
-        # uid, so port 53 on a local address stays reachable. Without this no
-        # app can resolve a name; every other local port is dropped below.
-        meta skuid 1001 fib daddr type local udp dport 53 accept
-        meta skuid 1001 fib daddr type local tcp dport 53 accept
+        # No IPv6 egress at all. The tenant needs none, and the tailnet, ULA
+        # and link-local space it must not reach lives there; dropping the
+        # whole family is stronger than enumerating prefixes that LAN peers
+        # may change.
+        meta skuid 1001 meta nfproto ipv6 drop
+
+        # Pasta forwards the tenant's DNS as the tenant uid, and the resolver
+        # may be the host stub, a tailnet MagicDNS address or a LAN router, so
+        # port 53 is the one exception to the destination blocks below.
+        meta skuid 1001 udp dport 53 accept
+        meta skuid 1001 tcp dport 53 accept
 
         # Any address this host answers on is local, including one outside the
         # private ranges; fib covers loopback and every configured address.
@@ -35,8 +41,5 @@ table inet smortress_apps_egress {
             127.0.0.0/8,
             100.64.0.0/10
         } drop
-
-        # Loopback, link-local, the tailnet ULA and the IPv6 metadata address.
-        meta skuid 1001 ip6 daddr { ::1/128, fe80::/10, fd7a:115c:a1e0::/48, fd00:ec2::254 } drop
     }
 }

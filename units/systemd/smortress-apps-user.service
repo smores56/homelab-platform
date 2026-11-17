@@ -4,9 +4,13 @@
 # container policy, and a check that pasta and the uid mappers exist. It must
 # finish before anything can start a tenant container or its user manager.
 Description=Provision the apps tenant user for rootless Podman
-Wants=systemd-sysusers.service
+DefaultDependencies=no
+Wants=systemd-sysusers.service local-fs.target
 After=systemd-sysusers.service local-fs.target
-Before=smortress-apps-quota.service smortress-apps-apply.service user@1001.service
+# Before logind: a lingering user manager (and any enabled tenant Quadlet it
+# starts) must not exist until the subuid ranges and policy are in place.
+Conflicts=shutdown.target
+Before=systemd-logind.service smortress-apps-quota.service shutdown.target
 
 [Service]
 Type=oneshot
@@ -14,4 +18,4 @@ RemainAfterExit=yes
 ExecStart=/usr/libexec/apps-user
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=sysinit.target
