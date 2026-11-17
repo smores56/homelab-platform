@@ -35,9 +35,15 @@ RUN set -eux; \
       iwlwifi-mld-firmware \
       fprintd fprintd-pam power-profiles-daemon thermald upower \
       libinput \
-      xdg-user-dirs gvfs udisks2 \
+      xdg-user-dirs gvfs udisks2 plymouth plymouth-system-theme \
       git tailscale firewalld; \
     dnf5 clean all; \
+    printf '[Daemon]\nTheme=bgrt\n' > /etc/plymouth/plymouthd.conf; \
+    for kdir in /usr/lib/modules/*/; do \
+      kver=$(basename "${kdir%/}"); \
+      dracut --force --no-hostonly --no-hostonly-cmdline --force-add plymouth \
+        "/usr/lib/modules/$kver/initramfs.img" "$kver"; \
+    done; \
     rm -rf /var/cache/dnf /var/cache/libdnf5 /var/cache/libX11 /var/cache/swcatalog \
       /var/lib/dnf /var/cache/ldconfig /var/log/dnf5.log /var/log/dnf5.log.*; \
     rm -rf /run/dnf /run/selinux-policy /run/tuned
@@ -59,6 +65,9 @@ RUN set -eux; \
       firewalld.service \
       power-profiles-daemon.service \
       thermald.service \
+      plymouth-start.service \
+      plymouth-quit.service \
+      plymouth-quit-wait.service \
       tailscaled.service \
       bootc-fetch-apply-updates.timer; \
     systemctl mask rpm-ostreed-automatic.timer; \
