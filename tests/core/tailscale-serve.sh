@@ -51,6 +51,7 @@ case $1 in
         shift
         case ${1:-} in
             status)
+                [[ ${FAKE_STATUS_FAIL:-} == 1 ]] && exit 1
                 cat "$FAKE_STATUS" ;;
             reset)
                 printf '{}\n' >"$FAKE_STATUS" ;;
@@ -195,6 +196,17 @@ else
     ok 'no plan removes every app route'
 fi
 serves host:443 / http://127.0.0.1:2283 'no plan keeps the core root route'
+
+# --- Serve status is a nicety, not a precondition for core ingress ----------
+
+reset_case
+plan_with "$(jq -cn --argjson a "$(app_entry alpha 21234 4001 1G internet)" '{alpha: $a}')" >"$plan"
+if FAKE_STATUS_FAIL=1 run; then ok 'an unreadable status still applies the plan'; else bad 'an unreadable status still applies the plan' "$(cat "$work/stderr")"; fi
+if [[ $(grep -c -- '--bg --https=' "$log") == 4 ]]; then
+    ok 'the core routes and the app route are declared without status'
+else
+    bad 'the core routes and the app route are declared without status' "$(cat "$log")"
+fi
 
 # --- malformed plans fail closed ---------------------------------------------
 

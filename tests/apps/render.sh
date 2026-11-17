@@ -211,6 +211,20 @@ else
 fi
 if [[ -z $(ls -A "$work/realout") ]]; then ok 'the symlink target stays untouched'; else bad 'the symlink target stays untouched'; fi
 
+# A network file this renderer wrote is removed when the last no-egress app
+# becomes internet, so the marker must match what render_network emits.
+nonet=$work/nonet
+mkdir -p "$nonet"
+"$validator" render --root "$tree" --secrets "$tree/secrets.sops.json" --out "$nonet" >/dev/null 2>&1
+sed -i 's/^egress = "none"$/egress = "internet"/' "$tree/apps/alpha/app.toml"
+if "$validator" render --root "$tree" --secrets "$tree/secrets.sops.json" --out "$nonet" >/dev/null 2>&1 &&
+  [[ ! -f $nonet/smortress-apps.network ]]; then
+  ok 'a stale network file is removed with the last no-egress app'
+else
+  bad 'a stale network file is removed with the last no-egress app' "$(cat "$work/render.log" 2>/dev/null)"
+fi
+sed -i 's/^egress = "internet"$/egress = "none"/' "$tree/apps/alpha/app.toml"
+
 # --- ownership of the output directory -----------------------------------
 
 # A foreign unit in the target directory is never overwritten or deleted.

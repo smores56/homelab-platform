@@ -116,7 +116,9 @@ dir_project() { # dir -> "<id> <flag>"
 }
 
 if [[ -n $dataset_quota_bytes ]]; then
-  got=$(exact_prop quota "$dataset")
+  if ! got=$(exact_prop quota "$dataset"); then
+    fail "could not read the quota on $dataset"
+  fi
   if [[ $got != "$dataset_quota_bytes" ]]; then
     if $check; then
       report "$dataset quota is $got, want $dataset_quota_bytes"
@@ -148,7 +150,20 @@ for index in "${!names[@]}"; do
   bytes=${quotas[$index]}
   dir=$apps_root/$name
 
-  if [[ ! -d $dir ]]; then
+  # The tenant owns /srv/apps and can replace an entry with a symlink; a root
+  # applier must never stamp, chown or create through one, so the guard runs
+  # before any write.
+  resolved_root=$(readlink -f -- "$apps_root")
+  if [[ -e $dir || -L $dir ]]; then
+    if [[ -L $dir ]] || [[ $(readlink -f -- "$dir") != "$resolved_root/$name" ]]; then
+      if $check; then
+        report "$name: $dir is a symlink or resolves outside the tenant"
+      else
+        fail "$name: $dir is a symlink or resolves outside the tenant"
+      fi
+      continue
+    fi
+  else
     if $check; then
       report "$name: $dir is missing"
       continue
@@ -159,17 +174,6 @@ for index in "${!names[@]}"; do
     else
       install -d -m 0700 "$dir" || fail "could not create $dir"
     fi
-  fi
-
-  # The tenant owns /srv/apps and can replace an entry with a symlink; a root
-  # applier must never stamp, chown or create through one.
-  if [[ -L $dir ]] || [[ $(readlink -f -- "$dir") != "$apps_root/$name" ]]; then
-    if $check; then
-      report "$name: $dir is a symlink or resolves outside the tenant"
-    else
-      fail "$name: $dir is a symlink or resolves outside the tenant"
-    fi
-    continue
   fi
 
   read -r current_id current_flag < <(dir_project "$dir") || true
@@ -186,7 +190,9 @@ for index in "${!names[@]}"; do
     fi
   fi
 
-  got=$(exact_prop "projectquota@$project" "$dataset")
+  if ! got=$(exact_prop "projectquota@$project" "$dataset"); then
+    fail "could not read the project quota for $name"
+  fi
   if [[ $got != "$bytes" ]]; then
     if $check; then
       report "$name: project quota is $got, want $bytes"
@@ -209,7 +215,7 @@ done
 
 # Orphans are informational: the data is retained on purpose, so a deploy that
 # removes an app must not fail, but the operator should see the usage.
-while IFS=',' read -r property _; do
+while IFS=$'\t' read -r property _; do
   id=${property#projectquota@}
   [[ $id =~ ^[0-9]+$ ]] || continue
   if ! printf '%s\n' "${projects[@]}" | grep -qx "$id"; then

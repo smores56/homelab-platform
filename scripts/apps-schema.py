@@ -106,6 +106,9 @@ LOOPBACK_SPAN = 10000
 #: `--network=none`, so no-egress apps get an internal network instead: they can
 #: reach nothing outside their own namespace and the loopback publish still
 #: exists for Serve.
+#: First line of everything this renderer writes, so it can tell its own output
+#: from a foreign unit in the target directory.
+MARKER = "# Rendered from apps/"
 INTERNAL_NETWORK = "smortress-apps"
 APPS_POLICY = "/usr/share/smortress/apps-policy.json"
 MEMORY_MAX = "1G"
@@ -411,7 +414,7 @@ def render_unit(name: str, data: dict[str, Any], loopback: int, level: tuple[int
 
 def render_network() -> str:
     return (
-        "# Rendered by scripts/apps-schema.py for apps with egress = \"none\". Do not edit.\n"
+        f"{MARKER} The tenant internal network for egress = \"none\". Do not edit.\n"
         "[Unit]\n"
         "Description=apps tenant internal network\n"
         "\n"
@@ -538,9 +541,6 @@ def verify_plan(plan: Path) -> list[str]:
         if unit != f"{name}.container":
             add(f"{where}.unitName is {unit!r}, want {name}.container")
     return problems
-
-
-MARKER = "# Rendered from apps/"
 
 
 def is_rendered(path: Path) -> bool:

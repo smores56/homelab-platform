@@ -92,7 +92,7 @@ case $1 in
                 for f in "$state"/quota/*.projectquota@*; do
                     [[ -f $f ]] || continue
                     base=$(basename "$f")
-                    printf '%s,%s\n' "${base##*.}" "$(cat "$f")"
+                    printf '%s\t%s\n' "${base##*.}" "$(cat "$f")"
                 done ;;
             projectquota@*) f=$state/quota/$(key "$target").projectquota@${prop#projectquota@} ;;
             quota) f=$state/quota/$(key "$target").quota ;;

@@ -66,7 +66,9 @@ a bad image reference, a non-object entry or invalid JSON changes nothing.
 
 `user@1001.service.d/50-smortress-apps.conf` makes the user manager `Requires=`
 the three prerequisites, so a failed provisioning, egress rule or quota stops
-the tenant instead of starting it unbounded.
+the tenant instead of starting it unbounded. That propagation also means
+restarting any of the three stops the tenant until it is started again; a deploy
+that changes a quota must restart the tenant's units afterwards.
 
 ## What the deploy still adds
 

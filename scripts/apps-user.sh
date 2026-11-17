@@ -20,6 +20,8 @@ fail() {
   exit 1
 }
 
+[[ $subid_range =~ ^[0-9]+:[0-9]+$ ]] || fail "APPS_SUBID_RANGE must be start:count, got '$subid_range'"
+
 id -u "$user" >/dev/null 2>&1 || fail "user $user does not exist"
 
 missing=
@@ -48,6 +50,11 @@ add_range() { # file start:count
   start=${spec%%:*}
   count=${spec##*:}
   [[ -e $file ]] || install -m 0644 /dev/null "$file"
+  # Appending to a file without a final newline would merge two entries.
+  [[ -s $file && $(tail -c 1 "$file" | wc -l) == 0 ]] && printf '\n' >>"$file"
+  local existing
+  existing=$(grep -cE "^${user}:" "$file" || true)
+  ((existing > 1)) && fail "$file holds more than one $user line; refusing to choose"
   line=$(grep -E "^${user}:" "$file" | head -1 || true)
   if [[ -n $line ]]; then
     if [[ $line =~ ^${user}:([0-9]+):([0-9]+)$ ]]; then

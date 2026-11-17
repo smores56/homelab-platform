@@ -55,31 +55,40 @@ if [[ -e $plan ]]; then
   fi
 fi
 
-status=$("$tailscale_bin" serve status --json) || fail "cannot read Serve status"
-
-# Every app in the plan is routed; an app that left the plan, or the whole
-# tenant, leaves no route behind. Only `/apps/` handlers on 443 are ours: the
-# root paths belong to the core apps.
-while IFS= read -r path; do
-  $plan_ok || break
-  [[ -n $path ]] || continue
-  [[ -n ${app_routes[$path]+x} ]] && continue
-  if ! "$tailscale_bin" serve --https=443 --set-path="$path" off; then
-    fail "could not remove the stale route $path"
-  fi
-done < <(
-  jq -r '.Web // {} | to_entries[]
-    | select(.key | endswith(":443"))
-    | .value.Handlers // {} | keys[]
-    | select(startswith("/apps/"))' <<<"$status"
-)
-
+# Core ingress first: whatever is wrong with the tenant plan or the Serve
+# status, the three core applications must stay reachable. Nothing below this
+# point may run before these declarations.
 for https in "${!core_routes[@]}"; do
   backend=http://127.0.0.1:${core_routes[$https]}
   if ! "$tailscale_bin" serve --bg --https="$https" "$backend"; then
     fail "could not serve $backend on https/$https"
   fi
 done
+
+# The status is only needed to prune stale app routes; if it cannot be read,
+# declare the plan's routes anyway and leave the pruning to a later run.
+status=$("$tailscale_bin" serve status --json) || {
+  echo "tailscale-serve: could not read Serve status; not pruning app routes" >&2
+  status='{}'
+}
+
+# An app that left the plan, or the whole tenant, leaves no route behind. Only
+# `/apps/` handlers on 443 are ours: the root paths belong to the core apps.
+while IFS= read -r path; do
+  $plan_ok || break
+  [[ -n $path ]] || continue
+  [[ -n ${app_routes[$path]+x} ]] && continue
+  if ! "$tailscale_bin" serve --https=443 --set-path="$path" off; then
+    echo "tailscale-serve: could not remove the stale route $path" >&2
+    plan_ok=false
+    break
+  fi
+done < <(
+  jq -r '.Web // {} | to_entries[]
+    | select(.key | endswith(":443"))
+    | .value.Handlers // {} | keys[]
+    | select(startswith("/apps/"))' <<<"$status" 2>/dev/null || true
+)
 
 $plan_ok || fail "$plan is not a valid tenant plan"
 
@@ -90,4 +99,4 @@ for path in "${!app_routes[@]}"; do
   fi
 done
 
-"$tailscale_bin" serve status
+"$tailscale_bin" serve status || true
