@@ -36,6 +36,17 @@ source scripts/storage-layout.sh
 eq "$pool" smortress 'the pool is smortress'
 eq "${#dataset_order[@]}" "${#dataset_mount[@]}" 'every dataset in the table is in the creation order'
 
+quota_orphan=0
+for key in "${!dataset_quota[@]}"; do
+  [[ -n ${dataset_mount[$key]:-} ]] || {
+    quota_orphan=$((quota_orphan + 1))
+    printf '     quota on an unknown dataset: %s\n' "$key"
+  }
+  [[ ${dataset_quota[$key]} =~ ^[0-9]+[KMGT]$ ]] || quota_orphan=$((quota_orphan + 1))
+done
+eq "$quota_orphan" 0 'every dataset quota is on a known dataset and well formed'
+eq "${dataset_quota[raw/apps]:-}" 200G 'the tenant dataset carries its own quota'
+
 foreign=0
 for key in "${dataset_order[@]}"; do
   mountpoint=$(mountpoint_for "$key")

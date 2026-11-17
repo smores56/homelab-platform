@@ -128,6 +128,33 @@ else
   bad 'the plan names the Serve path, egress class and quota' "$(head -c 500 "$out/plan.json" 2>/dev/null)"
 fi
 
+alpha_project=$(jq -r '.apps.alpha.projectId' "$out/plan.json" 2>/dev/null)
+beta_project=$(jq -r '.apps.beta.projectId' "$out/plan.json" 2>/dev/null)
+if [[ $alpha_project =~ ^[0-9]+$ ]] && ((alpha_project >= 1 && alpha_project <= 4294967295)); then
+  ok 'the plan gives each app a ZFS project id'
+else
+  bad 'the plan gives each app a ZFS project id' "got '$alpha_project'"
+fi
+if [[ -n $alpha_project && $alpha_project != "$beta_project" ]]; then
+  ok 'two apps get different project ids'
+else
+  bad 'two apps get different project ids' "alpha='$alpha_project' beta='$beta_project'"
+fi
+# An app arriving must not move another app's quota accounting.
+mkdir -p "$tree/apps/gamma"
+cat >"$tree/apps/gamma/app.toml" <<EOF
+image = "ghcr.io/example/gamma@sha256:$digest"
+port = 7070
+egress = "internet"
+EOF
+"$validator" render --root "$tree" --secrets "$tree/secrets.sops.json" --out "$work/gamma" >/dev/null 2>&1
+if [[ $(jq -r '.apps.alpha.projectId' "$work/gamma/plan.json") == "$alpha_project" ]]; then
+  ok 'an unrelated app does not move an existing project id'
+else
+  bad 'an unrelated app does not move an existing project id'
+fi
+rm -rf "$tree/apps/gamma"
+
 # Determinism: a second render of the same tree is byte-identical, so a deploy
 # can diff it.
 cp -r "$out" "$work/first"

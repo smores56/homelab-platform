@@ -54,6 +54,13 @@ dataset_order=(raw/files raw/photos raw/books raw/music raw/wallpapers raw/git
   raw/apps raw/repo-archive state/immich-postgres state/immich-dumps
   state/syncthing-config state/opdshelf)
 
+#: Dataset quotas. Until the core datasets carry a refreservation, the tenant is
+#: the only writer that can fill the pool, so the apps dataset is bounded here
+#: and each app gets its own project quota inside it (scripts/apps-quota.sh).
+declare -A dataset_quota=(
+  [raw/apps]=200G
+)
+
 #: Restore units, in backup order, and the datasets each one restores together.
 declare -A unit_datasets=(
   [files]="raw/files state/syncthing-config"

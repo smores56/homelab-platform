@@ -27,8 +27,9 @@ loopback only, receive pasta networking for ``egress = "internet"`` and the
 tenant's internal (routeless) network otherwise, mount exactly their own data
 directory read-write,
 drop every capability, run a read-only root with no-new-privileges, and carry
-a per-app SELinux MCS level. ``plan.json`` is what the deploy and the Serve
-wiring read: the loopback port, the base path, the data path and the quota.
+a per-app SELinux MCS level. ``plan.json`` is what the deploy, the Serve
+wiring and the quota applier read: the loopback port, the base path, the data
+path, the ZFS project id and the quota.
 
 Stdlib only, python 3.11 or later: the image ships one python3 and no
 third-party packages.
@@ -97,6 +98,8 @@ UNIT_BYTES = {"K": 1024, "M": 1024**2, "G": 1024**3, "T": 1024**4}
 #: has no field that would: these are policy, not configuration.
 DATA_ROOT = Path("/srv/apps")
 QUOTA_DEFAULT = "1G"
+PROJECT_MIN = 1
+PROJECT_MAX = 2**32 - 1
 LOOPBACK_BASE = 20000
 LOOPBACK_SPAN = 10000
 #: The tenant network for `egress = "none"`. Podman discards published ports on
@@ -305,6 +308,28 @@ def stable_ports(names: list[str]) -> dict[str, int]:
     return ports
 
 
+def project_ids(names: list[str]) -> dict[str, int]:
+    """One ZFS project id per app, stable while other apps come and go.
+
+    Quota accounting lives on the project id, so it must not move when an
+    unrelated app appears or disappears; the hash starts the search and the
+    probe walks in sorted-name order for determinism.
+    """
+    used: set[int] = set()
+    ids: dict[str, int] = {}
+    for name in sorted(names):
+        start = int.from_bytes(hashlib.sha256(b"project:" + name.encode("utf-8")).digest()[:4], "big")
+        for step in range(PROJECT_MAX):
+            candidate = PROJECT_MIN + (start + step) % (PROJECT_MAX - PROJECT_MIN + 1)
+            if candidate not in used:
+                used.add(candidate)
+                ids[name] = candidate
+                break
+        else:
+            raise RuntimeError("the project id range is exhausted")
+    return ids
+
+
 def mcs_levels(names: list[str]) -> dict[str, tuple[int, int]]:
     """Two SELinux MCS categories per app, distinct and stable.
 
@@ -386,7 +411,9 @@ def render_network() -> str:
     )
 
 
-def render_plan(name: str, data: dict[str, Any], loopback: int, level: tuple[int, int]) -> dict[str, Any]:
+def render_plan(
+    name: str, data: dict[str, Any], loopback: int, level: tuple[int, int], project: int
+) -> dict[str, Any]:
     first, second = level
     secrets = sorted(data.get("secrets", []))
     return {
@@ -398,6 +425,7 @@ def render_plan(name: str, data: dict[str, Any], loopback: int, level: tuple[int
         "loopbackPort": loopback,
         "mcs": f"s0:c{first},c{second}",
         "network": network_for(data["egress"]),
+        "projectId": project,
         "quota": data.get("quota", QUOTA_DEFAULT),
         "reachable": True,
         "secretNames": {secret: f"app-{name}-{secret}" for secret in secrets},
@@ -409,11 +437,12 @@ def render_files(definitions: list[tuple[str, dict[str, Any]]]) -> dict[str, str
     names = [name for name, _ in definitions]
     ports = stable_ports(names)
     levels = mcs_levels(names)
+    projects = project_ids(names)
     files: dict[str, str] = {}
     plan: dict[str, Any] = {}
     for name, data in definitions:
         files[f"{name}.container"] = render_unit(name, data, ports[name], levels[name])
-        plan[name] = render_plan(name, data, ports[name], levels[name])
+        plan[name] = render_plan(name, data, ports[name], levels[name], projects[name])
     if any(data["egress"] == "none" for _, data in definitions):
         files[f"{INTERNAL_NETWORK}.network"] = render_network()
     files["plan.json"] = json.dumps({"version": 1, "apps": plan}, indent=2, sort_keys=True) + "\n"

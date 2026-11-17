@@ -80,6 +80,11 @@ for key in "${dataset_order[@]}"; do
     # Restic still reads as root.
     chown 1000:1000 "$mountpoint"
     chmod 0755 "$mountpoint"
+    # Only the tenant's dataset has a quota in the table today; the applier
+    # re-asserts it at every deploy, this makes the first boot match.
+    if [[ -n ${dataset_quota[$key]:-} ]]; then
+      zfs set "quota=${dataset_quota[$key]}" "$dataset"
+    fi
   else
     echo "init-zpool: $dataset is not mounted at $mountpoint" >&2
     exit 1
