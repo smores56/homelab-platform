@@ -119,7 +119,7 @@ container with an explicit uid instead of being written world-readable.
 
 Four containers on the `immich.network` bridge plus one timer:
 
-- `smortress-immich-postgres` — the cluster in `/data/postgres`. The image
+- `smortress-immich-postgres` — the cluster in `/data` (the dataset root is `PGDATA`). The image
   entrypoint rewrites its config template into `/etc/postgresql` on every start,
   so that path is a tmpfs on an otherwise read-only root filesystem.
 - `smortress-immich-valkey` — append-only queue in `/data/appendonlydir`,
@@ -135,7 +135,7 @@ Four containers on the `immich.network` bridge plus one timer:
   root of an HTTPS port because Immich does not support a subpath.
 
 `smortress-immich-dump.timer` runs `pg_dump -Fc --no-owner` at 21:00 UTC into
-`/data/db-dumps/immich.dump`, written to a temporary name and renamed, so a
+`the dump dataset (`/var/lib/immich/dumps`)`, written to a temporary name and renamed, so a
 failed dump leaves the previous one intact. 21:00 UTC puts a same-day dump inside
 the midnight R2 snapshot with three hours of margin for a library-sized database.
 The dump is root-only (`UMask=0077`): it is the whole database. The dump is its own

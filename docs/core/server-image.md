@@ -196,7 +196,7 @@ Secure Boot stays off.
 
 `smortress-zpool.service` creates `smortress` with `cachefile=none`, `ashift=12`,
 `compression=zstd`, `atime=off`, `xattr=sa`, `acltype=posixacl`, and creates the
-childless groups `photos`, `books`, `notes`, `music`, `wallpapers` and
+datasets `raw/files`, `raw/photos`, `raw/books`, `raw/music`, `raw/wallpapers` and
 the raw groups under `/var/srv` and the state datasets under `/var/lib`. Later boots import the pool; a missing data device
 fails this unit and its consumers, not the OS.
 

@@ -186,11 +186,11 @@ closed on anything it cannot prove.
    - `success` → the attempt's snapshot must equal `final.snapshot` and
      `last_success.snapshot`.
 3. `last_success.end` must be no older than the maximum age for the backend.
-4. `restic snapshots --json --host smortress --path <staging path>` must return
+4. `restic snapshots --json --host smortress --tag unit:<unit>` must return
    exactly one snapshot with the recorded final ID, and that snapshot must:
    - carry `verified`, `unit:<unit>` and `host:smortress`;
    - report `hostname == smortress`;
-   - have exactly `[<staging path>]` as its paths;
+   - have the unit's whole path array;
    - be the newest snapshot for that host/path;
    - be no older than the maximum age.
 

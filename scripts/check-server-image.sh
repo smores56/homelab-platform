@@ -118,7 +118,7 @@ for q in "${quadlets[@]}"; do
   while IFS= read -r volume; do
     instance=${mount_to_instance[$volume]:-}
     [[ -n $instance ]] || continue
-    check "$q requires zfs-ready@$instance" grep -q "zfs-ready@$instance\.service" "$q"
+    check "$q requires zfs-ready@$instance" grep -qE "^Requires=.*zfs-ready@$instance\.service" "$q"
   done < <(sed -n 's|^Volume=\([^:]*\).*|\1|p' "$q" | sort -u)
 done
 

@@ -3200,7 +3200,7 @@ sudo podman run --rm -d --name drill-pg --network drillnet --network-alias drill
   --secret immich-db-password,type=mount,target=/run/secrets/pw \
   -v /var/tmp/drill-pg:/data:z \
   ghcr.io/smores56/homelab-platform/immich-postgres@sha256:79b95b795f0911e95ffa4d092a2162c4d81a984d5629bc8f786afe0bc0657671
-sudo podman cp "$(group photos)/db-dumps/immich.dump" drill-pg:/tmp/immich.dump
+sudo podman cp "$(path /var/lib/immich/dumps)/immich.dump" drill-pg:/tmp/immich.dump
 sudo podman exec drill-pg pg_isready -U immich -d immich
 sudo podman exec drill-pg pg_restore -U immich -d immich --no-owner --clean --if-exists \
   /tmp/immich.dump
@@ -3217,7 +3217,7 @@ sudo podman run --rm -d --name drill-immich --network drillnet \
   -e DB_PASSWORD_FILE=/run/secrets/pw -e IMMICH_MEDIA_LOCATION=/data/library \
   -e IMMICH_MACHINE_LEARNING_URL=http://127.0.0.1:3003 \
   --secret immich-db-password,type=mount,target=/run/secrets/pw \
-  -v "$(group photos):/data:z" \
+  -v "$(path /var/srv/photos):/data/library:z" \
   ghcr.io/smores56/homelab-platform/immich-server@sha256:c716dc20f957aafd89fa9d284a2ec63e25c9e2d8d8e87c6197d540a3dce237db
 curl -fsS http://127.0.0.1:12283/api/server/ping
 ```
@@ -3227,14 +3227,14 @@ library and the version agree. A restored library is not proven by a running
 server: open one asset through the restore and compare it.
 
 **Immich, physical restore.** Restore the cluster files instead of the dump. The
-data directory goes in a `postgres/` subdirectory so `PGDATA` stays
-`/data/postgres`, exactly as on the live host:
+`state/immich-postgres` dataset root is `PGDATA`, so the live host and the drill
+both use `PGDATA=/data` with no subdirectory:
 
 ```sh
 sudo podman rm -f drill-immich drill-pg
 sudo rm -rf /var/tmp/drill-pg
-sudo install -d -o 1000 -g 1000 -m 0700 /var/tmp/drill-pg/postgres
-sudo cp -a "$(group photos)/postgres/." /var/tmp/drill-pg/postgres/
+sudo install -d -o 1000 -g 1000 -m 0700 /var/tmp/drill-pg
+sudo cp -a "$(path /var/lib/immich/postgres)/." /var/tmp/drill-pg/
 sudo chown -R 1000:1000 /var/tmp/drill-pg
 sudo podman run --rm -d --name drill-pg --network drillnet --network-alias drill-pg \
   --user 1000:1000 -e PGDATA=/data \
@@ -3259,7 +3259,7 @@ sudo podman run --rm -d --name drill-opds -p 127.0.0.1:18083:8083 \
   --user 1000:1000 -e PORT=8083 -e BOOKS_DIR=/books -e DATA_DIR=/books/.opdshelf \
   -e WATCH=false \
   --secret opdshelf-admin-password,type=env,target=ADMIN_PASSWORD \
-  -v "$(group books):/books:z" \
+  -v "$(path /var/srv/books):/books:z" \
   ghcr.io/smores56/homelab-platform/opdshelf@sha256:b82f94f72b41686fd9169a2269d65550f411a97dfa341a330df88b0bfab0af35
 curl -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:18083/healthz
 curl -fsS -u "smores56:$OPDS_PASSWORD" http://127.0.0.1:18083/ | head -5
@@ -3278,7 +3278,7 @@ sudo podman run --rm -d --name drill-syncthing --network host \
   -e HOME=/var/syncthing -e STHOMEDIR=/var/syncthing/config \
   -e STGUIADDRESS=127.0.0.1:18384 \
   -v "$(path /var/lib/syncthing/config):/var/syncthing/config:z" \
-  -v "$(path /srv/files):/srv/files:z" \
+  -v "$(path /var/srv/files):/srv/files:z" \
   ghcr.io/smores56/homelab-platform/syncthing@sha256:2b71da7c0d0a91a6ae5285ad079226fecc0a365d08b27720e1f7037b018f7546
 curl -fsS http://127.0.0.1:18384/rest/noauth/health
 ```
@@ -3297,5 +3297,5 @@ sudo systemctl start immich-postgres.service immich-valkey.service immich-machin
 sudo systemctl start smortress-immich-dump.timer
 ```
 
-The T6 cutover reuses these drills: it restores the same groups from each of the
+The T6 cutover reuses these drills: it restores the same units from each of the
 three destinations before the legacy stack is retired.

@@ -139,7 +139,7 @@ umask 077
 printf '%s\n' \
   "s|@DERIVED_IMAGE@|$(escape "$derived_image")|g" \
   "s|@DISK_BY_ID@|$(escape "$disk")|g" \
-  "s|@CORE_PASSWORD_HASH@|$(escape "$password_hash")|g" \
+  "s|@SMORES_PASSWORD_HASH@|$(escape "$password_hash")|g" \
   "s|@ROOT_RECOVERY_PASSPHRASE@|$(escape "$root_pass")|g" \
   "s|@DATA_RECOVERY_PASSPHRASE@|$(escape "$data_pass")|g" \
   "s|@TANG_URL@|$(escape "$tang_url")|g" \

@@ -1,6 +1,6 @@
-# Immich's database. PGDATA is /data/postgres inside the photos recovery group,
+# Immich's database. PGDATA is /data/postgres in the `photos` unit,
 # so the live cluster and the library share one recovery point; the logical dump
-# in /data/db-dumps is the same dataset, not a second one.
+# in /data/db-dumps is its own state dataset, not a second one.
 #
 # User=1000 matches the ownership the restored tree already has and is what
 # Immich's own rootless compose uses. The image entrypoint seds its config

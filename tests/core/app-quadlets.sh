@@ -139,7 +139,7 @@ for q in "${app_quadlets[@]}"; do
   for volume in $volumes; do
     instance=${mount_to_instance[$volume]:-}
     [[ -n $instance ]] || continue
-    if grep -q "zfs-ready@$instance.service" "$q"; then
+    if grep -qE "^Requires=.*zfs-ready@$instance.service" "$q"; then
       ok "$q requires zfs-ready@$instance"
     else
       bad "$q requires zfs-ready@$instance"
