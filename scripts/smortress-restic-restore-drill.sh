@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Restore-drill helper for the smortress Restic plane (SDLC #706, T3).
 #
-#   smortress-restic-restore-drill <ssd|hdd|r2> <group> [--snapshot <id>]
+#   smortress-restic-restore-drill <ssd|hdd|r2> <unit> [--snapshot <id>]
 #                                   [--target <dir>] [--list]
 #
 # This is the by-hand path from docs/core/restic-plane.md: it selects a
@@ -24,24 +24,25 @@ umask 0077
 
 usage() {
   cat >&2 <<'EOF'
-usage: smortress-restic-restore-drill <ssd|hdd|r2> <group> [options]
+usage: smortress-restic-restore-drill <ssd|hdd|r2> <unit> [options]
 
   --snapshot <id>  restore this snapshot instead of the latest verified one
   --target <dir>   restore here (default /var/tmp/restic-drill/<backend>-<group>-<time>)
   --list           print the verified snapshots and exit
 
-The restore lands under <target>/var/tank/<group>/.zfs/snapshot/<backend>/,
-because that is the absolute path the backup recorded.
+The restore lands under <target>/<mountpoint>/.zfs/snapshot/<backend>/, one
+path per dataset in the unit, because those are the absolute paths the backup
+recorded.
 EOF
 }
 
 [[ $# -ge 2 ]] || { usage; exit 2; }
 backend=$1
-group=$2
+unit=$2
 shift 2
 case $backend in ssd | hdd | r2) ;; *) usage; exit 2 ;; esac
-printf '%s\n' "${groups[@]}" | grep -qx -- "$group" || {
-  warn "unknown group: $group"
+printf '%s\n' "${units[@]}" | grep -qx -- "$unit" || {
+  warn "unknown unit: $unit"
   exit 2
 }
 
@@ -67,12 +68,12 @@ if ! load_backend_env "$backend"; then
   exit 1
 fi
 
-staging=$(staging_for "$group" "$backend")
+mapfile -t staging_paths < <(unit_staging_paths "$unit" "$backend")
 deadline=${RESTIC_DEADLINE_DRILL:-14400}
 
 if ! json=$(with_deadline "$(job_deadline "$backend")" "$restic_bin" -r "$repo" \
-  snapshots --json --no-lock --host "$restic_host" --path "$staging" \
-  --tag "group:$group" --tag verified); then
+  snapshots --json --no-lock --host "$restic_host" \
+  --tag "unit:$unit" --tag verified); then
   warn "$backend: cannot list snapshots in $repo"
   exit 1
 fi
@@ -86,19 +87,19 @@ fi
 if [[ -n $snapshot ]]; then
   if ! jq -e --arg id "$snapshot" 'any(.[]; .id == $id and ((.tags // []) | index("verified") != null))' \
     >/dev/null <<<"$json"; then
-    warn "snapshot $snapshot is not a verified snapshot of $backend/$group"
+    warn "snapshot $snapshot is not a verified snapshot of $backend/$unit"
     exit 1
   fi
 else
   snapshot=$(jq -r 'sort_by(.time) | last | .id // empty' <<<"$json")
   if [[ -z $snapshot ]]; then
-    warn "$backend/$group has no verified snapshot; nothing to restore"
+    warn "$backend/$unit has no verified snapshot; nothing to restore"
     exit 1
   fi
 fi
 
 if [[ -z $target ]]; then
-  target=/var/tmp/restic-drill/$backend-$group-$(date -u +%Y%m%dT%H%M%SZ)
+  target=/var/tmp/restic-drill/$backend-$unit-$(date -u +%Y%m%dT%H%M%SZ)
 fi
 if [[ -e $target ]]; then
   if [[ -n $(find "$target" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null) ]]; then
@@ -110,22 +111,24 @@ else
 fi
 target=$(cd -- "$target" && pwd)
 
-say "$backend/$group: restoring $snapshot into $target"
+say "$backend/$unit: restoring $snapshot into $target"
 # restic restore clears xattrs on every file it writes, and SELinux denies
 # removing security.selinux even for root (lremovexattr, not setxattr). A dump
 # piped through tar --no-xattrs restores content, modes and ownership without
 # needing CAP_MAC_ADMIN; the label is reapplied by the system on the real target.
-if ! with_deadline "$deadline" bash -o pipefail -c \
-  '"$1" -r "$2" dump "$3" "$4" | tar -xf - --no-xattrs -C "$5"' _ \
-  "$restic_bin" "$repo" "$snapshot" "$staging" "$target"; then
-  warn "restore failed; $target holds an incomplete tree"
-  exit 1
-fi
+for path in "${staging_paths[@]}"; do
+  if ! with_deadline "$deadline" bash -o pipefail -c \
+    '"$1" -r "$2" dump "$3" "$4" | tar -xf - --no-xattrs -C "$5"' _ \
+    "$restic_bin" "$repo" "$snapshot" "$path" "$target"; then
+    warn "restore failed; $target holds an incomplete tree"
+    exit 1
+  fi
+done
 
 cat <<EOF
 
 Restored into:
-  $target/var/tank/$group/.zfs/snapshot/$backend
+  $target/$(mountpoint_for "$(unit_keys "$unit" | head -n1)")/.zfs/snapshot/$backend
 
 Check the contents, not the exit status: compare a known file and ownership,
 then remove the tree:

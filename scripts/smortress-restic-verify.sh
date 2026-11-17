@@ -3,7 +3,7 @@
 #
 #   smortress-restic-verify [--no-ping]
 #
-# Joins the durable attempt results under /var/lib/smortress/restic to what the
+# Joins the durable attempt results under /var/lib/homelab/restic to what the
 # repositories actually contain, then pings one Healthchecks.io check only when
 # every destination is current. Missing state, an in-progress attempt past its
 # retry window, a failed latest attempt, a snapshot that is not the recorded
@@ -63,22 +63,23 @@ ping_url() {
     --retry-delay 2 "$1" >/dev/null
 }
 
-check_group() {
-  local backend=$1 group=$2 repo=$3
-  local state journal staging max_age expiry line result start end reason snap final_snap succ_end succ_snap n
+check_unit() {
+  local backend=$1 unit=$2 repo=$3
+  local state journal max_age expiry line result start end reason snap final_snap succ_end succ_snap n
   local jline jatt jresult jsnap
-  state=$(state_file_for "$backend" "$group")
-  journal=$(journal_for "$backend" "$group")
-  staging=$(staging_for "$group" "$backend")
+  local staging_json
+  state=$(state_file_for "$backend" "$unit")
+  journal=$(journal_for "$backend" "$unit")
+  staging_json=$(unit_paths_json "$unit" "$backend")
   max_age=$(max_age_for "$backend")
   expiry=$(run_expiry_for "$backend")
 
   if [[ ! -s $state ]]; then
-    fail "$backend/$group: no status state at $state"
+    fail "$backend/$unit: no status state at $state"
     return
   fi
   if [[ ! -s $journal ]]; then
-    fail "$backend/$group: no attempt journal at $journal"
+    fail "$backend/$unit: no attempt journal at $journal"
     return
   fi
   if ! line=$(jq -r '[.last_attempt.n // 0, .last_attempt.result // "",
@@ -87,7 +88,7 @@ check_group() {
         .final.snapshot // "", .last_success.end // "",
         .last_success.snapshot // ""]
         | join("\u001f")' "$state" 2>/dev/null); then
-    fail "$backend/$group: unreadable status state"
+    fail "$backend/$unit: unreadable status state"
     return
   fi
   # Unit separator, not a tab: IFS whitespace collapses empty fields, and an
@@ -104,13 +105,13 @@ check_group() {
   jsnap=$(jq -r '.snapshot // ""' <<<"$jline" 2>/dev/null) || jsnap=""
   if [[ $result == running ]]; then
     if ((jatt != n - 1)); then
-      fail "$backend/$group: attempt $n is running but the journal ends at attempt $jatt"
+      fail "$backend/$unit: attempt $n is running but the journal ends at attempt $jatt"
     fi
   else
     if ((jatt != n)); then
-      fail "$backend/$group: attempt $n is not durably journaled (journal ends at $jatt)"
+      fail "$backend/$unit: attempt $n is not durably journaled (journal ends at $jatt)"
     elif [[ $jresult != "$result" || $jsnap != "$snap" ]]; then
-      fail "$backend/$group: journal and state disagree for attempt $n"
+      fail "$backend/$unit: journal and state disagree for attempt $n"
     fi
   fi
 
@@ -122,71 +123,71 @@ check_group() {
   if [[ $result == running ]]; then
     age=$(age_seconds "$start")
     if ((age > expiry)); then
-      fail "$backend/$group: run started ${start:-unknown} never completed (${age}s, window ${expiry}s)"
+      fail "$backend/$unit: run started ${start:-unknown} never completed (${age}s, window ${expiry}s)"
     fi
   elif [[ $result != success ]]; then
-    fail "$backend/$group: latest attempt is ${result:-missing}${reason:+ ($reason)}${end:+ at $end}"
+    fail "$backend/$unit: latest attempt is ${result:-missing}${reason:+ ($reason)}${end:+ at $end}"
   fi
 
   if [[ $result == success ]]; then
     [[ $snap == "$final_snap" ]] ||
-      fail "$backend/$group: last attempt snapshot does not match the persisted final snapshot"
+      fail "$backend/$unit: last attempt snapshot does not match the persisted final snapshot"
     [[ $succ_snap == "$final_snap" ]] ||
-      fail "$backend/$group: last success snapshot does not match the persisted final snapshot"
+      fail "$backend/$unit: last success snapshot does not match the persisted final snapshot"
   fi
 
   if [[ -z $final_snap || -z $succ_end ]]; then
-    fail "$backend/$group: no persisted successful snapshot"
+    fail "$backend/$unit: no persisted successful snapshot"
     return
   fi
   age=$(age_seconds "$succ_end")
   if ((age > max_age)); then
-    fail "$backend/$group: last success is ${age}s old (maximum ${max_age}s)"
+    fail "$backend/$unit: last success is ${age}s old (maximum ${max_age}s)"
   fi
 
   local out verdict stime
   if ! out=$(with_deadline "$(job_deadline "$backend")" "$restic_bin" -r "$repo" \
-    snapshots --json --no-lock --host "$restic_host" --path "$staging" 2>/dev/null); then
-    fail "$backend/$group: cannot read snapshots from $repo"
+    snapshots --json --no-lock --host "$restic_host" --tag "unit:$unit" 2>/dev/null); then
+    fail "$backend/$unit: cannot read snapshots from $repo"
     return
   fi
-  if ! verdict=$(jq -r --arg id "$final_snap" --arg g "$group" \
-    --arg h "$restic_host" --arg p "$staging" '
+  if ! verdict=$(jq -r --arg id "$final_snap" --arg u "$unit" \
+    --arg h "$restic_host" --argjson p "$staging_json" '
       ([.[] | select(.id == $id)]) as $m
       | if ($m | length) != 1 then "missing"
         else ($m[0]) as $s
           | [(($s.tags // []) | index("verified") != null),
-             (($s.tags // []) | index("group:" + $g) != null),
+             (($s.tags // []) | index("unit:" + $u) != null),
              (($s.tags // []) | index("host:" + $h) != null),
              ($s.hostname == $h),
-             (($s.paths // []) == [$p]),
+             (($s.paths // []) == $p),
              ($s.time == ([.[] | .time] | max))]
           | map(if . then "1" else "0" end) | join("")
         end' <<<"$out" 2>/dev/null); then
-    fail "$backend/$group: unreadable snapshot list from $repo"
+    fail "$backend/$unit: unreadable snapshot list from $repo"
     return
   fi
   if [[ $verdict == missing ]]; then
-    fail "$backend/$group: recorded snapshot $final_snap is not in $repo"
+    fail "$backend/$unit: recorded snapshot $final_snap is not in $repo"
     return
   fi
   if [[ $verdict != 111111 ]]; then
-    fail "$backend/$group: snapshot $final_snap fails checks [tags,group,host,hostname,paths,newest]=$verdict"
+    fail "$backend/$unit: snapshot $final_snap fails checks [tags,group,host,hostname,paths,newest]=$verdict"
   fi
 
   if ! stime=$(jq -r --arg id "$final_snap" '.[] | select(.id == $id) | .time' \
     <<<"$out" 2>/dev/null | head -n1); then
-    fail "$backend/$group: cannot read the snapshot time"
+    fail "$backend/$unit: cannot read the snapshot time"
     return
   fi
   if [[ -n $stime ]]; then
     age=$(age_seconds "$stime")
     if ((age > max_age)); then
-      fail "$backend/$group: repository snapshot is ${age}s old (maximum ${max_age}s)"
+      fail "$backend/$unit: repository snapshot is ${age}s old (maximum ${max_age}s)"
     fi
   fi
 
-  ok "$backend/$group snapshot $final_snap"
+  ok "$backend/$unit snapshot $final_snap"
 }
 
 for backend in "${backends[@]}"; do
@@ -198,8 +199,8 @@ for backend in "${backends[@]}"; do
     fail "$backend: credentials are not configured"
     continue
   fi
-  for group in "${groups[@]}"; do
-    check_group "$backend" "$group" "$repo"
+  for unit in "${units[@]}"; do
+    check_unit "$backend" "$unit" "$repo"
   done
 done
 

@@ -30,7 +30,7 @@ COPY units/systemd/ /usr/lib/systemd/system/
 COPY units/quadlet/pattern.container /usr/share/smortress/quadlet/pattern.container
 # /usr/local is a symlink to /var on bootc, so helpers go under /usr/libexec
 # and lose the .sh suffix that the units would otherwise have to know about.
-COPY scripts/zfs-ready.sh scripts/sops-decrypt.sh scripts/init-zpool.sh \
+COPY scripts/storage-layout.sh scripts/zfs-ready.sh scripts/sops-decrypt.sh scripts/init-zpool.sh \
      scripts/open-hdd.sh scripts/access-bootstrap.sh scripts/access-lockdown.sh \
      scripts/fix-crypttab.sh \
      scripts/restic-plane-common.sh scripts/smortress-restic-backup.sh \
@@ -92,12 +92,18 @@ RUN set -eux; \
       smortress-tailscale-up.service \
       sops-decrypt.service \
       tailscaled.service \
-      zfs-ready@photos.service \
-      zfs-ready@books.service \
-      zfs-ready@notes.service \
-      zfs-ready@music.service \
-      zfs-ready@wallpapers.service \
-      zfs-ready@syncthing.service \
+      zfs-ready@raw-files.service \
+      zfs-ready@raw-photos.service \
+      zfs-ready@raw-books.service \
+      zfs-ready@raw-music.service \
+      zfs-ready@raw-wallpapers.service \
+      zfs-ready@raw-git.service \
+      zfs-ready@raw-apps.service \
+      zfs-ready@raw-repo-archive.service \
+      zfs-ready@state-immich-postgres.service \
+      zfs-ready@state-immich-dumps.service \
+      zfs-ready@state-syncthing-config.service \
+      zfs-ready@state-opdshelf.service \
       smortress-app-secrets.service \
       smortress-tailscale-serve.service \
       smortress-immich-dump.timer \
@@ -108,7 +114,7 @@ RUN set -eux; \
       smortress-restic-backup-ssd.timer \
       smortress-restic-backup-hdd.timer \
       smortress-restic-backup-r2.timer; \
-    systemctl enable 'zfs-scrub-weekly@tank.timer'; \
+    systemctl enable 'zfs-scrub-weekly@smortress.timer'; \
     systemctl mask \
       podman-auto-update.timer \
       bootc-fetch-apply-updates.timer \

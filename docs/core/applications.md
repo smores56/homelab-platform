@@ -4,7 +4,7 @@ The three applications that carry real data on smortress run as Podman Quadlets
 from the derived image. This document covers what each container is allowed to
 read and write, how its image reaches the host, how it is reached from the
 tailnet, and what its restore actually consists of. Operator steps are in
-`docs/manual-steps.md` section 40; the Restic groups they rely on are in
+`docs/manual-steps.md` section 40; the Restic units they rely on are in
 `docs/core/restic-plane.md`.
 
 There is no second control plane: a deployment change is an image change plus a
@@ -58,39 +58,47 @@ generator would start it; `pattern.container` stays under
 
 Every unit keeps the pattern's invariants:
 
-- `Requires=`/`After=` on the readiness instance of the group it mounts, plus
+- `Requires=`/`After=` on the readiness instance of every dataset it mounts, plus
   `sops-decrypt.service` (and `smortress-app-secrets.service`) when it reads a
   secret;
 - `ReadOnly=true`, `NoNewPrivileges=true`, `DropCapability=ALL`;
 - loopback-only publication, fronted by Tailscale Serve;
 - no `AutoUpdate=`, no `Pull=always`, no image tag without a digest.
 
-## Recovery-group mapping
+## Storage mapping
 
-| Application | Group(s) | Container path | Host path |
+Data is split by kind: `/srv` holds raw data and `/var/lib` holds the service
+state that no raw file can regenerate. A restore unit is the application, and
+one Restic snapshot names every dataset the unit restores.
+
+| Application | Raw dataset | Backed-up state | Container paths |
 | --- | --- | --- | --- |
-| Immich | `photos` | `/data` | `/var/tank/photos` |
-| OPDShelf | `books` | `/books` | `/var/tank/books` |
-| Syncthing | `notes`, `syncthing` | `/var/tank/notes`, `/var/syncthing` | `/var/tank/notes`, `/var/tank/syncthing` |
+| Immich | `raw/photos` — `/srv/photos`, the asset library | `state/immich-postgres` — `/var/lib/immich/postgres` (the dataset root is `PGDATA`); `state/immich-dumps` — `/var/lib/immich/dumps` | `/data/library`; Postgres `/data`; the dump writes into the dump dataset |
+| OPDShelf | `raw/books` — `/srv/books`, the catalog | `state/opdshelf` — `/var/lib/opdshelf`, edits, annotations and covers | `/books`; `DATA_DIR=/state` |
+| Syncthing | `raw/files` — `/srv/files`, the vault | `state/syncthing-config` — `/var/lib/syncthing/config`, identity and configuration | `/srv/files`; `/var/syncthing/config` |
 
-`/var/tank/photos` holds `library/`, `postgres/`, `appendonlydir/` and `db-dumps/`, so
-one Restic snapshot of the `photos` group is one consistent Immich recovery
-point: media, cluster files and the logical dump. `/var/lib/immich/ml-cache` and
-`/var/lib/syncthing-versions` are deliberately outside every group — both are
-regenerable, and both would otherwise inflate every retained snapshot.
+`photos` is therefore one snapshot over `/srv/photos`,
+`/var/lib/immich/postgres` and `/var/lib/immich/dumps`: media, cluster files and
+the logical dump at one point in time. `books` pairs its catalog with the
+`.opdshelf` state, and `files` pairs the vault with the Syncthing identity.
 
-Every group root is owned by uid 1000, because that is the uid all three
-applications run as (and the uid the legacy data is owned by). The pool
-unit sets it at dataset creation, which is what lets a dump-only restore
-create `postgres/`, `appendonlydir/` or `.opdshelf/` without a manual
-`chown`. A group restored by Restic is root-owned, so a restore runbook
-step chowns it back before the application starts: root restoring files
-is correct, and serving them as root is not.
+Three directories are deliberately outside every dataset and every backup,
+because rebuilding them costs time and nothing else: `/var/lib/immich/ml-cache`
+(the model cache), `/var/lib/immich/valkey` (the AOF, which only holds in-flight
+jobs) and `/var/lib/syncthing/versions` (the version history). They are created
+by tmpfiles with uid 1000 and survive a restore as empty directories.
 
-`syncthing` is the sixth childless dataset. It exists so the identity and
-configuration can be restored *without* rolling the folder content back to the
-same second: a restore brings the identity back, pauses the peers, and only then
-designates a primary.
+Every dataset root is owned by uid 1000, because that is the uid the
+applications run as. The pool unit sets it at dataset creation, which is what
+lets a restore write a tree without a manual `chown`. A dataset restored by
+Restic is root-owned, so the restore runbook chowns it back before the
+application starts: root restoring files is correct, and serving them as root
+is not.
+
+The Syncthing identity is restorable without rolling the vault back to the same
+second: a restore brings the identity back, pauses the peers, and only then
+designates a primary. That is why its configuration is its own dataset even
+though it belongs to the `files` unit.
 
 ## Secrets
 
@@ -111,12 +119,12 @@ container with an explicit uid instead of being written world-readable.
 
 Four containers on the `immich.network` bridge plus one timer:
 
-- `smortress-immich-postgres` — the cluster in `/data/postgres`. The image
+- `smortress-immich-postgres` — the cluster in `/data` (the dataset root is `PGDATA`). The image
   entrypoint rewrites its config template into `/etc/postgresql` on every start,
   so that path is a tmpfs on an otherwise read-only root filesystem.
 - `smortress-immich-valkey` — append-only queue in `/data/appendonlydir`,
   snapshots off; Restic is the history. The AOF sits in the dataset root
-  because valkey refuses to start when its `--dir` is missing, and a group
+  because valkey refuses to start when its `--dir` is missing, and a dataset
   restored from the logical dump has only the library. The `--save ""`
   argument has to go through a shell: Quadlet drops an empty `Exec`
   argument, which turns it into `--save --appendfsync …` and a fatal config
@@ -127,7 +135,7 @@ Four containers on the `immich.network` bridge plus one timer:
   root of an HTTPS port because Immich does not support a subpath.
 
 `smortress-immich-dump.timer` runs `pg_dump -Fc --no-owner` at 21:00 UTC into
-`/data/db-dumps/immich.dump`, written to a temporary name and renamed, so a
+`the dump dataset (`/var/lib/immich/dumps`)`, written to a temporary name and renamed, so a
 failed dump leaves the previous one intact. 21:00 UTC puts a same-day dump inside
 the midnight R2 snapshot with three hours of margin for a library-sized database.
 The dump is root-only (`UMask=0077`): it is the whole database. The dump is its own
@@ -159,11 +167,11 @@ is firewalld, whose default zone is `drop` and whose `tailscale` zone permits
 cannot reach the sync protocol, the GUI, or SSH.
 
 - GUI: `STGUIADDRESS=127.0.0.1:8384`, fronted by Serve on its own HTTPS port.
-- Identity and configuration: `/var/tank/syncthing/config` (`syncthing` group).
-- Folder content: `/var/tank/notes/vault` (`notes` group), mounted at the same
+- Identity and configuration: `/var/lib/syncthing/config` (`state/syncthing-config`).
+- Folder content: `/srv/files` (`raw/files`), mounted at the same
   path inside the container so the folder paths in `config.xml` are the host
   paths.
-- Version history: `/var/lib/syncthing-versions`, outside every group, exactly as
+- Version history: `/var/lib/syncthing/versions`, outside every dataset, exactly as
   the legacy host kept it.
 - `AddCapability=CHOWN` is the one capability in the set, and it is why the unit
   sets no `User=`: the container starts as root, the image entrypoint chowns
@@ -184,7 +192,7 @@ which the firewall narrows to the tailnet.
 | Syncthing GUI | `127.0.0.1:8384` | `https://smortress.<tailnet>.ts.net:10000/` |
 
 `smortress-tailscale-serve.service` re-declares these three routes at every boot.
-Serve state lives in tailscaled's state file, which is not a recovery group and
+Serve state lives in tailscaled's state file, which is not a dataset and
 not worth backing up; re-applying the same route is idempotent. Nothing here is
 Funnel, and no public hostname serves an application.
 
@@ -195,14 +203,14 @@ automatically on first Serve). Without them Serve fails and the unit says so.
 ## Restore paths
 
 The acceptance for T5 is that each application restores *on scratch storage*,
-before any of it touches `/var/tank`. `docs/manual-steps.md` section 40 has the
+before any of it touches `/srv`. `docs/manual-steps.md` section 40 has the
 commands; the shape is:
 
 - **Immich, logical** — restore `photos` to scratch, take `db-dumps/immich.dump`,
   restore it into a throwaway Postgres container, start a throwaway server
   against the scratch library, and fetch an asset. This is the path that survives
   a version change and is the one the cutover uses.
-- **Immich, physical** — restore the same group, point a throwaway cluster at
+- **Immich, physical** — restore the same unit, point a throwaway cluster at
   `postgres/`, and fetch an asset. A restored cluster carries the password that
   was current when the snapshot was taken: after a physical restore either set
   the password from the decrypted secret

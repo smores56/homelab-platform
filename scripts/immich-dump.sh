@@ -8,11 +8,11 @@
 set -euo pipefail
 
 container=${IMMICH_PG_CONTAINER:-smortress-immich-postgres}
-out_dir=${IMMICH_DUMP_DIR:-/var/tank/photos/db-dumps}
+out_dir=${IMMICH_DUMP_DIR:-/var/lib/immich/dumps}
 podman_bin=${PODMAN_BIN:-podman}
 
-if [[ ! -d /var/tank/photos ]]; then
-  echo "immich-dump: /var/tank/photos is not a directory; the photos group is not mounted" >&2
+if [[ ! -d /var/lib/immich/postgres ]] || ! mountpoint -q /var/lib/immich/dumps; then
+  echo "immich-dump: the postgres or dumps dataset is not mounted" >&2
   exit 1
 fi
 if ! "$podman_bin" container exists "$container"; then

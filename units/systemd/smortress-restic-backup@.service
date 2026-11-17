@@ -3,19 +3,15 @@
 # group for that backend, records each result independently, and only then
 # exits non-zero if anything failed.
 #
-# Readiness is per group, not per unit: a failed zfs-ready@<group> must fail
+# Readiness is per dataset, not per unit: a failed zfs-ready@<dataset> must fail
 # only that group's job. The unit therefore orders after every readiness
 # instance and the script itself re-checks the exact dataset before touching it.
 Description=Run due Restic backup jobs for the %i repository
-After=zfs-ready@photos.service zfs-ready@books.service zfs-ready@notes.service \
-      zfs-ready@music.service zfs-ready@wallpapers.service \
-      zfs-ready@syncthing.service \
+After=zfs-ready@raw-files.service zfs-ready@raw-photos.service zfs-ready@raw-books.service zfs-ready@raw-music.service zfs-ready@raw-wallpapers.service zfs-ready@raw-git.service zfs-ready@raw-apps.service zfs-ready@raw-repo-archive.service zfs-ready@state-immich-postgres.service zfs-ready@state-immich-dumps.service zfs-ready@state-syncthing-config.service zfs-ready@state-opdshelf.service \
       smortress-restic-init.service \
       var-lib-restic-ssd.mount var-lib-restic-hdd.mount \
       sops-decrypt.service network-online.target
-Wants=zfs-ready@photos.service zfs-ready@books.service zfs-ready@notes.service \
-      zfs-ready@music.service zfs-ready@wallpapers.service \
-      zfs-ready@syncthing.service \
+Wants=zfs-ready@raw-files.service zfs-ready@raw-photos.service zfs-ready@raw-books.service zfs-ready@raw-music.service zfs-ready@raw-wallpapers.service zfs-ready@raw-git.service zfs-ready@raw-apps.service zfs-ready@raw-repo-archive.service zfs-ready@state-immich-postgres.service zfs-ready@state-immich-dumps.service zfs-ready@state-syncthing-config.service zfs-ready@state-opdshelf.service \
       smortress-restic-init.service \
       var-lib-restic-ssd.mount var-lib-restic-hdd.mount network-online.target
 Requires=sops-decrypt.service

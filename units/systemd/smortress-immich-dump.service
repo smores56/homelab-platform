@@ -4,8 +4,8 @@
 # snapshot, and a database dump failure cannot stop the filesystem backup: this
 # is its own unit, not part of the backup driver.
 Description=Dump the Immich database into the photos recovery group
-Requires=zfs-ready@photos.service immich-postgres.service
-After=zfs-ready@photos.service immich-postgres.service
+Requires=zfs-ready@raw-photos.service zfs-ready@state-immich-postgres.service zfs-ready@state-immich-dumps.service immich-postgres.service
+After=zfs-ready@raw-photos.service zfs-ready@state-immich-postgres.service zfs-ready@state-immich-dumps.service immich-postgres.service
 
 [Service]
 Type=oneshot

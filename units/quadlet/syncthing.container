@@ -16,8 +16,8 @@
 # inert, and a restored, root-owned tree would stay unwritable.
 [Unit]
 Description=Syncthing service (syncthing and notes recovery groups)
-Requires=zfs-ready@syncthing.service zfs-ready@notes.service
-After=network-online.target zfs-ready@syncthing.service zfs-ready@notes.service
+Requires=zfs-ready@raw-files.service zfs-ready@state-syncthing-config.service
+After=network-online.target zfs-ready@raw-files.service zfs-ready@state-syncthing-config.service
 Wants=network-online.target
 
 [Container]
@@ -29,9 +29,9 @@ Environment=STHOMEDIR=/var/syncthing/config
 Environment=STGUIADDRESS=127.0.0.1:8384
 Environment=PUID=1000
 Environment=PGID=1000
-Volume=/var/tank/syncthing:/var/syncthing:z
-Volume=/var/tank/notes:/var/tank/notes:z
-Volume=/var/lib/syncthing-versions:/var/lib/syncthing-versions:z
+Volume=/var/lib/syncthing/config:/var/syncthing/config:z
+Volume=/srv/files:/srv/files:z
+Volume=/var/lib/syncthing/versions:/var/lib/syncthing/versions:z
 AddCapability=CHOWN
 ReadOnly=true
 NoNewPrivileges=true

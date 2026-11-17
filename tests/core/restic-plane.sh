@@ -10,6 +10,7 @@
 #
 #   tests/core/restic-plane.sh
 # shellcheck disable=SC2034  # out is kept for debugging failed assertions
+# shellcheck disable=SC2154  # the storage table and helpers are sourced below
 set -uo pipefail
 
 root=$(git rev-parse --show-toplevel)
@@ -31,23 +32,23 @@ eq() {
   if [[ $1 == "$2" ]]; then ok "$3"; else bad "$3" "got '$1' want '$2'"; fi
 }
 
-# The harness builds its stub tree from the real group list: the verifier
-# fails closed on a group with no state, so a hardcoded list here would stop
-# testing whichever group was added last without failing.
-mapfile -t groups < <(grep -oP '^groups=\(\K[^)]+' scripts/restic-plane-common.sh | tr ' ' '\n')
-
+# The harness builds its stub tree from the real storage table: the verifier
+# fails closed on a unit with no state, so a hardcoded list here would stop
+# testing whichever unit was added last without failing.
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
 bin=$work/bin
 install -d -m 0755 "$bin"
 state=$work/state
-src=$work/tank
 repos=$work/repos
 secrets=$work/secrets
-install -d -m 0700 "$state" "$src" "$repos/ssd" "$repos/hdd" "$secrets"
-for g in "${groups[@]}"; do
-  install -d -m 0755 "$src/$g/.zfs/snapshot"
+install -d -m 0700 "$state" "$repos/ssd" "$repos/hdd" "$secrets"
+export STORAGE_MOUNT_ROOT=$work
+# shellcheck source=/dev/null
+source scripts/storage-layout.sh
+for key in "${dataset_order[@]}"; do
+  install -d -m 0755 "$(mountpoint_for "$key")/.zfs/snapshot"
 done
 printf 'hunter2\n' >"$secrets/restic-password.yaml"
 chmod 0600 "$secrets/restic-password.yaml"
@@ -75,7 +76,8 @@ i=0
 args=("$@")
 while ((i < ${#args[@]})); do
   case ${args[i]} in
-    -r|--retry-lock) i=$((i + 2)); continue ;;
+    -r) repo=${args[i + 1]}; i=$((i + 2)); continue ;;
+    --retry-lock) i=$((i + 2)); continue ;;
     -*) i=$((i + 1)); continue ;;
     *) cmd=${args[i]}; break ;;
   esac
@@ -101,16 +103,24 @@ case $cmd in
       printf '%s\n' "$STUB_SNAPSHOTS_JSON"
       exit "${STUB_SNAPSHOTS_EXIT:-0}"
     fi
-    path=""
+    unit=""
     for ((j = 0; j < ${#args[@]}; j++)); do
-      [[ ${args[j]} == --path ]] && path=${args[j + 1]}
+      [[ ${args[j]} == --tag && ${args[j + 1]} == unit:* ]] && unit=${args[j + 1]#unit:}
     done
-    rest=${path#*/tank/}
-    group=${rest%%/*}
-    printf '[{"id":"%s","tree":"%s","time":"%s","hostname":"smortress","paths":["%s"],"tags":["group:%s","host:smortress","verified"]}]\n' \
+    case $repo in
+      */restic) backend=$(basename "$(dirname "$repo")") ;;
+      *) backend=r2 ;;
+    esac
+    export STORAGE_MOUNT_ROOT=$(dirname "$STUB_LOG")
+    # shellcheck source=/dev/null
+    source "$REPO_ROOT/scripts/storage-layout.sh"
+    # shellcheck source=/dev/null
+    source "$REPO_ROOT/scripts/restic-plane-common.sh"
+    paths=$(unit_paths_json "$unit" "$backend")
+    printf '[{"id":"%s","tree":"%s","time":"%s","hostname":"smortress","paths":%s,"tags":["unit:%s","host:smortress","verified"]}]\n' \
       "${STUB_VERIFIED_ID:-${STUB_BACKUP_ID:-strepo}}" \
       "${STUB_VERIFIED_TREE:-${STUB_BACKUP_TREE:-tree1}}" \
-      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$path" "$group"
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$paths" "$unit"
     exit 0
     ;;
   forget | prune | check) exit "${STUB_MAINT_EXIT:-0}" ;;
@@ -128,8 +138,13 @@ case $1 in
   snapshot)
     name=${2##*@}
     ds=${2%@*}
+    key=${ds#*/}
     printf '%s\n' "$name" >>"$STUB_LOG/snapshots"
-    install -d -m 0755 "$RESTIC_SOURCE_ROOT/${ds##*/}/.zfs/snapshot/$name"
+    # The scratch root is the harness's work dir, next to the stub log.
+    export STORAGE_MOUNT_ROOT=$(dirname "$STUB_LOG")
+    # shellcheck source=/dev/null
+    source "$REPO_ROOT/scripts/storage-layout.sh"
+    install -d -m 0755 "$(mountpoint_for "$key")/.zfs/snapshot/$name"
     exit 0
     ;;
 esac
@@ -149,10 +164,10 @@ exit "${STUB_CURL_EXIT:-0}"
 EOF
 chmod 0755 "$bin"/*
 
-export STUB_LOG=$log
+export STUB_LOG=$log REPO_ROOT=$PWD
 export PATH="$bin:$PATH"
 export RESTIC_BIN=$bin/restic ZFS_BIN=$bin/zfs ZFS_READY_BIN=$bin/zfs-ready CURL_BIN=$bin/curl
-export RESTIC_BASE=$repos RESTIC_SOURCE_ROOT=$src RESTIC_STATE_ROOT=$state
+export RESTIC_BASE=$repos RESTIC_STATE_ROOT=$state STORAGE_LAYOUT=$PWD/scripts/storage-layout.sh
 export SMORTRESS_SECRETS_DIR=$secrets RESTIC_MOUNTINFO=$work/mountinfo
 export RESTIC_ATTEMPTS=1 RESTIC_RETRY_SLEEP_LOCAL=0 RESTIC_RETRY_SLEEP_R2=0
 export RESTIC_LOCK_WAIT=5 RESTIC_DEADLINE_LOCAL=20 RESTIC_DEADLINE_R2=20
@@ -165,8 +180,8 @@ reset_state() {
   unset STUB_BACKUP_EXIT STUB_BACKUP_ID STUB_TAG_EXIT STUB_ZFS_LIST_EXIT \
     STUB_SNAPSHOTS_JSON STUB_SNAPSHOTS_EXIT STUB_READY_EXIT STUB_CAT_EXIT \
     STUB_MAINT_EXIT STUB_INIT_EXIT STUB_CURL_EXIT RESTIC_HEALTHCHECK_URL
-  for g in "${groups[@]}"; do
-    rm -rf "$src/$g/.zfs/snapshot"/*
+  for key in "${dataset_order[@]}"; do
+    rm -rf "${dataset_mount[$key]}/.zfs/snapshot"/*
   done
 }
 
@@ -182,7 +197,7 @@ state_json() {
 # --- 1. exit codes -------------------------------------------------------
 reset_state
 export STUB_BACKUP_EXIT=1 STUB_BACKUP_ID=""
-run scripts/smortress-restic-backup.sh ssd --group photos --no-maintenance
+run scripts/smortress-restic-backup.sh ssd --unit photos --no-maintenance
 if ((rc != 0)); then ok "exit 1 is a failed run"; else bad "exit 1 is a failed run" "rc=$rc"; fi
 eq "$(state_json ssd-photos '.last_attempt.result')" failure "failed run is recorded as failure"
 eq "$(state_json ssd-photos '.last_attempt.reason')" exit-1 "failure reason records the exit code"
@@ -190,7 +205,7 @@ if grep -q '^tag ' "$log/restic"; then bad "no verified tag after exit 1"; else 
 
 reset_state
 export STUB_BACKUP_EXIT=3 STUB_BACKUP_ID="incomplete1"
-run scripts/smortress-restic-backup.sh ssd --group photos --no-maintenance
+run scripts/smortress-restic-backup.sh ssd --unit photos --no-maintenance
 if ((rc != 0)); then ok "exit 3 is a failed run"; else bad "exit 3 is a failed run"; fi
 eq "$(state_json ssd-photos '.last_attempt.reason')" exit-3 "exit 3 keeps its own reason"
 eq "$(state_json ssd-photos '.pending_reap[0]')" incomplete1 "an incomplete snapshot ID is recorded for reaping"
@@ -198,7 +213,7 @@ if grep -q '^tag ' "$log/restic"; then bad "an exit-3 snapshot is never tagged v
 
 reset_state
 export STUB_BACKUP_EXIT=0 STUB_BACKUP_ID="complete1"
-run scripts/smortress-restic-backup.sh ssd --group photos --no-maintenance
+run scripts/smortress-restic-backup.sh ssd --unit photos --no-maintenance
 eq "$rc" 0 "exit 0 succeeds"
 eq "$(state_json ssd-photos '.last_attempt.result')" success "success is recorded"
 eq "$(state_json ssd-photos '.final.snapshot')" complete1 "the final snapshot ID is persisted"
@@ -207,7 +222,7 @@ if grep -q -- 'tag --add verified complete1' "$log/restic"; then
 else
   bad "the successful snapshot is tagged verified" "$(cat "$log/restic")"
 fi
-if [[ ! -e $src/photos/.zfs/snapshot/ssd ]] || [[ -z $(ls -A "$src/photos/.zfs/snapshot/ssd" 2>/dev/null) ]]; then
+if [[ ! -e $(mountpoint_for raw/photos)/.zfs/snapshot/ssd ]] || [[ -z $(ls -A "$(mountpoint_for raw/photos)/.zfs/snapshot/ssd" 2>/dev/null) ]]; then
   ok "the staging snapshot was destroyed"
 else
   bad "the staging snapshot was destroyed"
@@ -217,7 +232,7 @@ fi
 # makes the freshness verifier report a snapshot that no longer exists.
 reset_state
 export STUB_BACKUP_EXIT=0 STUB_BACKUP_ID="pretag1" STUB_VERIFIED_ID="tagged1"
-run scripts/smortress-restic-backup.sh ssd --group photos --no-maintenance
+run scripts/smortress-restic-backup.sh ssd --unit photos --no-maintenance
 eq "$rc" 0 "a tagged snapshot succeeds"
 eq "$(state_json ssd-photos .final.snapshot)" tagged1 "the post-tag snapshot ID is the one recorded"
 if grep -q -- "tag --add verified pretag1" "$log/restic"; then
@@ -230,7 +245,7 @@ export STUB_BACKUP_ID="" STUB_VERIFIED_ID=""
 
 reset_state
 export STUB_BACKUP_EXIT=0 STUB_BACKUP_ID="complete2" STUB_TAG_EXIT=1
-run scripts/smortress-restic-backup.sh ssd --group photos --no-maintenance
+run scripts/smortress-restic-backup.sh ssd --unit photos --no-maintenance
 if ((rc != 0)); then ok "tagging failure fails the run"; else bad "tagging failure fails the run"; fi
 eq "$(state_json ssd-photos '.last_attempt.reason')" tag-failed "tagging failure is its own reason"
 eq "$(state_json ssd-photos '.pending_reap[0]')" complete2 "an untagged snapshot is reaped by recorded ID"
@@ -238,7 +253,7 @@ eq "$(state_json ssd-photos '.pending_reap[0]')" complete2 "an untagged snapshot
 # restic exit 11 is a lock failure: remove only stale locks, then retry once.
 reset_state
 export STUB_BACKUP_EXIT=0 STUB_BACKUP_ID="lock1" STUB_VERIFIED_ID="lock1v" STUB_TAG_EXIT_ONCE=11
-run scripts/smortress-restic-backup.sh ssd --group photos --no-maintenance
+run scripts/smortress-restic-backup.sh ssd --unit photos --no-maintenance
 eq "$rc" 0 "a stale lock is retried after unlocking"
 if grep -q ' unlock' "$log/restic"; then ok "stale locks are removed before the retry"; else bad "stale locks are removed before the retry"; fi
 export STUB_TAG_EXIT_ONCE=""
@@ -248,15 +263,15 @@ export STUB_BACKUP_ID="" STUB_VERIFIED_ID=""
 # --- 2. stale staging reconciliation ------------------------------------
 reset_state
 export STUB_BACKUP_EXIT=0 STUB_BACKUP_ID="complete3" STUB_ZFS_LIST_EXIT=0
-run scripts/smortress-restic-backup.sh ssd --group photos --no-maintenance
+run scripts/smortress-restic-backup.sh ssd --unit photos --no-maintenance
 eq "$rc" 0 "a stale staging snapshot does not block the run"
-if [[ $(grep -n '^destroy tank/photos@ssd' "$log/zfs" | head -n1 | cut -d: -f1) -lt \
-  $(grep -n '^snapshot tank/photos@ssd' "$log/zfs" | head -n1 | cut -d: -f1) ]]; then
+if [[ $(grep -n '^destroy smortress/raw/photos@ssd' "$log/zfs" | head -n1 | cut -d: -f1) -lt \
+  $(grep -n '^snapshot smortress/raw/photos@ssd' "$log/zfs" | head -n1 | cut -d: -f1) ]]; then
   ok "reconciliation destroys the stale snapshot before creating a new one"
 else
   bad "reconciliation destroys the stale snapshot before creating a new one" "$(cat "$log/zfs")"
 fi
-if grep -q 'destroy tank/photos@hdd\|destroy tank/books@ssd' "$log/zfs"; then
+if grep -q 'destroy smortress/raw/photos@hdd\|destroy smortress/raw/books@ssd' "$log/zfs"; then
   bad "a job destroys only its own staging snapshot"
 else
   ok "a job destroys only its own staging snapshot"
@@ -265,7 +280,7 @@ fi
 # --- 3. readiness and mount gates ---------------------------------------
 reset_state
 export STUB_BACKUP_EXIT=0 STUB_BACKUP_ID="should-not-happen" STUB_READY_EXIT=1
-run scripts/smortress-restic-backup.sh ssd --group photos --no-maintenance
+run scripts/smortress-restic-backup.sh ssd --unit photos --no-maintenance
 if ((rc != 0)); then ok "a failed readiness unit fails the job"; else bad "a failed readiness unit fails the job"; fi
 eq "$(state_json ssd-photos '.last_attempt.reason')" readiness "readiness failure is recorded"
 if grep -q 'zfs snapshot\|^backup ' "$log/zfs" "$log/restic"; then
@@ -277,7 +292,7 @@ fi
 reset_state
 sed -i "\|$repos/ssd|d" "$work/mountinfo"
 export STUB_BACKUP_EXIT=0 STUB_BACKUP_ID="should-not-happen"
-run scripts/smortress-restic-backup.sh ssd --group photos --no-maintenance
+run scripts/smortress-restic-backup.sh ssd --unit photos --no-maintenance
 if ((rc != 0)); then ok "an unmounted repository path fails the job"; else bad "an unmounted repository path fails the job"; fi
 eq "$(state_json ssd-photos '.last_attempt.reason')" repo-not-mounted "unmounted repository is recorded"
 if grep -q '^tag ' "$log/restic"; then bad "nothing is written to an unmounted repository"; else ok "nothing is written to an unmounted repository"; fi
@@ -288,20 +303,20 @@ joined=$(sed -e :a -e '/\\$/N; s/\\\n/ /; ta' scripts/smortress-restic-backup.sh
 retention_bad=""
 while IFS= read -r line; do
   [[ $line == *--keep-* ]] || continue
-  [[ $line == *'--tag "group:'* || $line == *'--tag group:'* ]] || retention_bad=$line
+  [[ $line == *'--tag "unit:'* || $line == *'--tag unit:'* ]] || retention_bad=$line
   [[ $line == *'--tag verified'* ]] || retention_bad=$line
 done <<<"$joined"
 if [[ -z $retention_bad ]]; then
-  ok "every retention command requires both group and verified tags"
+  ok "every retention command requires both unit and verified tags"
 else
-  bad "every retention command requires both group and verified tags" "$retention_bad"
+  bad "every retention command requires both unit and verified tags" "$retention_bad"
 fi
 if grep -qE -- '--keep-last|--keep-within|--keep-tag|unlock' scripts/smortress-restic-*.sh; then
   bad "retention uses no wildcard bucket and no routine unlock"
 else
   ok "retention uses no wildcard bucket and no routine unlock"
 fi
-if grep -qE -- 'forget .*\*|rm -rf[^#]*(/var/lib/restic|/var/lib/smortress/restic)' scripts/smortress-restic-*.sh; then
+if grep -qE -- 'forget .*\*|rm -rf[^#]*(/var/lib/restic|/var/lib/homelab/restic)' scripts/smortress-restic-*.sh; then
   bad "no bulk deletion of snapshot sets or repository roots"
 else
   ok "no bulk deletion of snapshot sets or repository roots"
@@ -309,26 +324,26 @@ fi
 
 # --- 5. freshness verifier ----------------------------------------------
 seed_state() {
-  local backend=$1 group=$2
+  local backend=$1 unit=$2
   install -d -m 0700 "$state/state" "$state/journal"
-  jq -n --arg b "$backend" --arg g "$group" --arg p "$src/$group/.zfs/snapshot/$backend" \
+  jq -n --arg b "$backend" --arg u "$unit" --argjson p "$(unit_paths_json "$unit" "$backend")" \
     --arg start "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg end "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --arg result "${3:-success}" --argjson exit "${4:-0}" --arg snap "${5:-strepo}" '
-    {schema: 1, backend: $b, group: $g, host: "smortress",
-     repository: "stub", path: $p,
+    {schema: 2, backend: $b, unit: $u, host: "smortress",
+     repository: "stub", paths: $p,
      last_attempt: {n: 1, start: $start, end: $end, exit: $exit,
                     result: $result, reason: "", snapshot: $snap},
      last_success: {end: $end, snapshot: $snap},
      final: {end: $end, snapshot: $snap},
-     pending_reap: []}' >"$state/state/$backend-$group.json"
+     pending_reap: []}' >"$state/state/$backend-$unit.json"
   jq -cn --arg result "${3:-success}" --arg snap "${5:-strepo}" \
-    '{schema:1, attempt:1, result:$result, snapshot:$snap}' \
-    >"$state/journal/$backend-$group.jsonl"
+    '{schema:2, attempt:1, result:$result, snapshot:$snap}' \
+    >"$state/journal/$backend-$unit.jsonl"
 }
 
 seed_all_healthy() {
   for b in ssd hdd r2; do
-    for g in "${groups[@]}"; do seed_state "$b" "$g"; done
+    for g in "${units[@]}"; do seed_state "$b" "$g"; done
   done
 }
 
@@ -363,7 +378,7 @@ if ((rc != 0)); then ok "a run that died without completing expires"; else bad "
 
 reset_state
 seed_all_healthy
-rm -f "$state/state/r2-notes.json"
+rm -f "$state/state/r2-files.json"
 run scripts/smortress-restic-verify.sh --no-ping
 if ((rc != 0)); then ok "missing status state fails closed"; else bad "missing status state fails closed"; fi
 
@@ -472,11 +487,12 @@ rm -f "$dec/src/extra.yaml"
 
 # --- 8. units cannot start before the dataset is ready ------------------
 svc=units/systemd/smortress-restic-backup@.service
-for g in "${groups[@]}"; do
-  if grep -q "zfs-ready@$g.service" "$svc"; then
-    ok "the backup driver is ordered after zfs-ready@$g"
+for key in "${dataset_order[@]}"; do
+  instance=$(readiness_instance "$key")
+  if grep -q "zfs-ready@$instance.service" "$svc"; then
+    ok "the backup driver is ordered after zfs-ready@$instance"
   else
-    bad "the backup driver is ordered after zfs-ready@$g"
+    bad "the backup driver is ordered after zfs-ready@$instance"
   fi
 done
 for unit in var-lib-restic-ssd.mount var-lib-restic-hdd.mount \

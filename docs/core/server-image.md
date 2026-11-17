@@ -3,7 +3,7 @@
 The smortress core is one immutable uCore bootc deployment, configured by this
 repository and nothing else. There is no Nix on the host, no k3s, no Flux and no
 Ansible. Podman Quadlets are the only container control plane; ZFS recovery
-groups and `/var/tank` are the only service-data layout.
+datasets under `/var/srv` and `/var/lib` are the only service-data layout.
 
 This document covers the image, its signing policy, the Ignition install and the
 rollback path. Operator-only actions are in `docs/manual-steps.md` section 37.
@@ -19,7 +19,7 @@ rollback path. Operator-only actions are in `docs/manual-steps.md` section 37.
 | `/etc/smortress/secrets/*.yaml` | SOPS ciphertext only. `image/rootfs/etc/smortress/secrets.manifest` fixes the decrypted owner, group and mode. |
 | `/usr/lib/systemd/system/zfs-ready@.service` | One readiness instance per recovery group; verifies the mount, not the directory. |
 | `/usr/lib/systemd/system/sops-decrypt.service` | Boot-ordered decrypt into `/run/smortress/secrets`. |
-| `/usr/lib/systemd/system/smortress-zpool.service` | Creates or imports `tank` on the encrypted data device. |
+| `/usr/lib/systemd/system/smortress-zpool.service` | Creates or imports the `smortress` pool on the encrypted data device. |
 | `/usr/lib/systemd/system/smortress-cryptsetup-hdd.service` | Opens the HDD LUKS with its keyfile; non-blocking by contract. |
 | `/etc/firewalld/zones/tailscale.xml` | Binds `tailscale0`, permits SSH and Syncthing's 22000/tcp+udp; the default zone is `drop`. |
 | `/usr/share/smortress/quadlet/pattern.container` | Quadlet base pattern; not enabled, no `[Install]`. |
@@ -47,7 +47,7 @@ published 2026-11-15 03:09:12Z. The amd64 manifest in that index is
 `sha256:e97dd4593a3b6845820da3aea11c0245f1f243d28df6510ed2da48c3848700f2`.
 The tag is recorded for humans; every consumer uses the digest. `stable-nvidia`
 is deliberate: uCore ships the NVIDIA userspace and the OpenZFS module used by
-`tank`.
+`smortress`.
 
 The base already provides what the design needs, verified by inspecting the
 image: the ZFS kernel module and tools, Podman with the Quadlet generator,
@@ -194,10 +194,10 @@ Secure Boot stays off.
 
 ## ZFS, readiness and Quadlets
 
-`smortress-zpool.service` creates `tank` with `cachefile=none`, `ashift=12`,
+`smortress-zpool.service` creates `smortress` with `cachefile=none`, `ashift=12`,
 `compression=zstd`, `atime=off`, `xattr=sa`, `acltype=posixacl`, and creates the
-childless groups `photos`, `books`, `notes`, `music`, `wallpapers` and
-`syncthing` under `/var/tank`. Later boots import the pool; a missing data device
+datasets `raw/files`, `raw/photos`, `raw/books`, `raw/music`, `raw/wallpapers` and
+the raw groups under `/var/srv` and the state datasets under `/var/lib`. Later boots import the pool; a missing data device
 fails this unit and its consumers, not the OS.
 
 `zfs-ready@<group>.service` runs `scripts/zfs-ready.sh <group>`, which checks
@@ -219,7 +219,7 @@ Quadlet is installed. Nothing publishes `0.0.0.0` or `::`.
 
 SOPS/age remains the versioned format. `secrets/server/*.yaml` is ciphertext for
 the admin age recipient in `.sops.yaml`; the same passphrase-wrapped identity is
-staged root-only at `/var/lib/smortress/age/keys.txt` from the offline kit
+staged root-only at `/var/lib/homelab/age/keys.txt` from the offline kit
 (unwrapped to the `AGE-SECRET-KEY-...` form there; the kit container itself is
 not readable without the paper passphrase).
 `sops-decrypt.service` decrypts on every boot into `/run/smortress/secrets`

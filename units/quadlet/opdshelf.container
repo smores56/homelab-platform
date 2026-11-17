@@ -12,8 +12,8 @@
 # forwards unchanged.
 [Unit]
 Description=OPDShelf catalog (books recovery group)
-Requires=zfs-ready@books.service sops-decrypt.service smortress-app-secrets.service
-After=network-online.target zfs-ready@books.service sops-decrypt.service smortress-app-secrets.service
+Requires=zfs-ready@raw-books.service zfs-ready@state-opdshelf.service sops-decrypt.service smortress-app-secrets.service
+After=network-online.target zfs-ready@raw-books.service zfs-ready@state-opdshelf.service sops-decrypt.service smortress-app-secrets.service
 Wants=network-online.target
 
 [Container]
@@ -24,13 +24,14 @@ User=1000:1000
 Secret=opdshelf-admin-password,type=env,target=ADMIN_PASSWORD
 Environment=PORT=8083
 Environment=BOOKS_DIR=/books
-Environment=DATA_DIR=/books/.opdshelf
+Environment=DATA_DIR=/state
 Environment=ADMIN_USERNAME=smores56
 Environment=WATCH=false
 Environment=SCAN_INTERVAL=600
 Environment=MAX_UPLOAD_MB=512
 Environment=TZ=UTC
-Volume=/var/tank/books:/books:z
+Volume=/srv/books:/books:z
+Volume=/var/lib/opdshelf:/state:z
 PublishPort=127.0.0.1:8083:8083
 ReadOnly=true
 NoNewPrivileges=true

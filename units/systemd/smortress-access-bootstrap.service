@@ -8,7 +8,7 @@
 # NM re-asserts its own zone on every activation, which is how the first
 # bring-up lost SSH even though firewalld had the interface bound.
 Description=Allow SSH on the wired LAN until tailnet enrollment
-ConditionPathExists=!/var/lib/smortress/tailscale-enrolled
+ConditionPathExists=!/var/lib/homelab/tailscale-enrolled
 Wants=NetworkManager.service firewalld.service
 After=NetworkManager.service firewalld.service network-online.target
 

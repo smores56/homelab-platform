@@ -16,16 +16,16 @@
 #     ghcr.io/smores56/homelab-platform, or add that registry's key to policy.
 
 [Unit]
-Description=Smortress application Quadlet pattern (photos group)
-Requires=zfs-ready@photos.service sops-decrypt.service
-After=network-online.target zfs-ready@photos.service sops-decrypt.service
+Description=Smortress application Quadlet pattern (books raw group)
+Requires=zfs-ready@raw-books.service zfs-ready@state-opdshelf.service sops-decrypt.service
+After=network-online.target zfs-ready@raw-books.service zfs-ready@state-opdshelf.service sops-decrypt.service
 Wants=network-online.target
 
 [Container]
 Image=quay.io/toolbx-images/alpine-toolbox@sha256:78e87959f390afb385c3ce2f0b3a2a508b9f08da2001815d294709ac0c087631
 ContainerName=smortress-pattern
 PublishPort=127.0.0.1:8080:8080
-Volume=/var/tank/photos:/data:z
+Volume=/srv/books:/data:z
 Volume=/run/smortress/secrets/canary.yaml:/run/secrets/canary.yaml:ro,z
 ReadOnly=true
 NoNewPrivileges=true

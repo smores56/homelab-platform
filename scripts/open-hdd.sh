@@ -6,7 +6,7 @@
 set -euo pipefail
 
 readonly device_file=/etc/smortress/hdd-device
-readonly key_file=/var/lib/smortress/keys/hdd.key
+readonly key_file=/var/lib/homelab/keys/hdd.key
 readonly mapper=luks-hdd
 
 if [[ ! -s $device_file ]]; then

@@ -12,8 +12,8 @@
 # creates itself.
 [Unit]
 Description=Immich Valkey queue (photos recovery group)
-Requires=zfs-ready@photos.service sops-decrypt.service
-After=network-online.target zfs-ready@photos.service sops-decrypt.service
+Requires=sops-decrypt.service
+After=network-online.target sops-decrypt.service
 Wants=network-online.target
 
 [Container]
@@ -22,7 +22,7 @@ ContainerName=smortress-immich-valkey
 Network=immich.network
 User=1000:1000
 Exec=/bin/sh -c 'exec valkey-server --dir /data --appendonly yes --appendfsync everysec --save ""'
-Volume=/var/tank/photos:/data:z
+Volume=/var/lib/immich/valkey:/data:z
 ReadOnly=true
 NoNewPrivileges=true
 DropCapability=ALL
