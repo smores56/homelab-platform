@@ -213,6 +213,8 @@ jobs:
         run: tests/provision/check.sh
       - name: core gate static checks
         run: tests/core/check.sh
+      - name: storage layout checks
+        run: tests/core/storage-layout.sh
       - name: apps schema checks
         run: tests/apps/check.sh
       - name: apps render checks

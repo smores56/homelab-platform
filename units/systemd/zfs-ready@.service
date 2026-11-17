@@ -1,5 +1,5 @@
 [Unit]
-Description=Verify ZFS recovery group %i is mounted at /var/tank/%i
+Description=Verify the dataset behind %i is mounted at its storage-table mountpoint
 After=zfs-mount.service smortress-zpool.service
 Wants=smortress-zpool.service
 

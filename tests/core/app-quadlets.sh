@@ -251,7 +251,7 @@ if [[ -n $dump_hour && -n $r2_hour ]]; then
 else
   bad 'immich dump precedes the R2 job' "dump=$dump_hour r2=$r2_hour"
 fi
-if grep -q 'Requires=.*zfs-ready@photos.service' units/systemd/smortress-immich-dump.service; then
+if grep -q 'Requires=.*zfs-ready@raw-photos.service' units/systemd/smortress-immich-dump.service; then
   ok 'immich dump requires its dataset'
 else
   bad 'immich dump requires its dataset'
@@ -276,19 +276,25 @@ else
   ok 'syncthing lets its entrypoint drop privileges'
 fi
 
-# 7. The recovery-group vocabulary is one list in three places.
-zp=$(grep -oP '^readonly groups=\(\K[^)]+' scripts/init-zpool.sh | tr ' ' '\n' | sort)
-rp=$(grep -oP '^groups=\(\K[^)]+' scripts/restic-plane-common.sh | tr ' ' '\n' | sort)
-eq "$zp" "$rp" 'zpool groups and Restic groups agree'
-# The pool unit gives every group root to the uid the applications run as; a
-# restore is root-owned, so this is what lets a dump-only group create the
-# directories the containers need.
-# The matched text is the source line, so $group is deliberately literal here.
+# 7. The storage table is the only list: the pool and the readiness check read
+# it rather than restating dataset names, and a dataset root belongs to the uid
+# the applications run as, which is what lets a restored tree be written
+# without a manual chown.
+# The matched text is the source line, so $layout is deliberately literal.
 # shellcheck disable=SC2016
-if grep -q 'chown 1000:1000 "/var/tank/$group"' scripts/init-zpool.sh; then
-  ok 'the pool unit gives each group root to uid 1000'
+if ! grep -q '^groups=(' scripts/init-zpool.sh &&
+  grep -q 'source "$layout"' scripts/init-zpool.sh &&
+  grep -q 'source "$layout"' scripts/zfs-ready.sh; then
+  ok 'the pool and readiness scripts read the storage table'
 else
-  bad 'the pool unit gives each group root to uid 1000'
+  bad 'the pool and readiness scripts read the storage table'
+fi
+# The matched text is the source line, so $mountpoint is deliberately literal.
+# shellcheck disable=SC2016
+if grep -q 'chown 1000:1000 "$mountpoint"' scripts/init-zpool.sh; then
+  ok 'the pool unit gives each dataset root to uid 1000'
+else
+  bad 'the pool unit gives each dataset root to uid 1000'
 fi
 
 # Quadlet drops an empty Exec argument, so valkey's `--save ""` must stay inside
@@ -305,16 +311,17 @@ else
   bad 'valkey keeps its AOF in the dataset root'
 fi
 
-for group in $zp; do
-  if grep -q "zfs-ready@$group.service" image/Containerfile; then
-    ok "image enables zfs-ready@$group"
+instances=$(scripts/init-zpool.sh --print-plan | awk '{print $1}' | sed 's|^[^/]*/||; s|/|-|')
+for instance in $instances; do
+  if grep -q "zfs-ready@$instance.service" image/Containerfile; then
+    ok "image enables zfs-ready@$instance"
   else
-    bad "image enables zfs-ready@$group"
+    bad "image enables zfs-ready@$instance"
   fi
-  if grep -q "zfs-ready@$group.service" units/systemd/smortress-restic-backup@.service; then
-    ok "backup driver is ordered after zfs-ready@$group"
+  if grep -q "zfs-ready@$instance.service" units/systemd/smortress-restic-backup@.service; then
+    ok "backup driver is ordered after zfs-ready@$instance"
   else
-    bad "backup driver is ordered after zfs-ready@$group"
+    bad "backup driver is ordered after zfs-ready@$instance"
   fi
 done
 
