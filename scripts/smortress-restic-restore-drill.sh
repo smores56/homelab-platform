@@ -73,7 +73,7 @@ deadline=${RESTIC_DEADLINE_DRILL:-14400}
 
 if ! json=$(with_deadline "$(job_deadline "$backend")" "$restic_bin" -r "$repo" \
   snapshots --json --no-lock --host "$restic_host" \
-  --tag "unit:$unit" --tag verified); then
+  --tag "unit:$unit,verified"); then
   warn "$backend: cannot list snapshots in $repo"
   exit 1
 fi

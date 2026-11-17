@@ -167,8 +167,7 @@ check "init requires the decrypt unit" grep -qE '^Requires=.*sops-decrypt\.servi
 retention_ok=1
 while IFS= read -r retention_line; do
   [[ $retention_line == *--keep-* ]] || continue
-  if [[ $retention_line != *'--tag unit:'* && $retention_line != *'--tag "unit:'* ]] ||
-    [[ $retention_line != *'--tag verified'* ]]; then
+  if [[ $retention_line != *'--tag "unit:'* || $retention_line != *',verified'* ]]; then
     retention_ok=0
   fi
 done < <(sed -e :a -e '/\\$/N; s/\\\n/ /; ta' scripts/smortress-restic-backup.sh)

@@ -105,7 +105,10 @@ case $cmd in
     fi
     unit=""
     for ((j = 0; j < ${#args[@]}; j++)); do
-      [[ ${args[j]} == --tag && ${args[j + 1]} == unit:* ]] && unit=${args[j + 1]#unit:}
+      if [[ ${args[j]} == --tag && ${args[j + 1]} == unit:* ]]; then
+        unit=${args[j + 1]#unit:}
+        unit=${unit%%,*}
+      fi
     done
     case $repo in
       */restic) backend=$(basename "$(dirname "$repo")") ;;
@@ -317,9 +320,16 @@ joined=$(sed -e :a -e '/\\$/N; s/\\\n/ /; ta' scripts/smortress-restic-backup.sh
 retention_bad=""
 while IFS= read -r line; do
   [[ $line == *--keep-* ]] || continue
-  [[ $line == *'--tag "unit:'* || $line == *'--tag unit:'* ]] || retention_bad=$line
-  [[ $line == *'--tag verified'* ]] || retention_bad=$line
+  [[ $line == *'--tag "unit:'* && $line == *',verified'* ]] || retention_bad=$line
 done <<<"$joined"
+# Two --tag flags are OR in restic; only one comma-separated flag is AND, and a
+# wrong form makes one unit's forget touch another unit's verified snapshots.
+if grep -nE -- '--tag "unit:\$[a-z]+" --tag verified' scripts/smortress-restic-*.sh; then
+  bad "unit and verified are matched with one AND tag"
+else
+  ok "unit and verified are matched with one AND tag"
+fi
+
 if [[ -z $retention_bad ]]; then
   ok "every retention command requires both unit and verified tags"
 else

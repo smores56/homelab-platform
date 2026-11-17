@@ -148,7 +148,7 @@ check_unit() {
 
   local out verdict stime
   if ! out=$(with_deadline "$(job_deadline "$backend")" "$restic_bin" -r "$repo" \
-    snapshots --json --no-lock --host "$restic_host" --tag "unit:$unit" 2>/dev/null); then
+    snapshots --json --no-lock --host "$restic_host" --tag "unit:$unit,verified" 2>/dev/null); then
     fail "$backend/$unit: cannot read snapshots from $repo"
     return
   fi

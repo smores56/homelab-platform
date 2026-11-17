@@ -284,8 +284,7 @@ attempt_locked() {
   # just created. The tree is what tagging does not change, so it identifies the
   # snapshot independently of its id.
   verified_json=$(with_deadline "$deadline" "$restic_bin" -r "$repo" snapshots \
-    --json --no-lock --host "$restic_host" --tag "unit:$unit" \
-    --tag verified 2>/dev/null) || verified_json=""
+    --json --no-lock --host "$restic_host" --tag "unit:$unit,verified" 2>/dev/null) || verified_json=""
   verified_sid=$(printf '%s' "$verified_json" |
     jq -r --arg tree "$backup_tree" '[.[] | select(.tree == $tree)] | sort_by(.time) | last | .id // empty' 2>/dev/null) || verified_sid=""
   verified_tree=$(printf '%s' "$verified_json" |
@@ -369,7 +368,7 @@ run_maintenance() {
     for g in "${units[@]}"; do
       if ! restic_with_lock "$deadline_maintenance" "$repo" forget \
         --host "$restic_host" \
-        --tag "unit:$g" --tag verified \
+        --tag "unit:$g,verified" \
         --keep-daily 14 --keep-weekly 8 --keep-monthly 12 >>"$log" 2>&1; then
         rc=1
       fi
