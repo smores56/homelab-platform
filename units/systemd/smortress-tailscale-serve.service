@@ -1,8 +1,10 @@
 [Unit]
-# Declare the Tailscale Serve routes that front the three loopback-published
-# applications. Serve state lives in tailscaled's state file, which is not a
-# recovery group, so the routes are re-declared at every boot; the script is
-# idempotent. Every route is Funnel-free: tailnet clients only.
+# Declare the Tailscale Serve routes that front the loopback-published
+# applications: the three core apps on their own root paths, plus one
+# /apps/<name> path on 443 per reachable tenant app from the rendered plan.
+# Serve state lives in tailscaled's state file, which is not a recovery group,
+# so the routes are re-declared at every boot, and a route the plan no longer
+# names is removed. Every route is Funnel-free: tailnet clients only.
 #
 # This unit needs an enrolled tailnet. Without one it fails visibly rather than
 # skipping, because a host whose applications answer on no route is a fault, not
