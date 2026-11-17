@@ -23,3 +23,6 @@ ignition/operator/
 
 # Rendered Ignition (contains first-boot passphrases)
 ignition/*.ign
+
+# Task worktrees live inside the repo (worktrees new).
+.worktrees/
