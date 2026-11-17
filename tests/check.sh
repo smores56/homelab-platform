@@ -179,6 +179,7 @@ fi
 if grep -qF 'nym-vpn-core-v${NYM_VERSION}_linux_${arch}.tar.gz' image/Containerfile \
     && grep -qF 'sha256sum -c -' image/Containerfile \
     && grep -q 'aarch64)' image/Containerfile \
+    && grep -q -- '--location' image/Containerfile \
     && grep -q -- '--strip-components=1' image/Containerfile; then
   ok "the Containerfile fetches the pinned tarball per arch and verifies its hash"
 else

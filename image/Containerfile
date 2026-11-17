@@ -85,7 +85,7 @@ RUN set -eux; \
       aarch64) arch=aarch64; nym_sha="${NYM_SHA256_ARM64}" ;; \
       *) echo "no NymVPN tarball for $(uname -m)" >&2; exit 1 ;; \
     esac; \
-    curl -fsS --proto '=https' --retry 3 --connect-timeout 10 --max-time 300 \
+    curl -fsS --location --proto '=https' --retry 3 --connect-timeout 10 --max-time 300 \
       -o /tmp/nym.tar.gz \
       "https://github.com/nymtech/nym-vpn-client/releases/download/nym-vpn-v${NYM_VERSION}/nym-vpn-core-v${NYM_VERSION}_linux_${arch}.tar.gz"; \
     printf '%s  %s\n' "$nym_sha" /tmp/nym.tar.gz | sha256sum -c -; \
