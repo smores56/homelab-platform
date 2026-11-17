@@ -1,0 +1,21 @@
+[Unit]
+# systemd-sysusers creates the account; this makes it able to run rootless
+# containers: a subuid/subgid allocation, a home for the storage, the tenant
+# container policy, and a check that pasta and the uid mappers exist. It must
+# finish before anything can start a tenant container or its user manager.
+Description=Provision the apps tenant user for rootless Podman
+DefaultDependencies=no
+Wants=systemd-sysusers.service local-fs.target
+After=systemd-sysusers.service local-fs.target
+# Before logind: a lingering user manager (and any enabled tenant Quadlet it
+# starts) must not exist until the subuid ranges and policy are in place.
+Conflicts=shutdown.target
+Before=systemd-logind.service smortress-apps-quota.service shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/apps-user
+
+[Install]
+WantedBy=sysinit.target

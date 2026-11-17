@@ -303,10 +303,10 @@ else
 fi
 # The matched text is the source line, so $mountpoint is deliberately literal.
 # shellcheck disable=SC2016
-if grep -q 'chown 1000:1000 "$mountpoint"' scripts/init-zpool.sh; then
-  ok 'the pool unit gives each dataset root to uid 1000'
+if grep -q 'chown "$(dataset_owner_for "$key")" "$mountpoint"' scripts/init-zpool.sh; then
+  ok 'the pool unit takes each dataset root owner from the table'
 else
-  bad 'the pool unit gives each dataset root to uid 1000'
+  bad 'the pool unit takes each dataset root owner from the table'
 fi
 
 # Quadlet drops an empty Exec argument, so valkey's `--save ""` must stay inside
@@ -360,10 +360,17 @@ for dir in /var/lib/immich/ml-cache /var/lib/immich/valkey /var/lib/syncthing/ve
   read -r _kind _path mode owner group _rest <<<"$line"
   eq "$mode/$owner/$group" "0750/1000/1000" "tmpfiles creates $dir for uid 1000"
 done
+known_owners="root 0 1000"
+for conf in image/rootfs/etc/sysusers.d/*.conf; do
+  [[ -f $conf ]] || continue
+  while read -r name _rest; do
+    [[ -n $name ]] && known_owners="$known_owners $name"
+  done < <(sed -nE 's/^[ug] ([^ ]+).*/\1/p' "$conf")
+done
 while read -r kind _path _mode owner _group _rest; do
   [[ $kind == d ]] || continue
-  case $owner in
-    root | 0 | 1000) ok "tmpfiles entry $_path names a real owner" ;;
+  case " $known_owners " in
+    *" $owner "*) ok "tmpfiles entry $_path names a real owner" ;;
     *) bad "tmpfiles entry $_path names a real owner" "$owner" ;;
   esac
 done < <(grep -vE '^#|^$' "$tmpfiles")

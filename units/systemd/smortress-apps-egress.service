@@ -1,0 +1,19 @@
+[Unit]
+# The tenant's egress boundary is static: it matches the apps uid and needs
+# nothing but the kernel, so it loads once and stays. It must be in force before
+# any tenant container starts, and before Serve can route to one.
+Description=Drop apps-tenant egress to LAN, tailnet, host and metadata destinations
+DefaultDependencies=no
+After=local-fs.target
+# Before logind: the rule must be in force before a lingering user manager can
+# start a tenant container.
+Conflicts=shutdown.target
+Before=systemd-logind.service shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/nft -f /etc/nftables/smortress-apps.nft
+
+[Install]
+WantedBy=sysinit.target

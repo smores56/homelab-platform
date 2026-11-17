@@ -75,11 +75,17 @@ for key in "${dataset_order[@]}"; do
   # it the application's ownership only when the dataset really is mounted under
   # it, so nothing here can carry a permission onto the wrong tree.
   if mountpoint -q "$mountpoint"; then
-    # Every application runs as uid 1000, so the dataset root belongs to that
-    # uid: it is what lets a restored tree be written without a manual chown.
-    # Restic still reads as root.
-    chown 1000:1000 "$mountpoint"
-    chmod 0755 "$mountpoint"
+    # A core dataset belongs to uid 1000: it is what lets a restored tree be
+    # written without a manual chown. Restic still reads as root. The mode is
+    # 0750 so the tenant user cannot read it; the tenant's own dataset belongs
+    # to the tenant account and is 0700.
+    chown "$(dataset_owner_for "$key")" "$mountpoint"
+    chmod "$(dataset_mode_for "$key")" "$mountpoint"
+    # Only the tenant's dataset has a quota in the table today; the applier
+    # re-asserts it at every deploy, this makes the first boot match.
+    if [[ -n ${dataset_quota[$key]:-} ]]; then
+      zfs set "quota=${dataset_quota[$key]}" "$dataset"
+    fi
   else
     echo "init-zpool: $dataset is not mounted at $mountpoint" >&2
     exit 1

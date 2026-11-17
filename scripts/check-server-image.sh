@@ -250,7 +250,9 @@ done < <(awk '!/^[[:space:]]*(#|$)/ { print $1 }' image/rootfs/etc/smortress/sec
 
 check "firewall binds tailscale0" has '<interface name="tailscale0"/>' image/rootfs/etc/firewalld/zones/tailscale.xml
 check "firewall permits ssh only on that zone" has '<service name="ssh"/>' image/rootfs/etc/firewalld/zones/tailscale.xml
-if grep -rInE '0\.0\.0\.0|\[::\]' units image/rootfs 2>/dev/null | grep -v 'PublishPort=127.0.0.1' | grep -q .; then
+# A wildcard *listener* binds every address; `0.0.0.0` inside a CIDR
+# (10.0.0.0/8) is a destination and must not trip this.
+if grep -rInE '\b0\.0\.0\.0\b|\[::\]' units image/rootfs 2>/dev/null | grep -v 'PublishPort=127.0.0.1' | grep -q .; then
   bad "no wildcard listener address in units or rootfs"
 else
   ok "no wildcard listener address in units or rootfs"

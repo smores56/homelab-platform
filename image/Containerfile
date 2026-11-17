@@ -39,10 +39,13 @@ COPY scripts/storage-layout.sh scripts/zfs-ready.sh scripts/sops-decrypt.sh scri
      scripts/smortress-restic-verify.sh scripts/smortress-restic-init.sh \
      scripts/smortress-restic-restore-drill.sh \
      scripts/app-secrets.sh scripts/immich-dump.sh scripts/tailscale-serve.sh \
+     scripts/apps-quota.sh scripts/apps-user.sh \
      /usr/libexec/smortress-src/
 # Application Quadlets. The generator scans /usr/share/containers/systemd at
 # boot, and a quadlet is a generated unit, so nothing here is enabled with
 # systemctl: the [Install] section is what starts it.
+COPY units/systemd/user@1001.service.d/ /usr/lib/systemd/system/user@1001.service.d/
+COPY units/systemd/user-1001.slice.d/ /usr/lib/systemd/system/user-1001.slice.d/
 COPY units/quadlet/immich.network units/quadlet/immich-postgres.container \
      units/quadlet/immich-valkey.container \
      units/quadlet/immich-machine-learning.container \
@@ -52,9 +55,11 @@ COPY units/quadlet/immich.network units/quadlet/immich-postgres.container \
 COPY secrets/server/ /etc/smortress/secrets/
 COPY image/cosign.pub /etc/pki/containers/smortress.pub
 
+COPY scripts/apps-schema.py /usr/libexec/apps-schema
 RUN set -eux; \
     for f in /usr/libexec/smortress-src/*.sh; do install -m 0755 "$f" "/usr/libexec/$(basename "${f%.sh}")"; done; \
     rm -rf /usr/libexec/smortress-src; \
+    chmod 0755 /usr/libexec/apps-schema; \
     chmod 0644 /etc/pki/containers/smortress.pub /etc/smortress/secrets.manifest; \
     chmod 0600 /etc/smortress/secrets/*.yaml
 
@@ -111,6 +116,9 @@ RUN set -eux; \
       zfs-ready@state-syncthing-config.service \
       zfs-ready@state-opdshelf.service \
       smortress-app-secrets.service \
+      smortress-apps-user.service \
+      smortress-apps-quota.service \
+      smortress-apps-egress.service \
       smortress-tailscale-serve.service \
       smortress-cloudflared.service \
       smortress-immich-dump.timer \
@@ -137,5 +145,6 @@ RUN firewall-offline-cmd --set-default-zone=drop
 # rejects by default.
 RUN set -eux; \
     case "${BASE_IMAGE}" in *@sha256:*) ;; *) echo "BASE_IMAGE is not digest-pinned" >&2; exit 1 ;; esac; \
+    command -v python3 >/dev/null || { echo "the image has no python3 for the plan verifier" >&2; exit 1; }; \
     jq -e '.default[0].type == "reject"' /etc/containers/policy.json >/dev/null; \
     jq -e '.transports.docker["ghcr.io/smores56/homelab-platform"][0].keyPath == "/etc/pki/containers/smortress.pub"' /etc/containers/policy.json >/dev/null
