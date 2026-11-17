@@ -109,6 +109,7 @@ jobs:
           COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
         run: |
           set -euo pipefail
+          . image/pins.env
           cosign sign -y --new-bundle-format=false --use-signing-config=false --tlog-upload=false \
             --key env://COSIGN_PRIVATE_KEY "${IMAGE_REPO}@${IMAGE_DIGEST}"
 
