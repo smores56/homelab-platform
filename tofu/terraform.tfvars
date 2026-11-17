@@ -14,7 +14,7 @@ cluster_tunnel_id = "16a461e2-b28e-4535-b79d-eca2f6e9b001"
 
 # Created in the dashboard (remotely managed); paste its UUID, then merge: the
 # ssh DNS record and its ingress are written by the same apply.
-ssh_tunnel_id = ""
+ssh_tunnel_id = "bc44b9af-3d18-496b-8ef2-f6e6f73f5fad"
 
 # Empty until the in-VM CSR client has registered; see docs/manual-steps.md
 # step 16. The CAA records are created only once this is set.
