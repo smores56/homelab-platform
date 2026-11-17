@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate (and later render) typed app definitions for the `apps` tenant.
+"""Validate typed app definitions for the `apps` tenant.
 
 A definition is ``homelab-apps/apps/<name>/app.toml`` and may declare only
 what the platform is willing to interpret: a digest-pinned image, one
@@ -12,12 +12,14 @@ definition cannot express them. Unknown keys are errors at every level.
     scripts/apps-schema.py validate --root <homelab-apps checkout> \
         [--secrets <tenant sops json>]
 
-``validate`` prints ``apps/<name>/app.toml: <problem>`` per problem and exits
-non-zero; it prints nothing when the tree is clean. It is the same check that
-smortress re-runs on the fetched commit before rendering, so it reads the
-tenant SOPS file's *key names* only and never decrypts a value.
+``validate`` prints ``apps/<name>/app.toml: <problem>`` per problem on stdout
+and exits non-zero; it prints nothing when the tree is clean. It is the same
+check that smortress re-runs on the fetched commit before rendering, so it
+fails closed — a missing ``apps/`` directory is an error, not an empty plan —
+and it reads the tenant SOPS file's *key names* only, never a value.
 
-Stdlib only: the image ships one python3 and no third-party packages.
+Stdlib only, python 3.11 or later: the image ships one python3 and no
+third-party packages.
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ import re
 import sys
 import tomllib
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any
 
 #: The whole vocabulary of a definition. Anything else is a containment bug,
@@ -41,26 +44,35 @@ EGRESS_CLASSES = {"internet", "none"}
 #: its own quota, so this bounds a single app rather than the tenant.
 QUOTA_CEILING = "50G"
 
-#: Container ports below 1024 would be privileged inside the namespace, and
-#: the platform assigns a loopback port outside this range for the reverse
-#: proxy; refuse the overlap instead of rendering something unusable.
-PORT_MIN = 1024
+#: The container port is never published on the host: the platform assigns its
+#: own loopback port for the reverse proxy, and rootless podman binds low ports
+#: inside the namespace without privilege. Any port the image listens on is
+#: therefore legal.
+PORT_MIN = 1
 PORT_MAX = 65535
 
-APP_NAME = re.compile(r"^[a-z][a-z0-9-]{0,30}$")
-IMAGE_REF = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
-ENV_NAME = re.compile(r"^[A-Z_][A-Z0-9_]*$")
-SECRET_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
-QUOTA = re.compile(r"^([0-9]+)([KMGT])$")
+#: Control characters are refused everywhere a string is accepted: a newline in
+#: an env value is how one definition becomes an extra directive in a rendered
+#: unit. `\Z` rather than `$` because `$` also matches before a trailing
+#: newline, which would let the same character through a name or a reference.
+CONTROL = re.compile(r"[\x00-\x1f\x7f]", re.ASCII)
+
+APP_NAME = re.compile(r"[a-z](?:[a-z0-9-]{0,29}[a-z0-9])?\Z", re.ASCII)
+#: A distribution reference with no tag but a digest. Anything that is not
+#: part of a repository path or a digest stay out: no `%`, `;`, `$` or space
+#: ever reaches podman or a generated `Image=` line.
+IMAGE_REF = re.compile(
+    r"(?:[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*)"
+    r"(?::[A-Za-z0-9._-]{1,128})?@sha256:[a-f0-9]{64}\Z",
+    re.ASCII,
+)
+ENV_NAME = re.compile(r"[A-Z_][A-Z0-9_]*\Z", re.ASCII)
+SECRET_NAME = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z", re.ASCII)
+QUOTA = re.compile(r"([0-9]+)([KMGT])\Z", re.ASCII)
 
 UNIT_BYTES = {"K": 1024, "M": 1024**2, "G": 1024**3, "T": 1024**4}
 
-
-class Problems(list):
-    """Collects ``(file, message)`` pairs so every defect is reported at once."""
-
-    def add(self, where: str, message: str) -> None:
-        self.append((where, message))
+Problems = list[str]
 
 
 def quota_bytes(value: str) -> int | None:
@@ -71,137 +83,153 @@ def quota_bytes(value: str) -> int | None:
     return int(amount) * UNIT_BYTES[unit]
 
 
-def check_definition(name: str, data: dict[str, Any], where: str, problems: Problems) -> None:
+def has_control(value: str) -> bool:
+    return CONTROL.search(value) is not None
+
+
+def check_definition(
+    name: str,
+    data: dict[str, Any],
+    where: str,
+    tenant_secrets: dict[str, Any] | None,
+    problems: Problems,
+) -> None:
+    def add(message: str) -> None:
+        problems.append(f"{where}: {message}")
+
     for key in sorted(set(data) - TOP_LEVEL_KEYS):
-        problems.add(where, f"unknown key '{key}'")
+        add(f"unknown key '{key}'")
     for key in REQUIRED_KEYS:
         if key not in data:
-            problems.add(where, f"missing required key '{key}'")
+            add(f"missing required key '{key}'")
 
-    image = data.get("image")
     if "image" in data:
+        image = data["image"]
         if not isinstance(image, str):
-            problems.add(where, "image must be a string")
+            add("image must be a string")
         elif not IMAGE_REF.match(image):
-            problems.add(where, "image must be pinned by digest: <repo>@sha256:<64 hex>")
+            add("image must be pinned by digest: <repo>@sha256:<64 hex>")
 
-    port = data.get("port")
     if "port" in data:
+        port = data["port"]
         if isinstance(port, bool) or not isinstance(port, int):
-            problems.add(where, f"port must be an integer in {PORT_MIN}-{PORT_MAX}")
+            add(f"port must be an integer in {PORT_MIN}-{PORT_MAX}")
         elif not PORT_MIN <= port <= PORT_MAX:
-            problems.add(where, f"port must be an integer in {PORT_MIN}-{PORT_MAX}")
+            add(f"port must be an integer in {PORT_MIN}-{PORT_MAX}")
 
-    egress = data.get("egress")
-    if "egress" in data and egress not in EGRESS_CLASSES:
-        problems.add(where, "egress must be \"internet\" or \"none\"")
+    if "egress" in data:
+        egress = data["egress"]
+        if not isinstance(egress, str) or egress not in EGRESS_CLASSES:
+            add('egress must be "internet" or "none"')
 
-    env = data.get("env", {})
     if "env" in data:
+        env = data["env"]
         if not isinstance(env, dict):
-            problems.add(where, "env must be a table of string values")
+            add("env must be a table of string values")
         else:
             for key, value in env.items():
-                if not isinstance(key, str) or not ENV_NAME.match(key):
-                    problems.add(where, f"env name '{key}' must match {ENV_NAME.pattern}")
+                if not ENV_NAME.match(key):
+                    add(f"env name '{key}' must match {ENV_NAME.pattern[:-2]}")
                 if not isinstance(value, str):
-                    problems.add(where, f"env value for '{key}' must be a string")
+                    add(f"env value for '{key}' must be a string")
+                elif has_control(value):
+                    add(f"env value for '{key}' must not contain control characters")
 
-    quota = data.get("quota")
     if "quota" in data:
+        quota = data["quota"]
         if not isinstance(quota, str):
-            problems.add(where, "quota must be a string such as \"10G\"")
+            add('quota must be a string such as "10G"')
         else:
             size = quota_bytes(quota)
             ceiling = quota_bytes(QUOTA_CEILING)
             if size is None:
-                problems.add(where, "quota must be a whole number with a K, M, G or T unit")
+                add("quota must be a whole number with a K, M, G or T unit")
             elif ceiling is not None and size > ceiling:
-                problems.add(where, f"quota exceeds the platform ceiling of {QUOTA_CEILING}")
+                add(f"quota exceeds the platform ceiling of {QUOTA_CEILING}")
 
-    secrets = data.get("secrets", [])
-    if "secrets" in data and not (
-        isinstance(secrets, list) and all(isinstance(s, str) and SECRET_NAME.match(s) for s in secrets)
-    ):
-        problems.add(where, "secrets must be a list of lower-case names")
-    elif "secrets" in data:
-        check_secrets(name, secrets, where, problems)
+    if "secrets" in data:
+        secrets = data["secrets"]
+        if not isinstance(secrets, list) or not all(
+            isinstance(secret, str) and SECRET_NAME.match(secret) for secret in secrets
+        ):
+            add("secrets must be a list of lower-case names")
+        else:
+            check_secrets(name, secrets, tenant_secrets, add)
 
 
-def check_secrets(name: str, secrets: list[str], where: str, problems: Problems) -> None:
+def check_secrets(
+    name: str,
+    secrets: list[str],
+    tenant_secrets: dict[str, Any] | None,
+    add: Callable[[str], None],
+) -> None:
     """A definition may reference only secrets declared under its own name."""
     if not secrets:
         return
-    declared = TENANT_SECRETS.get(name, {})
-    if TENANT_SECRETS_MISSING:
-        problems.add(where, "secrets reference the tenant SOPS file, but none was given (--secrets)")
+    if tenant_secrets is None:
+        add("secrets reference the tenant SOPS file, but none was given (--secrets)")
         return
+    declared = tenant_secrets.get(name, {})
     if not isinstance(declared, dict):
-        problems.add(where, f"'{name}' is not a table in the tenant SOPS file")
+        add(f"'{name}' is not a table in the tenant SOPS file")
         return
     for secret in sorted(secrets):
         if secret not in declared:
-            problems.add(where, f"secret '{secret}' is not declared for '{name}' in the tenant SOPS file")
+            add(f"secret '{secret}' is not declared for '{name}' in the tenant SOPS file")
 
 
-def load_tenant_secrets(path: Path | None, problems: Problems) -> None:
-    global TENANT_SECRETS, TENANT_SECRETS_MISSING
-    TENANT_SECRETS = {}
-    TENANT_SECRETS_MISSING = path is None
+def load_tenant_secrets(path: Path | None) -> tuple[dict[str, Any] | None, list[str]]:
+    problems: Problems = []
     if path is None:
-        return
+        return None, problems
     try:
         document = json.loads(path.read_text(encoding="utf-8"))
     except OSError as error:
-        problems.add(str(path), f"cannot read the tenant SOPS file: {error.strerror}")
-        return
-    except json.JSONDecodeError as error:
-        problems.add(str(path), f"tenant SOPS file is not valid JSON: {error}")
-        return
+        return None, [f"{path}: cannot read the tenant SOPS file: {error.strerror}"]
+    except ValueError as error:
+        return None, [f"{path}: tenant SOPS file is not valid JSON: {error}"]
+    if not isinstance(document, dict):
+        return None, [f"{path}: tenant SOPS file must be a JSON object"]
     apps = document.get("apps", {})
     if not isinstance(apps, dict):
-        problems.add(str(path), "tenant SOPS file has no 'apps' table")
-        return
-    TENANT_SECRETS = apps
-
-
-TENANT_SECRETS: dict[str, Any] = {}
-TENANT_SECRETS_MISSING = True
+        return None, [f"{path}: tenant SOPS file has no 'apps' table"]
+    return apps, problems
 
 
 def validate_root(root: Path, secrets: Path | None) -> Problems:
-    problems = Problems()
-    load_tenant_secrets(secrets, problems)
+    tenant_secrets, problems = load_tenant_secrets(secrets)
     if problems:
         return problems
 
     apps = root / "apps"
     if not apps.is_dir():
-        return problems
+        # The host re-runs this on a fetched commit; a wrong path or a failed
+        # clone must stop the deploy, never render an empty tenant.
+        return [f"{root}: no apps/ directory"]
 
     for directory in sorted(p for p in apps.iterdir() if p.is_dir()):
         name = directory.name
-        if not APP_NAME.match(name):
-            problems.add(str(directory), "app name must be lower-case letters, digits and hyphens")
-        definition = directory / "app.toml"
         where = f"apps/{name}/app.toml"
+        if not APP_NAME.match(name):
+            problems.append(f"{directory}: app name must be lower-case letters, digits and hyphens")
+        definition = directory / "app.toml"
         if not definition.is_file():
-            problems.add(f"apps/{name}", "missing app.toml")
+            problems.append(f"apps/{name}: missing app.toml")
             continue
         try:
             data = tomllib.loads(definition.read_text(encoding="utf-8"))
         except tomllib.TOMLDecodeError as error:
-            problems.add(where, f"not valid TOML: {error}")
+            problems.append(f"{where}: not valid TOML: {error}")
             continue
-        except OSError as error:
-            problems.add(where, f"cannot read: {error.strerror}")
+        except (OSError, ValueError) as error:
+            problems.append(f"{where}: cannot read: {error}")
             continue
-        check_definition(name, data, where, problems)
+        check_definition(name, data, where, tenant_secrets, problems)
 
     return problems
 
 
-def main(argv: list[str]) -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -214,17 +242,16 @@ def main(argv: list[str]) -> int:
     )
 
     args = parser.parse_args(argv)
-    if args.command == "validate":
-        secrets = args.secrets
-        if secrets is not None and not secrets.is_file():
-            print(f"{secrets}: tenant SOPS file not found", file=sys.stderr)
-            return 1
-        problems = validate_root(args.root, secrets)
-        for where, message in problems:
-            print(f"{where}: {message}")
-        return 1 if problems else 0
-    return 2
+    if args.command != "validate":
+        return 2
+    if args.secrets is not None and not args.secrets.is_file():
+        print(f"{args.secrets}: tenant SOPS file is not a file", file=sys.stderr)
+        return 1
+    problems = validate_root(args.root, args.secrets)
+    for problem in problems:
+        print(problem)
+    return 1 if problems else 0
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    raise SystemExit(main())

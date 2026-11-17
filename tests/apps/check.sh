@@ -69,6 +69,17 @@ validate() {
   fi
 }
 
+# expect_reject <label> <command...>: a run that must fail, whatever it says.
+expect_reject() {
+  local label=$1 out
+  shift
+  if out=$("$@" 2>&1); then
+    bad "$label" "expected a rejection, got a pass"
+  else
+    ok "$label"
+  fi
+}
+
 expect_ok() {
   local label=$1 tree=$2 out
   if out=$(validate "$tree") && [[ -z $out ]]; then
@@ -135,9 +146,15 @@ egress = \"none\"")" 'image'
 
 expect_fail 'a missing port is refused' "$(app example "image = \"ghcr.io/example/app@sha256:$digest\"
 egress = \"none\"")" 'port'
-expect_fail 'a privileged port is refused' "$(app example "image = \"ghcr.io/example/app@sha256:$digest\"
-port = 80
+expect_fail 'port zero is refused' "$(app example "image = \"ghcr.io/example/app@sha256:$digest\"
+port = 0
 egress = \"none\"")" 'port'
+expect_fail 'a boolean port is refused' "$(app example "image = \"ghcr.io/example/app@sha256:$digest\"
+port = true
+egress = \"none\"")" 'port'
+expect_ok 'a container port below 1024 is accepted' "$(app example "image = \"ghcr.io/example/app@sha256:$digest\"
+port = 80
+egress = \"none\"")" 
 expect_fail 'a port above 65535 is refused' "$(app example "image = \"ghcr.io/example/app@sha256:$digest\"
 port = 70000
 egress = \"none\"")" 'port'
@@ -181,6 +198,44 @@ secrets = [\"database-url\"]")" 'secrets'
 expect_fail 'an uppercase app name is refused' "$(app Example "$minimal")" 'name'
 expect_fail 'an unparsable definition names the file' "$(app example 'image = ')" 'app.toml'
 expect_fail 'an empty definition is refused' "$(app example '')" 'image'
+
+expect_fail 'a list egress is refused without a traceback' "$(app example "image = \"ghcr.io/example/app@sha256:$digest\"
+port = 18080
+egress = [\"none\"]")" 'egress'
+expect_fail 'a table egress is refused' "$(app example "image = \"ghcr.io/example/app@sha256:$digest\"
+port = 18080
+[egress]
+class = \"none\"")" 'egress'
+expect_fail 'a string secrets value is refused' "$(app example "$minimal
+secrets = \"database-url\"" "$secrets")" 'secrets'
+expect_fail 'an env value with a newline is refused' "$(app example "$minimal
+[env]
+LOG = \"info\\nEnvironment=LD_PRELOAD=/tmp/x.so\"")" 'control'
+expect_fail 'an env value with a NUL byte is refused' "$(app example "$minimal
+[env]
+LOG = \"x\\u0000y\"")" 'control'
+expect_fail 'a dotted key is refused' "$(app example "$minimal
+limits.memory = \"1G\"")" 'unknown key'
+expect_fail 'an array of tables for env is refused' "$(app example "$minimal
+[[env]]
+TZ = \"UTC\"")" 'env'
+expect_fail 'a trailing newline in the image is refused' "$(app example "image = \"ghcr.io/example/app@sha256:$digest\\n\"
+port = 18080
+egress = \"none\"")" 'image'
+expect_fail 'an image with a unit specifier is refused' "$(app example "image = \"ghcr.io/example/app%n@sha256:$digest\"
+port = 18080
+egress = \"none\"")" 'image'
+expect_fail 'a trailing hyphen in the app name is refused' "$(app example- "$minimal")" 'name'
+expect_fail 'a missing apps directory fails closed' "$(mktemp -d "$work/none.XXXXXX")" 'no apps/'
+expect_fail 'a root that is not a directory fails closed' "$work/notadir" 'no apps/'
+mkdir -p "$work/badjson" "$work/listjson" "$work/secretsdir"
+touch "$work/notadir" "$work/secretsdir/apps"
+printf 'not json' >"$work/badjson/secrets.sops.json"
+printf '[]' >"$work/listjson/secrets.sops.json"
+app example "$minimal" >/dev/null
+expect_reject 'invalid tenant JSON is refused' "$validator" validate --root "$work/badjson" --secrets "$work/badjson/secrets.sops.json"
+expect_reject 'a non-object tenant JSON is refused' "$validator" validate --root "$work/listjson" --secrets "$work/listjson/secrets.sops.json"
+expect_reject 'a secrets directory is refused' "$validator" validate --root "$work/listjson" --secrets "$work/secretsdir"
 
 printf '\n%s checks, %s failed\n' "$((pass + fail))" "$fail"
 ((fail == 0))
