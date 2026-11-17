@@ -189,6 +189,26 @@ Re-link the dotfiles as `smores` (the absolute symlinks under `~` still point at
 `/var/home/core`), enrol the YubiKey for `sudo`, and confirm
 `sshd -T | grep allowusers` reports `smores`.
 
+Two stores under `~` record the old home path as absolute state and fail after
+the rename, because `usermod -m` moves the tree without rewriting them:
+
+```sh
+# Rootless Podman's database pins the old static dir, and `podman system reset`
+# refuses on the same mismatch. The store only holds this account's dev images,
+# so move it aside and let Podman initialise a fresh one.
+mv ~/.local/share/containers/storage ~/.local/share/containers/storage.stale-core
+podman info >/dev/null          # re-initialises under /var/home/smores
+podman unshare rm -rf ~/.local/share/containers/storage.stale-core
+
+# mise tools that bake $HOME into their build (python, yamllint, uv/pipx tools,
+# conda:zsh) keep the old prefix; reinstall, do not re-link.
+mise install -f yamllint python
+```
+
+`scripts/bootstrap-task.sh` already reinstalls `conda:zsh` when its modules fail
+to load. The `dotfiles` SSH config and the wallpaper SFTP transport name
+`smores` instead of `core`.
+
 ## E. Retire the old family
 
 Only after D passes, in this order: the old Restic path family, then the attic.
