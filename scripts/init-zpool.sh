@@ -54,6 +54,13 @@ zpool set cachefile=none "$pool"
 # is rebuilt, not restored, so it gets no dataset and no snapshot.
 install -d -m 0755 /var/srv "${state_parents[@]}"
 
+# A child cannot be created before its parent, and neither parent is mounted.
+for parent in "${dataset_parents[@]}"; do
+  if ! zfs list -H -o name "$pool/$parent" >/dev/null 2>&1; then
+    zfs create -o mountpoint=none -o canmount=off "$pool/$parent"
+  fi
+done
+
 for key in "${dataset_order[@]}"; do
   dataset=$(dataset_name "$key")
   mountpoint=$(mountpoint_for "$key")

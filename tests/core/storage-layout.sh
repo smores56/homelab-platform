@@ -47,6 +47,16 @@ for key in "${dataset_order[@]}"; do
 done
 eq "$foreign" 0 'every mountpoint is under /var/srv or /var/lib'
 
+orphan=0
+for key in "${dataset_order[@]}"; do
+  parent=${key%%/*}
+  [[ " ${dataset_parents[*]} " == *" $parent "* ]] || {
+    orphan=1
+    printf '     %s has no parent in dataset_parents\n' "$key"
+  }
+done
+eq "$orphan" 0 'every dataset key has a declared parent dataset'
+
 # One raw dataset, one unit: a dataset restored by two units would be
 # snapshotted twice with two retention histories.
 declare -A seen=()
@@ -109,6 +119,49 @@ if plan=$(PATH="$tmp:$PATH" ZPOOL_DEVICE=/nonexistent scripts/init-zpool.sh --pr
 else
   bad '--print-plan matches the table and runs nothing' "$plan"
 fi
+
+# init-zpool must create the collection datasets before any child: a child
+# cannot exist without its parent, and the failure is a bare
+# "parent does not exist" on a host that is already in the window.
+tmp2=$(mktemp -d)
+mkdir -p "$tmp2/bin"
+touch "$tmp2/device"
+cat >"$tmp2/bin/zfs" <<'SH'
+#!/bin/sh
+echo "zfs $*" >>"$STUB_LOG"
+case $1 in
+  list) exit 1 ;;
+  *) exit 0 ;;
+esac
+SH
+cat >"$tmp2/bin/zpool" <<'SH'
+#!/bin/sh
+echo "zpool $*" >>"$STUB_LOG"
+case $1 in
+  list) exit 1 ;;
+  *) exit 0 ;;
+esac
+SH
+for bin in blkid install chown chmod; do
+  printf '#!/bin/sh\nexit 0\n' >"$tmp2/bin/$bin"
+done
+printf '#!/bin/sh\nexit 0\n' >"$tmp2/bin/mountpoint"
+chmod 0755 "$tmp2/bin"/*
+if STUB_LOG=$tmp2/log PATH="$tmp2/bin:$PATH" ZPOOL_DEVICE=$tmp2/device \
+  scripts/init-zpool.sh >/dev/null 2>&1; then
+  raw_parent=$(grep -n '^zfs create -o mountpoint=none -o canmount=off smortress/raw$' "$tmp2/log" | cut -d: -f1)
+  state_parent=$(grep -n '^zfs create -o mountpoint=none -o canmount=off smortress/state$' "$tmp2/log" | cut -d: -f1)
+  first_child=$(grep -n '^zfs create -o canmount=on .* smortress/raw/files$' "$tmp2/log" | cut -d: -f1)
+  if [[ -n $raw_parent && -n $state_parent && -n $first_child ]] &&
+    ((raw_parent < first_child && state_parent < first_child)); then
+    ok 'init-zpool creates the collection datasets before their children'
+  else
+    bad 'init-zpool creates the collection datasets before their children' "$(cat "$tmp2/log")"
+  fi
+else
+  bad 'init-zpool creates the collection datasets before their children' 'init-zpool failed under stubs'
+fi
+rm -rf "$tmp2"
 
 printf '\n%s checks, %s failed\n' "$((pass + fail))" "$fail"
 ((fail == 0))

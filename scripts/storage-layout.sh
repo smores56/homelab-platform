@@ -43,6 +43,11 @@ if [[ -n ${STORAGE_MOUNT_ROOT:-} ]]; then
   unset _layout_key
 fi
 
+#: Parent datasets. A ZFS child cannot exist without its parent, and neither
+#: parent is mounted: `/` is a plain filesystem, so the `raw` and `state`
+#: collections exist only as namespaces in the pool.
+dataset_parents=(raw state)
+
 #: Creation order. Associative arrays have no order, and a deterministic
 #: init-zpool plan is what --print-plan and its test compare.
 dataset_order=(raw/files raw/photos raw/books raw/music raw/wallpapers raw/git
