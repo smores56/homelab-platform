@@ -6,8 +6,14 @@
 #
 # This is the by-hand path from docs/core/restic-plane.md: it selects a
 # `verified` snapshot (never an untagged or incomplete one), restores it into a
-# fresh directory under /var/tmp and verifies the written data. It never
-# restores over a live dataset and never touches retention.
+# fresh directory and verifies the written data. It never restores over a live
+# dataset and never touches retention.
+#
+# The target defaults to a data disk, not /var/tmp: the root filesystem is
+# 100 GiB and the `photos` unit alone restores 116 GiB, so the old default could
+# only ever end in ENOSPC. The snapshot's restore size is compared with the
+# target filesystem before anything is written, and a target without room is
+# refused.
 # shellcheck disable=SC2154  # variables and helpers come from restic-plane-common
 # shellcheck disable=SC2016  # the bash -c script takes its values as positional parameters
 set -euo pipefail
@@ -27,7 +33,7 @@ usage() {
 usage: smortress-restic-restore-drill <ssd|hdd|r2> <unit> [options]
 
   --snapshot <id>  restore this snapshot instead of the latest verified one
-  --target <dir>   restore here (default /var/tmp/restic-drill/<backend>-<group>-<time>)
+  --target <dir>   restore here (default <drill root>/<backend>-<group>-<time>)
   --list           print the verified snapshots and exit
 
 The restore lands under <target>/<mountpoint>/.zfs/snapshot/<backend>/, one
@@ -98,8 +104,20 @@ else
   fi
 fi
 
+# Prefer a disk that holds the repositories; root is far too small for a media
+# unit. RESTIC_DRILL_ROOT overrides the choice, and --target overrides both.
 if [[ -z $target ]]; then
-  target=/var/tmp/restic-drill/$backend-$unit-$(date -u +%Y%m%dT%H%M%SZ)
+  drill_root=${RESTIC_DRILL_ROOT:-}
+  if [[ -z $drill_root ]]; then
+    for candidate in /var/lib/restic/hdd /var/lib/restic/ssd; do
+      if mountpoint -q "$candidate"; then
+        drill_root=$candidate/drill
+        break
+      fi
+    done
+    drill_root=${drill_root:-/var/tmp/restic-drill}
+  fi
+  target=$drill_root/$backend-$unit-$(date -u +%Y%m%dT%H%M%SZ)
 fi
 if [[ -e $target ]]; then
   if [[ -n $(find "$target" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null) ]]; then
@@ -110,6 +128,29 @@ else
   install -d -m 0700 "$target"
 fi
 target=$(cd -- "$target" && pwd)
+
+# Refuse before writing: an ENOSPC halfway through a media unit leaves a
+# partial tree and can fill the filesystem other services need.
+if ! restore_size=$(with_deadline 300 "$restic_bin" -r "$repo" stats "$snapshot" \
+  --mode restore-size --json | jq -r '.total_size // empty'); then
+  warn "$backend: cannot size snapshot $snapshot; refusing to guess"
+  exit 1
+fi
+if [[ ! $restore_size =~ ^[0-9]+$ ]]; then
+  warn "$backend: restic reported no restore size for $snapshot"
+  exit 1
+fi
+if ! avail_blocks=$(df -Pk "$target" | awk 'NR == 2 { print $4 }'); then
+  warn "$target: cannot read free space"
+  exit 1
+fi
+avail_bytes=$((avail_blocks * 1024))
+margin=$((2 * 1024 ** 3))
+if ((restore_size + margin > avail_bytes)); then
+  warn "$backend/$unit restores $((restore_size / 1024 ** 3)) GiB, but $target has $((avail_bytes / 1024 ** 3)) GiB free"
+  warn "choose --target on a disk with room, or set RESTIC_DRILL_ROOT"
+  exit 1
+fi
 
 say "$backend/$unit: restoring $snapshot into $target"
 # restic restore clears xattrs on every file it writes, and SELinux denies

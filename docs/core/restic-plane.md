@@ -255,19 +255,27 @@ export RESTIC_PASSWORD_FILE=/run/smortress/secrets/restic-password.yaml
 # What exists, newest last, verified only:
 sudo /usr/libexec/smortress-restic-restore-drill ssd photos --list
 
-# Restore the newest verified snapshot of one unit into /var/tmp:
+# Restore the newest verified snapshot of one unit into the default drill root:
 sudo /usr/libexec/smortress-restic-restore-drill ssd photos
 
-# A specific snapshot:
+# A specific snapshot, into a target of your choosing:
 sudo /usr/libexec/smortress-restic-restore-drill r2 books --snapshot <id> \
-  --target /var/tmp/drill-books
+  --target /var/lib/restic/hdd/drill/books
 ```
 
 The helper restores every path in the unit under
 `<target>/<mountpoint>/.zfs/snapshot/<backend>/` because those are the absolute
-paths the backup recorded. It refuses a non-empty
-target and only accepts `verified` snapshots. Check the contents, not the exit
-status.
+paths the backup recorded. It refuses a non-empty target and only accepts
+`verified` snapshots. Check the contents, not the exit status.
+
+The default target is `<drill root>/<backend>-<unit>-<time>`, where the drill
+root is the first mounted of `/var/lib/restic/hdd` and `/var/lib/restic/ssd`
+(`RESTIC_DRILL_ROOT` overrides it). It is **not** `/var/tmp`: the root
+filesystem is 100 GiB and `photos` restores more than that, so a drill there can
+only end in ENOSPC after filling a disk other services need. Before writing
+anything the helper asks restic for the snapshot's restore size and refuses a
+target whose filesystem cannot hold it plus a 2 GiB margin, naming `--target`
+and `RESTIC_DRILL_ROOT` in the message.
 
 The raw equivalent, for any machine:
 
@@ -275,7 +283,7 @@ The raw equivalent, for any machine:
 export RESTIC_PASSWORD_FILE=<file with only the password>
 restic -r /var/lib/restic/ssd/restic snapshots --host smortress \
   --tag unit:photos --tag verified
-restic -r /var/lib/restic/ssd/restic restore <id> --target /var/tmp/drill --verify
+restic -r /var/lib/restic/ssd/restic restore <id> --target /var/lib/restic/hdd/drill/pick-a-name --verify
 ```
 
 For `r2` set `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and use the URI from

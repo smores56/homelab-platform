@@ -178,12 +178,15 @@ sudo /usr/libexec/smortress-restic-backup ssd --unit photos
 sudo /usr/libexec/smortress-restic-backup ssd --unit files
 sudo /usr/libexec/smortress-restic-backup ssd --unit repo-archive
 sudo /usr/libexec/smortress-restic-verify
-sudo /usr/libexec/smortress-restic-restore-drill ssd photos --target /var/tmp/drill-photos
+sudo /usr/libexec/smortress-restic-restore-drill ssd photos --target /var/lib/restic/hdd/drill/photos
 ```
 
-The drill must contain both `/var/tmp/drill-photos/var/srv/photos/…` and
-`/var/tmp/drill-photos/var/lib/immich/postgres/…` from the same snapshot, and
-the restored database must start against the restored library.
+The drill must contain both `/var/lib/restic/hdd/drill/photos/var/srv/photos/…`
+and `/var/lib/restic/hdd/drill/photos/var/lib/immich/postgres/…` from the same
+snapshot, and the restored database must start against the restored library.
+Never stage a restore under `/var/tmp` or anywhere on the 100 GiB root
+filesystem: `photos` alone restores more than that, and the helper refuses a
+target without room instead of filling the disk.
 
 Re-link the dotfiles as `smores` (the absolute symlinks under `~` still point at
 `/var/home/core`), enrol the YubiKey for `sudo`, and confirm
