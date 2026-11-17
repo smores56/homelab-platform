@@ -136,6 +136,12 @@ else
   bad "no package the session never calls"
 fi
 
+if grep -qE '^u[[:space:]]+greeter[[:space:]]' image/rootfs/usr/lib/sysusers.d/smorespro-greeter.conf 2>/dev/null; then
+  ok "the image creates the greeter user greetd validates"
+else
+  bad "the image creates the greeter user greetd validates"
+fi
+
 if grep -q '^\[initial_session\]' image/rootfs/etc/greetd/config.toml 2>/dev/null \
     && grep -q '^user = "smores"' image/rootfs/etc/greetd/config.toml; then
   ok "greetd autologins through initial_session"
@@ -145,7 +151,7 @@ fi
 
 # --- shell ------------------------------------------------------------------
 
-if command -v shellcheck >/dev/null 2>&1; then
+if command -v shellcheck >/dev/null 2>&1 && shellcheck --version >/dev/null 2>&1; then
   if shellcheck -x scripts/*.sh tests/*.sh; then
     ok "shellcheck"
   else
