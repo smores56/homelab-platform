@@ -1,12 +1,12 @@
 // Fallback configuration, used only when the machine has not deployed its own
 // ~/.config/niri/config.kdl. It starts the shell and provides one terminal,
-// launcher, lock, terminal, and quit binding; the dotfiles config replaces it entirely.
+// launcher, lock, and quit binding; the dotfiles config replaces it entirely.
 spawn-at-startup "noctalia"
 
 binds {
-    // ~/.local/bin/wezterm is the AppImage wrapper the dotfiles bootstrap
-    // installs; a machine without the dotfiles has no terminal here.
-    Mod+Return { spawn "wezterm"; }
+    // kitty ships in the image, so this works whether or not the dotfiles
+    // are deployed.
+    Mod+Return { spawn "kitty"; }
     Mod+D { spawn "noctalia" "msg" "panel-toggle" "launcher"; }
     Super+Alt+L { spawn "noctalia" "msg" "session" "lock"; }
     Mod+Shift+E { quit; }

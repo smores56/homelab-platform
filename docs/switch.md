@@ -9,7 +9,7 @@ that recommends touching `bootc` on the laptop.
 - The user `smores` exists, with a password. greetd autologins as that user;
   if it is missing, greetd exits and VT1 stays black.
 - `dotfiles` is deployed (or accept the image's fallback niri config, which has
-  one terminal and no full keybind set).
+  the image's kitty terminal and no full keybind set).
 - Network works: WiFi or a USB tether. The switch pulls the image.
 - `/etc/fstab` has no `/` entry and does not mount `/boot` read-only. The root
   becomes a composefs overlay, so a `/` remount entry makes
@@ -114,7 +114,7 @@ Then, in the session:
 | Fingerprint | `fprintd-enroll` then lock and unlock |
 | Suspend/resume | close the lid, reopen |
 | External display | plug in a monitor |
-| Flatpak | launch an app; check its file chooser |
+| Flatpak | launch a flatpak app (Brave and Dolphin are image packages, not flatpaks); check its file chooser |
 | Screen share | start a call or `xdg-desktop-portal` test flow |
 | Polkit | a privileged app shows Noctalia's auth prompt |
 | Lock/idle | wait 10 minutes, or `noctalia msg session lock` |

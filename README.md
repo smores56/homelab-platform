@@ -53,3 +53,8 @@ The image installs from the Fedora 45 repositories configured in the pinned
 base. The base digest fixes the kernel, glibc, and systemd; packages added here
 resolve from Fedora 45 updates at build time, which is why a build only happens
 on a reviewed commit.
+
+The one exception is Brave Origin, which Fedora does not ship: the Containerfile
+writes Brave's official `brave-browser` RPM repository into
+`/etc/yum.repos.d/` and installs `brave-origin` from it. kitty (terminal),
+dolphin (file manager), ImageMagick and jq come from Fedora.
