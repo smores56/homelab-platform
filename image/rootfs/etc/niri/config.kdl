@@ -4,8 +4,9 @@
 spawn-at-startup "noctalia"
 
 binds {
-    // The terminal is the WezTerm Flatpak the dotfiles bootstrap installs.
-    Mod+Return { spawn-sh "flatpak run org.wezfurlong.wezterm"; }
+    // ~/.local/bin/wezterm is the AppImage wrapper the dotfiles bootstrap
+    // installs; a machine without the dotfiles has no terminal here.
+    Mod+Return { spawn "wezterm"; }
     Mod+D { spawn "noctalia" "msg" "panel-toggle" "launcher"; }
     Super+Alt+L { spawn "noctalia" "msg" "session" "lock"; }
     Mod+Shift+E { quit; }
