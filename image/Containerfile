@@ -1,0 +1,74 @@
+# Derived bootc image for smorespro: Fedora's minimal bootc base plus a niri
+# session. Built by scripts/build-image.sh and published by
+# .github/workflows/publish.yml.
+#
+# The base is digest-pinned. Everything added here is a distribution package
+# from the pinned base's Fedora repositories plus the configuration under
+# image/rootfs. No signing key, secret or per-machine state enters the image.
+
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+ARG BASE_IMAGE
+
+LABEL org.opencontainers.image.title="smorespro image" \
+      org.opencontainers.image.description="Fedora bootc base with a niri session for the smorespro laptop" \
+      org.opencontainers.image.source="https://github.com/smores56/smorespro-image" \
+      org.opencontainers.image.base.name="${BASE_IMAGE}" \
+      org.opencontainers.image.vendor="smores56"
+
+# The desktop stack is explicit because the base is minimal: it ships
+# systemd, NetworkManager, polkit, fwupd and firmware splits, but no graphics,
+# audio, portals or fonts.
+#
+# iwlwifi-mld-firmware is not optional: this laptop's CNVi radio is MLD-only,
+# and fedora-bootc ships no iwlwifi firmware package at all.
+RUN set -eux; \
+    dnf5 -y --setopt=install_weak_deps=False install \
+      niri noctalia xwayland-satellite greetd tuigreet \
+      xdg-desktop-portal xdg-desktop-portal-gtk xdg-desktop-portal-gnome \
+      pipewire wireplumber pipewire-alsa pipewire-utils alsa-ucm alsa-utils rtkit \
+      mesa-dri-drivers mesa-vulkan-drivers mesa-libEGL mesa-libgbm libglvnd-egl \
+      default-fonts-core-sans dconf gsettings-desktop-schemas \
+      gnome-keyring libsecret flatpak \
+      NetworkManager-wifi NetworkManager-bluetooth wpa_supplicant bluez \
+      iwlwifi-mld-firmware iwlwifi-mvm-firmware \
+      fprintd fprintd-pam tuned-ppd plymouth plymouth-system-theme \
+      libinput brightnessctl playerctl \
+      xdg-user-dirs gvfs gvfs-mtp udisks2 \
+      wl-clipboard grim slurp \
+      git rsync tailscale firewalld; \
+    dnf5 clean all; \
+    rm -rf /var/cache/dnf /var/cache/libdnf5 /var/cache/libX11 /var/cache/swcatalog \
+      /var/lib/dnf /var/cache/ldconfig /var/log/dnf5.log /var/log/dnf5.log.*; \
+    rm -rf /run/dnf /run/selinux-policy /run/tuned
+
+# Configuration: greetd autologin, the niri portal override, the signature
+# policy, and the public half of the signing key.
+COPY image/rootfs/ /
+COPY image/cosign.pub /etc/pki/containers/smorespro.pub
+
+# bootc images enable units at build time; the generator picks the rest up
+# from their [Install] sections.
+#
+# bootc updates are staged daily and applied on reboot. rpm-ostree's own
+# automatic timer is masked so two update agents never race for the same
+# deployment.
+RUN set -eux; \
+    systemctl enable \
+      greetd.service \
+      firewalld.service \
+      tailscaled.service \
+      bootc-fetch-apply-updates.timer; \
+    systemctl mask rpm-ostreed-automatic.timer; \
+    systemctl set-default graphical.target
+
+# Fail the build if the base is not digest-pinned or the shipped policy no
+# longer rejects by default.
+RUN set -eux; \
+    case "${BASE_IMAGE}" in *@sha256:*) ;; *) echo "BASE_IMAGE is not digest-pinned" >&2; exit 1 ;; esac; \
+    jq -e '.default[0].type == "reject"' /etc/containers/policy.json >/dev/null; \
+    jq -e '.transports.docker["ghcr.io/smores56/smorespro-image"][0].keyPath == "/etc/pki/containers/smorespro.pub"' /etc/containers/policy.json >/dev/null; \
+    test -s /etc/pki/containers/smorespro.pub
+
+RUN bootc container lint
