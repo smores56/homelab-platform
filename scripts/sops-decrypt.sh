@@ -11,7 +11,7 @@ set -euo pipefail
 src=${SMORTRESS_SECRETS_SRC:-/etc/smortress/secrets}
 dst=${SMORTRESS_SECRETS_DST:-/run/smortress/secrets}
 manifest=${SMORTRESS_SECRETS_MANIFEST:-/etc/smortress/secrets.manifest}
-age_key=${SMORTRESS_AGE_KEY:-/var/lib/smortress/age/keys.txt}
+age_key=${SMORTRESS_AGE_KEY:-/var/lib/homelab/age/keys.txt}
 sops_bin=${SOPS_BIN:-sops}
 
 if [[ ! -s $age_key ]]; then

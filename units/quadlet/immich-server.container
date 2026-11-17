@@ -4,8 +4,8 @@
 # forwards the original Host, which the mobile app and the web client need.
 [Unit]
 Description=Immich API and web UI (photos recovery group)
-Requires=zfs-ready@raw-photos.service zfs-ready@state-immich-postgres.service sops-decrypt.service smortress-app-secrets.service
-After=network-online.target zfs-ready@raw-photos.service zfs-ready@state-immich-postgres.service sops-decrypt.service smortress-app-secrets.service immich-postgres.service immich-valkey.service
+Requires=zfs-ready@raw-photos.service sops-decrypt.service smortress-app-secrets.service
+After=network-online.target zfs-ready@raw-photos.service sops-decrypt.service smortress-app-secrets.service immich-postgres.service immich-valkey.service
 Wants=network-online.target immich-postgres.service immich-valkey.service
 
 [Container]

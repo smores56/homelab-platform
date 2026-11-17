@@ -32,7 +32,7 @@ version that wrote the legacy repositories) or the distro package, and
 | SOPS admin age identity | decrypts the versioned secret files; passphrase-encrypted copy per machine | existing | — |
 | YubiKey restore bundle (`nix run .#key-backup`) | FIDO2 credential handles; PIV keys cannot be exported and are unaffected | existing | — |
 | New 980 root LUKS passphrase | offline unlock of the new OS disk (Tang + TPM2 is the unattended path) | T2 | — |
-| New 980 data LUKS passphrase | offline unlock of `/var/tank` | T2 | — |
+| New 980 data LUKS passphrase | offline unlock of the data pool | T2 | — |
 | cosign signing key | re-signs a derived image when CI is unavailable | T2 | — |
 | Restic password — new repositories | one password for `ssd`, `hdd`, `r2` | T3 | — |
 | Repository URIs — new | `ssd`, `hdd`, `r2` locations, including the R2 bucket | T3 | — |

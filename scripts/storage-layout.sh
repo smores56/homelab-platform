@@ -101,3 +101,15 @@ unit_paths_json() { # unit backend
   fi
   jq -cn --args '$ARGS.positional' -- "${paths[@]}"
 }
+
+#: Every path a consumer may name for a dataset. `/srv` is a symlink to
+#: `/var/srv`, so a Quadlet may mount either spelling; a check that compares a
+#: volume path to the table must accept both.
+mountpoint_aliases() { # key
+  local mountpoint
+  mountpoint=$(mountpoint_for "$1")
+  printf '%s\n' "$mountpoint"
+  case $mountpoint in
+    */var/srv/*) printf '%s\n' "${mountpoint/\/var\/srv//srv}" ;;
+  esac
+}

@@ -3,7 +3,7 @@
 #
 #   smortress-restic-verify [--no-ping]
 #
-# Joins the durable attempt results under /var/lib/smortress/restic to what the
+# Joins the durable attempt results under /var/lib/homelab/restic to what the
 # repositories actually contain, then pings one Healthchecks.io check only when
 # every destination is current. Missing state, an in-progress attempt past its
 # retry window, a failed latest attempt, a snapshot that is not the recorded

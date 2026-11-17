@@ -1,7 +1,7 @@
 # smortress autoinstall
 
 `user-data` is the whole install: partitions, LUKS containers, the bootstrap
-user, the data-volume keyfile, and a first-boot unit that creates `tank`.
+user, the data-volume keyfile, and a first-boot unit that creates the `smortress` pool.
 `build-seed.sh` renders it with values that must not live in git and packs a
 NoCloud `cidata` ISO; `spike.sh` boots that seed in QEMU against a synthetic
 980 so the layout is proven before hardware.

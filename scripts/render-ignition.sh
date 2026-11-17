@@ -91,7 +91,7 @@ if $synthetic; then
   tang_thumbprint=$(printf 'A%.0s' {1..43})
 else
   require_file "$repo/image/cosign.pub"
-  for f in derived-image disk core-password-hash root-recovery-passphrase \
+  for f in derived-image disk smores-password-hash root-recovery-passphrase \
     data-recovery-passphrase tang-thumbprint ssh_authorized_keys; do
     require_file "$repo/ignition/operator/$f"
   done
@@ -101,7 +101,7 @@ else
     derived_image=$(read_line "$repo/ignition/operator/derived-image")
   fi
   disk=$(read_line "$repo/ignition/operator/disk")
-  password_hash=$(read_line "$repo/ignition/operator/core-password-hash")
+  password_hash=$(read_line "$repo/ignition/operator/smores-password-hash")
   root_pass=$(read_line "$repo/ignition/operator/root-recovery-passphrase")
   data_pass=$(read_line "$repo/ignition/operator/data-recovery-passphrase")
   tang_url='http://10.0.0.193:7654'
@@ -120,7 +120,7 @@ fi
 [[ $disk =~ ^/dev/disk/by-id/[A-Za-z0-9._:-]+$ ]] \
   || die "disk must be a /dev/disk/by-id path: $disk"
 [[ $password_hash =~ ^\$6\$[^$]{1,16}\$[./A-Za-z0-9]{86}$ ]] \
-  || die "core password hash must be sha512crypt (openssl passwd -6)"
+  || die "smores password hash must be sha512crypt (openssl passwd -6)"
 [[ $root_pass =~ ^[[:print:]]{12,}$ ]] \
   || die "root recovery passphrase must be >=12 printable characters and one line"
 [[ $data_pass =~ ^[[:print:]]{12,}$ ]] \

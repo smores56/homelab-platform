@@ -2398,8 +2398,8 @@ scratch install.
    ```sh
    install -d -m 0700 ignition/operator
    install -m 0644 "$HOME/.ssh/id_ed25519.pub" ignition/operator/ssh_authorized_keys
-   nix shell nixpkgs#openssl -c openssl passwd -6 >ignition/operator/core-password-hash
-   chmod 0600 ignition/operator/core-password-hash
+   nix shell nixpkgs#openssl -c openssl passwd -6 >ignition/operator/smores-password-hash
+   chmod 0600 ignition/operator/smores-password-hash
    ( umask 077
      nix shell nixpkgs#openssl -c openssl rand -base64 48 \
        >ignition/operator/root-recovery-passphrase
@@ -2495,21 +2495,21 @@ scratch install.
    Neither path may appear. If `/etc/luks/root` does, delete the file, change the
    root crypttab key field to `none` (Clevis still unlocks it), and rebuild:
    `sudo dracut -f`. If `/etc/luks/data` does, move the key to
-   `/var/lib/smortress/luks-data`, point the data crypttab entry at it with
+   `/var/lib/homelab/luks-data`, point the data crypttab entry at it with
    `noauto`, open it after root with
    `sudo systemctl start systemd-cryptsetup@data.service` from a unit ordered
    before `smortress-zpool.service`, and recheck. Repeat the check after every
    kernel update.
 
  . "9. Stage the age identity" and prove the decrypt unit. The file at
-   `/var/lib/smortress/age/keys.txt` must be the unwrapped `AGE-SECRET-KEY-...`
+   `/var/lib/homelab/age/keys.txt` must be the unwrapped `AGE-SECRET-KEY-...`
    identity, not the passphrase-wrapped kit container.
 
    ```sh
-   sudo install -d -m 0700 -o root -g root /var/lib/smortress/age
+   sudo install -d -m 0700 -o root -g root /var/lib/homelab/age
    # write the kit's age identity to a local temporary file first, then:
    sudo install -m 0600 -o root -g root /path/to/kit-age-identity \
-     /var/lib/smortress/age/keys.txt
+     /var/lib/homelab/age/keys.txt
    sudo systemctl restart sops-decrypt.service
    sudo cat /run/smortress/secrets/canary.yaml
    ```
@@ -2527,9 +2527,9 @@ scratch install.
     sudo install -m 0644 -o root -g root /tmp/hdd-device /etc/smortress/hdd-device
     nix shell nixpkgs#openssl -c openssl rand -base64 48 \
       | sudo install -m 0600 -o root -g root /dev/stdin \
-        /var/lib/smortress/keys/hdd.key
+        /var/lib/homelab/keys/hdd.key
     sudo cryptsetup luksAddKey "$(cat /etc/smortress/hdd-device)" \
-      /var/lib/smortress/keys/hdd.key
+      /var/lib/homelab/keys/hdd.key
     sudo systemctl start smortress-cryptsetup-hdd.service
     ls -l /dev/mapper/luks-hdd
     ```
@@ -2548,7 +2548,7 @@ scratch install.
     before the age identity exists has to close the window explicitly:
 
     ```sh
-    sudo touch /var/lib/smortress/tailscale-enrolled
+    sudo touch /var/lib/homelab/tailscale-enrolled
     sudo /usr/libexec/access-lockdown
     sudo firewall-cmd --get-active-zones
     ```
@@ -2561,21 +2561,21 @@ scratch install.
     ```
 
     `tailscale0` must be the only interface in the `tailscale` zone; the default
-    zone is `drop`. From a LAN host that is not on Tailscale, `ssh core@<lan-ip>`
+    zone is `drop`. From a LAN host that is not on Tailscale, `ssh smores@<lan-ip>`
     and every application port must fail. From a Tailscale peer they work.
 
 12. Prove per-group readiness isolates failures.
 
     ```sh
     sudo systemctl status zfs-ready@photos.service
-    sudo zfs unmount tank/photos
+    sudo zfs unmount smortress/raw/photos
     sudo systemctl restart zfs-ready@photos.service
-    sudo zfs mount tank/photos
+    sudo zfs mount smortress/raw/photos
     sudo systemctl restart zfs-ready@photos.service
     ```
 
     The middle restart must fail with `zfs-ready: nothing is mounted at
-    /var/tank/photos`; the last must succeed. A consumer of `photos` must be
+    /srv/photos`; the last must succeed. A consumer of `photos` must be
     down between the two, while `zfs-ready@books` and unrelated backups stay up.
 
 13. Update the kit and run the drill. Record the cosign key/password, the root
@@ -2591,7 +2591,7 @@ scratch install.
 
 This section brings the three repositories up. It assumes section 37 finished:
 the derived image boots, the age identity is staged at
-`/var/lib/smortress/age/keys.txt`, and `secrets/server/restic-password.yaml`
+`/var/lib/homelab/age/keys.txt`, and `secrets/server/restic-password.yaml`
 decrypts. The 970 and the 5 TB HDD are already wiped and formatted
 (`LABEL=restic-ssd`, `LABEL=restic-hdd`); nothing in this section repartitions
 or reformats them.
@@ -2711,7 +2711,7 @@ or reformats them.
    ```
 
    Open a file from each restored tree under
-   `<target>/var/tank/<group>/.zfs/snapshot/<backend>/`, check its contents and
+   `<target>/<mountpoint>/.zfs/snapshot/<backend>/`, check its contents and
    ownership against the live path, then remove the target. A drill is only
    evidence once a restored file was opened and matched.
 
@@ -2722,14 +2722,14 @@ or reformats them.
    sudo umount /var/lib/restic/hdd
    sudo env RESTIC_ATTEMPTS=1 /usr/libexec/smortress-restic-backup hdd
    jq -r '.last_attempt | "\(.result) \(.reason)"' \
-     /var/lib/smortress/restic/state/hdd-photos.json
+     /var/lib/homelab/restic/state/hdd-photos.json
    sudo /usr/libexec/smortress-restic-verify; echo "verify exit $?"
    sudo systemctl start var-lib-restic-hdd.mount
    ```
 
    The job must print `failure repo-not-mounted`, the verifier must exit
    non-zero, and the SSD jobs must still succeed. To prove readiness isolation,
-   `sudo zfs unmount tank/books` and restart `zfs-ready@books.service`; only the
+   `sudo zfs unmount smortress/raw/books` and restart `zfs-ready@raw-books.service`; only the
    `books` jobs may fail.
 
 8. Record the new kit rows in `docs/core/recovery-kit.md`: the three repository
@@ -3023,7 +3023,7 @@ journalctl -b | grep -i quadlet-generator
 ```
 
 ```sh
-sudo zfs list -o name,mountpoint tank
+sudo zfs list -o name,mountpoint smortress
 systemctl list-units --all 'immich-*' 'opdshelf*' 'syncthing*'
 sudo podman ps --format '{{.Names}}	{{.Status}}'
 ```
@@ -3063,11 +3063,11 @@ numeric uid the containers run as.
 Both application secrets are single-value SOPS files. Viewing one needs the age
 identity, which only the operator has. sops looks for it in
 `$HOME/.config/sops/age/keys.txt` and finds nothing there: the identity this host
-staged is root-only at `/var/lib/smortress/age/keys.txt`, so every command here
+staged is root-only at `/var/lib/homelab/age/keys.txt`, so every command here
 passes it explicitly. Without that the decrypt fails with no recipient match.
 
 ```sh
-sudo env SOPS_AGE_KEY_FILE=/var/lib/smortress/age/keys.txt \
+sudo env SOPS_AGE_KEY_FILE=/var/lib/homelab/age/keys.txt \
   /usr/bin/sops --decrypt --extract '["password"]' \
   /etc/smortress/secrets/immich-db-password.yaml
 ```
@@ -3079,7 +3079,7 @@ Change the role first, on the running cluster:
 
 ```sh
 sudo podman exec -i immich-postgres psql -U immich -d immich \
-  -c "ALTER USER immich WITH PASSWORD '$(sudo env SOPS_AGE_KEY_FILE=/var/lib/smortress/age/keys.txt /usr/bin/sops --decrypt --extract '["password"]' /etc/smortress/secrets/immich-db-password.yaml)'"
+  -c "ALTER USER immich WITH PASSWORD '$(sudo env SOPS_AGE_KEY_FILE=/var/lib/homelab/age/keys.txt /usr/bin/sops --decrypt --extract '["password"]' /etc/smortress/secrets/immich-db-password.yaml)'"
 ```
 
 Then edit the ciphertext, publish a new image, reboot, and recreate the
@@ -3118,7 +3118,7 @@ check off through its own API, with the key from the config it writes on the
 `syncthing` dataset:
 
 ```sh
-key=$(sudo sed -n 's:.*<apikey>\(.*\)</apikey>.*:\1:p' /var/tank/syncthing/config/config.xml)
+key=$(sudo sed -n 's:.*<apikey>\(.*\)</apikey>.*:\1:p' /var/lib/syncthing/config/config.xml)
 sudo curl -fsS -X PATCH -H "X-API-Key: $key" -H 'Content-Type: application/json' \
   -d '{"insecureSkipHostcheck": true}' http://127.0.0.1:8384/rest/config/gui
 curl -fsS -o /dev/null -w '%{http_code}\n' \
@@ -3147,7 +3147,7 @@ From a machine on the LAN that is **not** on the tailnet:
 
 ```sh
 curl --max-time 3 http://10.0.0.125:22000
-ssh -o ConnectTimeout=3 core@10.0.0.125
+ssh -o ConnectTimeout=3 smores@10.0.0.125
 ```
 
 Both must time out. A connection there means the default firewalld zone is no
@@ -3166,18 +3166,17 @@ sudo systemctl stop immich-server.service immich-machine-learning.service immich
   immich-valkey.service opdshelf.service syncthing.service
 ```
 
-`smortress-restic-restore-drill` writes the tree under
-`<target>/var/tank/<group>/.zfs/snapshot/<backend>`, because that is the path the
-snapshot recorded. Set the variables the rest of this section uses; `group` prints
-the restored path of one group.
+`smortress-restic-restore-drill` writes the unit's paths under
+`<target>/<mountpoint>/.zfs/snapshot/<backend>`, because those are the paths the
+snapshot recorded. Set the variables the rest of this section uses; `path` prints
+the restored tree of one dataset.
 
 ```sh
 drill=/var/tmp/drill
-group() { printf '%s' "$drill/$1/var/tank/$1/.zfs/snapshot/ssd"; }
-sudo /usr/libexec/smortress-restic-restore-drill ssd photos --target "$drill/photos"
-sudo /usr/libexec/smortress-restic-restore-drill ssd books --target "$drill/books"
-sudo /usr/libexec/smortress-restic-restore-drill ssd syncthing --target "$drill/syncthing"
-sudo /usr/libexec/smortress-restic-restore-drill ssd notes --target "$drill/notes"
+path() { printf '%s%s/.zfs/snapshot/ssd' "$drill" "$1"; }
+for unit in files photos books music wallpapers git apps repo-archive; do
+  sudo /usr/libexec/smortress-restic-restore-drill ssd "$unit" --target "$drill/$unit"
+done
 sudo chown -R 1000:1000 "$drill"
 sudo chcon -R -t container_file_t "$drill"
 ```
@@ -3196,7 +3195,7 @@ survives a version change.
 sudo install -d -o 1000 -g 1000 -m 0700 /var/tmp/drill-pg
 sudo podman network create drillnet 2>/dev/null || true
 sudo podman run --rm -d --name drill-pg --network drillnet --network-alias drill-pg \
-  --user 1000:1000 -e PGDATA=/data/postgres -e POSTGRES_USER=immich -e POSTGRES_DB=immich \
+  --user 1000:1000 -e PGDATA=/data -e POSTGRES_USER=immich -e POSTGRES_DB=immich \
   -e POSTGRES_PASSWORD_FILE=/run/secrets/pw \
   --secret immich-db-password,type=mount,target=/run/secrets/pw \
   -v /var/tmp/drill-pg:/data:z \
@@ -3238,7 +3237,7 @@ sudo install -d -o 1000 -g 1000 -m 0700 /var/tmp/drill-pg/postgres
 sudo cp -a "$(group photos)/postgres/." /var/tmp/drill-pg/postgres/
 sudo chown -R 1000:1000 /var/tmp/drill-pg
 sudo podman run --rm -d --name drill-pg --network drillnet --network-alias drill-pg \
-  --user 1000:1000 -e PGDATA=/data/postgres \
+  --user 1000:1000 -e PGDATA=/data \
   -v /var/tmp/drill-pg:/data:z \
   ghcr.io/smores56/homelab-platform/immich-postgres@sha256:79b95b795f0911e95ffa4d092a2162c4d81a984d5629bc8f786afe0bc0657671
 sudo podman exec drill-pg psql -U immich -d immich -c 'select count(*) from asset;'
@@ -3250,7 +3249,7 @@ the server, or rotate the ciphertext — otherwise the server cannot authenticat
 
 ```sh
 sudo podman exec -i drill-pg psql -U immich -d immich \
-  -c "ALTER USER immich WITH PASSWORD '$(sudo env SOPS_AGE_KEY_FILE=/var/lib/smortress/age/keys.txt /usr/bin/sops --decrypt --extract '["password"]' /etc/smortress/secrets/immich-db-password.yaml)'"
+  -c "ALTER USER immich WITH PASSWORD '$(sudo env SOPS_AGE_KEY_FILE=/var/lib/homelab/age/keys.txt /usr/bin/sops --decrypt --extract '["password"]' /etc/smortress/secrets/immich-db-password.yaml)'"
 ```
 
 **OPDShelf.** Nothing stateful to rebuild; prove the tree serves.
@@ -3278,8 +3277,8 @@ primary is designated.
 sudo podman run --rm -d --name drill-syncthing --network host \
   -e HOME=/var/syncthing -e STHOMEDIR=/var/syncthing/config \
   -e STGUIADDRESS=127.0.0.1:18384 \
-  -v "$(group syncthing)/config:/var/syncthing/config:z" \
-  -v "$(group notes):/var/tank/notes:z" \
+  -v "$(path /var/lib/syncthing/config):/var/syncthing/config:z" \
+  -v "$(path /srv/files):/srv/files:z" \
   ghcr.io/smores56/homelab-platform/syncthing@sha256:2b71da7c0d0a91a6ae5285ad079226fecc0a365d08b27720e1f7037b018f7546
 curl -fsS http://127.0.0.1:18384/rest/noauth/health
 ```

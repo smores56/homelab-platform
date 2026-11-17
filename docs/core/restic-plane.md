@@ -1,6 +1,6 @@
 # Restic backup plane (T3)
 
-Three independent repositories, one shared password, one job per recovery group
+Three independent repositories, one shared password, one job per restore unit
 per destination. This document is the host contract: layout, schedule, tags,
 retention, what a failed run means, how to restore by hand, and what is still
 unproven. Operator actions are in `docs/manual-steps.md` section 38; the disks,
@@ -34,57 +34,63 @@ empty the `r2` jobs record failures and the verifier stays red rather than
 skipping the destination. The legacy migration repository is a different bucket
 and is never referenced by this plane.
 
-## Recovery groups and snapshot paths
+## Restore units and snapshot paths
 
-The groups are the six childless datasets: `photos`, `books`, `notes`, `music`,
-`wallpapers` and `syncthing`, mounted at `/var/tank/<group>`. `syncthing` holds
-the service identity and configuration, separately from the `notes` group it
-serves, so a restore can bring the identity back without also rolling the
-content back to the same instant.
+A unit is the application, and it names the datasets restored together: `files`
+(`raw/files` + `state/syncthing-config`), `photos` (`raw/photos` +
+`state/immich-postgres` + `state/immich-dumps`), `books` (`raw/books` +
+`state/opdshelf`), and the raw-only `music`, `wallpapers`, `git`, `apps` and
+`repo-archive`. The table in `scripts/storage-layout.sh` is the single source;
+`/srv` holds raw data and `/var/lib` holds the state no raw file regenerates.
 
-A job snapshots **its own** dataset and passes exactly that dataset's staging
-path to restic:
+A job snapshots **every dataset in its unit** and passes all of their staging
+paths to one restic snapshot:
 
 ```text
-zfs snapshot tank/<group>@<backend>
-restic backup /var/tank/<group>/.zfs/snapshot/<backend>
+zfs snapshot smortress/raw/photos@<backend>
+zfs snapshot smortress/state/immich-postgres@<backend>
+zfs snapshot smortress/state/immich-dumps@<backend>
+restic backup /var/srv/photos/.zfs/snapshot/<backend> \
+              /var/lib/immich/postgres/.zfs/snapshot/<backend> \
+              /var/lib/immich/dumps/.zfs/snapshot/<backend>
 ```
 
-The staging snapshot name is the backend name, so one group/backend job never
-touches another job's snapshot. Never pass `/var/tank` or a parent snapshot
-path: a parent snapshot cannot expose a child dataset's contents, and the
-resulting "successful" backup would silently be empty. Adding a child dataset
-requires a design delta that enumerates every child's own snapshot path.
+The staging snapshot name is the backend name, so one unit/backend job never
+touches another job's snapshot. Never pass a parent snapshot path: a parent
+snapshot cannot expose a child dataset's contents, and the resulting
+"successful" backup would silently be empty. Adding a dataset to a unit means
+adding it to that unit's path list, which changes the `host,paths` identity and
+therefore starts a new retention family.
 
 ## Tags and identity
 
 Every snapshot is written with:
 
 - `--host smortress`
-- `--tag group:<group>`
+- `--tag unit:<unit>`
 - `--tag host:smortress`
-- the single source path above
+- the unit's fixed path list
 
 After exit 0 the snapshot is tagged `verified` in a separate command. Restic's
-`host,paths` parent selection and retention address the same group because
-those two values never change for a given group/backend. An incomplete snapshot
+`host,paths` parent selection and retention address the same unit because
+those two values never change for a given unit/backend. An incomplete snapshot
 (exit 3) is never tagged and can never be selected by retention or by the
 verifier.
 
 ## A run: states and persistence
 
-The driver `smortress-restic-backup <backend>` runs every group for one backend,
+The driver `smortress-restic-backup <backend>` runs every unit for one backend,
 in order, recording each result before moving on. Nothing is reported until all
-groups and the maintenance step have finished; the unit then fails if any of
+units and the maintenance step have finished; the unit then fails if any of
 them failed.
 
-State lives under `/var/lib/smortress/restic`:
+State lives under `/var/lib/homelab/restic`:
 
 | Path | Contents | Mode |
 | --- | --- | --- |
-| `state/<backend>-<group>.json` | current run, last success, final snapshot, pending reap list | `0600` |
-| `journal/<backend>-<group>.jsonl` | one line per completed attempt | `0600` |
-| `locks/<backend>-<group>.lock` | flock serialization point | `0600` |
+| `state/<backend>-<unit>.json` | current run, last success, final snapshot, pending reap list | `0600` |
+| `journal/<backend>-<unit>.jsonl` | one line per completed attempt | `0600` |
+| `locks/<backend>-<unit>.lock` | flock serialization point | `0600` |
 | `maintenance/<backend>.{daily,check}` | maintenance stamps | `0600` |
 | `maintenance/<backend>.log` | forget/prune/check output | `0600` |
 
@@ -107,7 +113,7 @@ A run is **failed** when any of these happens:
 | Reason | Cause |
 | --- | --- |
 | `lock-timeout` | the per-job flock was not acquired within `RESTIC_LOCK_WAIT` |
-| `readiness` | `/usr/libexec/zfs-ready <group>` refused: dataset missing, unmounted, wrong mountpoint |
+| `readiness` | `/usr/libexec/zfs-ready <instance>` refused: dataset missing, unmounted, wrong mountpoint |
 | `repo-not-mounted` | the local repository path is not the exact mountinfo mountpoint |
 | `snapshot-path-missing` | `<mountpoint>/.zfs/snapshot` is absent |
 | `snapshot-reconcile` / `snapshot-create` | `zfs destroy` or `zfs snapshot` failed or timed out |
@@ -127,16 +133,17 @@ only a safety net above those.
 Cleanup is best effort by design. On normal exit and on TERM/INT the job
 destroys its own staging snapshot; after SIGKILL or power loss the next
 invocation reconciles it. Reconciliation happens *after* the lock is acquired
-and destroys only `tank/<group>@<backend>` — never another job's snapshot.
+and destroys only `<dataset>@<backend>` for its own unit — never another job's
+snapshot.
 
 ## Retention
 
 Retention runs repository-wide, once per backend per day, after that backend's
-jobs (including failed ones). For every recovery group:
+jobs (including failed ones). For every restore unit:
 
 ```text
-restic forget --host smortress --path /var/tank/<group>/.zfs/snapshot/<backend> \
-  --tag group:<group> --tag verified \
+restic forget --host smortress \
+  --tag unit:<unit> --tag verified \
   --keep-daily 14 --keep-weekly 8 --keep-monthly 12
 ```
 
@@ -145,7 +152,7 @@ bucket and displace a complete restore point. 14/8/12 is four-hourly to daily
 resolution: hourly jobs shorten the normal recovery-point interval, they do not
 provide fourteen days of hourly restore points.
 
-One `restic prune` follows the per-group forgets. A weekly
+One `restic prune` follows the per-unit forgets. A weekly
 `restic check --read-data-subset=1/30` is part of the same maintenance pass.
 Maintenance is attempted at most once per day (weekly for the check); a failure
 is recorded in `state/<backend>-maintenance.json`, printed to the journal, and
@@ -166,12 +173,12 @@ never by a timer.
 ## Freshness verifier
 
 `smortress-restic-verify` runs hourly at `:40`, after the `:05` jobs and their
-bounded retries, and checks every backend/group pair (15 checks). It fails
+bounded retries, and checks every backend/unit pair (24 checks). It fails
 closed on anything it cannot prove.
 
 **The join.** For each pair it reads the durable state and the repository:
 
-1. `state/<backend>-<group>.json` and the journal must exist and parse.
+1. `state/<backend>-<unit>.json` and the journal must exist and parse.
 2. The latest recorded attempt is authoritative:
    - `running` and younger than the run expiry → still in flight, not a fail;
    - `running` and older than the run expiry → fail (SIGKILL/power loss);
@@ -181,7 +188,7 @@ closed on anything it cannot prove.
 3. `last_success.end` must be no older than the maximum age for the backend.
 4. `restic snapshots --json --host smortress --path <staging path>` must return
    exactly one snapshot with the recorded final ID, and that snapshot must:
-   - carry `verified`, `group:<group>` and `host:smortress`;
+   - carry `verified`, `unit:<unit>` and `host:smortress`;
    - report `hostname == smortress`;
    - have exactly `[<staging path>]` as its paths;
    - be the newest snapshot for that host/path;
@@ -248,7 +255,7 @@ export RESTIC_PASSWORD_FILE=/run/smortress/secrets/restic-password.yaml
 # What exists, newest last, verified only:
 sudo /usr/libexec/smortress-restic-restore-drill ssd photos --list
 
-# Restore the newest verified snapshot of one group into /var/tmp:
+# Restore the newest verified snapshot of one unit into /var/tmp:
 sudo /usr/libexec/smortress-restic-restore-drill ssd photos
 
 # A specific snapshot:
@@ -256,8 +263,9 @@ sudo /usr/libexec/smortress-restic-restore-drill r2 books --snapshot <id> \
   --target /var/tmp/drill-books
 ```
 
-The helper restores to `<target>/var/tank/<group>/.zfs/snapshot/<backend>/`
-because that is the absolute path the backup recorded. It refuses a non-empty
+The helper restores every path in the unit under
+`<target>/<mountpoint>/.zfs/snapshot/<backend>/` because those are the absolute
+paths the backup recorded. It refuses a non-empty
 target and only accepts `verified` snapshots. Check the contents, not the exit
 status.
 
@@ -266,7 +274,7 @@ The raw equivalent, for any machine:
 ```sh
 export RESTIC_PASSWORD_FILE=<file with only the password>
 restic -r /var/lib/restic/ssd/restic snapshots --host smortress \
-  --path /var/tank/photos/.zfs/snapshot/ssd --tag group:photos --tag verified
+  --tag unit:photos --tag verified
 restic -r /var/lib/restic/ssd/restic restore <id> --target /var/tmp/drill --verify
 ```
 
@@ -285,7 +293,7 @@ while the applications are writing.
 | SIGTERM/INT | staging snapshot destroyed best effort, exit 143, `running` left behind and expired by the verifier |
 | SIGKILL/power loss | stale staging snapshot reconciled next run |
 | HDD/SSD unmounted | that backend's jobs record `repo-not-mounted`; other backends continue |
-| one dataset not ready | only that group's job records `readiness`; others continue |
+| one dataset not ready | only that unit's job records `readiness`; others continue |
 | R2 credentials absent | every `r2` group records `not-configured`; verifier stays red |
 | lock conflict | bounded retry; then failed run |
 | prune/check failure | maintenance recorded, driver red, retried next daily/weekly window |

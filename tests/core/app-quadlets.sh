@@ -120,27 +120,39 @@ for u in units/quadlet/*.container units/quadlet/*.network; do
   fi
 done
 
-# 2. A container that mounts a recovery group is ordered after that group's
-#    readiness unit, and requires nothing it does not mount. One that mounts no
-#    group (the machine learning cache) needs no readiness at all.
+# 2. A container that mounts a dataset is ordered after that dataset's
+#    readiness instance, and requires no instance for a dataset it does not
+#    mount. One that mounts no dataset (the machine learning cache) needs no
+#    readiness at all. The table maps a volume path to an instance.
+# shellcheck source=/dev/null
+source scripts/storage-layout.sh
+declare -A mount_to_instance=()
+# shellcheck disable=SC2154  # the storage table is sourced here
+for _key in "${dataset_order[@]}"; do
+  for _alias in $(mountpoint_aliases "$_key"); do
+    mount_to_instance[$_alias]=$(readiness_instance "$_key")
+  done
+done
+unset _key
 for q in "${app_quadlets[@]}"; do
-  while IFS= read -r group; do
-    [[ -n $group ]] || continue
-    if grep -q "zfs-ready@$group.service" "$q"; then
-      ok "$q requires zfs-ready@$group"
+  volumes=$(sed -n 's|^Volume=\([^:]*\).*|\1|p' "$q" | sort -u)
+  for volume in $volumes; do
+    instance=${mount_to_instance[$volume]:-}
+    [[ -n $instance ]] || continue
+    if grep -q "zfs-ready@$instance.service" "$q"; then
+      ok "$q requires zfs-ready@$instance"
     else
-      bad "$q requires zfs-ready@$group"
+      bad "$q requires zfs-ready@$instance"
     fi
-  done < <(grep -oE '^Volume=/var/tank/[a-z]+' "$q" | sed 's|^Volume=/var/tank/||' | sort -u)
-
-  while IFS= read -r unit; do
-    [[ -n $unit ]] || continue
-    group=${unit#zfs-ready@}
-    group=${group%.service}
-    if ! grep -qE "^Volume=/var/tank/${group}([/:][^ ]*)?:" "$q"; then
-      bad "$q requires $unit for a dataset it does not mount"
-    fi
-  done < <(grep -o 'zfs-ready@[a-z]*\.service' "$q" | sort -u)
+  done
+  while IFS= read -r instance; do
+    [[ -n $instance ]] || continue
+    found=0
+    for volume in $volumes; do
+      [[ ${mount_to_instance[$volume]:-} == "$instance" ]] && found=1
+    done
+    ((found)) || bad "$q requires zfs-ready@$instance for a dataset it does not mount"
+  done < <(grep -o 'zfs-ready@[a-z-]*\.service' "$q" | sed 's/zfs-ready@//; s/\.service//' | sort -u)
 done
 
 # 3. A Podman secret only exists because a decrypted file produced it.

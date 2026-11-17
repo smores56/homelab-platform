@@ -18,10 +18,10 @@ version: 1.7.0
 
 passwd:
   users:
-    - name: core
+    - name: smores
       ssh_authorized_keys_local:
         - ignition/operator/ssh_authorized_keys
-      password_hash: '@CORE_PASSWORD_HASH@'
+      password_hash: '@SMORES_PASSWORD_HASH@'
 
 storage:
   directories:

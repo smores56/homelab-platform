@@ -86,11 +86,13 @@ eq "$mapping" 0 'readiness instance names map back to their dataset'
 eq "$(readiness_key 'photos' || true)" '' 'a slashless instance is rejected'
 eq "$(readiness_key 'data-files' || true)" '' 'an unknown kind is rejected'
 
-# The files this table owns must not mention the old layout. The sweep of the
-# consumers (restic scripts, Quadlets, docs) asserts the same repo-wide at the
-# end of the branch.
-leftover=$(grep -ln -- '/var/tank\|pool=tank' scripts/storage-layout.sh scripts/zfs-ready.sh scripts/init-zpool.sh 2>/dev/null || true)
-eq "$leftover" '' 'the layout, readiness and pool scripts name no /var/tank'
+# The old layout is gone from everything the image ships or the tests read.
+# `ansible/`, `provision/` and the retired `apps/data_plane` tests keep their
+# historical wording until those paths are deleted.
+leftover=$(grep -rl -- '/var/tank\|tank/' scripts units image docs 2>/dev/null || true)
+leftover+=$(grep -rl --exclude=storage-layout.sh -- '/var/tank\|tank/' \
+  tests/core tests/apps tests/backrest tests/access tests/backup 2>/dev/null || true)
+eq "$leftover" '' 'no script, unit, image file, test or doc names /var/tank'
 
 # --print-plan is the plan init-zpool executes, and it must stay side-effect
 # free: stub zfs/zpool/blkid fail loudly if anything runs them.

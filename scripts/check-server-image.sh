@@ -11,7 +11,9 @@ repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 source "$repo/scripts/storage-layout.sh"
 declare -A mount_to_instance=()
 for _key in "${dataset_order[@]}"; do
-  mount_to_instance[$(mountpoint_for "$_key")]=$(readiness_instance "$_key")
+  for _alias in $(mountpoint_aliases "$_key"); do
+    mount_to_instance[$_alias]=$(readiness_instance "$_key")
+  done
 done
 unset _key
 cd "$repo"
@@ -178,7 +180,7 @@ if grep -qE '(^|[[:space:]])unlock([[:space:]]|$)' scripts/smortress-restic-*.sh
 else
   ok "no routine restic unlock"
 fi
-if grep -qE -- 'forget .*\*|rm -rf[^#]*(/var/lib/restic|/var/lib/smortress/restic)' scripts/smortress-restic-*.sh; then
+if grep -qE -- 'forget .*\*|rm -rf[^#]*(/var/lib/restic|/var/lib/homelab/restic)' scripts/smortress-restic-*.sh; then
   bad "no bulk deletion of snapshots or repository roots"
 else
   ok "no bulk deletion of snapshots or repository roots"
