@@ -1,0 +1,124 @@
+# Builds, pushes, signs and verifies the smorespro bootc image.
+#
+# The signing key is the homelab-platform keypair, exposed as an environment
+# secret behind the image-cosign environment (restricted to main). The
+# workflow therefore runs on push to main and on workflow_dispatch only; a pull
+# request never sees the key.
+name: publish
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "image/**"
+      - "scripts/**"
+      - ".github/workflows/publish.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: build, push, sign, verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: image-cosign
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+
+      - name: install podman, jq, shellcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends podman jq shellcheck
+
+      - name: static checks
+        run: |
+          set -euo pipefail
+          ./tests/check.sh
+
+      - name: install pinned cosign
+        run: |
+          set -euo pipefail
+          . image/pins.env
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -fsSLo "$RUNNER_TEMP/bin/cosign" \
+            "https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/cosign-linux-amd64"
+          echo "${COSIGN_SHA256}  $RUNNER_TEMP/bin/cosign" | sha256sum -c -
+          chmod 0755 "$RUNNER_TEMP/bin/cosign"
+          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
+
+      - name: the environment key matches the committed public key
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -s image/cosign.pub
+          cosign public-key --key env://COSIGN_PRIVATE_KEY >"$RUNNER_TEMP/cosign.pub"
+          diff -u image/cosign.pub "$RUNNER_TEMP/cosign.pub"
+
+      - name: build
+        run: |
+          set -euo pipefail
+          . image/pins.env
+          case "$BASE_IMAGE" in
+            *@sha256:*) ;;
+            *) echo "BASE_IMAGE is not digest-pinned" >&2; exit 1 ;;
+          esac
+          tag="sha-$(git rev-parse --short=12 HEAD)"
+          echo "TAG=$tag" >>"$GITHUB_ENV"
+          podman build \
+            --build-arg "BASE_IMAGE=$BASE_IMAGE" \
+            --label "org.opencontainers.image.revision=$(git rev-parse HEAD)" \
+            -f image/Containerfile \
+            -t "${IMAGE_REPO}:${tag}" \
+            -t "${IMAGE_REPO}:latest" \
+            .
+
+      - name: push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          . image/pins.env
+          echo "$GITHUB_TOKEN" | podman login ghcr.io -u "${{ github.actor }}" --password-stdin
+          podman push "${IMAGE_REPO}:${TAG}" --digestfile "$RUNNER_TEMP/digest"
+          podman push "${IMAGE_REPO}:latest"
+          echo "IMAGE_DIGEST=$(cat "$RUNNER_TEMP/digest")" >>"$GITHUB_ENV"
+
+      # --new-bundle-format=false keeps the signature in the .sig tag layout that
+      # containers/image reads; the OCI 1.1 bundle format is not understood by
+      # bootc's signature verification yet.
+      - name: sign
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          cosign sign -y --new-bundle-format=false --use-signing-config=false \
+            --key env://COSIGN_PRIVATE_KEY "${IMAGE_REPO}@${IMAGE_DIGEST}"
+
+      - name: verify
+        run: |
+          set -euo pipefail
+          cosign verify --key image/cosign.pub "${IMAGE_REPO}@${IMAGE_DIGEST}"
+
+      - name: summary
+        run: |
+          set -euo pipefail
+          . image/pins.env
+          {
+            echo "### published"
+            echo
+            echo '- image: `'"${IMAGE_REPO}"'`'
+            echo '- digest: `'"${IMAGE_DIGEST}"'`'
+            echo '- tag: `'"${TAG}"'`'
+          } >>"$GITHUB_STEP_SUMMARY"
