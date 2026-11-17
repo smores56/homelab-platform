@@ -231,9 +231,11 @@ fi
 # must pick the one whose tree it just wrote, not whichever is newest by time.
 reset_state
 export STUB_BACKUP_ID=complete3 STUB_BACKUP_TREE=treeB
-export STUB_SNAPSHOTS_JSON
-STUB_SNAPSHOTS_JSON='[{"id":"older1","tree":"treeA","time":"2026-01-01T00:00:00Z","hostname":"smortress","paths":[],"tags":["unit:photos","host:smortress","verified"]},
-{"id":"newer2","tree":"treeB","time":"2026-01-01T00:05:00Z","hostname":"smortress","paths":[],"tags":["unit:photos","host:smortress","verified"]}]'
+STUB_SNAPSHOTS_JSON=$(cat <<'JSON'
+[{"id":"older1","tree":"treeA","time":"2026-01-01T00:00:00Z","hostname":"smortress","paths":[],"tags":["unit:photos","host:smortress","verified"]},
+{"id":"newer2","tree":"treeB","time":"2026-01-01T00:05:00Z","hostname":"smortress","paths":[],"tags":["unit:photos","host:smortress","verified"]}]
+JSON
+)
 export STUB_SNAPSHOTS_JSON
 run scripts/smortress-restic-backup.sh ssd --unit photos --no-maintenance
 eq "$rc" 0 "a run succeeds when an older verified snapshot has a different tree"
