@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate typed app definitions for the `apps` tenant.
+"""Validate and render typed app definitions for the `apps` tenant.
 
 A definition is ``homelab-apps/apps/<name>/app.toml`` and may declare only
 what the platform is willing to interpret: a digest-pinned image, one
@@ -11,12 +11,24 @@ definition cannot express them. Unknown keys are errors at every level.
 
     scripts/apps-schema.py validate --root <homelab-apps checkout> \
         [--secrets <tenant sops json>]
+    scripts/apps-schema.py render --root <homelab-apps checkout> --out <dir> \
+        [--secrets <tenant sops json>] [--check]
 
 ``validate`` prints ``apps/<name>/app.toml: <problem>`` per problem on stdout
 and exits non-zero; it prints nothing when the tree is clean. It is the same
 check that smortress re-runs on the fetched commit before rendering, so it
 fails closed — a missing ``apps/`` directory is an error, not an empty plan —
 and it reads the tenant SOPS file's *key names* only, never a value.
+
+``render`` emits one rootless Podman Quadlet per app and ``plan.json``; it
+validates first and writes nothing when any definition is rejected. The
+Quadlets are user units for the unprivileged ``apps`` user: they publish on
+loopback only, receive pasta networking for ``egress = "internet"`` and the
+tenant's internal (routeless) network otherwise, mount exactly their own data
+directory read-write,
+drop every capability, run a read-only root with no-new-privileges, and carry
+a per-app SELinux MCS level. ``plan.json`` is what the deploy and the Serve
+wiring read: the loopback port, the base path, the data path and the quota.
 
 Stdlib only, python 3.11 or later: the image ships one python3 and no
 third-party packages.
@@ -25,9 +37,12 @@ third-party packages.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
 import re
 import sys
+import tempfile
 import tomllib
 from pathlib import Path
 from collections.abc import Callable
@@ -56,6 +71,12 @@ PORT_MAX = 65535
 #: unit. `\Z` rather than `$` because `$` also matches before a trailing
 #: newline, which would let the same character through a name or a reference.
 CONTROL = re.compile(r"[\x00-\x1f\x7f]", re.ASCII)
+#: A rendered `Environment=` line carries the value verbatim. Quadlet splits on
+#: whitespace, a trailing backslash continues the line (dropping the next
+#: directive), `%` is a systemd specifier, and quotes and `#` change how the
+#: generator reads the value. Refuse the characters rather than escape them:
+#: an app that needs them needs a platform change, not a definition.
+ENV_FORBIDDEN = re.compile(r"[\s\\\"'`%#]", re.ASCII)
 
 APP_NAME = re.compile(r"[a-z](?:[a-z0-9-]{0,29}[a-z0-9])?\Z", re.ASCII)
 #: A distribution reference with no tag but a digest. Anything that is not
@@ -71,6 +92,22 @@ SECRET_NAME = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z", re.ASCII)
 QUOTA = re.compile(r"([0-9]+)([KMGT])\Z", re.ASCII)
 
 UNIT_BYTES = {"K": 1024, "M": 1024**2, "G": 1024**3, "T": 1024**4}
+
+#: Platform-owned defaults. A definition cannot change them, and the schema
+#: has no field that would: these are policy, not configuration.
+DATA_ROOT = Path("/srv/apps")
+QUOTA_DEFAULT = "1G"
+LOOPBACK_BASE = 20000
+LOOPBACK_SPAN = 10000
+#: The tenant network for `egress = "none"`. Podman discards published ports on
+#: `--network=none`, so no-egress apps get an internal network instead: they can
+#: reach nothing outside their own namespace and the loopback publish still
+#: exists for Serve.
+INTERNAL_NETWORK = "smortress-apps"
+MEMORY_MAX = "1G"
+TASKS_MAX = 256
+CPU_QUOTA = "200%"
+TIMEOUT_START = 120
 
 Problems = list[str]
 
@@ -134,6 +171,11 @@ def check_definition(
                     add(f"env value for '{key}' must be a string")
                 elif has_control(value):
                     add(f"env value for '{key}' must not contain control characters")
+                elif ENV_FORBIDDEN.search(value):
+                    add(
+                        f"env value for '{key}' must not contain whitespace, quotes, "
+                        "a backslash, '%' or '#'"
+                    )
 
     if "quota" in data:
         quota = data["quota"]
@@ -196,17 +238,23 @@ def load_tenant_secrets(path: Path | None) -> tuple[dict[str, Any] | None, list[
     return apps, problems
 
 
-def validate_root(root: Path, secrets: Path | None) -> Problems:
+def scan(root: Path, secrets: Path | None) -> tuple[Problems, list[tuple[str, dict[str, Any]]]]:
+    """Validate the tree and return the parsed definitions it accepted.
+
+    Rendering uses these definitions rather than re-reading the files, so a
+    definition cannot change between the check and the write.
+    """
     tenant_secrets, problems = load_tenant_secrets(secrets)
     if problems:
-        return problems
+        return problems, []
 
     apps = root / "apps"
     if not apps.is_dir():
         # The host re-runs this on a fetched commit; a wrong path or a failed
         # clone must stop the deploy, never render an empty tenant.
-        return [f"{root}: no apps/ directory"]
+        return [f"{root}: no apps/ directory"], []
 
+    definitions: list[tuple[str, dict[str, Any]]] = []
     for directory in sorted(p for p in apps.iterdir() if p.is_dir()):
         name = directory.name
         where = f"apps/{name}/app.toml"
@@ -225,8 +273,236 @@ def validate_root(root: Path, secrets: Path | None) -> Problems:
             problems.append(f"{where}: cannot read: {error}")
             continue
         check_definition(name, data, where, tenant_secrets, problems)
+        definitions.append((name, data))
 
+    return problems, definitions
+
+
+def validate_root(root: Path, secrets: Path | None) -> Problems:
+    problems, _ = scan(root, secrets)
     return problems
+
+
+def stable_ports(names: list[str]) -> dict[str, int]:
+    """One loopback port per app, stable while other apps come and go.
+
+    The name is hashed rather than indexed, so adding or removing an unrelated
+    app does not move a port; the probe only walks on a collision, and it walks
+    in sorted-name order, so the result stays deterministic.
+    """
+    taken: set[int] = set()
+    ports: dict[str, int] = {}
+    for name in sorted(names):
+        start = int.from_bytes(hashlib.sha256(name.encode("utf-8")).digest()[:4], "big")
+        for step in range(LOOPBACK_SPAN):
+            candidate = LOOPBACK_BASE + (start + step) % LOOPBACK_SPAN
+            if candidate not in taken:
+                taken.add(candidate)
+                ports[name] = candidate
+                break
+        else:
+            raise RuntimeError("the loopback port range is exhausted")
+    return ports
+
+
+def mcs_levels(names: list[str]) -> dict[str, tuple[int, int]]:
+    """Two SELinux MCS categories per app, distinct and stable.
+
+    Distinct matters: two apps sharing a pair could read each other's files
+    under the same UID. The hash starts the search so nothing moves when an
+    unrelated app appears, and the probe runs in sorted-name order.
+    """
+    used: set[tuple[int, int]] = set()
+    levels: dict[str, tuple[int, int]] = {}
+    for name in sorted(names):
+        digest = hashlib.sha256(b"mcs:" + name.encode("utf-8")).digest()
+        first0 = 1 + int.from_bytes(digest[:2], "big") % 512
+        second0 = 1 + int.from_bytes(digest[2:4], "big") % 512
+        for offset in range(512 * 512):
+            first = 1 + (first0 - 1 + offset // 512) % 512
+            second = 1 + (second0 - 1 + offset % 512) % 512
+            if first != second and (first, second) not in used:
+                used.add((first, second))
+                levels[name] = (first, second)
+                break
+        else:
+            raise RuntimeError("the MCS category range is exhausted")
+    return levels
+
+
+def network_for(egress: str) -> str:
+    return "pasta" if egress == "internet" else INTERNAL_NETWORK
+
+
+def render_unit(name: str, data: dict[str, Any], loopback: int, level: tuple[int, int]) -> str:
+    first, second = level
+    lines = [
+        f"# Rendered from apps/{name}/app.toml by scripts/apps-schema.py. Do not edit:",
+        "# the deploy renders this again from the fetched commit and rejects drift.",
+        "[Unit]",
+        f"Description=apps tenant app: {name}",
+        # Not a Condition: a missing mount must fail the unit loudly, not skip it.
+        f"AssertPathIsMountPoint={DATA_ROOT}",
+        "",
+        "[Container]",
+        f"Image={data['image']}",
+        f"ContainerName=smortress-app-{name}",
+        f"Network={network_for(data['egress'])}",
+        f"PublishPort=127.0.0.1:{loopback}:{data['port']}",
+        f"Volume={DATA_ROOT}/{name}:/data:Z",
+        "ReadOnly=true",
+        "NoNewPrivileges=true",
+        "DropCapability=ALL",
+        f"SecurityLabelLevel=s0:c{first},c{second}",
+    ]
+    for key in sorted(data.get("env", {})):
+        lines.append(f"Environment={key}={data['env'][key]}")
+    for secret in sorted(data.get("secrets", [])):
+        lines.append(f"Secret=app-{name}-{secret},type=mount,target=/run/secrets/{secret}")
+    lines += [
+        "",
+        "[Service]",
+        "Restart=on-failure",
+        f"TimeoutStartSec={TIMEOUT_START}",
+        f"MemoryMax={MEMORY_MAX}",
+        f"TasksMax={TASKS_MAX}",
+        f"CPUQuota={CPU_QUOTA}",
+        "",
+        "[Install]",
+        "WantedBy=default.target",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def render_network() -> str:
+    return (
+        "# Rendered by scripts/apps-schema.py for apps with egress = \"none\". Do not edit.\n"
+        "[Unit]\n"
+        "Description=apps tenant internal network\n"
+        "\n"
+        "[Network]\n"
+        # No route out of the namespace; the loopback publish for Serve remains.
+        "Internal=true\n"
+    )
+
+
+def render_plan(name: str, data: dict[str, Any], loopback: int, level: tuple[int, int]) -> dict[str, Any]:
+    first, second = level
+    secrets = sorted(data.get("secrets", []))
+    return {
+        "basePath": f"/apps/{name}",
+        "containerPort": data["port"],
+        "dataPath": str(DATA_ROOT / name),
+        "egress": data["egress"],
+        "image": data["image"],
+        "loopbackPort": loopback,
+        "mcs": f"s0:c{first},c{second}",
+        "network": network_for(data["egress"]),
+        "quota": data.get("quota", QUOTA_DEFAULT),
+        "reachable": True,
+        "secretNames": {secret: f"app-{name}-{secret}" for secret in secrets},
+        "unitName": f"{name}.container",
+    }
+
+
+def render_files(definitions: list[tuple[str, dict[str, Any]]]) -> dict[str, str]:
+    names = [name for name, _ in definitions]
+    ports = stable_ports(names)
+    levels = mcs_levels(names)
+    files: dict[str, str] = {}
+    plan: dict[str, Any] = {}
+    for name, data in definitions:
+        files[f"{name}.container"] = render_unit(name, data, ports[name], levels[name])
+        plan[name] = render_plan(name, data, ports[name], levels[name])
+    if any(data["egress"] == "none" for _, data in definitions):
+        files[f"{INTERNAL_NETWORK}.network"] = render_network()
+    files["plan.json"] = json.dumps({"version": 1, "apps": plan}, indent=2, sort_keys=True) + "\n"
+    return files
+
+
+MARKER = "# Rendered from apps/"
+
+
+def is_rendered(path: Path) -> bool:
+    try:
+        with path.open(encoding="utf-8") as handle:
+            return handle.readline().startswith(MARKER)
+    except (OSError, ValueError):
+        return False
+
+
+def owned(path: Path) -> bool:
+    """A file this renderer wrote: a managed suffix with the rendered marker."""
+    return path.suffix in {".container", ".network"} and is_rendered(path)
+
+
+def render(root: Path, out: Path, secrets: Path | None, check: bool) -> int:
+    problems, definitions = scan(root, secrets)
+    if problems:
+        # A rejected tree renders nothing: a partial tenant is worse than none.
+        for problem in problems:
+            print(problem)
+        return 1
+    if not definitions:
+        print(f"{root}/apps: no app definitions; refusing to render an empty tenant", file=sys.stderr)
+        return 1
+
+    files = render_files(definitions)
+
+    if out.exists() and not out.is_dir():
+        print(f"{out}: --out must be a directory", file=sys.stderr)
+        return 1
+
+    if check:
+        drifted = []
+        for filename, content in sorted(files.items()):
+            target = out / filename
+            if not target.is_file():
+                drifted.append(f"{filename}: missing")
+            elif target.read_text(encoding="utf-8") != content:
+                drifted.append(f"{filename}: differs")
+        if out.is_dir():
+            for extra in sorted(p for p in out.iterdir() if p.suffix in {".container", ".network"}):
+                if extra.name not in files:
+                    drifted.append(f"{extra.name}: no longer defined")
+        for line in drifted:
+            print(f"drift: {line}")
+        return 1 if drifted else 0
+
+    # Preflight before touching anything: a managed name that is not a regular
+    # file, or a unit in the target directory this renderer did not write, is an
+    # error rather than something to overwrite or delete.
+    for filename in files:
+        target = out / filename
+        if target.exists() and not target.is_file():
+            print(f"{target}: exists and is not a regular file", file=sys.stderr)
+            return 1
+    stale: list[Path] = []
+    if out.is_dir():
+        for entry in sorted(out.iterdir()):
+            if entry.suffix not in {".container", ".network"} or entry.name in files:
+                continue
+            if not owned(entry):
+                print(f"{entry}: not rendered by this tool; refusing to manage {out}", file=sys.stderr)
+                return 1
+            stale.append(entry)
+
+    out.mkdir(parents=True, exist_ok=True)
+    for filename, content in sorted(files.items()):
+        target = out / filename
+        handle = tempfile.NamedTemporaryFile(
+            "w", encoding="utf-8", dir=out, prefix=f".{filename}.", delete=False
+        )
+        try:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        finally:
+            handle.close()
+        os.replace(handle.name, target)
+    for entry in stale:
+        entry.unlink()
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -241,16 +517,28 @@ def main(argv: list[str] | None = None) -> int:
         help="tenant SOPS JSON file; required when a definition references secrets",
     )
 
+    render_cmd = sub.add_parser("render", help="write one Quadlet per app and plan.json")
+    render_cmd.add_argument("--root", type=Path, default=Path("."))
+    render_cmd.add_argument("--out", type=Path, required=True)
+    render_cmd.add_argument(
+        "--secrets",
+        type=Path,
+        help="tenant SOPS JSON file; required when a definition references secrets",
+    )
+    render_cmd.add_argument("--check", action="store_true", help="fail on drift instead of writing")
+
     args = parser.parse_args(argv)
-    if args.command != "validate":
-        return 2
     if args.secrets is not None and not args.secrets.is_file():
         print(f"{args.secrets}: tenant SOPS file is not a file", file=sys.stderr)
         return 1
-    problems = validate_root(args.root, args.secrets)
-    for problem in problems:
-        print(problem)
-    return 1 if problems else 0
+    if args.command == "validate":
+        problems = validate_root(args.root, args.secrets)
+        for problem in problems:
+            print(problem)
+        return 1 if problems else 0
+    if args.command == "render":
+        return render(args.root, args.out, args.secrets, args.check)
+    return 2
 
 
 if __name__ == "__main__":

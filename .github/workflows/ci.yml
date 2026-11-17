@@ -215,6 +215,8 @@ jobs:
         run: tests/core/check.sh
       - name: apps schema checks
         run: tests/apps/check.sh
+      - name: apps render checks
+        run: tests/apps/render.sh
 
   action-pins:
     name: action SHA pins
