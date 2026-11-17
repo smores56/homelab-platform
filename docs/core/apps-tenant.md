@@ -43,7 +43,10 @@ project id or invalid JSON changes nothing.
 - **Egress.** `egress = "internet"` renders pasta, and a tenant-wide nftables
   rule (`smortress-apps-egress.service`) drops the tenant uid's traffic to LAN,
   link-local, loopback, CGNAT/Tailscale, the tailnet ULA and the metadata
-  address. `egress = "none"` joins the internal Podman network, which has no
+  address. Any local address is matched with `fib daddr type local`, so a host
+  address outside the private ranges is covered too. Port 53 to that local
+  resolver is the one exception: pasta forwards the tenant's DNS there as the
+  tenant uid, and without it no app can resolve a name. `egress = "none"` joins the internal Podman network, which has no
   route out; Serve still reaches the loopback publish.
 - **Ingress.** Only Serve: core apps own the root paths on 443, 8443 and 10000,
   so `tailscale-serve` puts each reachable app on `/apps/<name>` at 443 and

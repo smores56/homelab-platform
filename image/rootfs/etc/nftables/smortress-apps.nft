@@ -16,6 +16,16 @@ table inet smortress_apps_egress {
     chain output {
         type filter hook output priority filter; policy accept;
 
+        # Pasta forwards the tenant's DNS to the host resolver as the tenant
+        # uid, so port 53 on a local address stays reachable. Without this no
+        # app can resolve a name; every other local port is dropped below.
+        meta skuid 1001 fib daddr type local udp dport 53 accept
+        meta skuid 1001 fib daddr type local tcp dport 53 accept
+
+        # Any address this host answers on is local, including one outside the
+        # private ranges; fib covers loopback and every configured address.
+        meta skuid 1001 fib daddr type local drop
+
         # LAN, loopback, link-local and the CGNAT range Tailscale uses.
         meta skuid 1001 ip daddr {
             10.0.0.0/8,

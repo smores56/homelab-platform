@@ -69,6 +69,23 @@ else
   bad 'every non-public destination is dropped'
 fi
 
+# Everything this host answers on is local, including an address that is not in
+# a private range; resolve it through fib instead of enumerating it.
+if grep -qE 'meta skuid 1001 fib daddr type local drop' "$rules"; then
+  ok 'every local address is dropped, not just the ranges'
+else
+  bad 'every local address is dropped, not just the ranges'
+fi
+
+# Pasta forwards the tenant's DNS to the host resolver as the tenant uid, so
+# port 53 to a local address must stay open or no app can resolve a name.
+if grep -qE 'meta skuid 1001 fib daddr type local udp dport 53 accept' "$rules" &&
+  grep -qE 'meta skuid 1001 fib daddr type local tcp dport 53 accept' "$rules"; then
+  ok 'the host resolver stays reachable for DNS'
+else
+  bad 'the host resolver stays reachable for DNS'
+fi
+
 # The internet class keeps the public internet, so the policy must not accept
 # everything and the drops must come before any accept.
 if grep -qE '^\s*table' "$rules" && ! grep -qE '^\s*policy drop' "$rules"; then
@@ -76,10 +93,13 @@ if grep -qE '^\s*table' "$rules" && ! grep -qE '^\s*policy drop' "$rules"; then
 else
   bad 'the tenant chain keeps the public internet reachable'
 fi
-if ! grep -qE '^\s*accept' "$rules"; then
-  ok 'nothing is explicitly accepted'
+explicit=$(grep -E '(udp|tcp) dport 53 accept' "$rules" || true)
+others=$(grep -E '\baccept\b' "$rules" | grep -v 'policy accept' \
+  | grep -vE '(udp|tcp) dport 53 accept' || true)
+if [[ $(printf '%s\n' "$explicit" | grep -c .) == 2 && -z $others ]]; then
+  ok 'only the DNS exception is explicitly accepted'
 else
-  bad 'nothing is explicitly accepted'
+  bad 'only the DNS exception is explicitly accepted' "$others"
 fi
 
 # Loading twice must be a no-op: a plain `delete` aborts a reload when the
