@@ -8,8 +8,8 @@
 # though the rest of the root filesystem is read-only.
 [Unit]
 Description=Immich PostgreSQL 17 cluster (photos recovery group)
-Requires=zfs-ready@photos.service sops-decrypt.service smortress-app-secrets.service
-After=network-online.target zfs-ready@photos.service sops-decrypt.service smortress-app-secrets.service
+Requires=zfs-ready@state-immich-postgres.service sops-decrypt.service smortress-app-secrets.service
+After=network-online.target zfs-ready@state-immich-postgres.service sops-decrypt.service smortress-app-secrets.service
 Wants=network-online.target
 
 [Container]
@@ -21,9 +21,9 @@ Secret=immich-db-password,type=mount,target=/run/secrets/immich-db-password,uid=
 Environment=POSTGRES_USER=immich
 Environment=POSTGRES_DB=immich
 Environment=POSTGRES_PASSWORD_FILE=/run/secrets/immich-db-password
-Environment=PGDATA=/data/postgres
+Environment=PGDATA=/data
 Environment=TZ=UTC
-Volume=/var/tank/photos:/data:z
+Volume=/var/lib/immich/postgres:/data:z
 # The image entrypoint seds its config template into /etc/postgresql at every
 # start, so that directory is a tmpfs even though the rest of the root
 # filesystem is read-only. Podman's tmpfs options do not accept uid/gid, so the

@@ -228,12 +228,12 @@ else
   ok 'every publish is loopback-only'
 fi
 
-# 6. The logical Immich dump lands in the photos group and completes before the
-#    daily offsite snapshot.
-if grep -q '/var/tank/photos/db-dumps' scripts/immich-dump.sh; then
-  ok 'immich dump writes inside the photos group'
+# 6. The logical Immich dump lands in the photos unit's dump dataset and
+#    completes before the daily offsite snapshot.
+if grep -q '/var/lib/immich/dumps' scripts/immich-dump.sh; then
+  ok 'immich dump writes inside the photos unit'
 else
-  bad 'immich dump writes inside the photos group'
+  bad 'immich dump writes inside the photos unit'
 fi
 dump_hour=$(sed -n 's/^OnCalendar=\*-\*-\* \([0-9][0-9]\):[0-9][0-9]:00$/\1/p' \
   units/systemd/smortress-immich-dump.timer)
@@ -343,7 +343,7 @@ done
 #    "statfs <path>: no such file or directory", which is how the second T5 boot
 #    lost immich-machine-learning and syncthing.
 tmpfiles=image/rootfs/etc/tmpfiles.d/smortress.conf
-for dir in /var/lib/immich/ml-cache /var/lib/syncthing-versions; do
+for dir in /var/lib/immich/ml-cache /var/lib/immich/valkey /var/lib/syncthing/versions; do
   line=$(grep -E "^d[[:space:]]+${dir}[[:space:]]" "$tmpfiles" || true)
   read -r _kind _path mode owner group _rest <<<"$line"
   eq "$mode/$owner/$group" "0750/1000/1000" "tmpfiles creates $dir for uid 1000"

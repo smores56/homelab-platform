@@ -1,9 +1,19 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2154  # dataset values come from the storage table
 # Static checks for the derived image, Ignition template, Quadlets and SOPS
 # layout. No registry, no cosign key and no operator secret is required.
 set -euo pipefail
 
 repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+# The storage table is the only list of datasets: a volume is a dataset iff its
+# mountpoint is in the table, and the readiness instance is derived from it.
+# shellcheck source=/dev/null
+source "$repo/scripts/storage-layout.sh"
+declare -A mount_to_instance=()
+for _key in "${dataset_order[@]}"; do
+  mount_to_instance[$(mountpoint_for "$_key")]=$(readiness_instance "$_key")
+done
+unset _key
 cd "$repo"
 # shellcheck source=../image/pins.env disable=SC1091
 source image/pins.env
@@ -100,12 +110,14 @@ for q in "${quadlets[@]}"; do
     check "$q requires the app-secrets unit" grep -qE '^Requires=.*smortress-app-secrets\.service' "$q"
   fi
   # The generator's RequiresMountsFor is satisfied by an empty directory; the
-  # readiness instance is what checks /proc/self/mountinfo. Every dataset a
-  # container mounts must therefore have its instance required here.
-  while IFS= read -r group; do
-    [[ -n $group ]] || continue
-    check "$q requires zfs-ready@$group" grep -q "zfs-ready@$group\.service" "$q"
-  done < <(sed -n 's|^Volume=/var/tank/\([a-z]*\).*|\1|p' "$q" | sort -u)
+  # readiness instance is what checks /proc/self/mountinfo. Every volume that is
+  # a dataset in the storage table must therefore have its instance required
+  # here, and a volume that is not a dataset (a cache, valkey's AOF) has none.
+  while IFS= read -r volume; do
+    instance=${mount_to_instance[$volume]:-}
+    [[ -n $instance ]] || continue
+    check "$q requires zfs-ready@$instance" grep -q "zfs-ready@$instance\.service" "$q"
+  done < <(sed -n 's|^Volume=\([^:]*\).*|\1|p' "$q" | sort -u)
 done
 
 check "readiness unit exists" has 'ExecStart=/usr/libexec/zfs-ready %i' 'units/systemd/zfs-ready@.service'
@@ -117,8 +129,9 @@ check "no unit runs from /usr/local" lacks '/usr/local/libexec' units/systemd/
 for u in units/systemd/smortress-restic-backup@.service units/systemd/smortress-restic-verify.service units/systemd/smortress-restic-init.service; do
   check "$u sets RESTIC_CACHE_DIR" has "RESTIC_CACHE_DIR" "$u"
 done
-for group in photos books notes music wallpapers syncthing; do
-  check "image enables zfs-ready@$group" has "zfs-ready@$group.service" image/Containerfile
+for key in "${dataset_order[@]}"; do
+  instance=$(readiness_instance "$key")
+  check "image enables zfs-ready@$instance" has "zfs-ready@$instance.service" image/Containerfile
 done
 check "decrypt unit is ordered after local-fs" has 'After=local-fs.target' units/systemd/sops-decrypt.service
 check "zpool unit follows the data cryptsetup unit" has 'After=systemd-cryptsetup@data.service' units/systemd/smortress-zpool.service
@@ -137,11 +150,12 @@ check "HDD mount bounds the device wait" has 'JobTimeoutSec=45' units/systemd/va
 check "HDD mount bounds the mount command" has 'TimeoutSec=30' units/systemd/var-lib-restic-hdd.mount
 
 backup_after=$(sed -e :a -e '/\\$/N; s/\\\n/ /; ta' 'units/systemd/smortress-restic-backup@.service' | grep '^After=')
-for group in photos books notes music wallpapers syncthing; do
-  if [[ $backup_after == *"zfs-ready@$group.service"* ]]; then
-    ok "backup driver is ordered after zfs-ready@$group"
+for key in "${dataset_order[@]}"; do
+  instance=$(readiness_instance "$key")
+  if [[ $backup_after == *"zfs-ready@$instance.service"* ]]; then
+    ok "backup driver is ordered after zfs-ready@$instance"
   else
-    bad "backup driver is ordered after zfs-ready@$group"
+    bad "backup driver is ordered after zfs-ready@$instance"
   fi
 done
 check "backup driver requires the decrypt unit" grep -qE '^Requires=.*sops-decrypt\.service' 'units/systemd/smortress-restic-backup@.service'
@@ -151,12 +165,12 @@ check "init requires the decrypt unit" grep -qE '^Requires=.*sops-decrypt\.servi
 retention_ok=1
 while IFS= read -r retention_line; do
   [[ $retention_line == *--keep-* ]] || continue
-  if [[ $retention_line != *'--tag group:'* && $retention_line != *'--tag "group:'* ]] ||
+  if [[ $retention_line != *'--tag unit:'* && $retention_line != *'--tag "unit:'* ]] ||
     [[ $retention_line != *'--tag verified'* ]]; then
     retention_ok=0
   fi
 done < <(sed -e :a -e '/\\$/N; s/\\\n/ /; ta' scripts/smortress-restic-backup.sh)
-check "retention requires both group and verified tags" test "$retention_ok" -eq 1
+check "retention requires both unit and verified tags" test "$retention_ok" -eq 1
 check "no wildcard retention bucket" lacks '--keep-last' scripts/smortress-restic-backup.sh
 check "no time-window retention bucket" lacks '--keep-within' scripts/smortress-restic-backup.sh
 if grep -qE '(^|[[:space:]])unlock([[:space:]]|$)' scripts/smortress-restic-*.sh; then
@@ -175,7 +189,7 @@ if grep -qE -- '--password[= ]' scripts/smortress-restic-*.sh; then
 else
   ok "no restic password on a command line"
 fi
-check "all plane state lives under /var/lib/smortress" has '/var/lib/smortress/restic' scripts/restic-plane-common.sh
+check "all plane state lives under /var/lib/homelab" has '/var/lib/homelab/restic' scripts/restic-plane-common.sh
 check "state directories are created 0700" has 'install -d -m 0700' scripts/restic-plane-common.sh
 check "R2 uses the new repository path" has 'homelab-restic/smortress' scripts/restic-plane-common.sh
 check "the plane never names the legacy R2 bucket" lacks 'restic-backup' scripts/restic-plane-common.sh
