@@ -80,8 +80,10 @@ accepted gap until a dataset or quota is designed for it.
 
 The receiver task owns the remaining half: fetch the pushed commit, require it
 to be the tip of `homelab-apps` `main`, descend from the deployed commit, and
-carry a valid signature; re-run the validator from the image; install the
-rendered units into `~apps/.config/containers/systemd`, create the tenant's
-Podman secrets from its SOPS section, reload and restart only the changed apps,
+carry a valid signature; re-run the validator from the image; pull each app image by digest as the
+tenant user with `--signature-policy=/usr/share/smortress/apps-policy.json`
+(the host policy still rejects it for root); install the rendered units into
+`~apps/.config/containers/systemd`, create the tenant's Podman secrets from its
+SOPS section, reload and restart only the changed apps,
 and leave the last good revision running when any step fails. The immediate
 reboot snapshot and post-boot health gate belong to that same gate.
