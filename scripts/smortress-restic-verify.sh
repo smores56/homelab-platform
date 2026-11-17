@@ -65,6 +65,7 @@ ping_url() {
 
 check_unit() {
   local backend=$1 unit=$2 repo=$3
+  local failures_before=$failures
   local state journal max_age expiry line result start end reason snap final_snap succ_end succ_snap n
   local jline jatt jresult jsnap
   local staging_json
@@ -160,7 +161,7 @@ check_unit() {
              (($s.tags // []) | index("unit:" + $u) != null),
              (($s.tags // []) | index("host:" + $h) != null),
              ($s.hostname == $h),
-             (($s.paths // []) == $p),
+             ((($s.paths // []) | sort) == ($p | sort)),
              ($s.time == ([.[] | .time] | max))]
           | map(if . then "1" else "0" end) | join("")
         end' <<<"$out" 2>/dev/null); then
@@ -187,7 +188,9 @@ check_unit() {
     fi
   fi
 
-  ok "$backend/$unit snapshot $final_snap"
+  if ((failures == failures_before)); then
+    ok "$backend/$unit snapshot $final_snap"
+  fi
 }
 
 for backend in "${backends[@]}"; do

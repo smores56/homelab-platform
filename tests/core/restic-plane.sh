@@ -116,7 +116,8 @@ case $cmd in
     source "$REPO_ROOT/scripts/storage-layout.sh"
     # shellcheck source=/dev/null
     source "$REPO_ROOT/scripts/restic-plane-common.sh"
-    paths=$(unit_paths_json "$unit" "$backend")
+    # restic stores a multi-path snapshot with its paths sorted
+    paths=$(unit_paths_json "$unit" "$backend" | jq -c "sort")
     printf '[{"id":"%s","tree":"%s","time":"%s","hostname":"smortress","paths":%s,"tags":["unit:%s","host:smortress","verified"]}]\n' \
       "${STUB_VERIFIED_ID:-${STUB_BACKUP_ID:-strepo}}" \
       "${STUB_VERIFIED_TREE:-${STUB_BACKUP_TREE:-tree1}}" \
