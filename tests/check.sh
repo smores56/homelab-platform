@@ -124,10 +124,11 @@ else
   bad "the fallback niri config starts Noctalia"
 fi
 
-if grep -q 'flatpak run org.wezfurlong.wezterm' image/rootfs/etc/niri/config.kdl 2>/dev/null; then
-  ok "the fallback session opens the WezTerm Flatpak"
+if grep -q 'spawn "wezterm"' image/rootfs/etc/niri/config.kdl 2>/dev/null \
+    && ! grep -q 'flatpak run org.wezfurlong.wezterm' image/rootfs/etc/niri/config.kdl; then
+  ok "the fallback session opens the WezTerm AppImage wrapper"
 else
-  bad "the fallback session opens the WezTerm Flatpak"
+  bad "the fallback session opens the WezTerm AppImage wrapper"
 fi
 
 if ! grep -qE 'tuned-ppd|playerctl|brightnessctl|grim|slurp|wl-clipboard|gvfs-mtp|iwlwifi-mvm-firmware|rsync|alsa-utils|foot|tuigreet' image/Containerfile; then
