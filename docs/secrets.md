@@ -62,7 +62,7 @@ gone. These are the holdovers, each with the task that ends it:
 | nix-config key | Host reader | Retired by |
 | --- | --- | --- |
 | `cloudflare-api-token` | `kanbei-access.nix` DNS-01, the `cloudflare-*` flake apps | flake apps: the step-14 state move; Kanbei: a DNS-scoped token of its own |
-| `cloudflared-credentials` | the host tunnel (`web-proxy.nix`) | #615, when the last host-owned route moves |
+| `cloudflared-credentials` | the host tunnel (`web-proxy.nix`) | #615, when the last host-owned route moves; SSH got its own dashboard tunnel, whose connector token is `secrets/server/cloudflared-tunnel.yaml` |
 | `restic-password`, `r2-access-key-id`, `r2-secret-access-key` | `restic-backup.nix` | #660: one repository per recovery group, then the restore drill (`docs/manual-steps.md` step 35) |
 | `memory-mcp-token` | the maki memory shim | #617's cluster route with an Access service token |
 

@@ -144,8 +144,8 @@ and the cluster; this table names locations, not secrets.
 | Restic password | sops `restic-password` → `/run/secrets/restic-password` | kept until the legacy repositories are retired; the three new repositories share a new password (T3) |
 | R2 access key pair | sops `r2-access-key-id` / `r2-secret-access-key` → `/run/secrets/restic-r2.env` | kept for legacy reads; T3 creates a new write token, T4 a read-only recovery token |
 | Cloudflare API token | sops `cloudflare-api-token` (tofu) | rotated for the T4 objects; scope narrowed to R2, Access and DNS |
-| cloudflared tunnel credentials | sops `cloudflared-credentials` | retired: no host tunnel in the core |
-| `cloudflare-access-ssh-token` | sops, the `ssh.sammohr.dev` path | retired: SSH moves to Tailscale |
+| cloudflared tunnel credentials | sops `cloudflared-credentials` | retired with the host tunnel; T2 adds a dedicated SSH tunnel (`smortress-cloudflared.service`, step 41), whose token is `secrets/server/cloudflared-tunnel.yaml` |
+| `cloudflare-access-ssh-token` | sops, the `ssh.sammohr.dev` path | retired: SSH moves to Tailscale, and the work laptop uses the SSH tunnel with a browser Access login instead of a token |
 | k3s cluster token | sops `k3s-cluster-token` | retired with the guest |
 | ntfy reader token | sops `ntfy-reader-token` | retired: Healthchecks + Pushover replace it |
 | OpenAI API key | sops `openai-api-key` | not used by the core; belongs to the later agent feature |

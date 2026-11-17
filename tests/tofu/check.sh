@@ -251,8 +251,37 @@ if grep -qF 'contains(keys(local.cluster_ingress), host)' "$work/code.tf"; then
 else
   bad "cluster DNS and ingress must agree"
 fi
+
+# The SSH tunnel's connector takes only a token, so its DNS and ingress live
+# here. An empty id creates neither object, which keeps a pre-mint plan green.
+echo "== ssh tunnel"
+has 'ssh tunnel CNAME comes from the ssh tunnel variable' 'ssh_tunnel_cname[[:space:]]*=[[:space:]]*"\$\{var\.ssh_tunnel_id\}\.cfargotunnel\.com"'
+has 'ssh_tunnel_id is a variable' 'variable "ssh_tunnel_id"'
+has 'an empty ssh_tunnel_id is valid' 'var\.ssh_tunnel_id == "" || can\(regex'
+ssh_dns=$(extract cloudflare_dns_record.ssh)
+if [[ -z $ssh_dns ]]; then
+  bad "ssh DNS record exists"
+else
+  ok "ssh DNS record exists"
+  if grep -qE 'count[[:space:]]*=[[:space:]]*var\.ssh_tunnel_id == "" \? 0 : 1' <<<"$ssh_dns"; then ok "ssh DNS waits for the tunnel id"; else bad "ssh DNS waits for the tunnel id"; fi
+  if grep -qE 'name[[:space:]]*=[[:space:]]*"ssh\.\$\{var\.domain\}"' <<<"$ssh_dns"; then ok "ssh DNS covers ssh.<zone>"; else bad "ssh DNS covers ssh.<zone>"; fi
+  if grep -q 'content = local.ssh_tunnel_cname' <<<"$ssh_dns"; then ok "ssh DNS points at the ssh tunnel"; else bad "ssh DNS points at the ssh tunnel"; fi
+  if grep -q 'proxied = true' <<<"$ssh_dns"; then ok "ssh DNS is proxied"; else bad "ssh DNS is proxied"; fi
+fi
+ssh_cfg=$(extract cloudflare_zero_trust_tunnel_cloudflared_config.ssh)
+if [[ -z $ssh_cfg ]]; then
+  bad "ssh tunnel config exists"
+else
+  ok "ssh tunnel config exists"
+  if grep -qE 'count[[:space:]]*=[[:space:]]*var\.ssh_tunnel_id == "" \? 0 : 1' <<<"$ssh_cfg"; then ok "ssh config waits for the tunnel id"; else bad "ssh config waits for the tunnel id"; fi
+  if grep -qF 'tunnel_id  = var.ssh_tunnel_id' <<<"$ssh_cfg"; then ok "ssh config targets the ssh tunnel"; else bad "ssh config targets the ssh tunnel"; fi
+  if grep -qF 'hostname = "ssh.${var.domain}"' <<<"$ssh_cfg"; then ok "ssh ingress publishes ssh.<zone>"; else bad "ssh ingress publishes ssh.<zone>"; fi
+  if grep -qF 'service  = "ssh://localhost:22"' <<<"$ssh_cfg"; then ok "ssh ingress terminates on the host sshd"; else bad "ssh ingress terminates on the host sshd"; fi
+  last_rule=$(grep -E 'service[[:space:]]*=' <<<"$ssh_cfg" | tail -1)
+  if [[ $last_rule == *'http_status:404'* ]]; then ok "ssh ingress ends with a 404 catch-all"; else bad "ssh ingress ends with a 404 catch-all"; fi
+fi
 if [[ -f tofu/terraform.tfvars ]]; then ok "committed tfvars exists"; else bad "committed tfvars exists"; fi
-for key in account_id domain email host_tunnel_id cluster_tunnel_id; do
+for key in account_id domain email host_tunnel_id cluster_tunnel_id ssh_tunnel_id; do
   if grep -qE "^[[:space:]]*${key}[[:space:]]*=" tofu/terraform.tfvars 2>/dev/null; then
     ok "tfvars sets $key"
   else

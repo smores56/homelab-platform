@@ -1,0 +1,45 @@
+[Unit]
+# The SSH tunnel's connector: it publishes ssh.sammohr.dev and nothing else
+# (the ingress is cloudflare_zero_trust_tunnel_cloudflared_config.ssh in
+# tofu/ssh_tunnel.tf). SSH is the route that must survive the k3s and
+# data-plane failures the rescue path exists for, so this unit requires neither.
+#
+# The tunnel token is image ciphertext in /run, never a unit argument or a log
+# line. The unit is skipped while the ciphertext is missing, so a host waiting
+# for the operator's token still boots.
+Description=Cloudflare SSH tunnel connector (ssh.sammohr.dev)
+Documentation=https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/
+Wants=network-online.target
+After=network-online.target sshd.service
+Requires=sops-decrypt.service
+After=sops-decrypt.service
+ConditionPathExists=/run/smortress/secrets/cloudflared-tunnel.yaml
+
+[Service]
+Type=simple
+DynamicUser=yes
+LoadCredential=tunnel:/run/smortress/secrets/cloudflared-tunnel.yaml
+ExecStart=/usr/bin/cloudflared --no-autoupdate tunnel run --token-file %d/tunnel
+Restart=always
+RestartSec=5s
+TimeoutStopSec=30s
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

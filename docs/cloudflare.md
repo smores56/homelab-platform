@@ -5,37 +5,42 @@ described. It moved here from `nix-config/tofu/` (SDLC #581) so that every
 object a diff can change is reviewed next to the manifests it fronts. `*.tf` is
 Kanbei-critical (`docs/kanbei-critical.md`): the token can repoint a route.
 
-## Ownership: two tunnels, one zone
+## Ownership: three tunnels, one zone
 
 | Tunnel | Runs where | Serves | Owner |
 | --- | --- | --- | --- |
-| Host tunnel | `cloudflared` on `smortress`, declared from `nix-config` `modules/nixos/web-proxy.nix` | `ssh.sammohr.dev`, `kanbei.sammohr.dev`, and `agent`/`memory` until their cluster cutovers | human, nix-config |
+| Host tunnel | no connector: nix-config's `cloudflared` is retired, and the tunnel is locally managed and slated for retirement (#615) | nothing | human |
+| SSH tunnel | `cloudflared` on `smortress`, from the derived image (`units/systemd/smortress-cloudflared.service`) | `ssh.sammohr.dev` | this repository |
 | Cluster tunnel | `cloudflared` in the `ingress` namespace (`clusters/homelab/ingress/`) | the apps whose origin moved into the cluster (`immich`, `music`, `opdshelf`, later `memory`, `agent`) | this repository |
 
-`tofu/` owns DNS, Access and notifications for **both** tunnels; it does not
-create or manage either connector. The host tunnel's DNS is the wildcard record
-in `tofu/main.tf` (as it was before the move); its container, credentials and
-ingress rules stay in nix-config. The cluster tunnel's DNS comes from
-`var.cluster_hosts` and `var.cluster_tunnel_id` in `tofu/dns.tf`.
+`tofu/` owns DNS, Access, notifications and the ingress of the **SSH and
+cluster** tunnels; it creates neither connector. The SSH tunnel is created in
+the dashboard — which is what makes it remotely managed — and
+`tofu/ssh_tunnel.tf` writes both its specific `ssh` CNAME and its ingress. The
+cluster tunnel's DNS comes from `var.cluster_hosts` and `var.cluster_tunnel_id`
+in `tofu/dns.tf`, and its ingress from the `cluster` resource in
+`tofu/cluster.tf`. The host tunnel keeps the wildcard record in `tofu/main.tf`;
+its ingress is local to the retired nix-config connector, which is why SSH does
+not reuse it.
 
-`kanbei.sammohr.dev` is a **public hostname behind Access**: the host tunnel's
-ingress in nix-config (`webProxy.services.kanbei`) sends it to
-`https://127.0.0.1:443`, the relay into the guest, and the guest terminates TLS
-with its own certificate; the wildcard record below resolves the name.
-`tofu/kanbei.tf` creates only the Access application (SDLC #586): a public
-`self_hosted` destination, the owner email policy, and no `service_auth`.
+`kanbei.sammohr.dev` is a **public hostname behind Access** (SDLC #586):
+`tofu/kanbei.tf` creates the application and the wildcard record resolves the
+name. Its origin was the nix-config `webProxy.services.kanbei` rule into the
+guest relay, and that rule retired with nix-config. The name has no origin until
+a connector publishes it again; the Access application still answers first, so
+it is denied rather than exposed.
 
 A private WARP hostname route and its Gateway L4 rewrite were retired on
 2026-11-13. A private hostname needs Gateway to hand the client an
 initial-resolved IP and rewrite the connection into the tunnel, which never
 happened for either owner device; a public hostname needs no client component.
-`tests/tofu/check.sh` asserts there is no hostname route and no specific DNS
-record.
+`tests/tofu/check.sh` asserts there is no private hostname route and no record
+of its own.
 
-Nothing about the host tunnel's ingress rules is asserted here; the
-`webProxy.services` assertion in nix-config is what keeps a protected hostname
-from losing Access there, and the wildcard application below is what denies
-anything unnamed.
+The SSH tunnel's DNS and ingress are asserted in `tests/tofu/check.sh`: a
+specific `ssh` record points at `var.ssh_tunnel_id`, the ingress terminates on
+the host's own sshd, and the catch-all stays last. Both are gated on a non-empty
+id, so a checkout without the dashboard tunnel still plans.
 
 ## Moved files
 
@@ -44,10 +49,13 @@ anything unnamed.
 | `tofu/main.tf` | `tofu/main.tf`, `tofu/dns.tf`, `tofu/access.tf`, `tofu/notifications.tf`, `tofu/rate-limit.tf` | split by object family; resource addresses unchanged |
 | `tofu/pages.tf` | `tofu/pages.tf` | verbatim |
 | `tofu/r2.tf` | `tofu/r2.tf` | verbatim |
-| `tofu/variables.tf` | `tofu/variables.tf` | `tunnel_id` renamed `host_tunnel_id`, new cluster/ACME inputs |
+| `tofu/variables.tf` | `tofu/variables.tf` | `tunnel_id` renamed `host_tunnel_id`, new cluster/SSH/ACME inputs |
 | `tofu/versions.tf` | `tofu/versions.tf` | provider and zone lookup only |
 | `tofu/.terraform.lock.hcl` | `tofu/.terraform.lock.hcl` | re-resolved to 5.28.1 on bootstrap |
 | `tofu/.terraform/` | not copied | provider cache, never committed |
+
+`tofu/ssh_tunnel.tf` is new here, not moved: the SSH tunnel postdates the
+nix-config move.
 
 Resource addresses keep their old names (`cloudflare_dns_record.wildcard`,
 `cloudflare_zero_trust_access_application.ssh`, …) so the move is a state-file
@@ -301,7 +309,7 @@ Static half — no credentials, what CI runs:
 tests/tofu/check.sh
 ```
 
-Expected: `tofu: 89 passed, 0 failed` with `tofu` on `PATH`; 87 without it, because the fmt/validate pair skips (CI runs both). The count grows with the config.
+Expected: `tofu: 164 passed, 0 failed` with `tofu` on `PATH`; 162 without it, because the fmt/validate pair skips (CI runs both). The count grows with the config.
 
 Runtime half — needs a token that can read Access:
 

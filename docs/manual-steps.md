@@ -451,9 +451,11 @@ first cutover:
 1. Install the cluster tunnel's Cloudflare objects (T7,
    `smores56/sdlc#581`): the tunnel itself (step 15), then its DNS and Access
    objects from `tofu/` by adding the hostname to `cluster_hosts` and applying.
-   The host tunnel keeps `ssh`, `agent`, `memory` and the Kanbei private route;
-   `llm` and `chat` are retired by step 17. Until a hostname's cutover the
-   wildcard record keeps it resolving to the host.
+   The host tunnel now serves nothing: its nix-config connector is retired,
+   SSH has its own tunnel (step 41), the Kanbei route went with nix-config, and
+   `agent`/`memory` moved to the cluster. `llm` and `chat` are retired by step
+   17. Until a hostname's cutover the wildcard record keeps it resolving to the
+   host.
 2. Confirm the storage contract bound:
 
    ```sh
@@ -3299,3 +3301,65 @@ sudo systemctl start smortress-immich-dump.timer
 
 The T6 cutover reuses these drills: it restores the same units from each of the
 three destinations before the legacy stack is retired.
+
+## 41. SSH tunnel (`ssh.sammohr.dev`)
+
+`ssh.sammohr.dev` gets its own Cloudflare tunnel. The host tunnel is locally
+managed — its ingress lived in nix-config — and a locally-managed tunnel cannot
+be configured through the API, so reusing it would put the rules back in a file
+on the host. The connector is part of the image
+(`smortress-cloudflared.service`); `tofu/ssh_tunnel.tf` writes the specific
+`ssh` CNAME and the ingress (`ssh://localhost:22`, then the catch-all), both
+gated on `var.ssh_tunnel_id`. The Access application is the existing `ssh` one
+in `tofu/access.tf`, so nothing there changes.
+
+1. Create the tunnel. Zero Trust → Networks → Tunnels → **Create a tunnel** →
+   Cloudflared → name it `smortress-ssh`. Do not add public hostnames in the
+   dashboard: `tofu/ssh_tunnel.tf` owns them.
+
+2. Record its UUID in `tofu/terraform.tfvars` (`ssh_tunnel_id`). It is on the
+   tunnel's page and in its credentials JSON (`"TunnelID"`). Nothing is
+   created while it is empty, so a checkout may carry `""` until the tunnel
+   exists.
+
+3. Copy its token from the same page (**Install connector**) and encrypt it to
+   the host identity. It is a capability: never commit it plaintext, and rotate
+   it from the same page if it leaks.
+
+   ```sh
+   ( umask 077
+     printf 'token: %s\n' '<token>' >/tmp/cloudflared-tunnel.yaml
+     sops --encrypt --input-type yaml --output-type yaml \
+       --filename-override secrets/server/cloudflared-tunnel.yaml \
+       /tmp/cloudflared-tunnel.yaml >secrets/server/cloudflared-tunnel.yaml
+     rm -f /tmp/cloudflared-tunnel.yaml
+   )
+   ```
+
+   Commit the ciphertext **before** the image that lists it. The manifest names
+   the file, and `scripts/sops-decrypt` fails closed on a manifest entry
+   without its ciphertext, which would leave every secret in `/run`
+   undecrypted on that boot.
+
+4. Merge. `tofu-apply.yml` writes the CNAME and the ingress, and
+   `publish-server-image.yml` builds the image that carries the unit; section 37
+   step 2 (`sudo bootc upgrade --enforce-container-sigpolicy`) deploys it.
+
+5. Prove it. The unit must be active and the connector registered:
+
+   ```sh
+   sudo systemctl status smortress-cloudflared.service
+   journalctl -u smortress-cloudflared.service -n 20 --no-pager
+   ```
+
+   The log must report the configuration it fetched. Then from the work laptop,
+   with the tunnel client and `~/.ssh/id_smortress-access` in place:
+
+   ```sh
+   ssh -o ProxyCommand='cloudflared access ssh --hostname %h' smores@ssh.sammohr.dev
+   ```
+
+   The first connection opens the Access login in a browser (the owner email
+   policy); it is cached for the session duration. A shell, and not a
+   post-login 404, is the proof that DNS, Access, the ingress and the connector
+   agree.

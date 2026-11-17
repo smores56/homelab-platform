@@ -259,7 +259,9 @@ be applied at any time (a missing share just leaves the pod unstarted).
    The host route and `memory-forward` stay until that returns 200; deleting them
    is the host lane's change (`docs/manual-steps.md` step 30). Rolling back is
    removing `memory` from the map (or pinning `cluster_hosts` without it), which
-   sends the name back to the host tunnel's route on the next apply.
+   sends the name back to the wildcard and the host tunnel's catch-all: that
+   tunnel's `memory` route retired with nix-config, so re-publishing it means a
+   route on a live connector first.
 
 Rollback for any app: start the native service again. Its data is still at the
 host path until the copy step moved it, and a `mv` is reversed by moving it back.

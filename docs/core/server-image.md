@@ -15,7 +15,7 @@ rollback path. Operator-only actions are in `docs/manual-steps.md` section 37.
 | `/etc/containers/policy.json` | Default-reject policy; trusts the uCore keys by path and `ghcr.io/smores56/homelab-platform` through `/etc/pki/containers/smortress.pub`. |
 | `/etc/containers/registries.d/ghcr.io-smortress.yaml` | Enables cosign signature lookup for our GHCR repository. |
 | `/etc/pki/containers/smortress.pub` | Public half of the operator cosign key. The private half is an environment secret and a recovery-kit item. |
-| `/usr/bin/{sops,age,age-keygen,restic}` | Hash-pinned release binaries from `image/pins.env`; no distribution drift. |
+| `/usr/bin/{sops,age,age-keygen,restic,cloudflared}` | Hash-pinned release binaries from `image/pins.env`; no distribution drift. |
 | `/etc/smortress/secrets/*.yaml` | SOPS ciphertext only. `image/rootfs/etc/smortress/secrets.manifest` fixes the decrypted owner, group and mode. |
 | `/usr/lib/systemd/system/zfs-ready@.service` | One readiness instance per recovery group; verifies the mount, not the directory. |
 | `/usr/lib/systemd/system/sops-decrypt.service` | Boot-ordered decrypt into `/run/smortress/secrets`. |
@@ -52,7 +52,7 @@ is deliberate: uCore ships the NVIDIA userspace and the OpenZFS module used by
 The base already provides what the design needs, verified by inspecting the
 image: the ZFS kernel module and tools, Podman with the Quadlet generator,
 firewalld, Tailscale, clevis with the sss/tang/tpm2 dracut pins, and the
-`podman-system-generator` symlink. It does not ship `sops`, `age` or `restic`;
+`podman-system-generator` symlink. It does not ship `sops`, `age`, `restic` or `cloudflared`;
 the Containerfile adds the hash-pinned release binaries instead of layering
 distribution packages.
 

@@ -12,6 +12,10 @@ email             = "sam@sammohr.dev"
 host_tunnel_id    = "583026c2-4efb-453b-8392-3ce6dfcfa0d0"
 cluster_tunnel_id = "16a461e2-b28e-4535-b79d-eca2f6e9b001"
 
+# Created in the dashboard (remotely managed); paste its UUID, then merge: the
+# ssh DNS record and its ingress are written by the same apply.
+ssh_tunnel_id = ""
+
 # Empty until the in-VM CSR client has registered; see docs/manual-steps.md
 # step 16. The CAA records are created only once this is set.
 acme_account_id = ""

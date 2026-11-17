@@ -49,6 +49,17 @@ variable "cluster_tunnel_id" {
   }
 }
 
+variable "ssh_tunnel_id" {
+  type        = string
+  description = "UUID of the SSH tunnel (created in the dashboard, so remotely managed; its connector is smortress-cloudflared.service). Empty until the tunnel is minted: the ssh DNS record and its ingress are created together only once it is set."
+  default     = ""
+
+  validation {
+    condition     = var.ssh_tunnel_id == "" || can(regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", var.ssh_tunnel_id))
+    error_message = "ssh_tunnel_id is either empty or the tunnel UUID, not the tunnel name."
+  }
+}
+
 variable "cluster_hosts" {
   type        = set(string)
   description = "Subdomains routed to the cluster tunnel instead of the host tunnel. Defaults to the keys of `local.cluster_ingress`, so a cutover is one edit in tofu/cluster.tf and DNS cannot drift from the tunnel's ingress. Set it explicitly only to pin a subset, which is the rollback for a single name."

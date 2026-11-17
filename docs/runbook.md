@@ -344,8 +344,10 @@ unstarted until the operator has done `docs/manual-steps.md` steps 8, 12 and 13
 (ESO, the SOPS-contract Secrets, and the cutover). The per-app order, checks and
 rollback are in `docs/data-migration.md`. Nothing here flips a Cloudflare route:
 the tunnel and its DNS/Access objects belong to `tofu/` (`docs/cloudflare.md`),
-and the host tunnel keeps serving `ssh` and `agent` until each cutover. `llm`,
-`chat` and `nanobot` are retired (`docs/manual-steps.md` steps 17 and 20).
+and the host tunnel is retired with its nix-config connector (`#615`): SSH has
+its own tunnel (`docs/manual-steps.md` step 41) and the cutover apps are on the
+cluster tunnel. `llm`, `chat` and `nanobot` are retired (`docs/manual-steps.md`
+steps 17 and 20).
 
 ### 7. Cloudflare objects, Access default-deny and CAA
 

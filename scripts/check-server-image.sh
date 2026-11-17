@@ -31,7 +31,7 @@ probe() { local name=$1; shift; if "$@" >/dev/null 2>&1; then ok "$name"; else b
 
 if [[ $UCORE_IMAGE =~ @sha256:[0-9a-f]{64}$ ]]; then ok "base image is digest-pinned"; else bad "base image is digest-pinned"; fi
 if [[ -n ${IMAGE_REPO:-} ]]; then ok "image repository is set"; else bad "image repository is set"; fi
-for pin in SOPS_SHA256 AGE_SHA256 RESTIC_SHA256 BUTANE_SHA256 COSIGN_SHA256; do
+for pin in SOPS_SHA256 AGE_SHA256 RESTIC_SHA256 CLOUDFLARED_SHA256 BUTANE_SHA256 COSIGN_SHA256; do
   if [[ ${!pin} =~ ^[0-9a-f]{64}$ ]]; then ok "$pin format"; else bad "$pin format"; fi
 done
 
@@ -41,6 +41,21 @@ check "Containerfile installs the public key" has 'image/cosign.pub /etc/pki/con
 check "Containerfile masks Podman auto-update" has 'podman-auto-update.timer' image/Containerfile
 check "Containerfile masks bootc auto-update" has 'bootc-fetch-apply-updates.timer' image/Containerfile
 check "Containerfile sets the default firewall zone to drop" has '--set-default-zone=drop' image/Containerfile
+
+# The SSH tunnel connector. Its token is image ciphertext, so it must never
+# reach argv, and the unit must not start before the decrypt unit has written
+# that ciphertext.
+check "image pins the cloudflared release" has 'CLOUDFLARED_SHA256' image/Containerfile
+check "image ships the connector unit" has 'smortress-cloudflared.service' image/Containerfile
+check "the connector reads the token from a credential file" has 'LoadCredential=tunnel:/run/smortress/secrets/cloudflared-tunnel.yaml' units/systemd/smortress-cloudflared.service
+if grep -qE -- '--token([= ]|$)' units/systemd/smortress-cloudflared.service; then
+  bad "the connector keeps the token off argv"
+else
+  ok "the connector keeps the token off argv"
+fi
+check "the connector requires the decrypt unit" grep -qE '^Requires=.*sops-decrypt\.service' units/systemd/smortress-cloudflared.service
+check "the connector is skipped without its ciphertext" has 'ConditionPathExists=/run/smortress/secrets/cloudflared-tunnel.yaml' units/systemd/smortress-cloudflared.service
+check "the tunnel token is in the decrypt manifest" grep -qE '^cloudflared-tunnel\.yaml[[:space:]]' image/rootfs/etc/smortress/secrets.manifest
 
 probe "policy rejects by default" jq -e '.default[0].type == "reject"' image/rootfs/etc/containers/policy.json
 # An empty docker scope is the transport default and shadows the global reject
@@ -226,6 +241,12 @@ for cipher in secrets/server/*.yaml; do
   if grep -q 'sops-decrypt-ok' "$cipher"; then bad "$name leaks plaintext"; else ok "$name has no plaintext canary"; fi
   check "$name is in the decrypt manifest" grep -qE "^${name//./\\.}[[:space:]]" image/rootfs/etc/smortress/secrets.manifest
 done
+# The reverse direction matters just as much: the boot decrypt fails closed on
+# the first manifest entry without its ciphertext, and every unit that requires
+# sops-decrypt goes down with it.
+while read -r name; do
+  check "$name has committed ciphertext" test -s "secrets/server/$name"
+done < <(awk '!/^[[:space:]]*(#|$)/ { print $1 }' image/rootfs/etc/smortress/secrets.manifest)
 
 check "firewall binds tailscale0" has '<interface name="tailscale0"/>' image/rootfs/etc/firewalld/zones/tailscale.xml
 check "firewall permits ssh only on that zone" has '<service name="ssh"/>' image/rootfs/etc/firewalld/zones/tailscale.xml
