@@ -24,6 +24,10 @@ The migration runbook is `docs/switch.md`.
 - The base is always digest-pinned. `scripts/build-image.sh` and the
   Containerfile both refuse a tag.
 - No secrets, private keys, or per-machine state enter the image.
+- The shipped policy rejects by default, requires a signature only for this
+  image's repository, and allows unsigned pulls from `docker.io`, `quay.io`,
+  and `registry.fedoraproject.org` so `podman pull` and local builds keep
+  working next to the signature check.
 - The signing key is the `homelab-platform` keypair; only its public half is
   committed here. Policy scoping (`signedIdentity: matchRepository`) is what
   keeps the two image families from trusting each other's signatures.
