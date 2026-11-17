@@ -222,6 +222,19 @@ if grep -q -- 'tag --add verified complete1' "$log/restic"; then
 else
   bad "the successful snapshot is tagged verified" "$(cat "$log/restic")"
 fi
+
+# A second verified snapshot for the same unit and path set is normal. The run
+# must pick the one whose tree it just wrote, not whichever is newest by time.
+reset_state
+export STUB_BACKUP_ID=complete3 STUB_BACKUP_TREE=treeB
+export STUB_SNAPSHOTS_JSON
+STUB_SNAPSHOTS_JSON='[{"id":"older1","tree":"treeA","time":"2026-01-01T00:00:00Z","hostname":"smortress","paths":[],"tags":["unit:photos","host:smortress","verified"]},
+{"id":"newer2","tree":"treeB","time":"2026-01-01T00:05:00Z","hostname":"smortress","paths":[],"tags":["unit:photos","host:smortress","verified"]}]'
+export STUB_SNAPSHOTS_JSON
+run scripts/smortress-restic-backup.sh ssd --unit photos --no-maintenance
+eq "$rc" 0 "a run succeeds when an older verified snapshot has a different tree"
+eq "$(state_json ssd-photos '.final.snapshot')" newer2 "the tree selects the snapshot this attempt wrote"
+unset STUB_SNAPSHOTS_JSON
 if [[ ! -e $(mountpoint_for raw/photos)/.zfs/snapshot/ssd ]] || [[ -z $(ls -A "$(mountpoint_for raw/photos)/.zfs/snapshot/ssd" 2>/dev/null) ]]; then
   ok "the staging snapshot was destroyed"
 else

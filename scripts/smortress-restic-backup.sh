@@ -278,11 +278,18 @@ attempt_locked() {
     fail_attempt tag-failed 0 "$sid"
     return 1
   fi
+  # Select by tree, not by "latest": two verified snapshots for the same unit
+  # and path set are normal (a retry, or a second successful run), and asking
+  # for the latest returns one of them by time rather than the one this attempt
+  # just created. The tree is what tagging does not change, so it identifies the
+  # snapshot independently of its id.
   verified_json=$(with_deadline "$deadline" "$restic_bin" -r "$repo" snapshots \
     --json --no-lock --host "$restic_host" --tag "unit:$unit" \
-    --tag verified --latest 1 2>/dev/null) || verified_json=""
-  verified_sid=$(printf '%s' "$verified_json" | jq -r '.[0].id // empty' 2>/dev/null) || verified_sid=""
-  verified_tree=$(printf '%s' "$verified_json" | jq -r '.[0].tree // empty' 2>/dev/null) || verified_tree=""
+    --tag verified 2>/dev/null) || verified_json=""
+  verified_sid=$(printf '%s' "$verified_json" |
+    jq -r --arg tree "$backup_tree" '[.[] | select(.tree == $tree)] | sort_by(.time) | last | .id // empty' 2>/dev/null) || verified_sid=""
+  verified_tree=$(printf '%s' "$verified_json" |
+    jq -r --arg tree "$backup_tree" '[.[] | select(.tree == $tree)] | last | .tree // empty' 2>/dev/null) || verified_tree=""
   if [[ -z $verified_sid || -z $verified_tree || $verified_tree != "$backup_tree" ]]; then
     fail_attempt tag-failed 0 "$sid"
     return 1
