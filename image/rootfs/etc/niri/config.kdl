@@ -1,13 +1,16 @@
 // Fallback configuration, used only when the machine has not deployed its own
-// ~/.config/niri/config.kdl. It starts the shell and provides one terminal,
-// launcher, lock, and quit binding; the dotfiles config replaces it entirely.
+// ~/.config/niri/config.kdl. It starts the shell and provides the apps, session
+// and quit chords; the dotfiles config replaces it entirely.
 spawn-at-startup "noctalia"
 
 binds {
-    // kitty ships in the image, so this works whether or not the dotfiles
-    // are deployed.
+    // The apps ship in the image, so these work whether or not the dotfiles
+    // are deployed. Chords match the dotfiles config where they overlap.
+    Mod+T { spawn "kitty"; }
     Mod+Return { spawn "kitty"; }
-    Mod+D { spawn "noctalia" "msg" "panel-toggle" "launcher"; }
-    Super+Alt+L { spawn "noctalia" "msg" "session" "lock"; }
+    Mod+B { spawn "brave-origin"; }
+    Mod+D { spawn "dolphin"; }
+    Mod+Space { spawn "noctalia" "msg" "panel-toggle" "launcher"; }
+    Mod+L { spawn "noctalia" "msg" "session" "lock"; }
     Mod+Shift+E { quit; }
 }

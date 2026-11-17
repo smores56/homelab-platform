@@ -125,10 +125,21 @@ else
 fi
 
 if grep -q 'spawn "kitty"' image/rootfs/etc/niri/config.kdl 2>/dev/null \
+    && grep -q 'spawn "brave-origin"' image/rootfs/etc/niri/config.kdl \
+    && grep -q 'spawn "dolphin"' image/rootfs/etc/niri/config.kdl \
     && ! grep -q 'wezterm' image/rootfs/etc/niri/config.kdl; then
-  ok "the fallback session opens the image's kitty"
+  ok "the fallback session opens the image's apps"
 else
-  bad "the fallback session opens the image's kitty"
+  bad "the fallback session opens the image's apps"
+fi
+
+if grep -q 'install brave-origin' image/Containerfile \
+    && grep -q 'gpgcheck=1' image/Containerfile \
+    && grep -q "sed -i 's/^enabled=1\$/enabled=0/'" image/Containerfile \
+    && grep -qE ' dolphin ImageMagick jq' image/Containerfile; then
+  ok "Brave Origin comes from the vendor repo, disabled after install"
+else
+  bad "Brave Origin must come from the vendor repo, disabled after install"
 fi
 
 if ! grep -qE 'tuned-ppd|playerctl|brightnessctl|grim|slurp|wl-clipboard|gvfs-mtp|iwlwifi-mvm-firmware|rsync|alsa-utils|foot|tuigreet' image/Containerfile; then
