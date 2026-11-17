@@ -15,4 +15,4 @@ command = "niri-session"
 # forever. This path does ask for a password, by design.
 [default_session]
 user = "greeter"
-command = "tuigreet --cmd niri-session"
+command = "agreety --cmd niri-session"
