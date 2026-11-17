@@ -28,6 +28,8 @@ jobs:
 
       - name: check the pin
         id: check
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set +e
           ./scripts/refresh-pins.sh --check >"$RUNNER_TEMP/check" 2>&1
@@ -46,9 +48,18 @@ jobs:
         run: |
           set -euo pipefail
           title="Newer base digest or NymVPN release available"
+          # The watcher predates the NymVPN pin and used a base-only title; a
+          # stray open issue under it would otherwise never be closed again.
+          legacy="Newer fedora-bootc base digest available"
           detail=$(cat "$RUNNER_TEMP/check")
-          existing=$(gh issue list --state open --limit 100 --json number,title \
-            --jq "[.[] | select(.title == \"$title\")][0].number // empty")
+          existing=""
+          for candidate in "$title" "$legacy"; do
+            number=$(gh issue list --state open --limit 100 --json number,title \
+              --jq "[.[] | select(.title == \"$candidate\")][0].number // empty")
+            [[ -n $number ]] || continue
+            existing=$number
+            [[ $candidate == "$title" ]] && break
+          done
           if [[ $DRIFT != "true" ]]; then
             if [[ -n $existing ]]; then
               gh issue close "$existing" --comment "The pin is current again: $detail"

@@ -74,6 +74,9 @@ jobs:
             *@sha256:*) ;;
             *) echo "BASE_IMAGE is not digest-pinned" >&2; exit 1 ;;
           esac
+          for pin in NYM_VERSION NYM_SHA256_AMD64 NYM_SHA256_ARM64; do
+            [[ -n ${!pin:-} ]] || { echo "$pin is missing from image/pins.env" >&2; exit 1; }
+          done
           tag="sha-$(git rev-parse --short=12 HEAD)"
           echo "TAG=$tag" >>"$GITHUB_ENV"
           podman build \

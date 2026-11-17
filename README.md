@@ -11,11 +11,11 @@ The migration runbook is `docs/switch.md`.
 
 | File | Owns |
 | --- | --- |
-| `image/pins.env` | every external reference; the only file a base refresh edits |
+| `image/pins.env` | every external reference; the only file a base or NymVPN refresh edits |
 | `image/Containerfile` | the derived image: one explicit package set, config copy, unit enables, `bootc container lint` |
-| `image/rootfs/` | files copied into `/`: greetd autologin, portal override, signature policy |
+| `image/rootfs/` | files copied into `/`: greetd autologin, portal override, signature policy, the NymVPN unit and its polkit action |
 | `image/cosign.pub` | the public half of the signing key shared with `homelab-platform` |
-| `scripts/refresh-pins.sh` | resolves the current base digest; `--check` for the watcher, `--write` to pin |
+| `scripts/refresh-pins.sh` | resolves the base digest and the NymVPN release; `--check` for the watcher, `--write` to pin |
 | `scripts/build-image.sh` | local build; never pushes or signs |
 | `tests/check.sh` | static checks over the files above |
 
@@ -40,7 +40,7 @@ Nothing rebuilds on a schedule. A build happens when this repository changes.
 To move to a newer base or NymVPN release:
 
 ```sh
-scripts/refresh-pins.sh --check   # is there a newer digest?
+scripts/refresh-pins.sh --check   # is there a newer digest or release?
 scripts/refresh-pins.sh --write   # pin it
 ```
 

@@ -177,26 +177,21 @@ fi
 
 # shellcheck disable=SC2016 # the literal ${NYM_VERSION} is what must appear
 if grep -qF 'nym-vpn-core-v${NYM_VERSION}_linux_${arch}.tar.gz' image/Containerfile \
-    && grep -qF 'sha256sum -c -' image/Containerfile; then
-  ok "the Containerfile fetches the pinned tarball and verifies its hash"
+    && grep -qF 'sha256sum -c -' image/Containerfile \
+    && grep -q 'aarch64)' image/Containerfile \
+    && grep -q -- '--strip-components=1' image/Containerfile; then
+  ok "the Containerfile fetches the pinned tarball per arch and verifies its hash"
 else
-  bad "the Containerfile fetches the pinned tarball and verifies its hash"
+  bad "the Containerfile fetches the pinned tarball per arch and verifies its hash"
 fi
 
-missing=""
-for bin in nym-vpnd nym-vpnc; do
-  grep -qF "$bin" image/Containerfile || missing="$missing $bin"
-done
-if [[ -z $missing ]] && grep -q 'install -m 0755' image/Containerfile; then
-  ok "the Containerfile installs the daemon and CLI as executables"
+# The install line is the allowlist: the tarball also ships nym-exclude (a
+# setuid split-tunnel helper), nym-diagnostic and the NetworkManager plugin.
+if grep -qF 'install -m 0755 /tmp/nym/nym-vpnd /tmp/nym/nym-vpnc /tmp/nym/nym-socks5-proxy /usr/bin/' \
+    image/Containerfile; then
+  ok "the Containerfile installs exactly the daemon, CLI and SOCKS5 proxy"
 else
-  bad "the Containerfile installs the daemon and CLI as executables" "$missing"
-fi
-
-if ! grep -q 'nym-exclude' image/Containerfile; then
-  ok "no setuid split-tunnel helper enters the image"
-else
-  bad "no setuid split-tunnel helper enters the image"
+  bad "the Containerfile installs exactly the daemon, CLI and SOCKS5 proxy"
 fi
 
 unit=image/rootfs/usr/lib/systemd/system/nym-vpnd.service
@@ -204,6 +199,7 @@ if grep -qx 'ExecStart=/usr/bin/nym-vpnd run-as-service' "$unit" 2>/dev/null \
     && grep -qx 'NoNewPrivileges=true' "$unit" \
     && grep -qx 'ProtectSystem=strict' "$unit" \
     && grep -qx 'StateDirectory=nym-vpnd' "$unit" \
+    && grep -qx 'LimitCORE=0' "$unit" \
     && grep -q '^WantedBy=multi-user.target$' "$unit" \
     && grep -q 'nym-vpnd.service' image/Containerfile; then
   ok "the shipped daemon unit is hardened and enabled by the build"
@@ -211,11 +207,16 @@ else
   bad "the shipped daemon unit is hardened and enabled by the build"
 fi
 
-if grep -q 'NYM_DNS_MODULE=systemd' "$unit" 2>/dev/null \
-    && grep -q 'systemd-resolved' image/Containerfile; then
-  ok "the daemon resolves through systemd-resolved, which the image pins"
+# This release has no DNS env override: the daemon detects its backend, so
+# ordering on resolved and shipping resolved enabled are what choose it.
+if grep -q '^After=.*systemd-resolved.service' "$unit" 2>/dev/null \
+    && grep -q '^Wants=.*systemd-resolved.service' "$unit" \
+    && grep -q 'systemd-resolved nftables' image/Containerfile \
+    && grep -q 'systemd-resolved.service' image/Containerfile \
+    && ! grep -q 'NYM_DNS_MODULE' "$unit"; then
+  ok "the daemon is ordered after systemd-resolved, which the image installs and enables"
 else
-  bad "the daemon resolves through systemd-resolved, which the image pins"
+  bad "the daemon is ordered after systemd-resolved, which the image installs and enables"
 fi
 
 if grep -q 'nft delete table inet nym' "$unit" 2>/dev/null \
@@ -225,11 +226,13 @@ else
   bad "the unit clears a stale kill-switch and the build records the vendor binaries"
 fi
 
-if grep -q 'com.nymvpn.vpnd.unix-access' \
-    image/rootfs/usr/share/polkit-1/actions/com.nymvpn.vpnd.unix-access.policy 2>/dev/null; then
-  ok "the image bakes the polkit action the daemon would otherwise write"
+policy=image/rootfs/usr/share/polkit-1/actions/com.nymvpn.vpnd.unix-access.policy
+if grep -q 'com.nymvpn.vpnd.unix-access' "$policy" 2>/dev/null \
+    && grep -q '<allow_active>auth_admin</allow_active>' "$policy" \
+    && ! grep -q 'auth_self' "$policy"; then
+  ok "the baked polkit action demands admin auth, never the caller's own"
 else
-  bad "the image bakes the polkit action the daemon would otherwise write"
+  bad "the baked polkit action demands admin auth, never the caller's own"
 fi
 
 if ! grep -q '^g[[:space:]]*nym-vpn' image/rootfs/usr/lib/sysusers.d/*.conf 2>/dev/null; then
@@ -238,10 +241,11 @@ else
   bad "no nym-vpn group gives passwordless control of a root daemon"
 fi
 
-if grep -q 'NYM_SHA256_AMD64' scripts/refresh-pins.sh; then
-  ok "refresh-pins.sh watches the NymVPN pin"
+if grep -q 'NYM_SHA256_AMD64' scripts/refresh-pins.sh \
+    && grep -q 'curl_opts=' scripts/refresh-pins.sh; then
+  ok "refresh-pins.sh watches the NymVPN pin with bounded fetches"
 else
-  bad "refresh-pins.sh watches the NymVPN pin"
+  bad "refresh-pins.sh watches the NymVPN pin with bounded fetches"
 fi
 
 # --- shell ------------------------------------------------------------------
