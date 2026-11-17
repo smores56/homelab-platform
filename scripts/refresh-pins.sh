@@ -30,7 +30,15 @@ if ! command -v skopeo >/dev/null 2>&1; then
 fi
 
 tag="quay.io/fedora/fedora-bootc:${FEDORA_VERSION}"
-digest="sha256:$(skopeo inspect --raw "docker://$tag" | sha256sum | cut -d' ' -f1)"
+if ! raw=$(skopeo inspect --raw "docker://$tag"); then
+  echo "refresh-pins.sh: cannot read $tag from the registry" >&2
+  exit 2
+fi
+if [[ -z $raw ]]; then
+  echo "refresh-pins.sh: registry returned an empty manifest for $tag" >&2
+  exit 2
+fi
+digest="sha256:$(printf '%s' "$raw" | sha256sum | cut -d' ' -f1)"
 if [[ ! $digest =~ ^sha256:[0-9a-f]{64}$ ]]; then
   echo "refresh-pins.sh: registry returned no usable digest for $tag" >&2
   exit 2

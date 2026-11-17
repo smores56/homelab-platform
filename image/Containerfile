@@ -33,10 +33,10 @@ RUN set -eux; \
       gnome-keyring libsecret flatpak \
       NetworkManager-wifi NetworkManager-bluetooth wpa_supplicant bluez \
       iwlwifi-mld-firmware iwlwifi-mvm-firmware \
-      fprintd fprintd-pam tuned-ppd plymouth plymouth-system-theme \
+      fprintd fprintd-pam tuned-ppd upower \
       libinput brightnessctl playerctl \
       xdg-user-dirs gvfs gvfs-mtp udisks2 \
-      wl-clipboard grim slurp \
+      wl-clipboard grim slurp foot \
       git rsync tailscale firewalld; \
     dnf5 clean all; \
     rm -rf /var/cache/dnf /var/cache/libdnf5 /var/cache/libX11 /var/cache/swcatalog \
@@ -58,6 +58,7 @@ RUN set -eux; \
     systemctl enable \
       greetd.service \
       firewalld.service \
+      tuned.service \
       tailscaled.service \
       bootc-fetch-apply-updates.timer; \
     systemctl mask rpm-ostreed-automatic.timer; \
@@ -70,5 +71,12 @@ RUN set -eux; \
     jq -e '.default[0].type == "reject"' /etc/containers/policy.json >/dev/null; \
     jq -e '.transports.docker["ghcr.io/smores56/smorespro-image"][0].keyPath == "/etc/pki/containers/smorespro.pub"' /etc/containers/policy.json >/dev/null; \
     test -s /etc/pki/containers/smorespro.pub
+
+# The exact package set this image shipped, so a running host can be compared
+# with its image. Neither the base's packages nor these are version-locked, so
+# this file is the record of what a given build contained.
+RUN set -eux; \
+    mkdir -p /usr/share/smorespro; \
+    rpm -qa --qf '%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}\n' | sort > /usr/share/smorespro/package-manifest
 
 RUN bootc container lint

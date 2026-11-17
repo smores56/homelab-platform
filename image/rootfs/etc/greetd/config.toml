@@ -1,12 +1,18 @@
 # greetd autologin into niri. The disk passphrase is the only password asked
-# at power-on: greetd's default session starts without authentication, so the
-# next prompt is Noctalia's lock screen after idle or an explicit lock.
+# at power-on: the initial session starts without authentication, so the next
+# prompt is Noctalia's lock screen after idle or an explicit lock.
 #
 # The user must exist before this runs; docs/switch.md covers both the in-place
 # switch and a fresh install.
 [terminal]
 vt = 1
 
-[default_session]
+[initial_session]
 user = "smores"
 command = "niri-session"
+
+# After a logout (niri exits), show a greeter instead of restarting the session
+# forever. This path does ask for a password, by design.
+[default_session]
+user = "greeter"
+command = "tuigreet --cmd niri-session"

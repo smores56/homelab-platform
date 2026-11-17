@@ -28,6 +28,7 @@ jobs:
     name: build, push, sign, verify
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    if: github.ref == 'refs/heads/main'
     environment: image-cosign
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -37,7 +38,7 @@ jobs:
       - name: install podman, jq, shellcheck
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends podman jq shellcheck
+          sudo apt-get install -y --no-install-recommends podman skopeo jq shellcheck
 
       - name: static checks
         run: |
@@ -83,33 +84,47 @@ jobs:
             -t "${IMAGE_REPO}:latest" \
             .
 
-      - name: push
+      - name: push the digest tag
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           . image/pins.env
-          echo "$GITHUB_TOKEN" | podman login ghcr.io -u "${{ github.actor }}" --password-stdin
-          podman push "${IMAGE_REPO}:${TAG}" --digestfile "$RUNNER_TEMP/digest"
-          podman push "${IMAGE_REPO}:latest"
+          mkdir -p "$RUNNER_TEMP/docker"
+          authfile="$RUNNER_TEMP/docker/config.json"
+          echo "DOCKER_CONFIG=$RUNNER_TEMP/docker" >>"$GITHUB_ENV"
+          echo "REGISTRY_AUTH_FILE=$authfile" >>"$GITHUB_ENV"
+          echo "$GITHUB_TOKEN" \
+            | podman login ghcr.io -u "${{ github.actor }}" --password-stdin --authfile "$authfile"
+          podman push "${IMAGE_REPO}:${TAG}" --authfile "$authfile" --digestfile "$RUNNER_TEMP/digest"
           echo "IMAGE_DIGEST=$(cat "$RUNNER_TEMP/digest")" >>"$GITHUB_ENV"
 
       # --new-bundle-format=false keeps the signature in the .sig tag layout that
       # containers/image reads; the OCI 1.1 bundle format is not understood by
-      # bootc's signature verification yet.
-      - name: sign
+      # bootc's signature verification yet. --tlog-upload=false keeps the build
+      # independent of the public Rekor instance.
+      - name: sign the digest
         env:
           COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
           COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
         run: |
           set -euo pipefail
-          cosign sign -y --new-bundle-format=false --use-signing-config=false \
+          cosign sign -y --new-bundle-format=false --use-signing-config=false --tlog-upload=false \
             --key env://COSIGN_PRIVATE_KEY "${IMAGE_REPO}@${IMAGE_DIGEST}"
 
-      - name: verify
+      # The mutable tag moves only after the signature verifies, so latest never
+      # points at an unsigned image.
+      - name: verify, then move latest
         run: |
           set -euo pipefail
+          . image/pins.env
           cosign verify --key image/cosign.pub "${IMAGE_REPO}@${IMAGE_DIGEST}"
+          podman push "${IMAGE_REPO}:latest" --authfile "$REGISTRY_AUTH_FILE"
+          latest=$(skopeo inspect --format '{{.Digest}}' "docker://${IMAGE_REPO}:latest")
+          if [[ $latest != "$IMAGE_DIGEST" ]]; then
+            echo "latest resolves to $latest, expected $IMAGE_DIGEST" >&2
+            exit 1
+          fi
 
       - name: summary
         run: |

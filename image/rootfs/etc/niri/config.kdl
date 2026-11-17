@@ -1,0 +1,11 @@
+// Fallback configuration, used only when the machine has not deployed its own
+// ~/.config/niri/config.kdl. It starts the shell and provides one terminal,
+// launcher, lock, and quit binding; the dotfiles config replaces it entirely.
+spawn-at-startup "noctalia"
+
+binds {
+    Mod+Return { spawn "foot"; }
+    Mod+D { spawn "noctalia" "msg" "panel-toggle" "launcher"; }
+    Super+Alt+L { spawn "noctalia" "msg" "session" "lock"; }
+    Mod+Shift+E { quit; }
+}

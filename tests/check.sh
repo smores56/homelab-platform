@@ -57,7 +57,7 @@ else
   bad "Containerfile has exactly one FROM"
 fi
 
-if ! grep -qE 'dnf( |$)' image/Containerfile; then
+if ! grep -qE '(^|[^/-])dnf[[:space:]]' image/Containerfile; then
   ok "Containerfile uses dnf5, not dnf"
 else
   bad "Containerfile uses dnf5, not dnf"
@@ -95,6 +95,12 @@ if [[ -f image/rootfs/etc/containers/policy.json ]]; then
   else
     bad "policy.json scopes the signing key to this repository"
   fi
+  if jq -e '.transports | to_entries | all(.value | type == "object")' \
+      image/rootfs/etc/containers/policy.json >/dev/null 2>&1; then
+    ok "policy.json transport values are objects"
+  else
+    bad "policy.json transport values are objects" "each transport maps a repository name to requirements"
+  fi
   if jq -e '.transports.docker["ghcr.io/smores56/smorespro-image"][0].keyPath == "/etc/pki/containers/smorespro.pub"' \
       image/rootfs/etc/containers/policy.json >/dev/null 2>&1; then
     ok "policy.json points at the shipped public key"
@@ -110,6 +116,25 @@ if grep -q 'use-sigstore-attachments: true' \
   ok "registries.d enables sigstore attachments for the image repository"
 else
   bad "registries.d enables sigstore attachments for the image repository"
+fi
+
+if grep -q 'spawn-at-startup "noctalia"' image/rootfs/etc/niri/config.kdl 2>/dev/null; then
+  ok "the fallback niri config starts Noctalia"
+else
+  bad "the fallback niri config starts Noctalia"
+fi
+
+if grep -qE '(^|[[:space:]])foot([[:space:]]|\\|$)' image/Containerfile; then
+  ok "a terminal is installed for the fallback session"
+else
+  bad "a terminal is installed for the fallback session"
+fi
+
+if grep -q '^\[initial_session\]' image/rootfs/etc/greetd/config.toml 2>/dev/null \
+    && grep -q '^user = "smores"' image/rootfs/etc/greetd/config.toml; then
+  ok "greetd autologins through initial_session"
+else
+  bad "greetd autologins through initial_session"
 fi
 
 # --- shell ------------------------------------------------------------------

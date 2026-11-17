@@ -39,14 +39,22 @@ jobs:
             *) echo "refresh-pins.sh failed (status $status)" >&2; exit "$status" ;;
           esac
 
-      - name: open or update the issue
-        if: steps.check.outputs.drift == 'true'
+      - name: open, update, or close the issue
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DRIFT: ${{ steps.check.outputs.drift }}
         run: |
           set -euo pipefail
           title="Newer fedora-bootc base digest available"
           detail=$(cat "$RUNNER_TEMP/check")
+          existing=$(gh issue list --state open --limit 100 --json number,title \
+            --jq "[.[] | select(.title == \"$title\")][0].number // empty")
+          if [[ $DRIFT != "true" ]]; then
+            if [[ -n $existing ]]; then
+              gh issue close "$existing" --comment "The pin is current again: $detail"
+            fi
+            exit 0
+          fi
           body=$(cat <<'BODY'
           $title
 
@@ -59,7 +67,6 @@ jobs:
           )
           body=${body//\$title/$title}
           body=${body//\$detail/$detail}
-          existing=$(gh issue list --state open --search "$title in:title" --json number --jq '.[0].number // empty')
           if [[ -n $existing ]]; then
             gh issue comment "$existing" --body "$body"
           else
