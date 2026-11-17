@@ -99,10 +99,9 @@ jobs:
           podman push "${IMAGE_REPO}:${TAG}" --authfile "$authfile" --digestfile "$RUNNER_TEMP/digest"
           echo "IMAGE_DIGEST=$(cat "$RUNNER_TEMP/digest")" >>"$GITHUB_ENV"
 
-      # --new-bundle-format=false keeps the signature in the .sig tag layout that
-      # containers/image reads; the OCI 1.1 bundle format is not understood by
-      # bootc's signature verification yet. --tlog-upload=false keeps the build
-      # independent of the public Rekor instance.
+      # --new-bundle-format=false keeps the signature in the .sig lookaside tag
+      # that containers/image reads; the OCI 1.1 referrer bundle cosign writes by
+      # default is not understood by bootc's signature verification yet.
       - name: sign the digest
         env:
           COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
@@ -110,7 +109,7 @@ jobs:
         run: |
           set -euo pipefail
           . image/pins.env
-          cosign sign -y --new-bundle-format=false --use-signing-config=false --tlog-upload=false \
+          cosign sign -y --new-bundle-format=false --use-signing-config=false \
             --key env://COSIGN_PRIVATE_KEY "${IMAGE_REPO}@${IMAGE_DIGEST}"
 
       # The mutable tag moves only after the signature verifies, so latest never
@@ -119,6 +118,10 @@ jobs:
         run: |
           set -euo pipefail
           . image/pins.env
+          # `cosign verify` alone reads the referrer bundle and would pass while
+          # the host rejects the image; prove the lookaside tag containers/image
+          # actually reads, then verify the signature.
+          skopeo inspect --raw "docker://${IMAGE_REPO}:${IMAGE_DIGEST/:/-}.sig" >/dev/null
           cosign verify --key image/cosign.pub "${IMAGE_REPO}@${IMAGE_DIGEST}"
           podman push "${IMAGE_REPO}:latest" --authfile "$REGISTRY_AUTH_FILE"
           latest=$(skopeo inspect --format '{{.Digest}}' "docker://${IMAGE_REPO}:latest")
