@@ -18,6 +18,7 @@
 # Usage (as root on smortress):
 #   sudo scripts/core/verify-legacy-backups.sh
 #   sudo scripts/core/verify-legacy-backups.sh --repo local --keep
+# shellcheck disable=SC2016  # backticks and $ in printf formats are Markdown for the report
 set -euo pipefail
 
 readonly SELF=${0##*/}

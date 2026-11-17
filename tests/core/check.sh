@@ -46,19 +46,25 @@ done
 # Freeze defaults to the read-only mode: an accidental plain invocation must not
 # suspend anything.
 checks=$((checks + 1))
-grep -q '^mode=check$' scripts/core/freeze-legacy.sh &&
-  ! grep -q -- '--apply) mode=apply' scripts/core/freeze-legacy.sh &&
-  pass 'freeze defaults to --check' || fail 'freeze does not default to --check'
+if grep -q '^mode=check$' scripts/core/freeze-legacy.sh &&
+  ! grep -q -- '--apply) mode=apply' scripts/core/freeze-legacy.sh; then
+  pass 'freeze defaults to --check'
+else
+  fail 'freeze does not default to --check'
+fi
 
 # Resume must restore recorded state, not a hard-coded false.
 checks=$((checks + 1))
-grep -q 'recorded=' scripts/core/freeze-legacy.sh &&
-  grep -q 'state_file' scripts/core/freeze-legacy.sh &&
-  pass 'freeze records and restores prior suspend state' ||
+if grep -q 'recorded=' scripts/core/freeze-legacy.sh &&
+  grep -q 'state_file' scripts/core/freeze-legacy.sh; then
+  pass 'freeze records and restores prior suspend state'
+else
   fail 'freeze resume ignores recorded state'
+fi
 
 # The verifier must never change retention or snapshots.
 checks=$((checks + 1))
+# shellcheck disable=SC2016  # the pattern matches a literal "$restic_bin" in the verifier
 if grep -nE 'restic .*(forget|prune|init|unlock)|"\$restic_bin" (forget|prune|init|unlock)' \
   scripts/core/verify-legacy-backups.sh >/dev/null; then
   fail 'verifier invokes a mutating restic command'
@@ -77,10 +83,12 @@ fi
 
 # Scratch must be rooted under /var/tmp and never reused when non-empty.
 checks=$((checks + 1))
-grep -q 'SCRATCH_ROOT=/var/tmp' scripts/core/verify-legacy-backups.sh &&
-  grep -q 'refusing to reuse it' scripts/core/verify-legacy-backups.sh &&
-  pass 'scratch is confined and non-empty targets are refused' ||
+if grep -q 'SCRATCH_ROOT=/var/tmp' scripts/core/verify-legacy-backups.sh &&
+  grep -q 'refusing to reuse it' scripts/core/verify-legacy-backups.sh; then
+  pass 'scratch is confined and non-empty targets are refused'
+else
   fail 'scratch confinement is missing'
+fi
 
 # Neither script may print secret values.
 checks=$((checks + 1))
@@ -103,12 +111,12 @@ fi
 # The gate document must point at scripts that exist.
 checks=$((checks + 1))
 missing=0
-for ref in $(grep -o 'scripts/core/[a-z-]*\.sh' docs/core/t0-gate.md | sort -u); do
+while IFS= read -r ref; do
   [[ -f $ref ]] || {
     fail "gate references a missing $ref"
     missing=1
   }
-done
+done < <(grep -o 'scripts/core/[a-z-]*\.sh' docs/core/t0-gate.md | sort -u)
 ((missing)) || pass 'gate document references existing scripts'
 
 # The Restic plane has its own harness: it stubs restic, zfs, curl and sops so

@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Static checks for the smortress autoinstall artifact.
 # Runtime proof lives in provision/smortress/verify.sh; this runs in CI.
+# shellcheck disable=SC2016  # expectations are literal source text, not expansions
+# shellcheck disable=SC2329  # has()/lacks() are called through check()
 set -euo pipefail
 
 root=$(cd -- "$(dirname -- "$0")/../.." && pwd)

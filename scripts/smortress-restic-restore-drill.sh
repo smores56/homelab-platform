@@ -9,6 +9,7 @@
 # fresh directory under /var/tmp and verifies the written data. It never
 # restores over a live dataset and never touches retention.
 # shellcheck disable=SC2154  # variables and helpers come from restic-plane-common
+# shellcheck disable=SC2016  # the bash -c script takes its values as positional parameters
 set -euo pipefail
 
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)

@@ -12,6 +12,7 @@
 # It only reads: `lsblk`, `findmnt`, `stat`, `du`, `find`, `systemctl show`,
 # `ssh-keygen -l`, `ls` and a `journalctl` tail. Nothing here unlocks a disk,
 # starts a unit, or touches a repository. Secret *values* are never printed.
+# shellcheck disable=SC2016  # backticks and $ in printf formats are Markdown for the report
 set -euo pipefail
 
 readonly SELF=${0##*/}

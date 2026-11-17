@@ -12,6 +12,7 @@
 # lock is taken, creation reconciles *only* this job's own staging snapshot
 # (tank/<group>@<backend>); nothing here destroys a snapshot it did not create.
 # shellcheck disable=SC2154  # variables and helpers come from restic-plane-common
+# shellcheck disable=SC2016  # jq programs are single-quoted on purpose: jq expands $name, not the shell
 set -euo pipefail
 
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
