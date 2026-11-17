@@ -34,6 +34,15 @@ declare -A dataset_mount=(
   [state/opdshelf]=/var/lib/opdshelf
 )
 
+#: Tests run this exact table against a scratch tree. Nothing on the host sets
+#: it, and an empty value means the real roots.
+if [[ -n ${STORAGE_MOUNT_ROOT:-} ]]; then
+  for _layout_key in "${!dataset_mount[@]}"; do
+    dataset_mount[$_layout_key]=$STORAGE_MOUNT_ROOT${dataset_mount[$_layout_key]}
+  done
+  unset _layout_key
+fi
+
 #: Creation order. Associative arrays have no order, and a deterministic
 #: init-zpool plan is what --print-plan and its test compare.
 dataset_order=(raw/files raw/photos raw/books raw/music raw/wallpapers raw/git
@@ -77,4 +86,18 @@ unit_keys() {
   for key in ${unit_datasets[$1]:?unknown unit: $1}; do
     printf '%s\n' "$key"
   done
+}
+
+#: The unit's snapshot paths as a JSON array, for a state file or a journal.
+unit_paths_json() { # unit backend
+  local -a paths
+  local key
+  for key in $(unit_keys "$1"); do
+    paths+=("$(mountpoint_for "$key")/.zfs/snapshot/$2")
+  done
+  if ((${#paths[@]} == 0)); then
+    printf '[]\n'
+    return 0
+  fi
+  jq -cn --args '$ARGS.positional' -- "${paths[@]}"
 }

@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 # Run every due Restic backup job for one backend (SDLC #706, T3).
 #
-#   smortress-restic-backup ssd|hdd|r2 [--group <name>]... [--no-maintenance]
+#   smortress-restic-backup ssd|hdd|r2 [--unit <name>]... [--no-maintenance]
 #
-# One invocation is a driver: it runs every group for that backend, records each
+# One invocation is a driver: it runs every unit for that backend, records each
 # result independently, and only then reports an aggregate failure. A failed
-# group never stops the next one, and a destination with no usable credentials
+# unit never stops the next one, and a destination with no usable credentials
 # records failures instead of disappearing.
 #
-# Per-job serialization is a flock on /var/lib/smortress/restic/locks. After the
-# lock is taken, creation reconciles *only* this job's own staging snapshot
-# (tank/<group>@<backend>); nothing here destroys a snapshot it did not create.
+# A unit is a restore unit from the storage table: every dataset it restores is
+# snapshotted as <dataset>@<backend> and all of their snapshot paths go into one
+# Restic snapshot, so raw data and the state it needs share a point in time.
+# After the lock is taken, creation reconciles *only* this job's own staging
+# snapshots; nothing here destroys a snapshot it did not create.
 # shellcheck disable=SC2154  # variables and helpers come from restic-plane-common
 # shellcheck disable=SC2016  # jq programs are single-quoted on purpose: jq expands $name, not the shell
 set -euo pipefail
@@ -27,9 +29,9 @@ umask 0077
 
 usage() {
   cat >&2 <<'EOF'
-usage: smortress-restic-backup <ssd|hdd|r2> [--group <name>]... [--no-maintenance]
+usage: smortress-restic-backup <ssd|hdd|r2> [--unit <name>]... [--no-maintenance]
 
-  --group           run only this recovery group; repeatable
+  --unit            run only this restore unit; repeatable
   --no-maintenance  skip forget/prune/check (tests and manual single jobs)
 
 environment (defaults are the host contract):
@@ -43,13 +45,13 @@ backend=${1-}
 shift
 case $backend in ssd | hdd | r2) ;; *) usage; exit 2 ;; esac
 
-group_filter=()
+unit_filter=()
 maintenance=1
 while (($#)); do
   case $1 in
-    --group)
+    --unit)
       [[ -n ${2-} ]] || { usage; exit 2; }
-      group_filter+=("$2")
+      unit_filter+=("$2")
       shift 2
       ;;
     --no-maintenance) maintenance=0; shift ;;
@@ -57,34 +59,36 @@ while (($#)); do
     *) usage; exit 2 ;;
   esac
 done
-for g in "${group_filter[@]}"; do
-  printf '%s\n' "${groups[@]}" | grep -qx -- "$g" || { warn "unknown group: $g"; exit 2; }
+for u in "${unit_filter[@]}"; do
+  printf '%s\n' "${units[@]}" | grep -qx -- "$u" || { warn "unknown unit: $u"; exit 2; }
 done
 
 state=""
 journal=""
 lock=""
-staging_path=""
+staging_paths=()
+staging_snapshots=()
+staging_created=()
 repo=""
 attempt_log=""
 attempt_err=""
-staging_snapshot=""
-staging_created=0
+paths_json="[]"
 attempt_start=""
 deadline=$(job_deadline "$backend")
 sleep_time=$(job_retry_sleep "$backend")
 
 cleanup_staging() {
-  if [[ ${staging_created:-0} == 1 && -n ${staging_snapshot:-} ]]; then
-    with_deadline 120 "$zfs_bin" destroy "$staging_snapshot" >/dev/null 2>&1 || true
-  fi
-  staging_created=0
+  local snapshot
+  for snapshot in "${staging_created[@]}"; do
+    with_deadline 120 "$zfs_bin" destroy "$snapshot" >/dev/null 2>&1 || true
+  done
+  staging_created=()
 }
 
 # Best effort by contract: a SIGKILL or power loss leaves the snapshot behind,
 # and the next invocation's reconciliation removes it by name.
 on_signal() {
-  warn "$backend/${group:-?}: terminated, cleaning up staging snapshot"
+  warn "$backend/${unit:-?}: terminated, cleaning up staging snapshots"
   cleanup_staging
   exit 143
 }
@@ -110,13 +114,13 @@ finish_attempt() {
   line=$(jq -cn --argjson n "$n" --argjson exit "$exitcode" \
     --arg result "$result" --arg reason "$reason" --arg snap "$snapshot" \
     --arg start "${attempt_start:-}" --arg end "$end" \
-    --arg backend "$backend" --arg group "$group" \
-    --arg host "$restic_host" --arg repo "$repo" --arg path "$staging_path" '
-    {schema: 1, attempt: $n, result: $result, exit: $exit, reason: $reason,
+    --arg backend "$backend" --arg unit "$unit" \
+    --arg host "$restic_host" --arg repo "$repo" --argjson paths "$paths_json" '
+    {schema: 2, attempt: $n, result: $result, exit: $exit, reason: $reason,
      snapshot: (if $snap == "" then null else $snap end),
      start: $start, end: $end,
-     backend: $backend, group: $group, host: $host, repository: $repo,
-     path: $path}') || return 1
+     backend: $backend, unit: $unit, host: $host, repository: $repo,
+     paths: $paths}') || return 1
   journal_append "$journal" "$line" || return 1
 
   if [[ $result == success ]]; then
@@ -129,9 +133,9 @@ finish_attempt() {
 
 fail_attempt() {
   local reason=$1 exitcode=${2:-0} snapshot=${3:-}
-  warn "$backend/$group: attempt failed: $reason${snapshot:+ (snapshot $snapshot)}"
+  warn "$backend/$unit: attempt failed: $reason${snapshot:+ (snapshot $snapshot)}"
   finish_attempt failure "$exitcode" "$reason" "$snapshot" ||
-    warn "$backend/$group: could not persist the failure record"
+    warn "$backend/$unit: could not persist the failure record"
   cleanup_staging
   if [[ -n ${attempt_log:-} ]]; then
     rm -f "$attempt_log"
@@ -152,14 +156,14 @@ reap_pending() {
   ids=$(jq -r '.pending_reap[]?' "$state" 2>/dev/null) || return 0
   [[ -n $ids ]] || return 0
   list=$(with_deadline "$deadline" "$restic_bin" -r "$repo" snapshots --json --no-lock \
-    --host "$restic_host" --path "$staging_path" 2>/dev/null) || return 0
+    --host "$restic_host" --tag "unit:$unit" 2>/dev/null) || return 0
   while IFS= read -r id; do
     [[ -n $id ]] || continue
     if jq -e --arg id "$id" 'any(.[]; .id == $id)' >/dev/null 2>&1 <<<"$list"; then
       if ! restic_with_lock "$deadline" "$repo" forget "$id" >/dev/null 2>&1; then
         continue
       fi
-      say "$backend/$group: reaped recorded failed snapshot $id"
+      say "$backend/$unit: reaped recorded failed snapshot $id"
     fi
     state_write "$state" '.pending_reap -= [$id]' --arg id "$id" || return 0
   done <<<"$ids"
@@ -168,28 +172,36 @@ reap_pending() {
 attempt_locked() {
   local rc=0 sid="" reason=""
   attempt_log=$(mktemp) || {
-    warn "$backend/$group: cannot create a scratch file"
+    warn "$backend/$unit: cannot create a scratch file"
     return 1
   }
   attempt_err=$(mktemp) || {
-    warn "$backend/$group: cannot create a scratch error file"
+    warn "$backend/$unit: cannot create a scratch error file"
     rm -f "$attempt_log"
     attempt_log=""
     return 1
   }
-  staging_snapshot="$(dataset_for "$group")@$backend"
-  staging_created=0
-
-  # Readiness is the dataset, not the directory: zfs-ready checks the exact
-  # mountinfo entry, so an empty root-filesystem path cannot pass.
-  if ! "$zfs_ready_bin" "$group" >/dev/null 2>&1; then
-    fail_attempt readiness
-    return 1
-  fi
-  if [[ ! -d $(mountpoint_for "$group")/.zfs/snapshot ]]; then
-    fail_attempt snapshot-path-missing
-    return 1
-  fi
+  local key dataset mountpoint snapshot path
+  staging_paths=()
+  staging_snapshots=()
+  staging_created=()
+  for key in $(unit_keys "$unit"); do
+    dataset=$(dataset_name "$key")
+    mountpoint=$(mountpoint_for "$key")
+    # Readiness is the dataset, not the directory: zfs-ready checks the exact
+    # mountinfo entry, so an empty root-filesystem path cannot pass.
+    if ! "$zfs_ready_bin" "$(readiness_instance "$key")" >/dev/null 2>&1; then
+      fail_attempt readiness
+      return 1
+    fi
+    if [[ ! -d $mountpoint/.zfs/snapshot ]]; then
+      fail_attempt snapshot-path-missing
+      return 1
+    fi
+    staging_paths+=("$mountpoint/.zfs/snapshot/$backend")
+    staging_snapshots+=("$dataset@$backend")
+  done
+  paths_json=$(jq -cn --args '$ARGS.positional' -- "${staging_paths[@]}")
   if [[ $backend != r2 ]] && ! is_mountpoint "$restic_base/$backend"; then
     fail_attempt repo-not-mounted
     return 1
@@ -197,32 +209,37 @@ attempt_locked() {
 
   reap_pending || true
 
-  if with_deadline 120 "$zfs_bin" list -H -o name -t snapshot "$staging_snapshot" \
-    >/dev/null 2>&1; then
-    if ! with_deadline 120 "$zfs_bin" destroy "$staging_snapshot" >/dev/null 2>&1; then
-      fail_attempt snapshot-reconcile
+  for snapshot in "${staging_snapshots[@]}"; do
+    if with_deadline 120 "$zfs_bin" list -H -o name -t snapshot "$snapshot" >/dev/null 2>&1; then
+      if ! with_deadline 120 "$zfs_bin" destroy "$snapshot" >/dev/null 2>&1; then
+        fail_attempt snapshot-reconcile
+        return 1
+      fi
+      say "$backend/$unit: reconciled a stale staging snapshot $snapshot"
+    fi
+  done
+
+  for snapshot in "${staging_snapshots[@]}"; do
+    if ! with_deadline "$deadline" "$zfs_bin" snapshot "$snapshot" >/dev/null 2>&1; then
+      fail_attempt snapshot-create
       return 1
     fi
-    say "$backend/$group: reconciled a stale staging snapshot"
-  fi
+    staging_created+=("$snapshot")
+  done
 
-  if ! with_deadline "$deadline" "$zfs_bin" snapshot "$staging_snapshot" >/dev/null 2>&1; then
-    fail_attempt snapshot-create
-    return 1
-  fi
-  staging_created=1
-
-  # .zfs/snapshot entries are automounted on first lookup. Without touching it
-  # here, restic stats the path before the mount exists and --one-file-system
+  # .zfs/snapshot entries are automounted on first lookup. Without touching each
+  # one here, restic stats the path before the mount exists and --one-file-system
   # prunes the whole tree as cross-device, recording an empty backup.
-  if ! with_deadline 60 ls -A "$staging_path" >/dev/null 2>&1; then
-    fail_attempt snapshot-create
-    return 1
-  fi
+  for path in "${staging_paths[@]}"; do
+    if ! with_deadline 60 ls -A "$path" >/dev/null 2>&1; then
+      fail_attempt snapshot-create
+      return 1
+    fi
+  done
 
   if restic_with_lock "$deadline" "$repo" backup \
-    --host "$restic_host" --tag "group:$group" --tag "host:$restic_host" \
-    --one-file-system --json "$staging_path" >"$attempt_log" 2>"$attempt_err"; then
+    --host "$restic_host" --tag "unit:$unit" --tag "host:$restic_host" \
+    --one-file-system --json "${staging_paths[@]}" >"$attempt_log" 2>"$attempt_err"; then
     rc=0
   else
     rc=$?
@@ -262,7 +279,7 @@ attempt_locked() {
     return 1
   fi
   verified_json=$(with_deadline "$deadline" "$restic_bin" -r "$repo" snapshots \
-    --json --no-lock --host "$restic_host" --path "$staging_path" \
+    --json --no-lock --host "$restic_host" --tag "unit:$unit" \
     --tag verified --latest 1 2>/dev/null) || verified_json=""
   verified_sid=$(printf '%s' "$verified_json" | jq -r '.[0].id // empty' 2>/dev/null) || verified_sid=""
   verified_tree=$(printf '%s' "$verified_json" | jq -r '.[0].tree // empty' 2>/dev/null) || verified_tree=""
@@ -272,7 +289,7 @@ attempt_locked() {
   fi
   sid=$verified_sid
   if ! finish_attempt success 0 "" "$sid"; then
-    warn "$backend/$group: snapshot $sid verified but the result was not persisted; treating the run as failed"
+    warn "$backend/$unit: snapshot $sid verified but the result was not persisted; treating the run as failed"
     cleanup_staging
     rm -f "$attempt_log" "$attempt_err"
     attempt_log=""
@@ -284,7 +301,7 @@ attempt_locked() {
   rm -f "$attempt_log" "$attempt_err"
   attempt_log=""
   attempt_err=""
-  say "$backend/$group: ok (snapshot $sid)"
+  say "$backend/$unit: ok (snapshot $sid)"
   return 0
 }
 
@@ -296,7 +313,7 @@ run_attempt() {
                        end: null, exit: null, result: "running",
                        reason: "", snapshot: null}' \
     --arg start "$start" || {
-    warn "$backend/$group: cannot record a running attempt"
+    warn "$backend/$unit: cannot record a running attempt"
     return 1
   }
 
@@ -322,7 +339,7 @@ write_maintenance_result() {
     sync "$file" 2>/dev/null || true
 }
 
-# Repository-wide maintenance: forget per recovery group with the verified
+# Repository-wide maintenance: forget per restore unit with the verified
 # filter, one prune for the repository, and a weekly read-data-subset check.
 # Restic's own lock is what serializes this against a running backup.
 run_maintenance() {
@@ -342,10 +359,10 @@ run_maintenance() {
   fi
 
   if ((due)); then
-    for g in "${groups[@]}"; do
+    for g in "${units[@]}"; do
       if ! restic_with_lock "$deadline_maintenance" "$repo" forget \
-        --host "$restic_host" --path "$(staging_for "$g" "$backend")" \
-        --tag "group:$g" --tag verified \
+        --host "$restic_host" \
+        --tag "unit:$g" --tag verified \
         --keep-daily 14 --keep-weekly 8 --keep-monthly 12 >>"$log" 2>&1; then
         rc=1
       fi
@@ -388,12 +405,12 @@ main() {
   if ((resolved == 0)) || ! load_backend_env "$backend"; then
     warn "$backend: repository or credentials are not configured (see docs/core/restic-plane.md)"
     repo=${repo:-unconfigured}
-    for group in "${groups[@]}"; do
-      state=$(state_file_for "$backend" "$group")
-      journal=$(journal_for "$backend" "$group")
-      lock=$(lock_for "$backend" "$group")
-      staging_path=$(staging_for "$group" "$backend")
-      state_init "$state" "$backend" "$group" "$repo" "$staging_path" || continue
+    for unit in "${units[@]}"; do
+      state=$(state_file_for "$backend" "$unit")
+      journal=$(journal_for "$backend" "$unit")
+      lock=$(lock_for "$backend" "$unit")
+      paths_json=$(unit_paths_json "$unit" "$backend")
+      state_init "$state" "$backend" "$unit" "$repo" "$paths_json" || continue
       state_write "$state" '
           .last_attempt = {n: ((.last_attempt.n // 0) + 1), start: $start,
                            end: null, exit: null, result: "running",
@@ -403,19 +420,19 @@ main() {
     exit 1
   fi
 
-  local failed=0 group job_ok attempt in_filter g
-  for group in "${groups[@]}"; do
-    if ((${#group_filter[@]} > 0)); then
+  local failed=0 unit job_ok attempt in_filter g
+  for unit in "${units[@]}"; do
+    if ((${#unit_filter[@]} > 0)); then
       in_filter=0
-      for g in "${group_filter[@]}"; do [[ $g == "$group" ]] && in_filter=1; done
+      for g in "${unit_filter[@]}"; do [[ $g == "$unit" ]] && in_filter=1; done
       ((in_filter)) || continue
     fi
-    state=$(state_file_for "$backend" "$group")
-    journal=$(journal_for "$backend" "$group")
-    lock=$(lock_for "$backend" "$group")
-    staging_path=$(staging_for "$group" "$backend")
-    if ! state_init "$state" "$backend" "$group" "$repo" "$staging_path"; then
-      warn "$backend/$group: cannot initialise status state"
+    state=$(state_file_for "$backend" "$unit")
+    journal=$(journal_for "$backend" "$unit")
+    lock=$(lock_for "$backend" "$unit")
+    paths_json=$(unit_paths_json "$unit" "$backend")
+    if ! state_init "$state" "$backend" "$unit" "$repo" "$paths_json"; then
+      warn "$backend/$unit: cannot initialise status state"
       failed=1
       continue
     fi
@@ -429,7 +446,7 @@ main() {
         break
       fi
       if ((attempt < attempts)); then
-        warn "$backend/$group: retrying in ${sleep_time}s (attempt $attempt/$attempts)"
+        warn "$backend/$unit: retrying in ${sleep_time}s (attempt $attempt/$attempts)"
         sleep "$sleep_time"
       fi
     done

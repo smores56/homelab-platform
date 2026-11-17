@@ -9,13 +9,19 @@
 #
 # shellcheck disable=SC2034  # sourced library: consumers use a subset
 
+# The dataset and unit tables are the storage layout's, not a copy: a unit in
+# this plane is exactly an entry there.
+common_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+layout=${STORAGE_LAYOUT:-$common_dir/storage-layout}
+[[ -r $layout ]] || layout=$layout.sh
+# shellcheck source=/dev/null
+source "$layout"
+
 restic_host=${RESTIC_HOST:-smortress}
-groups=(photos books notes music wallpapers syncthing)
 backends=(ssd hdd r2)
 
 restic_base=${RESTIC_BASE:-/var/lib/restic}
-source_root=${RESTIC_SOURCE_ROOT:-/var/tank}
-state_root=${RESTIC_STATE_ROOT:-/var/lib/smortress/restic}
+state_root=${RESTIC_STATE_ROOT:-/var/lib/homelab/restic}
 secrets_dir=${SMORTRESS_SECRETS_DIR:-/run/smortress/secrets}
 mountinfo=${RESTIC_MOUNTINFO:-/proc/self/mountinfo}
 
@@ -141,9 +147,15 @@ is_mountpoint() {
   awk -v p="$path" '$5 == p { found = 1 } END { exit !found }' "$mountinfo"
 }
 
-dataset_for() { printf 'tank/%s\n' "$1"; }
-mountpoint_for() { printf '%s/%s\n' "$source_root" "$1"; }
-staging_for() { printf '%s/%s/.zfs/snapshot/%s\n' "$source_root" "$1" "$2"; }
+# One snapshot path per dataset in the unit, in table order. The backup passes
+# all of them to a single snapshot, and a restore reads the same list back.
+unit_staging_paths() { # unit backend
+  local key
+  for key in $(unit_keys "$1"); do
+    printf '%s/.zfs/snapshot/%s\n' "$(mountpoint_for "$key")" "$2"
+  done
+}
+
 
 state_file_for() { printf '%s/state/%s-%s.json\n' "$state_root" "$1" "$2"; }
 journal_for() { printf '%s/journal/%s-%s.jsonl\n' "$state_root" "$1" "$2"; }
@@ -199,13 +211,13 @@ journal_append() {
 }
 
 state_init() {
-  local file=$1 backend=$2 group=$3 repo=$4 path=$5
+  local file=$1 backend=$2 unit=$3 repo=$4 paths_json=$5
   [[ -s $file ]] && return 0
   local tmp
   tmp=$(mktemp "$state_root/state/.init.XXXXXX") || return 1
-  if ! jq -n --arg b "$backend" --arg g "$group" --arg h "$restic_host" \
-    --arg r "$repo" --arg p "$path" \
-    '{schema:1,backend:$b,group:$g,host:$h,repository:$r,path:$p,
+  if ! jq -n --arg b "$backend" --arg u "$unit" --arg h "$restic_host" \
+    --arg r "$repo" --argjson p "$paths_json" \
+    '{schema:2,backend:$b,unit:$u,host:$h,repository:$r,paths:$p,
       last_attempt:null,last_success:null,final:null,pending_reap:[]}' >"$tmp"; then
     rm -f "$tmp"
     return 1
