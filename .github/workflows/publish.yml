@@ -78,6 +78,9 @@ jobs:
           echo "TAG=$tag" >>"$GITHUB_ENV"
           podman build \
             --build-arg "BASE_IMAGE=$BASE_IMAGE" \
+            --build-arg "NYM_VERSION=$NYM_VERSION" \
+            --build-arg "NYM_SHA256_AMD64=$NYM_SHA256_AMD64" \
+            --build-arg "NYM_SHA256_ARM64=$NYM_SHA256_ARM64" \
             --label "org.opencontainers.image.revision=$(git rev-parse HEAD)" \
             -f image/Containerfile \
             -t "${IMAGE_REPO}:${tag}" \

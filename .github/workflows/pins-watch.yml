@@ -1,7 +1,7 @@
-# Opens an issue when the pinned Fedora bootc base has a newer digest. It never
-# commits and never rebuilds: a base refresh stays a reviewed change to
-# image/pins.env, made with scripts/refresh-pins.sh --write.
-name: base-digest-watch
+# Opens an issue when either moving pin in image/pins.env is stale: the Fedora
+# bootc base digest or the NymVPN release. It never commits and never rebuilds:
+# a refresh stays a reviewed change made with scripts/refresh-pins.sh --write.
+name: pins-watch
 
 on:
   schedule:
@@ -21,10 +21,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: install skopeo
+      - name: install skopeo, jq and curl
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends skopeo
+          sudo apt-get install -y --no-install-recommends skopeo jq curl
 
       - name: check the pin
         id: check
@@ -45,7 +45,7 @@ jobs:
           DRIFT: ${{ steps.check.outputs.drift }}
         run: |
           set -euo pipefail
-          title="Newer fedora-bootc base digest available"
+          title="Newer base digest or NymVPN release available"
           detail=$(cat "$RUNNER_TEMP/check")
           existing=$(gh issue list --state open --limit 100 --json number,title \
             --jq "[.[] | select(.title == \"$title\")][0].number // empty")
@@ -58,7 +58,7 @@ jobs:
           body=$(cat <<'BODY'
           $title
 
-          Refresh with `scripts/refresh-pins.sh --write`, commit `image/pins.env`, and let publish.yml rebuild.
+          Refresh with `scripts/refresh-pins.sh --write`, commit `image/pins.env`, and let publish.yml rebuild. A NymVPN bump is a new release tarball: check its notes before pinning.
 
           ```
           $detail

@@ -1,20 +1,27 @@
 #!/usr/bin/env bash
-# Resolve the current digest of the Fedora bootc base for the pinned Fedora
-# release. This is the only script allowed to consume a moving tag; every other
-# script and the Containerfile consume the digest.
+# Resolve the moving upstream references behind image/pins.env: the Fedora bootc
+# base digest for the pinned Fedora release, and the newest stable NymVPN release
+# that carries a Linux core tarball. This is the only script allowed to consume
+# a moving tag; every other script and the Containerfile consume the pins.
 #
-#   scripts/refresh-pins.sh          print the current reference
-#   scripts/refresh-pins.sh --check  exit 0 if the pin is current, 1 if a newer
-#                                    digest exists, 2 on error (CI watcher)
+#   scripts/refresh-pins.sh          print the current base reference
+#   scripts/refresh-pins.sh --check  exit 0 if both pins are current, 1 if a
+#                                    newer base digest or NymVPN release exists,
+#                                    2 on error (CI watcher)
 #   scripts/refresh-pins.sh --write  rewrite image/pins.env
 #
-# The digest is the index digest, not a per-architecture manifest digest, so
-# the pin stays valid if the image is ever built for another architecture.
+# The base digest is the index digest, not a per-architecture manifest digest,
+# so the pin stays valid if the image is ever built for another architecture.
+# The NymVPN hashes come from the release's own checksums.txt: they are what the
+# Containerfile verifies the tarball against, so a release page that changes
+# under the pin can only break the build, never slip a binary in.
 set -euo pipefail
 
 repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 # shellcheck source=../image/pins.env disable=SC1091
 source "$repo/image/pins.env"
+
+nym_repo=nymtech/nym-vpn-client
 
 mode="print"
 case "${1:-}" in
@@ -24,10 +31,14 @@ case "${1:-}" in
   *) echo "usage: refresh-pins.sh [--check|--write]" >&2; exit 2 ;;
 esac
 
-if ! command -v skopeo >/dev/null 2>&1; then
-  echo "refresh-pins.sh: skopeo is not installed" >&2
-  exit 2
-fi
+for tool in skopeo curl jq; do
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    echo "refresh-pins.sh: $tool is not installed" >&2
+    exit 2
+  fi
+done
+
+# --- base ------------------------------------------------------------------
 
 tag="quay.io/fedora/fedora-bootc:${FEDORA_VERSION}"
 if ! raw=$(skopeo inspect --raw "docker://$tag"); then
@@ -45,24 +56,84 @@ if [[ ! $digest =~ ^sha256:[0-9a-f]{64}$ ]]; then
 fi
 ref="quay.io/fedora/fedora-bootc@${digest}"
 
+# --- NymVPN ----------------------------------------------------------------
+
+# Some stable tags carry a F-Droid APK alone, and a prerelease is never a
+# candidate, so the assets decide: the newest release with a core tarball wins.
+if ! releases=$(curl -fsSL "https://api.github.com/repos/${nym_repo}/releases?per_page=30"); then
+  echo "refresh-pins.sh: cannot list ${nym_repo} releases" >&2
+  exit 2
+fi
+nym_tag=$(printf '%s' "$releases" | jq -r '
+    .[]
+    | select(.draft | not)
+    | select(.prerelease | not)
+    | select(.tag_name | test("^nym-vpn-v[0-9]+\\.[0-9]+\\.[0-9]+$"))
+    | select([.assets[].name] | any(test("_linux_x86_64\\.tar\\.gz$")))
+    | [.tag_name, .published_at] | @tsv' |
+  sort -k2,2r | head -n1 | cut -f1)
+if [[ ! $nym_tag =~ ^nym-vpn-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "refresh-pins.sh: no stable ${nym_repo} release carries a Linux tarball" >&2
+  exit 2
+fi
+nym_latest=${nym_tag#nym-vpn-v}
+
+if ! sums=$(curl -fsSL "https://github.com/${nym_repo}/releases/download/${nym_tag}/checksums.txt"); then
+  echo "refresh-pins.sh: cannot read ${nym_tag} checksums.txt" >&2
+  exit 2
+fi
+hash_of() {
+  printf '%s\n' "$sums" | awk -v want="$1" '$2 == want { print $1 }'
+}
+nym_amd=$(hash_of "nym-vpn-core-v${nym_latest}_linux_x86_64.tar.gz")
+nym_arm=$(hash_of "nym-vpn-core-v${nym_latest}_linux_aarch64.tar.gz")
+for hash in "$nym_amd" "$nym_arm"; do
+  if [[ ! $hash =~ ^[0-9a-f]{64}$ ]]; then
+    echo "refresh-pins.sh: ${nym_tag} checksums.txt has no hash for a core tarball" >&2
+    exit 2
+  fi
+done
+
+# --- modes -----------------------------------------------------------------
+
+drift=0
+
+if [[ $BASE_IMAGE != "$ref" ]]; then
+  printf 'image/pins.env: newer base digest available\n  pinned:  %s\n  current: %s\n' "$BASE_IMAGE" "$ref"
+  drift=1
+fi
+if [[ $NYM_VERSION != "$nym_latest" ]]; then
+  printf 'image/pins.env: newer NymVPN release available\n  pinned:  %s\n  current: %s\n' "$NYM_VERSION" "$nym_latest"
+  drift=1
+fi
+
 case $mode in
   print)
     printf '%s\n' "$ref"
     ;;
   check)
-    if [[ $BASE_IMAGE == "$ref" ]]; then
-      printf 'image/pins.env: current (%s)\n' "$ref"
+    if [[ $drift -eq 0 ]]; then
+      printf 'image/pins.env: current (%s, nym %s)\n' "$ref" "$NYM_VERSION"
     else
-      printf 'image/pins.env: newer base digest available\n  pinned:  %s\n  current: %s\n' "$BASE_IMAGE" "$ref"
       exit 1
     fi
     ;;
   write)
-    if [[ $BASE_IMAGE == "$ref" ]]; then
-      printf 'image/pins.env: unchanged (%s)\n' "$ref"
+    if [[ $drift -eq 0 ]]; then
+      printf 'image/pins.env: unchanged (%s, nym %s)\n' "$ref" "$NYM_VERSION"
       exit 0
     fi
-    sed -i "s|^BASE_IMAGE=.*|BASE_IMAGE=$ref|" "$repo/image/pins.env"
-    printf 'image/pins.env: BASE_IMAGE=%s\n' "$ref"
+    if [[ $BASE_IMAGE != "$ref" ]]; then
+      sed -i "s|^BASE_IMAGE=.*|BASE_IMAGE=$ref|" "$repo/image/pins.env"
+      printf 'image/pins.env: BASE_IMAGE=%s\n' "$ref"
+    fi
+    if [[ $NYM_VERSION != "$nym_latest" ]]; then
+      sed -i \
+        -e "s|^NYM_VERSION=.*|NYM_VERSION=$nym_latest|" \
+        -e "s|^NYM_SHA256_AMD64=.*|NYM_SHA256_AMD64=$nym_amd|" \
+        -e "s|^NYM_SHA256_ARM64=.*|NYM_SHA256_ARM64=$nym_arm|" \
+        "$repo/image/pins.env"
+      printf 'image/pins.env: NYM_VERSION=%s\n' "$nym_latest"
+    fi
     ;;
 esac

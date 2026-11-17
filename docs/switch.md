@@ -119,6 +119,7 @@ Then, in the session:
 | Polkit | a privileged app shows Noctalia's auth prompt |
 | Lock/idle | wait 10 minutes, or `noctalia msg session lock` |
 | Tailscale | `sudo tailscale up` once, then `tailscale status` |
+| NymVPN | `sudo nym-vpnc status` answers, `systemctl status nym-vpnd` is active; the daemon logs to `/var/log/nym-vpnd/nym-vpnd.log`, not the journal. A "DNS intercepted" warning with the tunnel down is worth a look at `resolvectl status` |
 | Firmware | `fwupdmgr get-updates` |
 
 Keyring, once, before any app stores a secret. Autologin gives no PAM
@@ -141,6 +142,10 @@ printf '' | gnome-keyring-daemon --unlock --components=secrets
 - `niri-session` run by hand from the TTY starts the session for debugging.
 - `bootc rollback` returns to the previous deployment; the pinned Fedora
   deployment is also selectable in the GRUB menu.
+- If the network wedges right after a NymVPN change, `sudo systemctl stop
+  nym-vpnd` restores routing and DNS; its config and state live in
+  `/var/lib/nym-vpnd`, never in `/etc`, and a crash loop shows up in
+  `/var/log/nym-vpnd/nym-vpnd.log` rather than `journalctl`.
 
 ## 5. If image pulls start failing
 

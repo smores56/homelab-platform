@@ -161,6 +161,89 @@ else
   bad "greetd autologins through initial_session"
 fi
 
+# --- NymVPN -----------------------------------------------------------------
+
+if nympins=$(bash -c 'set -euo pipefail; source "$1"; printf "%s %s %s\n" "$NYM_VERSION" "$NYM_SHA256_AMD64" "$NYM_SHA256_ARM64"' _ image/pins.env 2>/dev/null); then
+  read -r nymver nymamd nymarm <<<"$nympins"
+  if [[ $nymver =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+      && [[ $nymamd =~ ^[0-9a-f]{64}$ ]] && [[ $nymarm =~ ^[0-9a-f]{64}$ ]]; then
+    ok "the NymVPN pin is a stable version and two tarball hashes"
+  else
+    bad "the NymVPN pin is a stable version and two tarball hashes" "$nympins"
+  fi
+else
+  bad "the NymVPN pin is a stable version and two tarball hashes"
+fi
+
+# shellcheck disable=SC2016 # the literal ${NYM_VERSION} is what must appear
+if grep -qF 'nym-vpn-core-v${NYM_VERSION}_linux_${arch}.tar.gz' image/Containerfile \
+    && grep -qF 'sha256sum -c -' image/Containerfile; then
+  ok "the Containerfile fetches the pinned tarball and verifies its hash"
+else
+  bad "the Containerfile fetches the pinned tarball and verifies its hash"
+fi
+
+missing=""
+for bin in nym-vpnd nym-vpnc; do
+  grep -qF "$bin" image/Containerfile || missing="$missing $bin"
+done
+if [[ -z $missing ]] && grep -q 'install -m 0755' image/Containerfile; then
+  ok "the Containerfile installs the daemon and CLI as executables"
+else
+  bad "the Containerfile installs the daemon and CLI as executables" "$missing"
+fi
+
+if ! grep -q 'nym-exclude' image/Containerfile; then
+  ok "no setuid split-tunnel helper enters the image"
+else
+  bad "no setuid split-tunnel helper enters the image"
+fi
+
+unit=image/rootfs/usr/lib/systemd/system/nym-vpnd.service
+if grep -qx 'ExecStart=/usr/bin/nym-vpnd run-as-service' "$unit" 2>/dev/null \
+    && grep -qx 'NoNewPrivileges=true' "$unit" \
+    && grep -qx 'ProtectSystem=strict' "$unit" \
+    && grep -qx 'StateDirectory=nym-vpnd' "$unit" \
+    && grep -q '^WantedBy=multi-user.target$' "$unit" \
+    && grep -q 'nym-vpnd.service' image/Containerfile; then
+  ok "the shipped daemon unit is hardened and enabled by the build"
+else
+  bad "the shipped daemon unit is hardened and enabled by the build"
+fi
+
+if grep -q 'NYM_DNS_MODULE=systemd' "$unit" 2>/dev/null \
+    && grep -q 'systemd-resolved' image/Containerfile; then
+  ok "the daemon resolves through systemd-resolved, which the image pins"
+else
+  bad "the daemon resolves through systemd-resolved, which the image pins"
+fi
+
+if grep -q 'nft delete table inet nym' "$unit" 2>/dev/null \
+    && grep -q 'vendor-manifest' image/Containerfile; then
+  ok "the unit clears a stale kill-switch and the build records the vendor binaries"
+else
+  bad "the unit clears a stale kill-switch and the build records the vendor binaries"
+fi
+
+if grep -q 'com.nymvpn.vpnd.unix-access' \
+    image/rootfs/usr/share/polkit-1/actions/com.nymvpn.vpnd.unix-access.policy 2>/dev/null; then
+  ok "the image bakes the polkit action the daemon would otherwise write"
+else
+  bad "the image bakes the polkit action the daemon would otherwise write"
+fi
+
+if ! grep -q '^g[[:space:]]*nym-vpn' image/rootfs/usr/lib/sysusers.d/*.conf 2>/dev/null; then
+  ok "no nym-vpn group gives passwordless control of a root daemon"
+else
+  bad "no nym-vpn group gives passwordless control of a root daemon"
+fi
+
+if grep -q 'NYM_SHA256_AMD64' scripts/refresh-pins.sh; then
+  ok "refresh-pins.sh watches the NymVPN pin"
+else
+  bad "refresh-pins.sh watches the NymVPN pin"
+fi
+
 # --- shell ------------------------------------------------------------------
 
 if command -v shellcheck >/dev/null 2>&1 && shellcheck --version >/dev/null 2>&1; then

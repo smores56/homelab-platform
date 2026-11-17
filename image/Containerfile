@@ -4,12 +4,20 @@
 #
 # The base is digest-pinned. Everything added here is a distribution package
 # from the pinned base's Fedora repositories plus the configuration under
-# image/rootfs. No signing key, secret or per-machine state enters the image.
+# image/rootfs, with one vendored exception: NymVPN publishes no RPM, so its
+# release tarball is hashed and installed here (see the NYM_* pins). No signing
+# key, secret or per-machine state enters the image.
 
 ARG BASE_IMAGE
 FROM ${BASE_IMAGE}
 
 ARG BASE_IMAGE
+# NymVPN's tarball is per architecture, and `uname -m` inside the build already
+# says x86_64 or aarch64, which is what the asset names use. The hashes come
+# from image/pins.env; a wrong one fails the build.
+ARG NYM_VERSION
+ARG NYM_SHA256_AMD64
+ARG NYM_SHA256_ARM64
 
 LABEL org.opencontainers.image.title="smorespro image" \
       org.opencontainers.image.description="Fedora bootc base with a niri session for the smorespro laptop" \
@@ -27,6 +35,11 @@ LABEL org.opencontainers.image.title="smorespro image" \
 # glibc-langpack-en is not optional: the base ships /etc/locale.conf with
 # LANG=en_US.UTF-8 and no langpacks, so every bash prints a setlocale warning.
 #
+# systemd-resolved is not optional either: it is the DNS backend nym-vpnd
+# reports into, and a preset (`disable *`) can leave a reinstalled package
+# disabled, so it is explicit here and enabled below. Without it the daemon
+# falls back to rewriting /etc/resolv.conf behind NetworkManager's back.
+#
 # Brave Origin is not in Fedora: it ships only from Brave's own RPM repository
 # (the official vendor package), so the RUN writes that repo before installing
 # it, then disables it so nothing else in the image silently trusts it. The
@@ -41,6 +54,7 @@ RUN set -eux; \
       gnome-keyring libsecret flatpak \
       NetworkManager-wifi NetworkManager-bluetooth wpa_supplicant bluez \
       iwlwifi-mld-firmware \
+      systemd-resolved \
       fprintd fprintd-pam power-profiles-daemon thermald upower \
       libinput \
       xdg-user-dirs gvfs udisks2 plymouth plymouth-system-theme \
@@ -60,8 +74,27 @@ RUN set -eux; \
       /var/lib/dnf /var/cache/ldconfig /var/log/dnf5.log /var/log/dnf5.log.*; \
     rm -rf /run/dnf /run/selinux-policy /run/tuned
 
+# NymVPN has no Fedora package, so the daemon and the CLI are vendored from the
+# pinned release tarball. The download stays before the rootfs COPY so editing
+# configuration never re-downloads 50 MB, and `install` is what sets the mode:
+# the tarball ships its binaries 0644.
+RUN set -eux; \
+    case "$(uname -m)" in \
+      x86_64) arch=x86_64; nym_sha="${NYM_SHA256_AMD64}" ;; \
+      aarch64) arch=aarch64; nym_sha="${NYM_SHA256_ARM64}" ;; \
+      *) echo "no NymVPN tarball for $(uname -m)" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSLo /tmp/nym.tar.gz \
+      "https://github.com/nymtech/nym-vpn-client/releases/download/nym-vpn-v${NYM_VERSION}/nym-vpn-core-v${NYM_VERSION}_linux_${arch}.tar.gz"; \
+    printf '%s  %s\n' "$nym_sha" /tmp/nym.tar.gz | sha256sum -c -; \
+    mkdir -p /tmp/nym; \
+    tar -xzf /tmp/nym.tar.gz -C /tmp/nym --strip-components=1; \
+    install -m 0755 /tmp/nym/nym-vpnd /tmp/nym/nym-vpnc /usr/bin/; \
+    rm -rf /tmp/nym /tmp/nym.tar.gz
+
 # Configuration: greetd autologin, the niri portal override, the signature
-# policy, and the public half of the signing key.
+# policy, the public half of the signing key, and the NymVPN daemon's unit and
+# polkit action.
 COPY image/rootfs/ /
 COPY image/cosign.pub /etc/pki/containers/smorespro.pub
 
@@ -81,6 +114,8 @@ RUN set -eux; \
       plymouth-quit.service \
       plymouth-quit-wait.service \
       tailscaled.service \
+      systemd-resolved.service \
+      nym-vpnd.service \
       bootc-fetch-apply-updates.timer; \
     systemctl mask rpm-ostreed-automatic.timer; \
     systemctl set-default graphical.target
@@ -95,9 +130,12 @@ RUN set -eux; \
 
 # The exact package set this image shipped, so a running host can be compared
 # with its image. Neither the base's packages nor these are version-locked, so
-# this file is the record of what a given build contained.
+# this file is the record of what a given build contained. NymVPN's binaries
+# come from a tarball, so `rpm -qa` cannot see them: vendor-manifest is what
+# records the version and architecture they were extracted from.
 RUN set -eux; \
     mkdir -p /usr/share/smorespro; \
-    rpm -qa --qf '%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}\n' | sort > /usr/share/smorespro/package-manifest
+    rpm -qa --qf '%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}\n' | sort > /usr/share/smorespro/package-manifest; \
+    printf 'nym-vpn-core %s %s\n' "${NYM_VERSION}" "$(uname -m)" > /usr/share/smorespro/vendor-manifest
 
 RUN bootc container lint

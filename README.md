@@ -37,7 +37,7 @@ The migration runbook is `docs/switch.md`.
 ## Rebuilds
 
 Nothing rebuilds on a schedule. A build happens when this repository changes.
-To move to a newer base:
+To move to a newer base or NymVPN release:
 
 ```sh
 scripts/refresh-pins.sh --check   # is there a newer digest?
@@ -45,7 +45,7 @@ scripts/refresh-pins.sh --write   # pin it
 ```
 
 then commit the `image/pins.env` change. The scheduled watcher opens an issue
-when `--check` sees a newer digest.
+when `--check` sees a newer digest or release.
 
 ## Package sources
 
@@ -54,7 +54,14 @@ base. The base digest fixes the kernel, glibc, and systemd; packages added here
 resolve from Fedora 45 updates at build time, which is why a build only happens
 on a reviewed commit.
 
-The one exception is Brave Origin, which Fedora does not ship: the Containerfile
-writes Brave's official `brave-browser` RPM repository into
-`/etc/yum.repos.d/` and installs `brave-origin` from it. kitty (terminal),
-dolphin (file manager), ImageMagick and jq come from Fedora.
+Two exceptions, both absent from Fedora:
+
+- Brave Origin ships only from Brave's official `brave-browser` RPM repository,
+  which the Containerfile writes into `/etc/yum.repos.d/`, installs from, and
+  re-disables so nothing else in the image trusts it.
+- NymVPN publishes no RPM (`.deb`, AUR, AppImage, Flatpak and a shell installer
+  only), so the Containerfile vendors the pinned release tarball: the daemon and
+  the CLI, checked against the per-architecture sha256 in `image/pins.env`.
+  `scripts/refresh-pins.sh` is what moves that pin.
+
+kitty (terminal), dolphin (file manager), ImageMagick and jq come from Fedora.

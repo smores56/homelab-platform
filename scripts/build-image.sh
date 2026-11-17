@@ -19,6 +19,12 @@ if [[ ! $BASE_IMAGE =~ @sha256:[0-9a-f]{64}$ ]]; then
   echo "build-image: BASE_IMAGE is not digest-pinned: $BASE_IMAGE" >&2
   exit 1
 fi
+for pin in NYM_VERSION NYM_SHA256_AMD64 NYM_SHA256_ARM64; do
+  if [[ -z ${!pin:-} ]]; then
+    echo "build-image: $pin is missing from image/pins.env" >&2
+    exit 1
+  fi
+done
 if [[ ! -s $repo/image/cosign.pub ]]; then
   echo "build-image: image/cosign.pub is missing; copy it from homelab-platform" >&2
   exit 1
@@ -33,6 +39,9 @@ tag="localhost/smorespro-image:sha-${revision:0:12}"
 
 "$engine" build \
   --build-arg "BASE_IMAGE=$BASE_IMAGE" \
+  --build-arg "NYM_VERSION=$NYM_VERSION" \
+  --build-arg "NYM_SHA256_AMD64=$NYM_SHA256_AMD64" \
+  --build-arg "NYM_SHA256_ARM64=$NYM_SHA256_ARM64" \
   --label "org.opencontainers.image.revision=$revision" \
   -f "$repo/image/Containerfile" \
   -t "$tag" \
