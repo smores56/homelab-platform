@@ -214,6 +214,11 @@ LOG = \"info\\nEnvironment=LD_PRELOAD=/tmp/x.so\"")" 'control'
 expect_fail 'an env value with a NUL byte is refused' "$(app example "$minimal
 [env]
 LOG = \"x\\u0000y\"")" 'control'
+for value in 'hello world' "trail\\" '100%n' 'a"b' 'a#b' 'a`b'; do
+  expect_fail "an env value [$value] is refused" "$(app example "$minimal
+[env]
+K = '$value'")" 'env value'
+done
 expect_fail 'a dotted key is refused' "$(app example "$minimal
 limits.memory = \"1G\"")" 'unknown key'
 expect_fail 'an array of tables for env is refused' "$(app example "$minimal

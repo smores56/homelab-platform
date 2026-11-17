@@ -81,12 +81,13 @@ if [[ -f $alpha ]]; then ok 'one Quadlet per app'; else bad 'one Quadlet per app
 contains "$alpha" "Image=ghcr.io/example/alpha@sha256:$digest" 'the image is the digest-pinned one'
 contains "$alpha" 'PublishPort=127.0.0.1:' 'the port is published on loopback'
 contains "$alpha" ':8080' 'the published port is the declared container port'
-contains "$alpha" 'Network=none' 'egress none renders no network'
+contains "$alpha" 'Network=smortress-apps' 'egress none joins the internal network'
+contains "$out/smortress-apps.network" 'Internal=true' 'the internal network has no route out'
 contains "$alpha" 'Volume=/srv/apps/alpha:/data:Z' 'the only bind is the app data directory, relabelled'
 contains "$alpha" 'ReadOnly=true' 'the root filesystem is read-only'
 contains "$alpha" 'NoNewPrivileges=true' 'no-new-privileges is set'
 contains "$alpha" 'DropCapability=ALL' 'all capabilities are dropped'
-contains "$alpha" 'label=level:s0:c' 'a per-app MCS level is set'
+contains "$alpha" 'SecurityLabelLevel=s0:c' 'a per-app MCS level is set'
 contains "$alpha" 'Environment=TZ=UTC' 'declared env reaches the unit'
 contains "$alpha" 'Secret=app-alpha-api-key,type=mount,target=/run/secrets/api-key' 'secrets mount under their own name'
 contains "$alpha" 'WantedBy=default.target' 'the unit is a rootless user unit'
@@ -105,6 +106,20 @@ else
   bad 'the loopback port comes from the platform range' "got '$alpha_port'"
 fi
 if [[ $alpha_port != "$beta_port" ]]; then ok 'two apps get different loopback ports'; else bad 'two apps get different loopback ports'; fi
+
+alpha_level=$(sed -n 's/^SecurityLabelLevel=//p' "$alpha")
+beta_level=$(sed -n 's/^SecurityLabelLevel=//p' "$beta")
+if [[ -n $alpha_level && -n $beta_level && $alpha_level != "$beta_level" ]]; then
+  ok 'two apps get different MCS levels'
+else
+  bad 'two apps get different MCS levels' "alpha='$alpha_level' beta='$beta_level'"
+fi
+
+if [[ $(grep -c '^Volume=' "$alpha") == 1 && $(grep -c '^PublishPort=' "$alpha") == 1 ]]; then
+  ok 'exactly one bind and one published port'
+else
+  bad 'exactly one bind and one published port'
+fi
 
 if jq -e '.apps.alpha.basePath == "/apps/alpha" and .apps.alpha.egress == "none" and .apps.alpha.quota == "5G"' \
   "$out/plan.json" >/dev/null 2>&1; then
@@ -154,6 +169,90 @@ if [[ -z $(ls -A "$work/badout") ]]; then
   ok 'a rejected tree writes no files'
 else
   bad 'a rejected tree writes no files' "$(ls -A "$work/badout")"
+fi
+
+# --- ownership of the output directory -----------------------------------
+
+# A foreign unit in the target directory is never overwritten or deleted.
+foreign=$work/foreign
+mkdir -p "$foreign"
+printf '[Container]\nImage=example\n' >"$foreign/other.container"
+if "$validator" render --root "$tree" --secrets "$tree/secrets.sops.json" --out "$foreign" >/dev/null 2>&1; then
+  bad 'a foreign unit in the output directory is refused'
+else
+  ok 'a foreign unit in the output directory is refused'
+fi
+if [[ -f $foreign/other.container ]]; then ok 'the foreign unit survives'; else bad 'the foreign unit survives'; fi
+
+# A stale unit this renderer wrote is removed when its app disappears.
+stale=$work/stale
+mkdir -p "$stale"
+"$validator" render --root "$tree" --secrets "$tree/secrets.sops.json" --out "$stale" >/dev/null 2>&1
+rm -rf "$tree/apps/beta"
+"$validator" render --root "$tree" --secrets "$tree/secrets.sops.json" --out "$stale" >/dev/null 2>&1
+if [[ ! -f $stale/beta.container && -f $stale/smortress-apps.network ]]; then
+  ok 'a removed app loses its unit and the network stays while it is still used'
+else
+  bad 'a removed app loses its unit and the network stays while it is still used' "$(ls "$stale")"
+fi
+mkdir -p "$tree/apps/beta"
+cat >"$tree/apps/beta/app.toml" <<EOF
+image = "ghcr.io/example/beta@sha256:$digest"
+port = 9090
+egress = "internet"
+EOF
+
+# An empty tenant is refused rather than rendered as an empty plan.
+emptytree=$work/emptytree
+mkdir -p "$emptytree/apps"
+if "$validator" render --root "$emptytree" --out "$work/emptyout" >/dev/null 2>&1; then
+  bad 'an empty tenant is refused'
+else
+  ok 'an empty tenant is refused'
+fi
+
+# --out pointing at a file is a diagnostic, not a traceback.
+if "$validator" render --root "$tree" --secrets "$tree/secrets.sops.json" --out "$work/render.log" >"$work/outfile.log" 2>&1; then
+  bad '--out pointing at a file is refused'
+elif grep -q 'Traceback' "$work/outfile.log"; then
+  bad '--out pointing at a file is refused' "$(cat "$work/outfile.log")"
+else
+  ok '--out pointing at a file is refused'
+fi
+
+# Hostile env values cannot reach the unit: the validator refuses them.
+for value in 'hello world' "trail\\" '100%n' 'a"b' 'a#b' 'a`b'; do
+  hostile=$(mktemp -d "$work/hostile.XXXXXX")
+  mkdir -p "$hostile/apps/delta"
+  printf 'image = "ghcr.io/example/delta@sha256:%s"\nport = 7070\negress = "none"\n\n[env]\nK = '\''%s'\''\n' "$digest" "$value" \
+    >"$hostile/apps/delta/app.toml"
+  if "$validator" render --root "$hostile" --out "$work/hostile-out" >/dev/null 2>&1; then
+    bad "env value [$value] is refused"
+  else
+    ok "env value [$value] is refused"
+  fi
+done
+
+# The host generator is the ground truth for what a unit means. Where podman is
+# installed (the host, not the CI runner), the rendered unit must generate with
+# the MCS level, the exact env value and the single publish.
+if [[ -x /usr/libexec/podman/quadlet ]]; then
+  gen=$(mktemp -d "$work/gen.XXXXXX")
+  mkdir -p "$gen/xdg/containers/systemd"
+  "$validator" render --root "$tree" --secrets "$tree/secrets.sops.json" --out "$gen/xdg/containers/systemd" >/dev/null 2>&1
+  if XDG_CONFIG_HOME="$gen/xdg" /usr/libexec/podman/quadlet -dryrun -user >"$gen/units" 2>"$gen/err"; then
+    if grep -q -- '--security-opt label=level:s0:c' "$gen/units" &&
+      grep -q -- '--env TZ=UTC' "$gen/units" &&
+      grep -q -- '--publish 127.0.0.1:' "$gen/units"; then
+      ok 'the host generator accepts the rendered unit'
+    else
+      bad 'the host generator accepts the rendered unit' "$(grep -E 'security-opt|env|publish' "$gen/units" | head -5)"
+    fi
+  else
+    bad 'the host generator accepts the rendered unit' "$(cat "$gen/err")"
+  fi
+else
+  ok 'the host generator check is skipped without podman'
 fi
 
 printf '\n%s checks, %s failed\n' "$((pass + fail))" "$fail"
