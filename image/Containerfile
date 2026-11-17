@@ -107,6 +107,7 @@ RUN set -eux; \
       zfs-ready@state-opdshelf.service \
       smortress-app-secrets.service \
       smortress-apps-quota.service \
+      smortress-apps-egress.service \
       smortress-tailscale-serve.service \
       smortress-immich-dump.timer \
       var-lib-restic-ssd.mount \
