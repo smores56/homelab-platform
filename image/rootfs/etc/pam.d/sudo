@@ -1,0 +1,5 @@
+# /etc/pam.d/sudo
+auth  required      pam_faillock.so preauth deny=5 unlock_time=300
+auth  sufficient    pam_userdb.so db=/etc/security/sudopin
+auth  [default=die] pam_faillock.so authfail deny=5 unlock_time=300
+auth  include       system-auth

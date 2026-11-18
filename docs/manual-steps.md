@@ -130,3 +130,71 @@ If the token is lost or its PIN is blocked, unlock from the TTY, remove
 mapping exists. A blocked PIN is a token reset, which erases every resident
 credential at once — the disk keyslot from step 1 included, which is why the
 passphrase stays enrolled.
+
+## 3. Build the sudo PIN database
+
+`/etc/pam.d/sudo` authenticates against an eight-digit PIN in a gdbm database,
+`/etc/security/sudopin.db`. The key is the PAM user name, and the account that
+logs in and runs sudo on this machine is **`smores`**.
+
+Two properties of the shipped stack decide what the database may contain. Both
+were checked against this image's own `pam_userdb` (Linux-PAM 1.7.2), and both
+differ from what the design text assumes:
+
+- `db=/etc/security/sudopin` is opened literally. Linux-PAM no longer appends
+  `.db`, so the image ships `/etc/security/sudopin` as a symlink to
+  `sudopin.db`, the file tmpfiles declares. The database goes in
+  `sudopin.db`; the symlink is never written.
+- The module line carries no `crypt=` option, and pam_userdb's documented
+  default is a literal comparison ("default to plaintext password storage"), so
+  the stored value is the PIN itself, not a hash of it. This is not a weaker
+  secret than the design describes: 0600 root:root is the whole property, and an
+  eight-digit sha512crypt hash is 10^8 candidates — seconds of work for anything
+  that can already read the file. Adding `crypt=crypt` to the line is what would
+  let the file hold a hash, and that is a change to both hosts' stack.
+
+`db_load -T -t hash` is never the tool here, whatever the stack holds:
+Fedora's `pam_userdb` links libgdbm and cannot read a Berkeley DB file.
+
+```sh
+read -rsp 'new sudo PIN (8 digits): ' pin; echo
+read -rsp 'again: ' pin2; echo
+[[ $pin =~ ^[0-9]{8}$ && $pin == "$pin2" ]] \
+  || { echo 'not eight digits, or the two entries differ' >&2; exit 1; }
+db=$(mktemp -d)
+printf 'store "smores" "%s"\n' "$pin" | gdbmtool -n "$db/sudopin.db"
+unset pin pin2
+printf 'fetch "smores"\n' | gdbmtool -r "$db/sudopin.db"   # reads the value back
+sudo install -m 0600 -o root -g root "$db/sudopin.db" /etc/security/sudopin.db
+rm -rf "$db"
+```
+
+Nothing here is recoverable later: no copy in this repository, in SOPS or in the
+image, on purpose — a hash an agent can read is a PIN an agent can hold. Build
+the same PIN by hand on the other host; consistency comes from that, never from
+a shared file.
+
+Before relying on the gate, make sure a way to root exists that is not sudo:
+`su -` on root's password if one is set, or a rescue boot. The stack below ends
+the authentication itself, so the account password does not reach past it.
+
+Prove it:
+
+```sh
+sudo -k; sudo true      # the PIN
+sudo true               # no prompt: the same TTY, inside 30 minutes
+```
+
+- A different TTY prompts again (`timestamp_type=tty`), and a process without a
+  TTY gets no ticket at all.
+- Five wrong PINs cost five minutes in which sudo refuses everything, the right
+  PIN included. Recover from a TTY with `su -`, then
+  `faillock --user smores --reset`.
+- A wrong PIN does **not** fall through to the account password:
+  `[default=die]` on the faillock line ends the stack before `system-auth` runs,
+  which is the opposite of the design's "the account password covers a lost
+  PIN". Both hosts ship that line byte for byte, so this is a decision for the
+  stack, not for this machine: `[default=die]` is what makes faillock a hard
+  gate, and `[default=ignore]` is what would let the password through — at the
+  cost of letting it through during a lockout too.
+- Every sudo command raises its subcommands in the journal (`log_subcmds`).

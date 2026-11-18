@@ -1,0 +1,4 @@
+# /etc/sudoers.d/10-human-gate
+Defaults timestamp_timeout=30
+Defaults timestamp_type=tty
+Defaults log_subcmds

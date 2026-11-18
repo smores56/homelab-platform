@@ -314,6 +314,101 @@ else
   bad "manual-steps.md carries the token enrolment commands"
 fi
 
+# --- escalation (sudo PIN) --------------------------------------------------
+
+# The same stack runs on smortress, so this file is compared byte for byte with
+# the design rather than by keyword: drift here means two hosts that gate
+# differently, which is the one thing the design says must not happen.
+expected=$(cat <<'EOT'
+# /etc/pam.d/sudo
+auth  required      pam_faillock.so preauth deny=5 unlock_time=300
+auth  sufficient    pam_userdb.so db=/etc/security/sudopin
+auth  [default=die] pam_faillock.so authfail deny=5 unlock_time=300
+auth  include       system-auth
+EOT
+)
+if [[ $(cat image/rootfs/etc/pam.d/sudo 2>/dev/null) == "$expected" ]]; then
+  ok "the shipped sudo PAM stack is the design's, byte for byte"
+else
+  bad "the shipped sudo PAM stack is the design's, byte for byte"
+fi
+
+# The PIN is what an agent lacks. A token line or a permitting module here would
+# put escalation back within reach of whatever the session already holds.
+if ! grep -qE 'pam_u2f|pam_permit' image/rootfs/etc/pam.d/sudo 2>/dev/null; then
+  ok "the sudo stack asks for the PIN, not the token"
+else
+  bad "the sudo stack asks for the PIN, not the token"
+fi
+
+expected=$(cat <<'EOT'
+# /etc/sudoers.d/10-human-gate
+Defaults timestamp_timeout=30
+Defaults timestamp_type=tty
+Defaults log_subcmds
+EOT
+)
+if [[ $(cat image/rootfs/etc/sudoers.d/10-human-gate 2>/dev/null) == "$expected" ]]; then
+  ok "the shipped sudoers drop-in is the design's, byte for byte"
+else
+  bad "the shipped sudoers drop-in is the design's, byte for byte"
+fi
+
+if grep -qx 'f /etc/security/sudopin.db 0600 root root -' \
+    image/rootfs/usr/lib/tmpfiles.d/smorespro.conf 2>/dev/null; then
+  ok "tmpfiles declares the PIN database root-only"
+else
+  bad "tmpfiles declares the PIN database root-only"
+fi
+
+# Linux-PAM 1.7 opens the db= value as given and never appends .db, so the path
+# the stack names has to exist. It is a symlink to the file tmpfiles declares,
+# and both come from the shipped files rather than from this test.
+dbpath=$(sed -n 's/.*pam_userdb\.so db=\([^ ]*\).*/\1/p' image/rootfs/etc/pam.d/sudo 2>/dev/null)
+dbdecl=$(awk '$1 == "f" && $2 ~ /sudopin/ { print $2 }' \
+  image/rootfs/usr/lib/tmpfiles.d/smorespro.conf 2>/dev/null)
+if [[ -n $dbpath && -L image/rootfs$dbpath ]] \
+    && [[ $(readlink "image/rootfs$dbpath") == "${dbdecl##*/}" ]]; then
+  ok "$dbpath resolves to the declared PIN database"
+else
+  bad "$dbpath resolves to the declared PIN database" \
+    "pam_userdb opens db= literally: the file has to carry that exact name"
+fi
+
+if grep -q 'chmod 0440 /etc/sudoers.d/10-human-gate' image/Containerfile \
+    && grep -q 'visudo -c' image/Containerfile; then
+  ok "the build sets the drop-in's mode and proves it parses"
+else
+  bad "the build sets the drop-in's mode and proves it parses"
+fi
+
+if ! grep -rqF 'NOPASSWD' image docs README.md scripts 2>/dev/null; then
+  ok "nothing in the tree grants NOPASSWD"
+else
+  bad "nothing in the tree grants NOPASSWD"
+fi
+
+# The PIN, its hash and the database are never in the tree: an eight-digit
+# space is 10^8 candidates, so a committed hash is a leaked PIN. Only the steps
+# that build it by hand are.
+# shellcheck disable=SC2016 # the literal $6$ is what must not appear
+if ! grep -rqF '$6$' image docs README.md \
+    && [[ -z $(find . \( -path ./.git -o -path ./.worktrees \) -prune -o \
+        \( -name 'sudopin*' -o -name '*.gdbm' \) -type f -print) ]]; then
+  ok "no PIN hash or database is committed"
+else
+  bad "no PIN hash or database is committed"
+fi
+
+if grep -q 'gdbmtool -n' docs/manual-steps.md \
+    && grep -q 'no longer appends' docs/manual-steps.md \
+    && grep -q 'install -m 0600 -o root -g root' docs/manual-steps.md \
+    && ! grep -qE '^[[:space:]]*(sudo[[:space:]]+)?db_load' docs/manual-steps.md; then
+  ok "manual-steps.md builds the PIN database with gdbmtool"
+else
+  bad "manual-steps.md builds the PIN database with gdbmtool" "pam_userdb links libgdbm, so db_load -T -t hash writes a database it cannot read"
+fi
+
 # --- shell ------------------------------------------------------------------
 
 if command -v shellcheck >/dev/null 2>&1 && shellcheck --version >/dev/null 2>&1; then
