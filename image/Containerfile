@@ -153,9 +153,13 @@ RUN set -eux; \
 
 # The unlock path is a PAM module and a dlopened library, so a base refresh
 # that dropped either would fail silently at the lock screen rather than at
-# boot. Fail the build instead.
+# boot. The sudo gate is a third module with a worse failure: its
+# `[success=2 default=ignore]` line reads PAM_OPEN_ERR as "not applicable", so a
+# missing pam_userdb.so degrades sudo to the account password and says nothing.
+# Fail the build instead.
 RUN set -eux; \
     test -f /usr/lib64/security/pam_u2f.so; \
+    test -f /usr/lib64/security/pam_userdb.so; \
     command -v pamu2fcfg systemd-cryptenroll cryptsetup >/dev/null
 
 # The exact package set this image shipped, so a running host can be compared
