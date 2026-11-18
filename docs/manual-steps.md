@@ -137,37 +137,41 @@ passphrase stays enrolled.
 `/etc/security/sudopin.db`. The key is the PAM user name, and the account that
 logs in and runs sudo on this machine is **`smores`**.
 
-Two properties of the shipped stack decide what the database may contain. Both
-were checked against this image's own `pam_userdb` (Linux-PAM 1.7.2), and both
-differ from what the design text assumes:
+The shipped module line is
+`pam_userdb.so crypt=crypt db=/etc/security/sudopin.db`. Two options decide what
+the file may hold:
 
-- `db=/etc/security/sudopin` is opened literally. Linux-PAM no longer appends
-  `.db`, so the image ships `/etc/security/sudopin` as a symlink to
-  `sudopin.db`, the file tmpfiles declares. The database goes in
-  `sudopin.db`; the symlink is never written.
-- The module line carries no `crypt=` option, and pam_userdb's documented
-  default is a literal comparison ("default to plaintext password storage"), so
-  the stored value is the PIN itself, not a hash of it. This is not a weaker
-  secret than the design describes: 0600 root:root is the whole property, and an
-  eight-digit sha512crypt hash is 10^8 candidates — seconds of work for anything
-  that can already read the file. Adding `crypt=crypt` to the line is what would
-  let the file hold a hash, and that is a change to both hosts' stack.
+- `crypt=crypt` makes the stored value a **sha512crypt hash**, not the PIN. That
+  is what the design asks for: an eight-digit space is 10^8 candidates, so
+  anything an unprivileged process can read is not a secret — a hash at least
+  keeps a reader of the file from holding the PIN itself.
+- `db=` is opened literally. Linux-PAM never appends `.db`, so the path in the
+  stack is the whole file name and the image ships no second name for it.
 
-`db_load -T -t hash` is never the tool here, whatever the stack holds:
-Fedora's `pam_userdb` links libgdbm and cannot read a Berkeley DB file.
+`db_load -T -t hash` is never the tool here, whatever the file holds: Fedora's
+`pam_userdb` links libgdbm and cannot read a Berkeley DB file.
+
+Take the PIN at a prompt, hash it, and store the hash under the key `smores`.
+`openssl passwd -6 -stdin` reads the PIN from standard input, so it never
+appears in an argument list where `ps` would show it:
 
 ```sh
 read -rsp 'new sudo PIN (8 digits): ' pin; echo
 read -rsp 'again: ' pin2; echo
 [[ $pin =~ ^[0-9]{8}$ && $pin == "$pin2" ]] \
   || { echo 'not eight digits, or the two entries differ' >&2; exit 1; }
-db=$(mktemp -d)
-printf 'store "smores" "%s"\n' "$pin" | gdbmtool -n "$db/sudopin.db"
+hash=$(printf '%s\n' "$pin" | openssl passwd -6 -stdin)
 unset pin pin2
-printf 'fetch "smores"\n' | gdbmtool -r "$db/sudopin.db"   # reads the value back
-sudo install -m 0600 -o root -g root "$db/sudopin.db" /etc/security/sudopin.db
-rm -rf "$db"
+sudo rm -f /etc/security/sudopin.db
+printf 'store smores %s\n' "$hash" | sudo gdbmtool /etc/security/sudopin.db
+unset hash
+sudo chown root:root /etc/security/sudopin.db
+sudo chmod 0600 /etc/security/sudopin.db
+printf 'fetch smores\n' | sudo gdbmtool -r /etc/security/sudopin.db
 ```
+
+The last line prints the hash back, which is the check that the key is spelled
+`smores` and nothing else is in the database.
 
 Nothing here is recoverable later: no copy in this repository, in SOPS or in the
 image, on purpose — a hash an agent can read is a PIN an agent can hold. Build
@@ -175,8 +179,9 @@ the same PIN by hand on the other host; consistency comes from that, never from
 a shared file.
 
 Before relying on the gate, make sure a way to root exists that is not sudo:
-`su -` on root's password if one is set, or a rescue boot. The stack below ends
-the authentication itself, so the account password does not reach past it.
+`su -` on root's password if one is set, or a rescue boot. A forgotten PIN is
+not the case this covers — the account password answers that at the sudo prompt
+— it covers a stack that no longer parses.
 
 Prove it:
 
@@ -187,14 +192,16 @@ sudo true               # no prompt: the same TTY, inside 30 minutes
 
 - A different TTY prompts again (`timestamp_type=tty`), and a process without a
   TTY gets no ticket at all.
-- Five wrong PINs cost five minutes in which sudo refuses everything, the right
-  PIN included. Recover from a TTY with `su -`, then
-  `faillock --user smores --reset`.
-- A wrong PIN does **not** fall through to the account password:
-  `[default=die]` on the faillock line ends the stack before `system-auth` runs,
-  which is the opposite of the design's "the account password covers a lost
-  PIN". Both hosts ship that line byte for byte, so this is a decision for the
-  stack, not for this machine: `[default=die]` is what makes faillock a hard
-  gate, and `[default=ignore]` is what would let the password through — at the
-  cost of letting it through during a lockout too.
+- The fallback is **one prompt, not two**. `pam_userdb` caches the value typed
+  at that prompt and `pam_unix.so try_first_pass` re-verifies it, so typing the
+  account password instead of the PIN authenticates without a second prompt.
+  The TTY that asks twice in step 2 is the `pam_u2f` lock-screen stack, where
+  two different modules ask for two different credentials; that does not happen
+  here.
+- faillock counts one row per PAM transaction and sudo makes three per
+  invocation, so **five wrong prompts**, not five invocations, are what cost
+  five minutes. A successful authentication clears the tally. While the lock
+  stands the correct password is refused too, because `preauth` denies the
+  transaction before anything compares a value. Clear it manually from a root
+  shell reached without sudo: `faillock --user smores --reset`.
 - Every sudo command raises its subcommands in the journal (`log_subcmds`).
