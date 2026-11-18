@@ -22,7 +22,7 @@ rollback path. Operator-only actions are in `docs/manual-steps.md` section 37.
 | `/usr/lib/systemd/system/smortress-zpool.service` | Creates or imports the `smortress` pool on the encrypted data device. |
 | `/usr/lib/systemd/system/smortress-cryptsetup-hdd.service` | Opens the HDD LUKS with its keyfile; non-blocking by contract. |
 | `/etc/firewalld/zones/tailscale.xml` | Binds `tailscale0`, permits SSH and Syncthing's 22000/tcp+udp; the default zone is `drop`. |
-| `/etc/ssh/sshd_config.d/05-deny-loopback-passwords.conf` | The only route into sshd: loopback listeners in both families, `AuthorizedKeysFile` under `/var/lib/homelab/.ssh`, no forwarding, and the `Match Address 127.0.0.1,::1` block that stops uCore's `90-enable-localhost-passwords.conf` from re-enabling password auth. It sorts at `05-` because sshd keeps the first value it obtains in the second config pass. |
+| `/etc/ssh/sshd_config.d/05-deny-loopback-passwords.conf` | The only route into sshd: loopback listeners in both families, `AuthorizedKeysFile` under `/var/lib/homelab/.ssh`, no forwarding, and the `Match Address 127.0.0.1,::1` block that stops uCore's `90-enable-localhost-passwords.conf` from re-enabling password auth. It sorts at `05-` because sshd keeps the first value it obtains in the second config pass. `PubkeyAuthOptions` is deliberately unset, so the per-key `no-touch-required` on each `authorized_keys` line is the whole sk policy. |
 | `/usr/lib/systemd/system/smortress-tailscale-ssh-off.service` | Re-asserts `tailscale set --ssh=false` at every boot; tailscaled persists the preference, so removing the flag from the enrollment unit is not enough. Tailscale SSH is retired. |
 | `/etc/pam.d/sudo` and `/etc/sudoers.d/10-human-gate` | The sudo PIN gate: `pam_faillock` preauth, then `pam_userdb` against the literal path `/etc/security/sudopin.db` with `crypt=crypt`, so the stored value is a sha512crypt hash and not the PIN; then `pam_unix` re-verifying the same string the prompt already cached. A 30-minute ticket per TTY and `log_subcmds`. The database is a host file built from `docs/manual-steps.md` section 45 and never enters the image. |
 | `/usr/share/smortress/quadlet/pattern.container` | Quadlet base pattern; not enabled, no `[Install]`. |
@@ -116,6 +116,15 @@ Ignition also writes the same policy, registries.d file and public key, so the
 second auto-rebase stage (the signed reference) sees them even though it runs
 before bootc takes over. `bootc switch` and `bootc upgrade` use
 `--enforce-container-sigpolicy`; a digest without a valid signature is refused.
+
+Ignition likewise delivers `/var/lib/homelab/.ssh/authorized_keys`, inlining the
+committed `ignition/smortress-authorized-keys`, because bootc does not reconcile
+`/var`: an image-baked copy would never appear on an installed host. The
+committed file carries instructions and no key — a resident `sk-` handle can only
+be created with the token — so sshd authenticates nobody until a key line is
+appended (`docs/manual-steps.md` section 42). The file and its `.ssh` directory
+are smores-owned, and `/var/lib/homelab` is `0711`, because sshd opens
+`AuthorizedKeysFile` with the target user's uid rather than root's.
 
 ## Install path
 

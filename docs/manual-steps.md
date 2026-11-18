@@ -3373,6 +3373,11 @@ to `127.0.0.1` and `::1`, points `AuthorizedKeysFile` at
 `/var/lib/homelab/.ssh/authorized_keys`, and repeats uCore's
 `Match Address 127.0.0.1,::1` with `PasswordAuthentication no`.
 
+That key file comes from Ignition, inlining `ignition/smortress-authorized-keys`:
+bootc does not reconcile `/var`, so an image-baked copy would never appear on an
+installed host. The committed file carries instructions and no key, which is why
+steps 4 and 5 below are the ones that make login possible at all.
+
 The repetition is load-bearing, not redundancy. uCore ships
 `90-enable-localhost-passwords.conf`, which sets that block to `yes` so
 Cockpit's web login can use the core password. sshd parses its configuration
@@ -3414,13 +3419,68 @@ for that reason. A drop-in sorting after `90-` is silently ignored.
    not shipped; check `ls /etc/ssh/sshd_config.d/` on the host before going
    further.
 
-4. Prove the authorised set is in the SELinux type sshd may read, after Ignition
-   has written it:
+4. Create the resident key. The FIDO2 handle is generated with the token and
+   never enters the repository, so this is the only step that produces it. Run it
+   once per laptop, on the laptop:
 
    ```sh
-   matchpathcon /var/lib/homelab/.ssh/authorized_keys   # expect: ssh_home_t
-   ls -ld /var/lib/homelab/.ssh                         # expect: root root
+   ssh-keygen -O resident -O no-touch-required -t ed25519-sk -f ~/.ssh/id_smortress
    ```
+
+   `-O resident` keeps the handle on the token, so the private half never leaves
+   it; `-O no-touch-required` is what stops a docked token from demanding a touch
+   it cannot prove anything with. `ssh-keygen -K` downloads the resident handles
+   again if the public line is needed on a machine that lost it.
+
+5. Put the key line into the delivered file. sshd's `AuthorizedKeysFile` is
+   `/var/lib/homelab/.ssh/authorized_keys`, written by Ignition from
+   `ignition/smortress-authorized-keys` — the committed file holds instructions
+   only, because no key can exist until step 4 has run on a laptop.
+
+   The `no-touch-required` option belongs on the line, not in the sshd config:
+   the drop-in deliberately carries no `PubkeyAuthOptions verify-required`, which
+   sshd treats as a hard requirement that `authorized_keys` cannot cancel per
+   key. On a fresh install, append before rendering Ignition:
+
+   ```sh
+   printf 'no-touch-required %s\n' "$(cat ~/.ssh/id_smortress.pub)" \
+     >>ignition/smortress-authorized-keys
+   cat ~/.ssh/id_smortress-access.pub >>ignition/smortress-authorized-keys
+   scripts/render-ignition.sh
+   ```
+
+   On a host that is already installed, append to the live file instead. It is
+   smores-owned, so this needs no sudo and survives a bootc upgrade:
+
+   ```sh
+   printf 'no-touch-required %s\n' "$(cat ~/.ssh/id_smortress.pub)" \
+     >>/var/lib/homelab/.ssh/authorized_keys
+   cat ~/.ssh/id_smortress-access.pub >>/var/lib/homelab/.ssh/authorized_keys
+   ```
+
+   The second line is the file key, and the pair is deliberate: the Access token
+   gets a client to sshd and the key gets the client in, so a leaked token
+   authenticates nothing and a copied key reaches nothing.
+
+   **Until one of those lines lands, sshd authenticates nobody.** That is the
+   intended failure direction — an empty authorised set refuses every login
+   rather than admitting a key that was never reviewed — not an oversight.
+
+6. Prove the file, its owner and its label. sshd reads this file as the target
+   user, not as root (`auth2-pubkey.c` switches uid before opening it), which is
+   why smores owns the directory and the file and why `/var/lib/homelab` is
+   `0711`: traversal for that account, no listing.
+
+   ```sh
+   ls -ld /var/lib/homelab /var/lib/homelab/.ssh /var/lib/homelab/.ssh/authorized_keys
+   # expect: drwx--x--x root root, drwx------ smores smores, -rw------- smores smores
+   matchpathcon /var/lib/homelab/.ssh/authorized_keys   # expect: ssh_home_t
+   sudo sshd -T -C addr=127.0.0.1,user=smores | grep -E '^authorizedkeysfile '
+   # expect: authorizedkeysfile /var/lib/homelab/.ssh/authorized_keys
+   ```
+
+   Then prove the doors: the token and the key together log in, and either half
+   alone does not.
 
 ## 43. Retire Tailscale SSH on smortress
 

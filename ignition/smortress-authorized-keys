@@ -1,0 +1,29 @@
+# Authorised keys for smores@smortress (design #748, Entry).
+#
+# Ignition inlines this file to /var/lib/homelab/.ssh/authorized_keys, which is
+# the AuthorizedKeysFile the sshd drop-in sets. bootc does not reconcile /var, so
+# an image-baked copy would never appear on an installed host and a hand-written
+# one would drift; the Ignition entry is the delivery path that survives an
+# upgrade. The directory and the file are owned by smores because sshd reads this
+# file with the target user's uid.
+#
+# No key is committed here. The FIDO2 resident handle is generated with the token
+# and cannot exist in the repository, so this file ships with nothing but these
+# instructions: sshd authenticates nobody until a key line is appended, and that
+# is the intended failure direction, not an oversight. Section 42 of
+# docs/manual-steps.md has the commands:
+#
+#   ssh-keygen -O resident -O no-touch-required -t ed25519-sk -f ~/.ssh/id_smortress
+#   printf 'no-touch-required %s\n' "$(cat ~/.ssh/id_smortress.pub)" \
+#     >>ignition/smortress-authorized-keys
+#
+# The `no-touch-required` option is what keeps the docked token from asking for a
+# touch; sshd carries no `PubkeyAuthOptions verify-required`, so the per-key
+# option is the whole policy. The existing file key is the other half of the
+# pair (Access token AND key) and belongs on its own line, without that option:
+#
+#   cat ~/.ssh/id_smortress-access.pub >>ignition/smortress-authorized-keys
+#
+# Append to the working copy for a fresh install, or to
+# /var/lib/homelab/.ssh/authorized_keys on a running host. Never commit the
+# resulting lines and never put a private key in this file.

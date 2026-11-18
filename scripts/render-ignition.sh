@@ -76,6 +76,7 @@ if $synthetic; then
   template=$tmp/ignition/smortress.bu
   mkdir -p "$tmp/ignition/operator" "$tmp/image/rootfs/etc/containers/registries.d" "$tmp/image/rootfs/etc/containers"
   cp "$repo/ignition/smortress.bu" "$template"
+  cp "$repo/ignition/smortress-authorized-keys" "$tmp/ignition/smortress-authorized-keys"
   cp "$repo/image/rootfs/etc/containers/policy.json" "$tmp/image/rootfs/etc/containers/policy.json"
   cp "$repo/image/rootfs/etc/containers/registries.d/ghcr.io-smortress.yaml" \
     "$tmp/image/rootfs/etc/containers/registries.d/ghcr.io-smortress.yaml"

@@ -115,6 +115,56 @@ check "the loopback block comes last and re-denies passwords" test \
   "$(awk '/^[[:space:]]*(#|$)/ {next} /^Match Address 127\.0\.0\.1,::1$/ {inblock=1; next} inblock' "$sshd_dropin" | tr -d '[:space:]')" \
   = PasswordAuthenticationno
 
+# The authorised set (design #748, Entry). bootc does not reconcile /var, so the
+# file sshd points at arrives from Ignition inlining a committed repo file: an
+# image-baked copy would never appear on an installed host and a hand-written one
+# would drift. The resident sk- handle is generated with the token, so nothing in
+# the tree may carry real key material and the file ships as instructions only.
+ignition_bu=ignition/smortress.bu
+keys_source=ignition/smortress-authorized-keys
+# The list item for one path, up to the next item: a mode asserted inside it is
+# that file's mode and not a neighbour's.
+bu_block() {
+  awk -v head="    - path: $1" '
+    $0 == head { inblock = 1; next }
+    inblock && /^    - / { exit }
+    inblock { print }
+  ' "$ignition_bu"
+}
+in_block() { printf '%s\n' "$2" | grep -qF -- "$1"; }
+ak_path=$(sed -nE 's/^AuthorizedKeysFile[[:space:]]+([^[:space:]]+)$/\1/p' "$sshd_dropin")
+check "the drop-in names one authorised-keys file" test "$(printf '%s\n' "$ak_path" | grep -c .)" -eq 1
+check "Ignition writes the file the drop-in points at" grep -qF "path: $ak_path" "$ignition_bu"
+ak_block=$(bu_block "$ak_path")
+check "Ignition inlines the committed key file" in_block "local: $keys_source" "$ak_block"
+check "the delivered file is owner-readable only" in_block 'mode: 0600' "$ak_block"
+# sshd opens AuthorizedKeysFile with the target user's uid, so ownership and the
+# path's traversal both have to belong to that account.
+check "the delivered file is smores-owned twice over" \
+  test "$(printf '%s\n' "$ak_block" | grep -cF 'name: smores')" -eq 2
+ak_dir=$(dirname -- "$ak_path")
+check "Ignition creates the directory that file lives in" grep -qF "path: $ak_dir" "$ignition_bu"
+dir_block=$(bu_block "$ak_dir")
+check "the key directory belongs to the same account" \
+  test "$(printf '%s\n' "$dir_block" | grep -cF 'name: smores')" -eq 2
+check "the key directory is 0700" in_block 'mode: 0700' "$dir_block"
+# 0711 is the traversal sshd needs as smores; every child stays root-only.
+check "the key path is traversable by that account" \
+  has 'd /var/lib/homelab 0711 root root -' image/rootfs/etc/tmpfiles.d/smortress.conf
+check "the enrollment unit keeps the same traversal mode" \
+  has 'install -d -m 0711 /var/lib/homelab' units/systemd/smortress-tailscale-up.service
+check "the committed key file exists" test -s "$keys_source"
+if grep -qvE '^[[:space:]]*(#|$)' "$keys_source"; then
+  bad "the committed key file carries no key line"
+else
+  ok "the committed key file carries no key line"
+fi
+# git grep reads the index, so the exclusion is only the check's own pattern.
+if git grep -qF -- 'sk-ssh-ed25519@openssh.com' -- . ':(exclude)scripts/check-server-image.sh'; then
+  bad "no sk- handle is committed anywhere"
+else
+  ok "no sk- handle is committed anywhere"
+fi
 # Tailscale SSH stays off (design #748). Removing the flag from the enrollment
 # unit only fixes the first boot; the preference lives in tailscaled's state and
 # a separate unit re-asserts it every boot, which is why it must be enabled and
