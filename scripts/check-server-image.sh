@@ -57,6 +57,51 @@ check "the connector requires the decrypt unit" grep -qE '^Requires=.*sops-decry
 check "the connector is skipped without its ciphertext" has 'ConditionPathExists=/run/smortress/secrets/cloudflared-tunnel.yaml' units/systemd/smortress-cloudflared.service
 check "the tunnel token is in the decrypt manifest" grep -qE '^cloudflared-tunnel\.yaml[[:space:]]' image/rootfs/etc/smortress/secrets.manifest
 
+# sshd (design #748). Access through the tunnel is the only route in, so the
+# listener is loopback-only. The drop-in must also sort ahead of uCore's
+# 90-enable-localhost-passwords.conf: sshd reads its config twice, and the
+# second pass re-reads only the matching Match blocks with first-obtained-value
+# semantics, so a file sorting after 90- cannot undo uCore's
+# `PasswordAuthentication yes` for loopback.
+sshd_dir=image/rootfs/etc/ssh/sshd_config.d
+sshd_dropin=$sshd_dir/05-deny-loopback-passwords.conf
+sshd_dropins=("$sshd_dir"/*.conf)
+check "sshd ships exactly one drop-in" test "${#sshd_dropins[@]}" -eq 1
+check "the drop-in sorts ahead of uCore's 90- localhost-passwords file" \
+  test "$(basename "$sshd_dropin")" = 05-deny-loopback-passwords.conf
+check "sshd binds loopback for IPv4" has 'ListenAddress 127.0.0.1' "$sshd_dropin"
+check "sshd binds loopback for IPv6" has 'ListenAddress ::1' "$sshd_dropin"
+check "sshd binds no other address" test "$(count 'ListenAddress ' "$sshd_dropin")" -eq 2
+check "the loopback pair is exempt from the shared penalty counter" \
+  has 'PerSourcePenaltyExemptList 127.0.0.1,::1' "$sshd_dropin"
+check "ssh accepts keys from the Ignition file" \
+  has 'AuthorizedKeysFile /var/lib/homelab/.ssh/authorized_keys' "$sshd_dropin"
+# The dotted directory is what file_contexts maps to ssh_home_t; a plain
+# /var/lib/homelab/ssh would be var_lib_t and sshd could not read the file.
+check "the authorised set lives under a dot-prefixed directory" grep -qF '/.ssh/authorized_keys' "$sshd_dropin"
+check "ssh never accepts a password" has 'PasswordAuthentication no' "$sshd_dropin"
+# Comment lines are dropped: the file explains uCore's block by name.
+if grep -vE '^[[:space:]]*#' "$sshd_dropin" | grep -qF 'PasswordAuthentication yes'; then
+  bad "ssh never re-enables a password for loopback"
+else
+  ok "ssh never re-enables a password for loopback"
+fi
+check "keyboard-interactive stays off" has 'KbdInteractiveAuthentication no' "$sshd_dropin"
+check "root never logs in over ssh" has 'PermitRootLogin no' "$sshd_dropin"
+check "one account may log in" has 'AllowUsers smores' "$sshd_dropin"
+check "no TCP forwarding" has 'AllowTcpForwarding no' "$sshd_dropin"
+check "no stream-local forwarding" has 'AllowStreamLocalForwarding no' "$sshd_dropin"
+check "no agent forwarding" has 'AllowAgentForwarding no' "$sshd_dropin"
+check "no user rc file runs at login" has 'PermitUserRC no' "$sshd_dropin"
+check "auth tries are bounded" has 'MaxAuthTries 10' "$sshd_dropin"
+check "the grace time is bounded" has 'LoginGraceTime 60' "$sshd_dropin"
+check "sk signatures must be user-verified" has 'PubkeyAuthOptions verify-required' "$sshd_dropin"
+# Everything that is not a comment after the Match line is inside the block, so
+# a global directive appended below it would silently become loopback-only.
+check "the loopback block comes last and re-denies passwords" test \
+  "$(awk '/^[[:space:]]*(#|$)/ {next} /^Match Address 127\.0\.0\.1,::1$/ {inblock=1; next} inblock' "$sshd_dropin" | tr -d '[:space:]')" \
+  = PasswordAuthenticationno
+
 probe "policy rejects by default" jq -e '.default[0].type == "reject"' image/rootfs/etc/containers/policy.json
 # An empty docker scope is the transport default and shadows the global reject
 # for every registry reference, so it must not exist.

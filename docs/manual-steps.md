@@ -3363,3 +3363,58 @@ in `tofu/access.tf`, so nothing there changes.
    policy); it is cached for the session duration. A shell, and not a
    post-login 404, is the proof that DNS, Access, the ingress and the connector
    agree.
+
+## 42. Loopback-only sshd on smortress
+
+`image/rootfs/etc/ssh/sshd_config.d/05-deny-loopback-passwords.conf` binds sshd
+to `127.0.0.1` and `::1`, points `AuthorizedKeysFile` at
+`/var/lib/homelab/.ssh/authorized_keys`, and repeats uCore's
+`Match Address 127.0.0.1,::1` with `PasswordAuthentication no`.
+
+The repetition is load-bearing, not redundancy. uCore ships
+`90-enable-localhost-passwords.conf`, which sets that block to `yes` so
+Cockpit's web login can use the core password. sshd parses its configuration
+twice; the second pass re-reads only the matching `Match` blocks and keeps the
+first value it obtains, so the *earlier file* wins. Our file sorts at `05-`
+for that reason. A drop-in sorting after `90-` is silently ignored.
+
+1. Deploy the image (section 37 step 2) and reboot:
+
+   ```sh
+   sudo bootc upgrade --enforce-container-sigpolicy
+   sudo systemctl reboot
+   ```
+
+2. Prove the listener is loopback-only:
+
+   ```sh
+   sudo ss -ltnp '( sport = :22 )'
+   # expect: 127.0.0.1:22 and [::1]:22, and no tailnet or LAN address
+   ```
+
+3. Prove the password decision survived uCore's file. The loopback query is the
+   one that matters; the second query shows the global context:
+
+   ```sh
+   sudo sshd -T -C addr=127.0.0.1,user=smores | \
+     grep -E '^(passwordauthentication|kbdinteractiveauthentication|permitrootlogin|allowusers|authorizedkeysfile|pubkeyauthoptions|permituserrc|maxauthtries|logingracetime|allowtcpforwarding|allowstreamlocalforwarding|allowagentforwarding|persourcepenaltyexemptlist) '
+   # expect: passwordauthentication no first, then kbdinteractiveauthentication no,
+   # permitrootlogin no, allowusers smores, authorizedkeysfile
+   # /var/lib/homelab/.ssh/authorized_keys, pubkeyauthoptions verify-required,
+   # permituserrc no, maxauthtries 10, logingracetime 60, all three forwardings
+   # no, persourcepenaltyexemptlist 127.0.0.1,::1
+   sudo sshd -T -C addr=100.64.0.1,user=smores | grep -E '^passwordauthentication '
+   # expect: passwordauthentication no
+   ```
+
+   `passwordauthentication yes` means the drop-in is sorting after `90-` or was
+   not shipped; check `ls /etc/ssh/sshd_config.d/` on the host before going
+   further.
+
+4. Prove the authorised set is in the SELinux type sshd may read, after Ignition
+   has written it:
+
+   ```sh
+   matchpathcon /var/lib/homelab/.ssh/authorized_keys   # expect: ssh_home_t
+   ls -ld /var/lib/homelab/.ssh                         # expect: root root
+   ```
