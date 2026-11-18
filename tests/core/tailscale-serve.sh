@@ -4,9 +4,10 @@
 # Serve is the tenant's only ingress. The core applications own their root
 # paths; each `homelab-apps` app gets one `/apps/<name>` path on 443 pointing at
 # the loopback port the renderer assigned. This proves the declaration half
-# without a tailnet: the fixed core routes, one route per app, pruning of an app
-# that left the plan, and a refusal to build a route from a plan that names a
-# foreign path or port.
+# without a tailnet: the fixed core routes, the wallpaper library as static files
+# under `/wallpapers`, one route per app, pruning of an app that left the plan
+# without touching that static route, and a refusal to build a route from a plan
+# that names a foreign path or port.
 #
 #   tests/core/tailscale-serve.sh
 set -uo pipefail
@@ -41,7 +42,9 @@ trap 'rm -rf "$work"' EXIT
 
 # The fake tailscale records argv and answers `serve status --json` from a file
 # the case sets up. `off` is a removal, so the status it prints afterwards is
-# the file rewritten without that handler.
+# the file rewritten without that handler. A target that is an absolute path is
+# Serve's static-file form and lands in `Path`, exactly as the real one does, and
+# a directory mount gains the trailing slash Serve adds itself.
 cat >"$work/tailscale" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -59,12 +62,14 @@ case $1 in
                 # A declaration ends in a target; `off` removes that path.
                 path=
                 target=
+                kind=Proxy
                 port=443
                 for arg in "$@"; do
                     case $arg in
                         --set-path=*) path=${arg#--set-path=} ;;
                         --https=*) port=${arg#--https=} ;;
                         http://*) target=$arg ;;
+                        /*) target=$arg; kind=Path ;;
                         off) target=off ;;
                     esac
                 done
@@ -73,11 +78,17 @@ case $1 in
                     echo "fake tailscale: unparsed serve invocation: $*" >&2
                     exit 2
                 fi
-                jq --arg key "host:$port" --arg path "$path" --arg target "$target" '
+                if [[ $kind == Path ]]; then
+                    [[ ${FAKE_FAIL_PATH:-} == 1 ]] && exit 1
+                    # Serve stats the target and appends the slash itself.
+                    [[ -e $target ]] || { echo "fake tailscale: invalid path: $target" >&2; exit 1; }
+                    [[ -d $target ]] && path=${path%/}/
+                fi
+                jq --arg key "host:$port" --arg path "$path" --arg target "$target" --arg kind "$kind" '
                     .Web //= {} | .Web[$key] //= {"Handlers": {}}
                     | if $target == "off"
                       then del(.Web[$key].Handlers[$path])
-                      else .Web[$key].Handlers[$path] = {"Proxy": $target}
+                      else .Web[$key].Handlers[$path] = {($kind): $target}
                       end' "$FAKE_STATUS" >"$FAKE_STATUS.next"
                 mv "$FAKE_STATUS.next" "$FAKE_STATUS" ;;
         esac ;;
@@ -90,6 +101,10 @@ status=$work/status.json
 plan=$work/plan.json
 log=$work/log
 digest=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+# The wallpaper library is a dataset mount on the host; the case points the
+# script at a scratch directory so the declaration is exercised offline.
+wallpapers=$work/wallpapers
+mkdir -p "$wallpapers"
 
 app_entry() { # name port project quota egress
     jq -cn --arg n "$1" --argjson port "$2" --argjson project "$3" \
@@ -110,7 +125,7 @@ plan_with() { jq -cn --argjson apps "$1" '{version: 1, apps: $apps}'; }
 
 run() {
     FAKE_LOG=$log FAKE_STATUS=$status TAILSCALE_BIN=$work/tailscale APPS_PLAN=$plan \
-        APPS_SCHEMA=$root/scripts/apps-schema.py \
+        APPS_SCHEMA=$root/scripts/apps-schema.py WALLPAPERS_DIR=${WALLPAPERS_DIR:-$wallpapers} \
         bash "$script" >"$work/stdout" 2>"$work/stderr"
 }
 
@@ -137,6 +152,10 @@ served() { # port -> handler path or empty
     jq -r --arg port "$1" '.Web[$port].Handlers // {} | to_entries[] | "\(.key) \(.value.Proxy)"' "$status" 2>/dev/null
 }
 
+static_served() { # port, handler path -> the directory or file it publishes
+    jq -r --arg port "$1" --arg path "$2" '.Web[$port].Handlers[$path].Path // empty' "$status" 2>/dev/null
+}
+
 # --- core routes always exist -------------------------------------------------
 
 reset_case
@@ -148,6 +167,21 @@ serves() { # path target label
 serves host:443 / http://127.0.0.1:2283 '443 still fronts Immich'
 serves host:8443 / http://127.0.0.1:8083 '8443 still fronts OPDShelf'
 serves host:10000 / http://127.0.0.1:8384 '10000 still fronts Syncthing'
+
+# --- the wallpaper library is static files, not a listener --------------------
+
+reset_case
+run
+eq "$?" 0 'a host with no tenant plan still declares the wallpaper route'
+eq "$(static_served host:443 /wallpapers/)" "$wallpapers" \
+    'the wallpaper library is published from its directory, under /wallpapers/'
+eq "$(jq -r '.Web["host:443"].Handlers["/wallpapers/"].Proxy // empty' "$status")" \
+    '' 'the wallpaper handler carries no loopback target'
+if grep -qF -- "--bg --https=443 --set-path=/wallpapers $wallpapers" "$log"; then
+    ok 'the declaration is 443, /wallpapers and an absolute path'
+else
+    bad 'the declaration is 443, /wallpapers and an absolute path' "$(cat "$log")"
+fi
 
 # --- one path per app --------------------------------------------------------
 
@@ -183,6 +217,12 @@ else
     ok 'a route for an app that left the plan is pruned'
 fi
 serves host:443 / http://127.0.0.1:2283 'pruning leaves the core root route alone'
+eq "$(static_served host:443 /wallpapers/)" "$wallpapers" 'pruning leaves the wallpaper route alone'
+if grep -E -- ' off$' "$log" | grep -qv -- '--set-path=/apps/'; then
+    bad 'pruning only removes /apps/ handlers' "$(grep -E -- ' off$' "$log")"
+else
+    ok 'pruning only removes /apps/ handlers'
+fi
 
 # --- a missing plan prunes every app route -----------------------------------
 
@@ -202,10 +242,36 @@ serves host:443 / http://127.0.0.1:2283 'no plan keeps the core root route'
 reset_case
 plan_with "$(jq -cn --argjson a "$(app_entry alpha 21234 4001 1G internet)" '{alpha: $a}')" >"$plan"
 if FAKE_STATUS_FAIL=1 run; then ok 'an unreadable status still applies the plan'; else bad 'an unreadable status still applies the plan' "$(cat "$work/stderr")"; fi
-if [[ $(grep -c -- '--bg --https=' "$log") == 4 ]]; then
-    ok 'the core routes and the app route are declared without status'
+if [[ $(grep -c -- '--bg --https=' "$log") == 5 ]]; then
+    ok 'the core routes, the wallpaper route and the app route are declared without status'
 else
-    bad 'the core routes and the app route are declared without status' "$(cat "$log")"
+    bad 'the core routes, the wallpaper route and the app route are declared without status' "$(cat "$log")"
+fi
+
+# --- an unpublishable wallpaper route fails the run --------------------------
+
+reset_case
+if FAKE_FAIL_PATH=1 run; then
+    bad 'Serve refusing the wallpaper directory fails the run'
+else
+    ok 'Serve refusing the wallpaper directory fails the run'
+fi
+if grep -qF -- 'could not serve' "$work/stderr"; then
+    ok 'the failure names the directory it could not publish'
+else
+    bad 'the failure names the directory it could not publish' "$(cat "$work/stderr")"
+fi
+
+reset_case
+if WALLPAPERS_DIR=$work/absent run; then
+    bad 'a missing wallpaper directory fails the run'
+else
+    ok 'a missing wallpaper directory fails the run'
+fi
+if [[ $(grep -c -- '--bg --https=' "$log") == 3 ]]; then
+    ok 'a missing wallpaper directory still leaves the core routes declared'
+else
+    bad 'a missing wallpaper directory still leaves the core routes declared' "$(cat "$log")"
 fi
 
 # --- malformed plans fail closed ---------------------------------------------
@@ -233,17 +299,17 @@ rejected 'an app entry that is not an object is rejected' \
 reset_case
 printf 'not json\n' >"$plan"
 if ! run; then ok 'invalid JSON is rejected'; else bad 'invalid JSON is rejected'; fi
-# A rejected plan must still leave the core applications reachable, and must
-# change no app route.
-if grep -qE -- '(--set-path| off)' "$log"; then
+# A rejected plan must still leave the core applications and the wallpapers
+# route reachable, and must change no app route.
+if grep -qE -- '(--set-path=/apps/| off)' "$log"; then
     bad 'a rejected plan changes no app route' "$(cat "$log")"
 else
     ok 'a rejected plan changes no app route'
 fi
-if [[ $(grep -c -- '--bg --https=' "$log") == 3 ]]; then
-    ok 'a rejected plan still declares the core routes'
+if [[ $(grep -c -- '--bg --https=' "$log") == 4 ]]; then
+    ok 'a rejected plan still declares the core routes and the wallpapers route'
 else
-    bad 'a rejected plan still declares the core routes' "$(cat "$log")"
+    bad 'a rejected plan still declares the core routes and the wallpapers route' "$(cat "$log")"
 fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

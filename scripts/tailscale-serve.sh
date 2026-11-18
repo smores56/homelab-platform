@@ -10,12 +10,20 @@
 # from the rendered plan, never from a definition, and every path the plan no
 # longer names is removed, including when the tenant is empty.
 #
+# The wallpaper library is a fourth core route and the only one with no
+# application behind it: `/srv/wallpapers` is a directory, so Serve publishes it
+# as static files under `/wallpapers` on 443. An absolute path is Serve's
+# static-file target -- a URL would be a proxy instead -- and Serve appends the
+# trailing slash itself, so `https://<host>.<tailnet>.ts.net/wallpapers/` is
+# exactly what this declares.
+#
 # Nothing here is Funnel: Serve answers tailnet clients only.
 set -euo pipefail
 
 tailscale_bin=${TAILSCALE_BIN:-tailscale}
 schema=${APPS_SCHEMA:-/usr/libexec/apps-schema}
 plan=${APPS_PLAN:-/var/lib/homelab/apps/plan.json}
+wallpapers=${WALLPAPERS_DIR:-/srv/wallpapers}
 
 fail() {
   echo "tailscale-serve: $*" >&2
@@ -25,6 +33,8 @@ fail() {
 command -v jq >/dev/null 2>&1 || fail "jq is missing"
 
 # https port -> loopback port. 443 Immich, 8443 OPDShelf, 10000 Syncthing GUI.
+# The wallpaper library is deliberately absent: it is a directory published as
+# static files under a path on 443, not a loopback port with a root path.
 declare -A core_routes=(
   [443]=2283
   [8443]=8083
@@ -56,14 +66,24 @@ if [[ -e $plan ]]; then
 fi
 
 # Core ingress first: whatever is wrong with the tenant plan or the Serve
-# status, the three core applications must stay reachable. Nothing below this
-# point may run before these declarations.
+# status, the three core applications and the wallpaper tree must stay
+# reachable. Nothing below this point may run before these declarations.
 for https in "${!core_routes[@]}"; do
   backend=http://127.0.0.1:${core_routes[$https]}
   if ! "$tailscale_bin" serve --bg --https="$https" "$backend"; then
     fail "could not serve $backend on https/$https"
   fi
 done
+
+# The wallpaper library is declared here, with the rest of the core ingress, so
+# a tenant plan that cannot be read or verified still leaves that route up. The
+# directory has to exist when Serve is asked for it -- Serve stats the target
+# and rejects it otherwise -- which is what makes a missing dataset a failed
+# unit rather than an empty listing.
+[[ -d $wallpapers ]] || fail "$wallpapers is missing"
+if ! "$tailscale_bin" serve --bg --https=443 --set-path=/wallpapers "$wallpapers"; then
+  fail "could not serve $wallpapers on https/443/wallpapers"
+fi
 
 # The status is only needed to prune stale app routes; if it cannot be read,
 # declare the plan's routes anyway and leave the pruning to a later run.
@@ -73,7 +93,9 @@ status=$("$tailscale_bin" serve status --json) || {
 }
 
 # An app that left the plan, or the whole tenant, leaves no route behind. Only
-# `/apps/` handlers on 443 are ours: the root paths belong to the core apps.
+# `/apps/` handlers on 443 are ours: the root paths belong to the core apps, and
+# `/wallpapers` is not under that prefix either, so the static route survives
+# every prune.
 while IFS= read -r path; do
   $plan_ok || break
   [[ -n $path ]] || continue

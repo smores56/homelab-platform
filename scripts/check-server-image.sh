@@ -483,6 +483,27 @@ for unit in smortress-app-secrets.service smortress-tailscale-serve.service \
   smortress-immich-dump.timer; do
   check "image enables $unit" has "$unit" image/Containerfile
 done
+
+# Serve topology (review finding G1 of design #748). The wallpaper library is the
+# fourth core route and the only one that is not a loopback port: an absolute
+# directory target on 443 makes Serve publish it as static files, and a client
+# that carries no credential fetches it as `<tailnet>/wallpapers/`. The route
+# therefore has to be declared here rather than in a runbook, and the stale-route
+# pruning has to stay scoped to the tenant paths.
+serve_script=scripts/tailscale-serve.sh
+check "Serve declares the wallpaper library as static files" \
+  has "serve --bg --https=443 --set-path=/wallpapers \"\$wallpapers\"" "$serve_script"
+check "the wallpaper library is the dataset mount point" has 'WALLPAPERS_DIR:-/srv/wallpapers' "$serve_script"
+check "stale-route pruning only considers tenant handlers" \
+  has 'select(startswith("/apps/"))' "$serve_script"
+if grep -qE -- '--set-path=/wallpapers[^ ]* .*off' "$serve_script"; then
+  bad "pruning never removes the wallpaper route"
+else
+  ok "pruning never removes the wallpaper route"
+fi
+check "the Serve unit is ordered after the wallpapers dataset is ready" \
+  grep -qE '^After=.*zfs-ready@raw-wallpapers\.service' units/systemd/smortress-tailscale-serve.service
+
 # shellcheck source=app-images.sh disable=SC1091
 source scripts/app-images.sh
 for name in $(app_image_names); do

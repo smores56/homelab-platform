@@ -3103,6 +3103,13 @@ such second copy: rotating the ciphertext is the whole change.
 
 ### 40.4 Declare the Serve routes
 
+`scripts/tailscale-serve.sh` is the producer of every route on this host. The
+image installs it as `/usr/libexec/tailscale-serve`, and
+`smortress-tailscale-serve.service` runs it at every boot. There is no
+hand-run declaration to remember: a reinstall or a re-enrolment that left Serve
+empty is repaired by starting the unit, never by retyping a `tailscale serve`
+command into a shell.
+
 Serve needs HTTPS certificates for the tailnet, which is an admin-console toggle,
 not a host setting. Once it is on:
 
@@ -3111,9 +3118,24 @@ sudo systemctl start smortress-tailscale-serve.service
 tailscale serve status
 ```
 
-The status output must show three routes: 443 to `http://127.0.0.1:2283` (Immich),
-8443 to `http://127.0.0.1:8083` (OPDShelf) and 10000 to `http://127.0.0.1:8384`
-(Syncthing GUI). Nothing here is Funnel.
+The status output must show four routes: 443 to `http://127.0.0.1:2283` (Immich),
+8443 to `http://127.0.0.1:8083` (OPDShelf), 10000 to `http://127.0.0.1:8384`
+(Syncthing GUI), and `/wallpapers/` on 443 to the directory `/srv/wallpapers`.
+That last one is the only route with no application behind it: Serve publishes
+the wallpaper dataset as static files, and the path shows a `Path` target where
+the other three show a `Proxy`. Nothing here is Funnel.
+
+The wallpaper route fails in a client rather than on this host, so prove it from
+a tailnet device — the timer on the laptops fetches exactly this URL and carries
+no credential:
+
+```sh
+curl -fsS https://smortress.<tailnet>.ts.net/wallpapers/ | head
+```
+
+A `200` with the file links means the route is up; an empty listing means the
+dataset is not mounted under it, which is what
+`systemctl status zfs-ready@raw-wallpapers.service` answers.
 
 Syncthing refuses a proxied Host header: the GUI is bound to localhost, so it
 rejects anything whose `Host` is not localhost with `403`, which is every request
