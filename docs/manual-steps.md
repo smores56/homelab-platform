@@ -3510,7 +3510,11 @@ steps 1–3 are the ones that make login possible at all.
    ```sh
    ls -ld /var/lib/homelab /var/lib/homelab/.ssh /var/lib/homelab/.ssh/authorized_keys
    # expect: drwx--x--x root root, drwx------ smores smores, -rw------- smores smores
-   matchpathcon /var/lib/homelab/.ssh/authorized_keys   # expect: ssh_home_t
+   ls -Z /var/lib/homelab/.ssh/authorized_keys
+   # expect: ... ssh_home_t ... — read it with ls -Z, because matchpathcon prints
+   # the policy default for the path rather than the file's actual context and so
+   # says ssh_home_t even for a var_lib_t file that sshd is denied
+   sudo restorecon -v /var/lib/homelab/.ssh/authorized_keys   # when it is not
    sudo sshd -T -C addr=127.0.0.1,user=smores | grep -E '^authorizedkeysfile '
    # expect: authorizedkeysfile /var/lib/homelab/.ssh/authorized_keys
    ```
