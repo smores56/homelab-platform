@@ -319,23 +319,72 @@ fi
 # The same stack runs on smortress, so this file is compared byte for byte with
 # the design rather than by keyword: drift here means two hosts that gate
 # differently, which is the one thing the design says must not happen.
+sudo_pam=image/rootfs/etc/pam.d/sudo
 expected=$(cat <<'EOT'
-# /etc/pam.d/sudo
 auth  required      pam_faillock.so preauth deny=5 unlock_time=300
-auth  sufficient    pam_userdb.so db=/etc/security/sudopin
+auth  [success=2 default=ignore] pam_userdb.so crypt=crypt db=/etc/security/sudopin.db
+auth  [success=1 default=ignore] pam_unix.so try_first_pass
 auth  [default=die] pam_faillock.so authfail deny=5 unlock_time=300
-auth  include       system-auth
+auth  sufficient    pam_faillock.so authsucc deny=5 unlock_time=300
+account    include system-auth
+password   include system-auth
+session    optional pam_keyinit.so revoke
+session    required  pam_limits.so
+session    include system-auth
 EOT
 )
-if [[ $(cat image/rootfs/etc/pam.d/sudo 2>/dev/null) == "$expected" ]]; then
-  ok "the shipped sudo PAM stack is the design's, byte for byte"
+if [[ $(cat "$sudo_pam" 2>/dev/null) == "$expected" ]] \
+    && [[ $(wc -l <"$sudo_pam" 2>/dev/null) -eq 10 ]]; then
+  ok "the shipped sudo PAM stack is the design's ten lines, byte for byte"
 else
-  bad "the shipped sudo PAM stack is the design's, byte for byte"
+  bad "the shipped sudo PAM stack is the design's ten lines, byte for byte" \
+    "$(diff <(printf '%s\n' "$expected") "$sudo_pam" 2>&1)"
+fi
+
+# Without crypt=crypt pam_userdb compares the stored value as plaintext, so the
+# database would hold the PIN itself. db= is opened literally too: Linux-PAM
+# never appends .db, so the name in the stack is the whole file name.
+if grep -qx 'auth  \[success=2 default=ignore\] pam_userdb\.so crypt=crypt db=/etc/security/sudopin\.db' \
+    "$sudo_pam" 2>/dev/null; then
+  ok "the PIN is compared as a hash against the literal .db path"
+else
+  bad "the PIN is compared as a hash against the literal .db path" \
+    "crypt=crypt is what makes the file a hash; db= is opened as given"
+fi
+
+# A bare authsucc stops clearing the tally at three rows, and interspersed typos
+# then lock out an account whose every invocation succeeded.
+if grep -qx 'auth  sufficient    pam_faillock\.so authsucc deny=5 unlock_time=300' \
+    "$sudo_pam" 2>/dev/null; then
+  ok "authsucc carries the same deny and unlock_time as preauth and authfail"
+else
+  bad "authsucc carries the same deny and unlock_time as preauth and authfail" \
+    "a bare authsucc stops clearing the tally at three rows"
+fi
+
+# try_first_pass is what makes one prompt serve both credentials: pam_userdb
+# caches the value typed there and pam_unix re-verifies it, so the account
+# password is the fallback the design promises.
+if grep -qx 'auth  \[success=1 default=ignore\] pam_unix\.so try_first_pass' \
+    "$sudo_pam" 2>/dev/null; then
+  ok "the account password is the fallback at the same prompt"
+else
+  bad "the account password is the fallback at the same prompt"
+fi
+
+if grep -qx 'account    include system-auth' "$sudo_pam" 2>/dev/null \
+    && grep -qx 'password   include system-auth' "$sudo_pam" \
+    && grep -qx 'session    optional pam_keyinit.so revoke' "$sudo_pam" \
+    && grep -qx 'session    required  pam_limits.so' "$sudo_pam" \
+    && grep -qx 'session    include system-auth' "$sudo_pam"; then
+  ok "the sudo stack keeps the stock account, password and session phases"
+else
+  bad "the sudo stack keeps the stock account, password and session phases"
 fi
 
 # The PIN is what an agent lacks. A token line or a permitting module here would
 # put escalation back within reach of whatever the session already holds.
-if ! grep -qE 'pam_u2f|pam_permit' image/rootfs/etc/pam.d/sudo 2>/dev/null; then
+if ! grep -qE 'pam_u2f|pam_permit' "$sudo_pam" 2>/dev/null; then
   ok "the sudo stack asks for the PIN, not the token"
 else
   bad "the sudo stack asks for the PIN, not the token"
@@ -361,18 +410,18 @@ else
   bad "tmpfiles declares the PIN database root-only"
 fi
 
-# Linux-PAM 1.7 opens the db= value as given and never appends .db, so the path
-# the stack names has to exist. It is a symlink to the file tmpfiles declares,
-# and both come from the shipped files rather than from this test.
-dbpath=$(sed -n 's/.*pam_userdb\.so db=\([^ ]*\).*/\1/p' image/rootfs/etc/pam.d/sudo 2>/dev/null)
+# The db= name has to be the path tmpfiles declares, and nothing else may stand
+# in for it: an extensionless symlink under the old name would mean the stack
+# and the declaration disagree about which file holds the PIN.
+dbpath=$(sed -n 's/.*pam_userdb\.so .*db=\([^ ]*\).*/\1/p' "$sudo_pam" 2>/dev/null)
 dbdecl=$(awk '$1 == "f" && $2 ~ /sudopin/ { print $2 }' \
   image/rootfs/usr/lib/tmpfiles.d/smorespro.conf 2>/dev/null)
-if [[ -n $dbpath && -L image/rootfs$dbpath ]] \
-    && [[ $(readlink "image/rootfs$dbpath") == "${dbdecl##*/}" ]]; then
-  ok "$dbpath resolves to the declared PIN database"
+if [[ -n $dbpath && $dbpath == "$dbdecl" ]] \
+    && [[ ! -e image/rootfs/etc/security/sudopin && ! -L image/rootfs/etc/security/sudopin ]]; then
+  ok "the db= path is the declared PIN database and no symlink shadows it"
 else
-  bad "$dbpath resolves to the declared PIN database" \
-    "pam_userdb opens db= literally: the file has to carry that exact name"
+  bad "the db= path is the declared PIN database and no symlink shadows it" \
+    "stack: ${dbpath:-none}, tmpfiles: ${dbdecl:-none}"
 fi
 
 if grep -q 'chmod 0440 /etc/sudoers.d/10-human-gate' image/Containerfile \
@@ -400,13 +449,17 @@ else
   bad "no PIN hash or database is committed"
 fi
 
-if grep -q 'gdbmtool -n' docs/manual-steps.md \
-    && grep -q 'no longer appends' docs/manual-steps.md \
-    && grep -q 'install -m 0600 -o root -g root' docs/manual-steps.md \
+if grep -q 'read -rsp .new sudo PIN' docs/manual-steps.md \
+    && grep -q 'openssl passwd -6 -stdin' docs/manual-steps.md \
+    && grep -q 'store smores' docs/manual-steps.md \
+    && grep -q 'fetch smores' docs/manual-steps.md \
+    && grep -q 'chmod 0600 /etc/security/sudopin.db' docs/manual-steps.md \
+    && grep -q 'faillock --user smores --reset' docs/manual-steps.md \
     && ! grep -qE '^[[:space:]]*(sudo[[:space:]]+)?db_load' docs/manual-steps.md; then
-  ok "manual-steps.md builds the PIN database with gdbmtool"
+  ok "manual-steps.md hashes the PIN with openssl and stores it with gdbmtool"
 else
-  bad "manual-steps.md builds the PIN database with gdbmtool" "pam_userdb links libgdbm, so db_load -T -t hash writes a database it cannot read"
+  bad "manual-steps.md hashes the PIN with openssl and stores it with gdbmtool" \
+    "pam_userdb links libgdbm, so db_load -T -t hash writes a database it cannot read"
 fi
 
 # --- shell ------------------------------------------------------------------
