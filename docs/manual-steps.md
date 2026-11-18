@@ -3734,13 +3734,18 @@ token secret.
 
 2. Build the database. `openssl passwd -6 -stdin` reads the PIN from stdin and
    returns a freshly salted sha512crypt hash; `read -rsp` keeps the PIN off the
-   screen and out of the shell history:
+   screen and out of the shell history. The two entries have to match and the PIN
+   has to be eight digits, because a typo here is only discovered at the next
+   `sudo`, where the stack silently falls through to the account password:
 
    ```sh
    read -rsp 'new sudo PIN (8 digits, not the FIDO2 PIN): ' PIN; echo
+   read -rsp 'again: ' PIN2; echo
+   [[ $PIN =~ ^[0-9]{8}$ && $PIN == "$PIN2" ]] \
+     || { echo 'not eight digits, or the two entries differ' >&2; exit 1; }
    hash=$(printf '%s\n' "$PIN" | openssl passwd -6 -stdin)
    printf 'store smores %s\n' "$hash" | gdbmtool /etc/security/sudopin.db
-   unset PIN hash
+   unset PIN PIN2 hash
    chmod 0600 /etc/security/sudopin.db
    ls -l /etc/security/sudopin.db    # expect: -rw------- root root
    gdbmtool /etc/security/sudopin.db list | cut -d' ' -f1 | grep -x smores
