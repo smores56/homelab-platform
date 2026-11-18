@@ -19,6 +19,13 @@ version: 1.7.0
 passwd:
   users:
     - name: smores
+      # Dead on this image, on purpose. sshd's AuthorizedKeysFile is
+      # /var/lib/homelab/.ssh/authorized_keys, set by the 05- drop-in, so nothing
+      # reads ~/.ssh/authorized_keys and this key authenticates nobody while that
+      # deployment is running. It is kept for one case: `bootc rollback` to a
+      # deployment without the drop-in restores sshd's default AuthorizedKeysFile,
+      # and this then becomes the key that gets in over Tailscale SSH again. It is
+      # not, and must not become, a second AuthorizedKeysFile path.
       ssh_authorized_keys_local:
         - ignition/operator/ssh_authorized_keys
       password_hash: '@SMORES_PASSWORD_HASH@'
