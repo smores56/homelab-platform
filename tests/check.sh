@@ -249,6 +249,71 @@ else
   bad "refresh-pins.sh watches the NymVPN pin with bounded fetches"
 fi
 
+# --- unlock (pam_u2f) -------------------------------------------------------
+
+login=image/rootfs/etc/pam.d/login
+if [[ $(grep -c 'pam_u2f\.so' "$login" 2>/dev/null) -eq 1 ]] \
+    && grep -qxE 'auth +sufficient +pam_u2f\.so pinverification=1 cue' "$login"; then
+  ok "login's one u2f line asks for the key and its PIN"
+else
+  bad "login's one u2f line asks for the key and its PIN" "pinverification=1 is what keeps a docked token from unlocking the machine alone"
+fi
+
+# Noctalia's lock screen authenticates against the "login" service (its
+# pam_service build option defaults to login) and a TTY reads the same file, so
+# this one line covers both. Behind system-auth's pam_unix it would never run:
+# pam_unix succeeds first and the stack stops.
+u2f_line=$(grep -n 'pam_u2f\.so' "$login" 2>/dev/null | cut -d: -f1)
+pw_line=$(grep -nE '^auth +substack +system-auth' "$login" 2>/dev/null | cut -d: -f1)
+if [[ -n $u2f_line && -n $pw_line && $u2f_line -lt $pw_line ]]; then
+  ok "the u2f line runs ahead of the password stack"
+else
+  bad "the u2f line runs ahead of the password stack"
+fi
+
+# The rest of the file is util-linux's, so a base refresh is the only reason to
+# change it; these are the lines that would silently vanish with a rewrite.
+if grep -qx 'account    required     pam_nologin.so' "$login" \
+    && grep -qx 'password   include      system-auth' "$login" \
+    && grep -qx 'session    required     pam_selinux.so open' "$login" \
+    && grep -qx 'session    required     pam_namespace.so' "$login" \
+    && grep -qx '\-session   optional     pam_ck_connector.so' "$login"; then
+  ok "the shipped login stack keeps util-linux's lines"
+else
+  bad "the shipped login stack keeps util-linux's lines"
+fi
+
+# The greeter must stay password-only: greetd ships its service files in
+# /usr/lib/pam.d, so anything under /etc/pam.d/greetd* is this image's doing.
+if [[ ! -e image/rootfs/etc/pam.d/greetd && ! -e image/rootfs/etc/pam.d/greetd-greeter ]]; then
+  ok "the greeter's PAM service is left to greetd"
+else
+  bad "the greeter's PAM service is left to greetd"
+fi
+
+if grep -qE '^ +pam-u2f pamu2fcfg' image/Containerfile \
+    && grep -q 'test -f /usr/lib64/security/pam_u2f.so' image/Containerfile; then
+  ok "the image installs pam-u2f and pamu2fcfg and proves the module is there"
+else
+  bad "the image installs pam-u2f and pamu2fcfg and proves the module is there"
+fi
+
+# FIDO2 is HID through libfido2 everywhere in this design; a smartcard stack
+# would add a daemon and a PIN cache for nothing.
+if ! grep -qE '^ +(pcsc-lite|pcscd|opensc) ' image/Containerfile; then
+  ok "no PC/SC or smartcard stack enters the image"
+else
+  bad "no PC/SC or smartcard stack enters the image"
+fi
+
+if [[ -f docs/manual-steps.md ]] \
+    && grep -q 'systemd-cryptenroll --fido2-device=auto --fido2-with-client-pin=yes' docs/manual-steps.md \
+    && grep -q 'pamu2fcfg -N -u smores' docs/manual-steps.md; then
+  ok "manual-steps.md carries the token enrolment commands"
+else
+  bad "manual-steps.md carries the token enrolment commands"
+fi
+
 # --- shell ------------------------------------------------------------------
 
 if command -v shellcheck >/dev/null 2>&1 && shellcheck --version >/dev/null 2>&1; then

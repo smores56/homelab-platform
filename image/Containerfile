@@ -41,6 +41,15 @@ LABEL org.opencontainers.image.title="smorespro image" \
 # already in the pinned base; listing and enabling it here keeps a future base
 # refresh from silently taking the backend away.
 #
+# pam-u2f is the unlock and TTY second factor: /etc/pam.d/login calls it with
+# pinverification=1, so the key and its FIDO2 PIN are both required. pamu2fcfg
+# is the enrolment tool the same module's mapping file needs, and it is a
+# separate package. Both are Fedora packages; nothing is compiled here.
+#
+# FIDO2 here is HID only. libfido2 (which pam-u2f requires and
+# systemd-cryptenroll dlopens) talks to /dev/hidraw; nothing in the unlock or
+# disk path needs a smartcard, so pcsc-lite, opensc and pcscd stay out.
+#
 # Brave Origin is not in Fedora: it ships only from Brave's own RPM repository
 # (the official vendor package), so the RUN writes that repo before installing
 # it, then disables it so nothing else in the image silently trusts it. The
@@ -56,6 +65,7 @@ RUN set -eux; \
       NetworkManager-wifi NetworkManager-bluetooth wpa_supplicant bluez \
       iwlwifi-mld-firmware \
       systemd-resolved nftables \
+      pam-u2f pamu2fcfg \
       fprintd fprintd-pam power-profiles-daemon thermald upower \
       libinput \
       xdg-user-dirs gvfs udisks2 plymouth plymouth-system-theme \
@@ -129,6 +139,13 @@ RUN set -eux; \
     jq -e '.default[0].type == "reject"' /etc/containers/policy.json >/dev/null; \
     jq -e '.transports.docker["ghcr.io/smores56/smorespro-image"][0].keyPath == "/etc/pki/containers/smorespro.pub"' /etc/containers/policy.json >/dev/null; \
     test -s /etc/pki/containers/smorespro.pub
+
+# The unlock path is a PAM module and a dlopened library, so a base refresh
+# that dropped either would fail silently at the lock screen rather than at
+# boot. Fail the build instead.
+RUN set -eux; \
+    test -f /usr/lib64/security/pam_u2f.so; \
+    command -v pamu2fcfg systemd-cryptenroll cryptsetup >/dev/null
 
 # The exact package set this image shipped, so a running host can be compared
 # with its image. Neither the base's packages nor these are version-locked, so
