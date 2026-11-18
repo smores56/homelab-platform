@@ -264,6 +264,7 @@ else
 fi
 
 probe "policy rejects by default" jq -e '.default[0].type == "reject"' image/rootfs/etc/containers/policy.json
+# An empty docker scope is the transport default and shadows the global reject
 # for every registry reference, so it must not exist.
 probe "no docker transport-wide accept" jq -e '.transports.docker[""] == null' image/rootfs/etc/containers/policy.json
 check "firewalld is enabled in the image" has "firewalld.service" image/Containerfile
