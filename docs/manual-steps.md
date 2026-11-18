@@ -3373,11 +3373,6 @@ to `127.0.0.1` and `::1`, points `AuthorizedKeysFile` at
 `/var/lib/homelab/.ssh/authorized_keys`, and repeats uCore's
 `Match Address 127.0.0.1,::1` with `PasswordAuthentication no`.
 
-That key file comes from Ignition, inlining `ignition/smortress-authorized-keys`:
-bootc does not reconcile `/var`, so an image-baked copy would never appear on an
-installed host. The committed file carries instructions and no key, which is why
-steps 4 and 5 below are the ones that make login possible at all.
-
 The repetition is load-bearing, not redundancy. uCore ships
 `90-enable-localhost-passwords.conf`, which sets that block to `yes` so
 Cockpit's web login can use the core password. sshd parses its configuration
@@ -3385,21 +3380,109 @@ twice; the second pass re-reads only the matching `Match` blocks and keeps the
 first value it obtains, so the *earlier file* wins. Our file sorts at `05-`
 for that reason. A drop-in sorting after `90-` is silently ignored.
 
-1. Deploy the image (section 37 step 2) and reboot:
+**The order of these steps is a lockout guard.** The image retires Tailscale SSH
+(section 43) and the `05-` drop-in replaces `AuthorizedKeysFile` with a file
+only Ignition writes, so a reboot before both key lines exist authenticates
+nobody: every step after it would have to be done from a console. Write the key
+lines and prove their label (steps 1–3) *before* the upgrade and reboot in
+step 4.
+
+Sections 42 to 44 run in one order across the two repositories: section 44
+first, because the dotfiles step that installs the laptops' wrapper is handed
+the token `tofu apply` creates there and cannot be pointed at one that does not
+exist yet; then this section; then the cutover.
+
+The key file comes from Ignition, inlining `ignition/smortress-authorized-keys`:
+bootc does not reconcile `/var`, so an image-baked copy would never appear on an
+installed host. The committed file carries instructions and no key, which is why
+steps 1–3 are the ones that make login possible at all.
+
+1. Create the resident key, on a laptop that still has a working route to the
+   host — Tailscale SSH before section 43, the tunnel from section 41 after it.
+   Do it first: the reboot in step 4 removes the first route, and the second one
+   needs the token section 44 creates. The FIDO2 handle is generated with the
+   token and never enters the repository, so this is the only step that produces
+   it; run it once per laptop, on the laptop:
+
+   ```sh
+   ssh-keygen -O resident -O no-touch-required -t ed25519-sk -f ~/.ssh/id_smortress
+   ```
+
+   `-O resident` keeps the handle on the token, so the private half never leaves
+   it; `-O no-touch-required` is what stops a docked token from demanding a touch
+   it cannot prove anything with. `ssh-keygen -K` downloads the resident handles
+   again if the public line is needed on a machine that lost it.
+
+2. Fresh install: put both key lines into the delivered file before rendering.
+   The `no-touch-required` option belongs on the line, not in the sshd config:
+   the drop-in deliberately carries no `PubkeyAuthOptions verify-required`, which
+   sshd treats as a hard requirement that `authorized_keys` cannot cancel per
+   key.
+
+   ```sh
+   printf 'no-touch-required %s\n' "$(cat ~/.ssh/id_smortress.pub)" \
+     >>ignition/smortress-authorized-keys
+   cat ~/.ssh/id_smortress-access.pub >>ignition/smortress-authorized-keys
+   scripts/render-ignition.sh
+   git checkout -- ignition/smortress-authorized-keys
+   ```
+
+   The `git checkout` is not tidying up: `scripts/check-server-image.sh` fails
+   on any non-comment line in that file and on any `sk-ssh-ed25519@openssh.com`
+   anywhere in the tree, and a handle committed to the repository would be
+   re-delivered to every future install with an Ignition config that no longer
+   matches the token. The file stays instructions-only in git; the rendering
+   already happened, so the installer still carries the keys.
+
+   The second line is the file key, and the pair is deliberate: the Access token
+   gets a client to sshd and the key gets the client in, so a leaked token
+   authenticates nothing and a copied key reaches nothing.
+
+3. On a host that is already installed, append to the live file instead, still
+   before the upgrade. `/var/lib/homelab` is root-owned `0711` and `.ssh` exists
+   on such a host only because Ignition created it at install time, so a bare
+   `>>` fails with `Permission denied`; `install -d` is idempotent where the
+   directory is already correct:
+
+   ```sh
+   sudo install -d -o smores -g smores -m 0700 /var/lib/homelab/.ssh
+   printf 'no-touch-required %s\n' "$(cat ~/.ssh/id_smortress.pub)" |
+     sudo tee -a /var/lib/homelab/.ssh/authorized_keys >/dev/null
+   cat ~/.ssh/id_smortress-access.pub |
+     sudo tee -a /var/lib/homelab/.ssh/authorized_keys >/dev/null
+   sudo chown smores:smores /var/lib/homelab/.ssh/authorized_keys
+   sudo chmod 0600 /var/lib/homelab/.ssh/authorized_keys
+   ```
+
+   `tee` writes as root, so the owner and mode have to be set afterwards: sshd
+   opens `AuthorizedKeysFile` as the target user, and a root-owned `0600` file
+   authorises nobody. A directory made by hand also inherits `var_lib_t` from
+   `/var/lib/homelab` rather than the `ssh_home_t` Fedora's `file_contexts`
+   assigns to `/.ssh`, and sshd is denied a `var_lib_t` key file — so read the
+   label off the file and fix it before going further:
+
+   ```sh
+   ls -Z /var/lib/homelab/.ssh /var/lib/homelab/.ssh/authorized_keys
+   # expect: ... ssh_home_t ... on both, not var_lib_t
+   sudo restorecon -Rv /var/lib/homelab/.ssh
+   ```
+
+4. Deploy the image and reboot. Only now, with both key lines and their label in
+   place:
 
    ```sh
    sudo bootc upgrade --enforce-container-sigpolicy
    sudo systemctl reboot
    ```
 
-2. Prove the listener is loopback-only:
+5. Prove the listener is loopback-only:
 
    ```sh
    sudo ss -ltnp '( sport = :22 )'
    # expect: 127.0.0.1:22 and [::1]:22, and no tailnet or LAN address
    ```
 
-3. Prove the password decision survived uCore's file. The loopback query is the
+6. Prove the password decision survived uCore's file. The loopback query is the
    one that matters; the second query shows the global context:
 
    ```sh
@@ -3419,57 +3502,10 @@ for that reason. A drop-in sorting after `90-` is silently ignored.
    not shipped; check `ls /etc/ssh/sshd_config.d/` on the host before going
    further.
 
-4. Create the resident key. The FIDO2 handle is generated with the token and
-   never enters the repository, so this is the only step that produces it. Run it
-   once per laptop, on the laptop:
-
-   ```sh
-   ssh-keygen -O resident -O no-touch-required -t ed25519-sk -f ~/.ssh/id_smortress
-   ```
-
-   `-O resident` keeps the handle on the token, so the private half never leaves
-   it; `-O no-touch-required` is what stops a docked token from demanding a touch
-   it cannot prove anything with. `ssh-keygen -K` downloads the resident handles
-   again if the public line is needed on a machine that lost it.
-
-5. Put the key line into the delivered file. sshd's `AuthorizedKeysFile` is
-   `/var/lib/homelab/.ssh/authorized_keys`, written by Ignition from
-   `ignition/smortress-authorized-keys` — the committed file holds instructions
-   only, because no key can exist until step 4 has run on a laptop.
-
-   The `no-touch-required` option belongs on the line, not in the sshd config:
-   the drop-in deliberately carries no `PubkeyAuthOptions verify-required`, which
-   sshd treats as a hard requirement that `authorized_keys` cannot cancel per
-   key. On a fresh install, append before rendering Ignition:
-
-   ```sh
-   printf 'no-touch-required %s\n' "$(cat ~/.ssh/id_smortress.pub)" \
-     >>ignition/smortress-authorized-keys
-   cat ~/.ssh/id_smortress-access.pub >>ignition/smortress-authorized-keys
-   scripts/render-ignition.sh
-   ```
-
-   On a host that is already installed, append to the live file instead. It is
-   smores-owned, so this needs no sudo and survives a bootc upgrade:
-
-   ```sh
-   printf 'no-touch-required %s\n' "$(cat ~/.ssh/id_smortress.pub)" \
-     >>/var/lib/homelab/.ssh/authorized_keys
-   cat ~/.ssh/id_smortress-access.pub >>/var/lib/homelab/.ssh/authorized_keys
-   ```
-
-   The second line is the file key, and the pair is deliberate: the Access token
-   gets a client to sshd and the key gets the client in, so a leaked token
-   authenticates nothing and a copied key reaches nothing.
-
-   **Until one of those lines lands, sshd authenticates nobody.** That is the
-   intended failure direction — an empty authorised set refuses every login
-   rather than admitting a key that was never reviewed — not an oversight.
-
-6. Prove the file, its owner and its label. sshd reads this file as the target
-   user, not as root (`auth2-pubkey.c` switches uid before opening it), which is
-   why smores owns the directory and the file and why `/var/lib/homelab` is
-   `0711`: traversal for that account, no listing.
+7. Prove the file, its owner, its label and the doors. sshd reads this file as
+   the target user, not as root (`auth2-pubkey.c` switches uid before opening
+   it), which is why smores owns the directory and the file and why
+   `/var/lib/homelab` is `0711`: traversal for that account, no listing.
 
    ```sh
    ls -ld /var/lib/homelab /var/lib/homelab/.ssh /var/lib/homelab/.ssh/authorized_keys
@@ -3480,7 +3516,10 @@ for that reason. A drop-in sorting after `90-` is silently ignored.
    ```
 
    Then prove the doors: the token and the key together log in, and either half
-   alone does not.
+   alone does not. **Until one of the key lines lands, sshd authenticates
+   nobody.** That is the intended failure direction — an empty authorised set
+   refuses every login rather than admitting a key that was never reviewed — not
+   an oversight.
 
 ## 43. Retire Tailscale SSH on smortress
 
@@ -3492,14 +3531,20 @@ restored with the state — or a hand-run `tailscale up --ssh` — turns it back
 on. Nothing changes in firewalld; with the listener bound to loopback, nothing
 on the tailnet address is reachable at all.
 
-1. Deploy the image (section 37 step 2) and reboot:
+1. Do nothing here before section 42's steps 1–3 have run and section 44 has
+   created the token. This section removes one of the two routes in, and the
+   other one is the tunnel: rebooting the image without a key line in
+   `/var/lib/homelab/.ssh/authorized_keys` and without the token in the laptops'
+   wrapper leaves a console as the only way back.
+
+2. Deploy the image (section 37 step 2) and reboot:
 
    ```sh
    sudo bootc upgrade --enforce-container-sigpolicy
    sudo systemctl reboot
    ```
 
-2. Prove the preference and the unit:
+3. Prove the preference and the unit:
 
    ```sh
    sudo systemctl status smortress-tailscale-ssh-off.service
@@ -3510,7 +3555,7 @@ on the tailnet address is reachable at all.
    `/var/lib/tailscale/tailscaled.state` exists and that the unit is enabled
    (`systemctl is-enabled smortress-tailscale-ssh-off.service`).
 
-3. Prove the old path is closed, from a tailnet device such as a laptop:
+4. Prove the old path is closed, from a tailnet device such as a laptop:
 
    ```sh
    ssh -o ConnectTimeout=5 smores@smortress true
@@ -3518,7 +3563,7 @@ on the tailnet address is reachable at all.
    tailscale status | grep smortress        # expect: still up, so Serve is unaffected
    ```
 
-4. Clearing it by hand is the same one-liner, and the next boot repeats it:
+5. Clearing it by hand is the same one-liner, and the next boot repeats it:
 
    ```sh
    sudo tailscale set --ssh=false
