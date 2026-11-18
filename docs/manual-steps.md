@@ -3402,7 +3402,8 @@ for that reason. A drop-in sorting after `90-` is silently ignored.
      grep -E '^(passwordauthentication|kbdinteractiveauthentication|permitrootlogin|allowusers|authorizedkeysfile|pubkeyauthoptions|permituserrc|maxauthtries|logingracetime|allowtcpforwarding|allowstreamlocalforwarding|allowagentforwarding|persourcepenaltyexemptlist) '
    # expect: passwordauthentication no first, then kbdinteractiveauthentication no,
    # permitrootlogin no, allowusers smores, authorizedkeysfile
-   # /var/lib/homelab/.ssh/authorized_keys, pubkeyauthoptions verify-required,
+   # /var/lib/homelab/.ssh/authorized_keys, pubkeyauthoptions none (the per-key
+   # no-touch-required in authorized_keys is what sk login relies on),
    # permituserrc no, maxauthtries 10, logingracetime 60, all three forwardings
    # no, persourcepenaltyexemptlist 127.0.0.1,::1
    sudo sshd -T -C addr=100.64.0.1,user=smores | grep -E '^passwordauthentication '

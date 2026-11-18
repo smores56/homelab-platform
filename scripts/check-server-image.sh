@@ -95,7 +95,20 @@ check "no agent forwarding" has 'AllowAgentForwarding no' "$sshd_dropin"
 check "no user rc file runs at login" has 'PermitUserRC no' "$sshd_dropin"
 check "auth tries are bounded" has 'MaxAuthTries 10' "$sshd_dropin"
 check "the grace time is bounded" has 'LoginGraceTime 60' "$sshd_dropin"
-check "sk signatures must be user-verified" has 'PubkeyAuthOptions verify-required' "$sshd_dropin"
+# PubkeyAuthOptions stays unset (default `none`). verify-required is a hard
+# requirement, not a permission: with it set, sshd rejects every FIDO signature
+# without the UV assertion, and authorized_keys has no no-verify-required to
+# cancel it per key, so the touch-free resident sk- login could never work.
+# touch-required is refused for the mirror-image reason: it pins the opposite
+# decision where only the authorized_keys line should make it. Comments name the
+# options, so the directives are what is checked.
+for option in verify-required touch-required; do
+  if grep -vE '^[[:space:]]*#' "$sshd_dropin" | grep -qF -- "$option"; then
+    bad "ssh never pins sk signatures to $option"
+  else
+    ok "ssh never pins sk signatures to $option"
+  fi
+done
 # Everything that is not a comment after the Match line is inside the block, so
 # a global directive appended below it would silently become loopback-only.
 check "the loopback block comes last and re-denies passwords" test \
