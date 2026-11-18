@@ -3483,24 +3483,38 @@ steps 1–3 are the ones that make login possible at all.
    ```
 
 6. Prove the password decision survived uCore's file. The loopback query is the
-   one that matters; the second query shows the global context:
+   one that matters; the second query shows the global context. Both greps are
+   case-insensitive on purpose: OpenSSH 10 prints CamelCase directive names, so
+   a lowercase pattern matches nothing and "no output" then reads as success.
 
    ```sh
    sudo sshd -T -C addr=127.0.0.1,user=smores | \
-     grep -E '^(passwordauthentication|kbdinteractiveauthentication|permitrootlogin|allowusers|authorizedkeysfile|pubkeyauthoptions|permituserrc|maxauthtries|logingracetime|allowtcpforwarding|allowstreamlocalforwarding|allowagentforwarding|persourcepenaltyexemptlist) '
-   # expect: passwordauthentication no first, then kbdinteractiveauthentication no,
-   # permitrootlogin no, allowusers smores, authorizedkeysfile
-   # /var/lib/homelab/.ssh/authorized_keys, pubkeyauthoptions none (the per-key
-   # no-touch-required in authorized_keys is what sk login relies on),
-   # permituserrc no, maxauthtries 10, logingracetime 60, all three forwardings
-   # no, persourcepenaltyexemptlist 127.0.0.1,::1
-   sudo sshd -T -C addr=100.64.0.1,user=smores | grep -E '^passwordauthentication '
-   # expect: passwordauthentication no
+     grep -iE '^(passwordauthentication|kbdinteractiveauthentication|permitrootlogin|allowusers|authorizedkeysfile|pubkeyauthoptions|permituserrc|maxauthtries|logingracetime|allowtcpforwarding|allowstreamlocalforwarding|allowagentforwarding|persourcepenaltyexemptlist) '
+   sudo sshd -T -C addr=100.64.0.1,user=smores | grep -iE '^passwordauthentication '
    ```
 
-   `passwordauthentication yes` means the drop-in is sorting after `90-` or was
-   not shipped; check `ls /etc/ssh/sshd_config.d/` on the host before going
-   further.
+   Compare the output against this table line by line. A line that is missing is
+   a failure, not a quiet pass:
+
+   | directive | expected |
+   | --- | --- |
+   | `PasswordAuthentication` | `no`, in both queries |
+   | `KbdInteractiveAuthentication` | `no` |
+   | `PermitRootLogin` | `no` |
+   | `AllowUsers` | `smores` |
+   | `AuthorizedKeysFile` | `/var/lib/homelab/.ssh/authorized_keys` |
+   | `PubkeyAuthOptions` | `none` — the per-key `no-touch-required` in `authorized_keys` is what sk login relies on |
+   | `PermitUserRC` | `no` |
+   | `MaxAuthTries` | `10` |
+   | `LoginGraceTime` | `60` |
+   | `AllowTcpForwarding` | `no` |
+   | `AllowStreamLocalForwarding` | `no` |
+   | `AllowAgentForwarding` | `no` |
+   | `PerSourcePenaltyExemptList` | `127.0.0.1,::1` |
+
+   `PasswordAuthentication yes` in either query means the drop-in is sorting
+   after `90-` or was not shipped; check `ls /etc/ssh/sshd_config.d/` on the
+   host before going further.
 
 7. Prove the file, its owner, its label and the doors. sshd reads this file as
    the target user, not as root (`auth2-pubkey.c` switches uid before opening
@@ -3515,7 +3529,7 @@ steps 1–3 are the ones that make login possible at all.
    # the policy default for the path rather than the file's actual context and so
    # says ssh_home_t even for a var_lib_t file that sshd is denied
    sudo restorecon -v /var/lib/homelab/.ssh/authorized_keys   # when it is not
-   sudo sshd -T -C addr=127.0.0.1,user=smores | grep -E '^authorizedkeysfile '
+   sudo sshd -T -C addr=127.0.0.1,user=smores | grep -iE '^authorizedkeysfile '
    # expect: authorizedkeysfile /var/lib/homelab/.ssh/authorized_keys
    ```
 
