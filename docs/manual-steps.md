@@ -3599,6 +3599,17 @@ The PIN, its hash and the database stay on the host: an eight-digit space is
 recovers in seconds. "Consistent" across hosts comes from typing the same PIN
 into each host's database, not from a shared file.
 
+The stack was proven on Fedora 45 (pam 1.7.2) with `pamtester` and real `sudo`,
+and three details decide whether it works at all:
+
+- the path is `/etc/security/sudopin.db` exactly. `db=` is opened literally:
+  Linux-PAM never appends `.db`, so a database called `sudopin` is one PAM never
+  opens;
+- the stored value is a **hash**, because the stack passes `crypt=crypt`. Without
+  it pam_userdb compares the typed PIN as plaintext against whatever is stored;
+- `gdbmtool` is the tool, not `db_load`: Fedora's `pam_userdb.so` links
+  `libgdbm`, so a libdb file is a file PAM cannot open.
+
 `pam_userdb` looks the hash up by the **PAM username**, so the key must be the
 account that runs sudo. That account is `smores` — the only login
 `ignition/smortress.bu` creates and the only name sshd's `AllowUsers` permits.
@@ -3617,13 +3628,13 @@ token secret.
    sudo -i
    ```
 
-2. Build the database. `gdbmtool` is the tool: Fedora's `pam_userdb.so` links
-   `libgdbm`, not libdb, so `db_load` writes a file PAM cannot open.
-   `openssl passwd -6` is a sha512crypt hash; the salt is random.
+2. Build the database. `openssl passwd -6 -stdin` reads the PIN from stdin and
+   returns a freshly salted sha512crypt hash; `read -rsp` keeps the PIN off the
+   screen and out of the shell history:
 
    ```sh
    read -rsp 'new sudo PIN (8 digits, not the FIDO2 PIN): ' PIN; echo
-   hash=$(openssl passwd -6 -stdin <<<"$PIN")
+   hash=$(printf '%s\n' "$PIN" | openssl passwd -6 -stdin)
    printf 'store smores %s\n' "$hash" | gdbmtool /etc/security/sudopin.db
    unset PIN hash
    chmod 0600 /etc/security/sudopin.db
@@ -3632,8 +3643,10 @@ token secret.
    # expect: smores   (the hash itself is not printed)
    ```
 
-   A database with the wrong key authenticates nobody: pam_userdb fails, and the
-   stack falls through to the long password.
+   A database with the wrong key authenticates nobody through pam_userdb, and the
+   stack falls through to the account password at the same prompt (step 4). A
+   database at the wrong path is never opened at all: the PIN then simply never
+   matches.
 
 3. Prove the gate, in the root shell's parent session as `smores`:
 
@@ -3650,20 +3663,52 @@ token secret.
    # expect: sudo: a password is required
    ```
 
-4. Prove the fallback and the lockout. A wrong PIN falls through to the account
-   password, so a forgotten PIN is not a lockout:
+4. Prove the fallback at **one** prompt, not two. The account password typed
+   where the PIN belongs authenticates, because pam_userdb caches the string the
+   user typed and pam_unix re-verifies that same value with `try_first_pass`. A
+   forgotten PIN is therefore not a lockout:
 
    ```sh
-   for _ in 1 2 3 4 5; do printf 'wrong-pin\n' | sudo -S true; done
-   faillock --user smores          # expect: five INVALID entries, then refused
-   sudo true                       # expect: refused for 300s
+   sudo -k; sudo true      # type the account password, not the PIN
+   # expect: success, no second prompt
    ```
 
-   The five-minute lockout clears itself; `sudo faillock --user smores --reset`
-   is only possible once it has. SSH over the tunnel is unaffected: key auth
-   never runs the `auth` stack, so a faillock lockout costs sudo, not the host.
+5. Prove the lockout. faillock writes one row per PAM transaction and sudo makes
+   three per invocation, so **five wrong prompts** — not five invocations — is
+   what costs 300 seconds. As `smores`, in a fresh TTY:
 
-5. An agent sharing your TTY inherits the ticket for up to 30 minutes. That is
+   ```sh
+   sudo -k
+   for _ in 1 2 3 4 5; do printf 'wrong-pin\n' | sudo -S true; done
+   ```
+
+   Read the tally from the root shell of step 1, because sudo is locked and that
+   shell needs no prompt:
+
+   ```sh
+   faillock --user smores          # expect: five INVALID rows
+   faillock --user smores --reset  # the manual clear, from this shell
+   faillock --user smores          # expect: no rows
+   ```
+
+   And back as `smores`, prove that nothing authenticates while the tally
+   stands — not the PIN and not the account password:
+
+   ```sh
+   sudo true      # expect: refused, the correct PIN included
+   ```
+
+   That blanket refusal is the design, not a bug: `pam_faillock preauth` denies
+   before any comparison runs, so a locked account fails before pam_userdb or
+   pam_unix ever looks at what was typed. `authsucc` carries the same `deny` so
+   the first successful login after the window clears the tally. Recovery
+   *before* the window ends is a session that is already authenticated — the
+   `sudo -i` shell from step 1, or a console getty you have already logged into.
+
+   SSH over the tunnel is unaffected throughout: key auth never runs the `auth`
+   stack, so a faillock lockout costs sudo, not the host.
+
+6. An agent sharing your TTY inherits the ticket for up to 30 minutes. That is
    the design's accepted residual; `log_subcmds` records what ran:
 
    ```sh
