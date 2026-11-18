@@ -3428,7 +3428,7 @@ steps 1–3 are the ones that make login possible at all.
    ```
 
    The `git checkout` is not tidying up: `scripts/check-server-image.sh` fails
-   on any non-comment line in that file and on any `sk-ssh-ed25519@openssh.com`
+   on any non-comment line in that file and on any resident `sk-` handle
    anywhere in the tree, and a handle committed to the repository would be
    re-delivered to every future install with an Ignition config that no longer
    matches the token. The file stays instructions-only in git; the rendering

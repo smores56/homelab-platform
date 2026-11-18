@@ -24,6 +24,11 @@
 #
 #   cat ~/.ssh/id_smortress-access.pub >>ignition/smortress-authorized-keys
 #
-# Append to the working copy for a fresh install, or to
-# /var/lib/homelab/.ssh/authorized_keys on a running host. Never commit the
-# resulting lines and never put a private key in this file.
+# Append to the working copy for a fresh install, render, then
+# `git checkout -- ignition/smortress-authorized-keys`; on a running host append
+# to /var/lib/homelab/.ssh/authorized_keys instead. Never commit the resulting
+# lines and never put a private key in this file: this file has to stay
+# instructions-only, because scripts/check-server-image.sh fails on any
+# non-comment line here and on any sk- resident handle in the tree, and a
+# handle in git would be re-delivered to every later install by an Ignition
+# config that no longer matches the token it was made with.
