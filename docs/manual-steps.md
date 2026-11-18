@@ -2798,8 +2798,10 @@ read -rsp 'read-only secret: ' R2_READ_SECRET_ACCESS_KEY && export R2_READ_SECRE
 ### 39.3 Access service token
 
 Zero Trust → Access → Service Auth → Create. Store the pair in Bitwarden. The
-`service auth` policy is account-wide, so this token also reaches `ssh`,
-`memory` and `agent` if it leaks; rotate it in the same place if that happens.
+`service auth` policy is account-wide, so this token also reaches `memory` and
+`agent` if it leaks; rotate it in the same place if that happens. It does **not**
+reach `ssh`: that application accepts only the token `tofu/access.tf` declares
+(section 44).
 
 ### 39.4 Apply the Access application
 
@@ -3460,3 +3462,68 @@ on the tailnet address is reachable at all.
    ```sh
    sudo tailscale set --ssh=false
    ```
+
+## 44. Dedicated Access service token for `ssh.sammohr.dev`
+
+`tofu/access.tf` declares `cloudflare_zero_trust_access_service_token.ssh` (a
+one-year lifetime) and `cloudflare_zero_trust_access_policy.service_auth_ssh`,
+which admits that one token id. The `ssh` application attaches the new policy
+instead of the account-wide `service auth`, so the credential a laptop carries
+to `cloudflared access ssh` reaches sshd and nothing else — not the memory MCP,
+not the agent frontend, not the backup reader. Minting it is a `tofu apply`; no
+workflow and no repository file holds the secret.
+
+1. Apply. The token is created at the edge, and its secret appears only in
+   state:
+
+   ```sh
+   tofu -chdir=tofu plan -no-color
+   # expect: cloudflare_zero_trust_access_service_token.ssh (create),
+   # cloudflare_zero_trust_access_policy.service_auth_ssh (create),
+   # cloudflare_zero_trust_access_application.ssh (update) — nothing else
+   tofu -chdir=tofu apply -no-color
+   ```
+
+2. Read the pair out of state once, into files rather than into scrollback:
+
+   ```sh
+   ( umask 077
+     tofu -chdir=tofu state show -no-color cloudflare_zero_trust_access_service_token.ssh |
+       sed -nE 's/^[[:space:]]*(client_id|client_secret)[[:space:]]*=[[:space:]]*"(.*)"$/\1=\2/p' \
+       >~/.config/cloudflared-access-ssh.env
+   )
+   chmod 600 ~/.config/cloudflared-access-ssh.env
+   ```
+
+   Store both values in the password manager, then hand them to the wrapper's
+   mode-600 file on each laptop (the `cloudflared access ssh` wrapper section).
+   They are a bearer credential: never in the repository, never in argv, never
+   in an image.
+
+3. Prove the scoping. The ssh token must be admitted at `ssh` and refused
+   everywhere else:
+
+   ```sh
+   set -a; . ~/.config/cloudflared-access-ssh.env; set +a
+   probe() {
+     curl -sS -o /dev/null -w '%{http_code}\n' \
+       -H "CF-Access-Client-Id: $client_id" -H "CF-Access-Client-Secret: $client_secret" \
+       "https://$1.sammohr.dev/"
+   }
+   probe ssh       # expect: never 302 to *.cloudflareaccess.com; the tunnel
+                   # forwards to sshd, whose answer is not HTTP
+   probe memory    # expect: 403
+   probe agent     # expect: 403
+   probe recovery  # expect: 403 (the backrest reader)
+   ```
+
+4. Rotation, when a machine leaves our control or the year is up. The resource
+   deliberately carries no `prevent_destroy`, so replacement is one command:
+
+   ```sh
+   tofu -chdir=tofu apply -no-color -replace=cloudflare_zero_trust_access_service_token.ssh
+   ```
+
+   Then repeat step 2 on the remaining laptops and delete the old pair from the
+   password manager. The `service token expiry` notification policy emails
+   before the one-year lifetime lapses, which is the reminder to do this.

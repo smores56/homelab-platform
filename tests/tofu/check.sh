@@ -108,9 +108,67 @@ for app in ssh memory agent backrest; do
     continue
   fi
   ok "application ${app} exists"
-  if grep -q 'cloudflare_zero_trust_access_policy.service_auth.id' <<<"$block"; then ok "${app} accepts a service token"; else bad "${app} accepts a service token"; fi
   if grep -q 'cloudflare_zero_trust_access_policy.email.id' <<<"$block"; then ok "${app} allows the owner email"; else bad "${app} allows the owner email"; fi
 done
+for app in memory agent backrest; do
+  if grep -q 'cloudflare_zero_trust_access_policy.service_auth.id' <<<"$(extract "cloudflare_zero_trust_access_application.${app}")"; then
+    ok "${app} accepts any valid service token"
+  else
+    bad "${app} accepts any valid service token"
+  fi
+done
+
+# ssh is the one application a laptop presents a bearer token to (design #748).
+# The account-wide decision admits every token in the account, so ssh accepts
+# only the token named by its own policy.
+ssh_app=$(extract cloudflare_zero_trust_access_application.ssh)
+if grep -q 'cloudflare_zero_trust_access_policy.service_auth_ssh.id' <<<"$ssh_app"; then
+  ok "ssh accepts its own service token"
+else
+  bad "ssh accepts its own service token"
+fi
+if grep -q 'cloudflare_zero_trust_access_policy.service_auth.id' <<<"$ssh_app"; then
+  bad "ssh does not accept the account-wide service token"
+else
+  ok "ssh does not accept the account-wide service token"
+fi
+ssh_token=$(extract cloudflare_zero_trust_access_service_token.ssh)
+if [[ -z $ssh_token ]]; then
+  bad "the dedicated ssh service token is declared"
+else
+  ok "the dedicated ssh service token is declared"
+  if grep -qF 'duration   = "8760h"' <<<"$ssh_token"; then
+    ok "the ssh token has a one-year lifetime"
+  else
+    bad "the ssh token has a one-year lifetime"
+  fi
+fi
+ssh_token_policy=$(extract cloudflare_zero_trust_access_policy.service_auth_ssh)
+if [[ -z $ssh_token_policy ]]; then
+  bad "the ssh service-token policy exists"
+else
+  ok "the ssh service-token policy exists"
+  if grep -qF 'decision   = "non_identity"' <<<"$ssh_token_policy"; then
+    ok "the ssh token policy needs no browser identity"
+  else
+    bad "the ssh token policy needs no browser identity"
+  fi
+  if grep -qF 'token_id = cloudflare_zero_trust_access_service_token.ssh.id' <<<"$ssh_token_policy"; then
+    ok "the ssh token policy names the dedicated token"
+  else
+    bad "the ssh token policy names the dedicated token"
+  fi
+  if grep -q 'any_valid_service_token' <<<"$ssh_token_policy"; then
+    bad "the ssh token policy admits no other token"
+  else
+    ok "the ssh token policy admits no other token"
+  fi
+fi
+if grep -qE '^[[:space:]]*(client_secret|client_id)[[:space:]]*=' "$work/code.tf"; then
+  bad "no service-token credential is authored in the config"
+else
+  ok "no service-token credential is authored in the config"
+fi
 
 # The hosted Backrest reader (#707) owns recovery.sammohr.dev; the static letter
 # and its Pages domain are retired.
@@ -316,7 +374,9 @@ echo "== preserved objects"
 for addr in cloudflare_pages_project.recovery cloudflare_r2_bucket_cors.restic \
   cloudflare_notification_policy.tunnel_health cloudflare_notification_policy.service_token_expiry \
   cloudflare_ruleset.dav_rate_limit cloudflare_zero_trust_access_policy.email \
-  cloudflare_zero_trust_access_policy.service_auth; do
+  cloudflare_zero_trust_access_policy.service_auth \
+  cloudflare_zero_trust_access_policy.service_auth_ssh \
+  cloudflare_zero_trust_access_service_token.ssh; do
   if [[ -n $(extract "$addr") ]]; then ok "preserved: $addr"; else bad "preserved: $addr"; fi
 done
 has 'tunnel health covers both tunnels' 'tunnel_id = compact\(\[var\.host_tunnel_id, var\.cluster_tunnel_id\]\)'

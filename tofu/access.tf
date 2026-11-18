@@ -25,10 +25,14 @@ resource "cloudflare_zero_trust_access_policy" "email" {
   }
 }
 
-# Unattended clients: `cloudflared access ssh/tcp` and a blessed device's local
+# Unattended clients: `cloudflared access tcp` and a blessed device's local
 # proxy authenticate with an account service token instead of an IdP browser
 # login. `non_identity`, so the request is authorized without an identity and
 # the token secret never leaves the client.
+#
+# This decision accepts *any* valid token in the account, so every application
+# that attaches it is reachable by every token. The SSH application does not
+# attach it; see `service_auth_ssh` below.
 resource "cloudflare_zero_trust_access_policy" "service_auth" {
   account_id = var.account_id
   name       = "service auth"
@@ -36,6 +40,41 @@ resource "cloudflare_zero_trust_access_policy" "service_auth" {
 
   include = [{
     any_valid_service_token = {}
+  }]
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+# The token the laptops' `cloudflared access ssh` wrapper presents (design #748,
+# docs/manual-steps.md section 44). It is its own resource rather than a token
+# minted in the dashboard so that the policy below can name it, and its one-year
+# lifetime is the rotation schedule: it is replaced when a machine leaves our
+# control. `client_secret` is computed by the API, lives in state only, and is
+# never committed.
+#
+# No `prevent_destroy`: replacing the token is the intended rotation, and losing
+# it costs a route, not the last way in — the owner's email policy still admits
+# a browser login.
+resource "cloudflare_zero_trust_access_service_token" "ssh" {
+  account_id = var.account_id
+  name       = "ssh"
+  duration   = "8760h"
+}
+
+# The scoped decision for that one token. It matches by token id, so a leaked
+# `service auth` token cannot reach sshd and this token cannot reach the memory
+# MCP, the agent frontend or the backup reader.
+resource "cloudflare_zero_trust_access_policy" "service_auth_ssh" {
+  account_id = var.account_id
+  name       = "ssh service token"
+  decision   = "non_identity"
+
+  include = [{
+    service_token = {
+      token_id = cloudflare_zero_trust_access_service_token.ssh.id
+    }
   }]
 
   lifecycle {
@@ -85,7 +124,9 @@ resource "cloudflare_zero_trust_access_application" "wildcard" {
 
 # Protected applications: the host's sshd, the memory MCP, and the assistant.
 # Service auth where an unattended client reaches the endpoint, because a
-# browser login is not available to `cloudflared access` or a device proxy.
+# browser login is not available to `cloudflared access` or a device proxy. The
+# SSH application attaches the token-scoped decision, not the account-wide one:
+# it is the endpoint a laptop presents a bearer token to.
 resource "cloudflare_zero_trust_access_application" "ssh" {
   account_id       = var.account_id
   name             = "ssh"
@@ -103,7 +144,7 @@ resource "cloudflare_zero_trust_access_application" "ssh" {
       precedence = 1
     },
     {
-      id         = cloudflare_zero_trust_access_policy.service_auth.id
+      id         = cloudflare_zero_trust_access_policy.service_auth_ssh.id
       precedence = 2
     },
   ]
