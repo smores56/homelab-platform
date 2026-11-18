@@ -51,8 +51,9 @@ resource "cloudflare_zero_trust_access_policy" "service_auth" {
 # docs/manual-steps.md section 44). It is its own resource rather than a token
 # minted in the dashboard so that the policy below can name it, and its one-year
 # lifetime is the rotation schedule: it is replaced when a machine leaves our
-# control. `client_secret` is computed by the API, lives in state only, and is
-# never committed.
+# control. `client_secret` is computed by the API, is never committed, and lives
+# in the R2 state bucket — the state therefore holds this one credential, and
+# reading the bucket or the CI identity is enough to hold it (tofu/backend.tf).
 #
 # No `prevent_destroy`: replacing the token is the intended rotation, and losing
 # it costs a route, not the last way in — the owner's email policy still admits
