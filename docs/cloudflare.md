@@ -239,8 +239,10 @@ zone with no application of its own is reachable only by the owner's identity.
   token-id or token-tag include per application. Both policies live in
   `tofu/access.tf`; the ssh token's one-year lifetime is its rotation schedule
   (docs/manual-steps.md section 44), and the expiring-service-token notification
-  emails before it lapses. Rotate a leaked token in Zero Trust → Access controls
-  → Service credentials → Service tokens.
+  emails before it lapses. Rotate a leaked token by replacing the resource
+  (`tofu apply -replace=cloudflare_zero_trust_access_service_token.ssh`, section
+  44), not in Zero Trust → Access controls → Service credentials: a dashboard
+  token has its own id, which `service_auth_ssh` does not admit.
 
 ## CAA
 

@@ -3610,19 +3610,33 @@ a `tofu apply`; no workflow and no repository file holds the secret.
    tofu -chdir=tofu apply -no-color
    ```
 
-2. Read the pair out of state once, into files rather than into scrollback:
+2. Deliver the pair where the wrapper reads it. The laptops reach sshd through
+   the dotfiles' `smortress-ssh` ProxyCommand, which reads
+   `~/.config/cloudflare/access.env` and refuses to run unless it is mode 600.
+   That file is derived, not authored: `scripts/secrets.sh` in the dotfiles
+   decrypts `sops.yaml` and writes it, and short-circuits on the ciphertext's
+   hash plus a marker, so a hand-edited env file survives only until the next
+   decrypt. Read the pair out of state once, into a file rather than into
+   scrollback:
 
    ```sh
    ( umask 077
      tofu -chdir=tofu state show -no-color cloudflare_zero_trust_access_service_token.ssh |
        sed -nE 's/^[[:space:]]*(client_id|client_secret)[[:space:]]*=[[:space:]]*"(.*)"$/\1=\2/p' \
-       >~/.config/cloudflared-access-ssh.env
+       >/tmp/cloudflare-access-ssh.env
    )
-   chmod 600 ~/.config/cloudflared-access-ssh.env
    ```
 
-   Store both values in the password manager, then hand them to the wrapper's
-   mode-600 file on each laptop (the `cloudflared access ssh` wrapper section).
+   Copy `client_id` and `client_secret` into the password manager, set
+   `CLOUDFLARE_ACCESS_CLIENT_ID` and `CLOUDFLARE_ACCESS_CLIENT_SECRET` in the
+   dotfiles' `sops.yaml`, and let the delivery run on each laptop:
+
+   ```sh
+   sops sops.yaml          # dotfiles checkout: decrypt, paste both values, save
+   scripts/secrets.sh      # each laptop: rewrites ~/.config/cloudflare/access.env
+   rm -f /tmp/cloudflare-access-ssh.env
+   ```
+
    They are a bearer credential: never in the repository, never in argv, never
    in an image.
 
@@ -3631,10 +3645,13 @@ a `tofu apply`; no workflow and no repository file holds the secret.
    and the drill has to say so:
 
    ```sh
-   set -a; . ~/.config/cloudflared-access-ssh.env; set +a
+   set -a
+   . ~/.config/cloudflare/access.env
+   set +a
    probe() {
      curl -sS -o /dev/null -w '%{http_code}\n' \
-       -H "CF-Access-Client-Id: $client_id" -H "CF-Access-Client-Secret: $client_secret" \
+       -H "CF-Access-Client-Id: $CLOUDFLARE_ACCESS_CLIENT_ID" \
+       -H "CF-Access-Client-Secret: $CLOUDFLARE_ACCESS_CLIENT_SECRET" \
        "https://$1.sammohr.dev/"
    }
    probe ssh       # expect: never 302 to *.cloudflareaccess.com; the tunnel
@@ -3660,9 +3677,21 @@ a `tofu apply`; no workflow and no repository file holds the secret.
    tofu -chdir=tofu apply -no-color -replace=cloudflare_zero_trust_access_service_token.ssh
    ```
 
-   Then repeat step 2 on the remaining laptops and delete the old pair from the
-   password manager. The `service token expiry` notification policy emails
-   before the one-year lifetime lapses, which is the reminder to do this.
+   That revokes the old secret at the edge and writes a new one into state; it
+   changes nothing in SOPS, and SOPS is what the laptops actually read, so a
+   rotation that stops here leaves each laptop presenting a revoked pair —
+   `smortress-ssh` then fails with a 403 that looks like a policy problem. So
+   rotation is the replace above **plus** step 2 again: state into the password
+   manager, then `sops.yaml`, then `scripts/secrets.sh` on every laptop. Delete
+   the old pair from the password manager afterwards.
+
+   Do not mint the replacement in Zero Trust → Access controls → Service
+   credentials → Service tokens. A dashboard token gets its own id, and
+   `service_auth_ssh` admits only the id `tofu` created, so a dashboard
+   replacement is refused at the edge while looking perfectly valid.
+
+   The `service token expiry` notification policy emails before the one-year
+   lifetime lapses, which is the reminder to do this.
 
 ## 45. Build the sudo PIN database on smortress
 
