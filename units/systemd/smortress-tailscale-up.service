@@ -1,14 +1,20 @@
 [Unit]
-# Enroll this host in the tailnet with Tailscale SSH enabled, so tailnet
-# devices reach it without managing authorized_keys. Tailnet ACLs decide who
-# may connect; sshd stays key-only as the fallback path.
+# Enroll this host in the tailnet. Tailscale SSH is off (design #748): Cloudflare
+# Access is the only route into sshd, and it authenticates before PAM, so a
+# tailnet login could never carry the hardware story. The Serve routes stay on
+# the tailnet, which needs no SSH.
 #
 # The auth key is optional. Without it the unit is skipped and the operator runs
-# `tailscale up --ssh --hostname smortress` once by hand. With it, the ciphertext
-# in /etc/smortress/secrets decrypts to /run at boot as `authkey: tskey-...`.
+# `tailscale up --hostname smortress` once by hand. With it, the ciphertext in
+# /etc/smortress/secrets decrypts to /run at boot as `authkey: tskey-...`.
 # Requires= is deliberate: a failed decrypt must not run `tailscale up` with an
 # empty key. The key reaches the command through a temporary file, never argv.
-Description=Enroll smortress in the tailnet with SSH
+#
+# Re-asserting the preference is not this unit's job: it is gated on the
+# enrollment marker and stops running after the first boot, while tailscaled
+# keeps the preference in its state file. `tailscale set --ssh=false` lives in
+# smortress-tailscale-ssh-off.service for that reason.
+Description=Enroll smortress in the tailnet
 Requires=firewalld.service tailscaled.service sops-decrypt.service
 Wants=network-online.target
 After=network-online.target firewalld.service tailscaled.service sops-decrypt.service
@@ -18,7 +24,7 @@ ConditionPathExists=!/var/lib/homelab/tailscale-enrolled
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/bin/sh -c 'umask 077; k=$(mktemp); sed -n "s/^authkey:[[:space:]]*//p" /run/smortress/secrets/tailscale.yaml >"$k"; /usr/bin/tailscale up --ssh --hostname=smortress --auth-key="file:$k"; rc=$?; rm -f "$k"; exit $rc'
+ExecStart=/bin/sh -c 'umask 077; k=$(mktemp); sed -n "s/^authkey:[[:space:]]*//p" /run/smortress/secrets/tailscale.yaml >"$k"; /usr/bin/tailscale up --hostname=smortress --auth-key="file:$k"; rc=$?; rm -f "$k"; exit $rc'
 ExecStart=/usr/bin/install -d -m 0700 /var/lib/homelab
 ExecStart=/usr/bin/touch /var/lib/homelab/tailscale-enrolled
 ExecStart=/usr/libexec/access-lockdown

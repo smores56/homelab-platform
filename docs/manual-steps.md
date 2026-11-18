@@ -3418,3 +3418,45 @@ for that reason. A drop-in sorting after `90-` is silently ignored.
    matchpathcon /var/lib/homelab/.ssh/authorized_keys   # expect: ssh_home_t
    ls -ld /var/lib/homelab/.ssh                         # expect: root root
    ```
+
+## 43. Retire Tailscale SSH on smortress
+
+`smortress-tailscale-up.service` no longer passes `--ssh`, and
+`smortress-tailscale-ssh-off.service` runs `tailscale set --ssh=false` on every
+boot. The second unit exists because tailscaled persists the preference in its
+state file: removing the flag fixes only the first enrollment, and a preference
+restored with the state — or a hand-run `tailscale up --ssh` — turns it back
+on. Nothing changes in firewalld; with the listener bound to loopback, nothing
+on the tailnet address is reachable at all.
+
+1. Deploy the image (section 37 step 2) and reboot:
+
+   ```sh
+   sudo bootc upgrade --enforce-container-sigpolicy
+   sudo systemctl reboot
+   ```
+
+2. Prove the preference and the unit:
+
+   ```sh
+   sudo systemctl status smortress-tailscale-ssh-off.service
+   tailscale debug prefs | jq -r .RunSSH    # expect: false
+   ```
+
+   `true` here means the unit did not run: check that
+   `/var/lib/tailscale/tailscaled.state` exists and that the unit is enabled
+   (`systemctl is-enabled smortress-tailscale-ssh-off.service`).
+
+3. Prove the old path is closed, from a tailnet device such as a laptop:
+
+   ```sh
+   ssh -o ConnectTimeout=5 smores@smortress true
+   # expect: connection refused, never a login attempt
+   tailscale status | grep smortress        # expect: still up, so Serve is unaffected
+   ```
+
+4. Clearing it by hand is the same one-liner, and the next boot repeats it:
+
+   ```sh
+   sudo tailscale set --ssh=false
+   ```

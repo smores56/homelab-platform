@@ -102,8 +102,33 @@ check "the loopback block comes last and re-denies passwords" test \
   "$(awk '/^[[:space:]]*(#|$)/ {next} /^Match Address 127\.0\.0\.1,::1$/ {inblock=1; next} inblock' "$sshd_dropin" | tr -d '[:space:]')" \
   = PasswordAuthenticationno
 
+# Tailscale SSH stays off (design #748). Removing the flag from the enrollment
+# unit only fixes the first boot; the preference lives in tailscaled's state and
+# a separate unit re-asserts it every boot, which is why it must be enabled and
+# must not run before there is a state to write to.
+tailscale_up=units/systemd/smortress-tailscale-up.service
+tailscale_off=units/systemd/smortress-tailscale-ssh-off.service
+check "enrollment no longer asks for Tailscale SSH" has 'tailscale up --hostname=smortress' "$tailscale_up"
+if grep -vE '^[[:space:]]*#' "$tailscale_up" | grep -qE -- '--ssh([= ]|$)'; then
+  bad "enrollment never passes --ssh"
+else
+  ok "enrollment never passes --ssh"
+fi
+check "a unit re-asserts the preference at boot" has 'ExecStart=/usr/bin/tailscale set --ssh=false' "$tailscale_off"
+check "the preference is re-asserted after tailscaled starts" grep -qE '^Requires=tailscaled\.service' "$tailscale_off"
+check "the preference is re-asserted after enrollment" grep -qE '^After=.*smortress-tailscale-up\.service' "$tailscale_off"
+# Before `tailscale up` writes its state there is no preference to set, and the
+# enrollment unit's own exec is what creates it.
+check "the preference is not set before there is a state file" \
+  has 'ConditionPathExists=/var/lib/tailscale/tailscaled.state' "$tailscale_off"
+check "image enables the preference unit" has 'smortress-tailscale-ssh-off.service' image/Containerfile
+if grep -qE '^ExecStart=.*tailscale (up|set).*--ssh(=true)?([[:space:]]|$)' "$tailscale_off"; then
+  bad "the preference unit only ever disables Tailscale SSH"
+else
+  ok "the preference unit only ever disables Tailscale SSH"
+fi
+
 probe "policy rejects by default" jq -e '.default[0].type == "reject"' image/rootfs/etc/containers/policy.json
-# An empty docker scope is the transport default and shadows the global reject
 # for every registry reference, so it must not exist.
 probe "no docker transport-wide accept" jq -e '.transports.docker[""] == null' image/rootfs/etc/containers/policy.json
 check "firewalld is enabled in the image" has "firewalld.service" image/Containerfile

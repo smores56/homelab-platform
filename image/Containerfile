@@ -101,6 +101,7 @@ RUN set -eux; \
       smortress-crypttab-fix.service \
       firewalld.service \
       smortress-tailscale-up.service \
+      smortress-tailscale-ssh-off.service \
       sops-decrypt.service \
       tailscaled.service \
       zfs-ready@raw-files.service \
