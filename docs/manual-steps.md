@@ -2798,8 +2798,10 @@ read -rsp 'read-only secret: ' R2_READ_SECRET_ACCESS_KEY && export R2_READ_SECRE
 ### 39.3 Access service token
 
 Zero Trust → Access → Service Auth → Create. Store the pair in Bitwarden. The
-`service auth` policy is account-wide, so this token also reaches `ssh`,
-`memory` and `agent` if it leaks; rotate it in the same place if that happens.
+`service auth` policy is account-wide, so this token also reaches `memory` and
+`agent` if it leaks; rotate it in the same place if that happens. It does **not**
+reach `ssh`: that application accepts only the token `tofu/access.tf` declares
+(section 44).
 
 ### 39.4 Apply the Access application
 
@@ -3101,6 +3103,13 @@ such second copy: rotating the ciphertext is the whole change.
 
 ### 40.4 Declare the Serve routes
 
+`scripts/tailscale-serve.sh` is the producer of every route on this host. The
+image installs it as `/usr/libexec/tailscale-serve`, and
+`smortress-tailscale-serve.service` runs it at every boot. There is no
+hand-run declaration to remember: a reinstall or a re-enrolment that left Serve
+empty is repaired by starting the unit, never by retyping a `tailscale serve`
+command into a shell.
+
 Serve needs HTTPS certificates for the tailnet, which is an admin-console toggle,
 not a host setting. Once it is on:
 
@@ -3109,9 +3118,24 @@ sudo systemctl start smortress-tailscale-serve.service
 tailscale serve status
 ```
 
-The status output must show three routes: 443 to `http://127.0.0.1:2283` (Immich),
-8443 to `http://127.0.0.1:8083` (OPDShelf) and 10000 to `http://127.0.0.1:8384`
-(Syncthing GUI). Nothing here is Funnel.
+The status output must show four routes: 443 to `http://127.0.0.1:2283` (Immich),
+8443 to `http://127.0.0.1:8083` (OPDShelf), 10000 to `http://127.0.0.1:8384`
+(Syncthing GUI), and `/wallpapers/` on 443 to the directory `/srv/wallpapers`.
+That last one is the only route with no application behind it: Serve publishes
+the wallpaper dataset as static files, and the path shows a `Path` target where
+the other three show a `Proxy`. Nothing here is Funnel.
+
+The wallpaper route fails in a client rather than on this host, so prove it from
+a tailnet device — the timer on the laptops fetches exactly this URL and carries
+no credential:
+
+```sh
+curl -fsS https://smortress.<tailnet>.ts.net/wallpapers/ | head
+```
+
+A `200` with the file links means the route is up; an empty listing means the
+dataset is not mounted under it, which is what
+`systemctl status zfs-ready@raw-wallpapers.service` answers.
 
 Syncthing refuses a proxied Host header: the GUI is bound to localhost, so it
 rejects anything whose `Host` is not localhost with `403`, which is every request
@@ -3363,3 +3387,461 @@ in `tofu/access.tf`, so nothing there changes.
    policy); it is cached for the session duration. A shell, and not a
    post-login 404, is the proof that DNS, Access, the ingress and the connector
    agree.
+
+## 42. Loopback-only sshd on smortress
+
+`image/rootfs/etc/ssh/sshd_config.d/05-deny-loopback-passwords.conf` binds sshd
+to `127.0.0.1` and `::1`, points `AuthorizedKeysFile` at
+`/var/lib/homelab/.ssh/authorized_keys`, and repeats uCore's
+`Match Address 127.0.0.1,::1` with `PasswordAuthentication no`.
+
+The repetition is load-bearing, not redundancy. uCore ships
+`90-enable-localhost-passwords.conf`, which sets that block to `yes` so
+Cockpit's web login can use the core password. sshd parses its configuration
+twice; the second pass re-reads only the matching `Match` blocks and keeps the
+first value it obtains, so the *earlier file* wins. Our file sorts at `05-`
+for that reason. A drop-in sorting after `90-` is silently ignored.
+
+**The order of these steps is a lockout guard.** The image retires Tailscale SSH
+(section 43) and the `05-` drop-in replaces `AuthorizedKeysFile` with a file
+only Ignition writes, so a reboot before both key lines exist authenticates
+nobody: every step after it would have to be done from a console. Write the key
+lines and prove their label (steps 1–3) *before* the upgrade and reboot in
+step 4.
+
+Sections 42 to 44 run in one order across the two repositories: section 44
+first, because the dotfiles step that installs the laptops' wrapper is handed
+the token `tofu apply` creates there and cannot be pointed at one that does not
+exist yet; then this section; then the cutover.
+
+The key file comes from Ignition, inlining `ignition/smortress-authorized-keys`:
+bootc does not reconcile `/var`, so an image-baked copy would never appear on an
+installed host. The committed file carries instructions and no key, which is why
+steps 1–3 are the ones that make login possible at all.
+
+1. Create the resident key, on a laptop that still has a working route to the
+   host — Tailscale SSH before section 43, the tunnel from section 41 after it.
+   Do it first: the reboot in step 4 removes the first route, and the second one
+   needs the token section 44 creates. The FIDO2 handle is generated with the
+   token and never enters the repository, so this is the only step that produces
+   it; run it once per laptop, on the laptop:
+
+   ```sh
+   ssh-keygen -O resident -O no-touch-required -t ed25519-sk -f ~/.ssh/id_smortress
+   ```
+
+   `-O resident` keeps the handle on the token, so the private half never leaves
+   it; `-O no-touch-required` is what stops a docked token from demanding a touch
+   it cannot prove anything with. `ssh-keygen -K` downloads the resident handles
+   again if the public line is needed on a machine that lost it.
+
+2. Fresh install: put both key lines into the delivered file before rendering.
+   The `no-touch-required` option belongs on the line, not in the sshd config:
+   the drop-in deliberately carries no `PubkeyAuthOptions verify-required`, which
+   sshd treats as a hard requirement that `authorized_keys` cannot cancel per
+   key.
+
+   ```sh
+   printf 'no-touch-required %s\n' "$(cat ~/.ssh/id_smortress.pub)" \
+     >>ignition/smortress-authorized-keys
+   cat ~/.ssh/id_smortress-access.pub >>ignition/smortress-authorized-keys
+   scripts/render-ignition.sh
+   git checkout -- ignition/smortress-authorized-keys
+   ```
+
+   The `git checkout` is not tidying up: `scripts/check-server-image.sh` fails
+   on any non-comment line in that file and on any resident `sk-` handle
+   anywhere in the tree, and a handle committed to the repository would be
+   re-delivered to every future install with an Ignition config that no longer
+   matches the token. The file stays instructions-only in git; the rendering
+   already happened, so the installer still carries the keys.
+
+   The second line is the file key, and the pair is deliberate: the Access token
+   gets a client to sshd and the key gets the client in, so a leaked token
+   authenticates nothing and a copied key reaches nothing.
+
+3. On a host that is already installed, append to the live file instead, still
+   before the upgrade. `/var/lib/homelab` is root-owned `0711` and `.ssh` exists
+   on such a host only because Ignition created it at install time, so a bare
+   `>>` fails with `Permission denied`; `install -d` is idempotent where the
+   directory is already correct:
+
+   ```sh
+   sudo install -d -o smores -g smores -m 0700 /var/lib/homelab/.ssh
+   printf 'no-touch-required %s\n' "$(cat ~/.ssh/id_smortress.pub)" |
+     sudo tee -a /var/lib/homelab/.ssh/authorized_keys >/dev/null
+   cat ~/.ssh/id_smortress-access.pub |
+     sudo tee -a /var/lib/homelab/.ssh/authorized_keys >/dev/null
+   sudo chown smores:smores /var/lib/homelab/.ssh/authorized_keys
+   sudo chmod 0600 /var/lib/homelab/.ssh/authorized_keys
+   ```
+
+   `tee` writes as root, so the owner and mode have to be set afterwards: sshd
+   opens `AuthorizedKeysFile` as the target user, and a root-owned `0600` file
+   authorises nobody. A directory made by hand also inherits `var_lib_t` from
+   `/var/lib/homelab` rather than the `ssh_home_t` Fedora's `file_contexts`
+   assigns to `/.ssh`, and sshd is denied a `var_lib_t` key file — so read the
+   label off the file and fix it before going further:
+
+   ```sh
+   ls -Z /var/lib/homelab/.ssh /var/lib/homelab/.ssh/authorized_keys
+   # expect: ... ssh_home_t ... on both, not var_lib_t
+   sudo restorecon -Rv /var/lib/homelab/.ssh
+   ```
+
+4. Deploy the image and reboot. Only now, with both key lines and their label in
+   place:
+
+   ```sh
+   sudo bootc upgrade --enforce-container-sigpolicy
+   sudo systemctl reboot
+   ```
+
+5. Prove the listener is loopback-only:
+
+   ```sh
+   sudo ss -ltnp '( sport = :22 )'
+   # expect: 127.0.0.1:22 and [::1]:22, and no tailnet or LAN address
+   ```
+
+6. Prove the password decision survived uCore's file. The loopback query is the
+   one that matters; the second query shows the global context. Both greps are
+   case-insensitive on purpose: OpenSSH 10 prints CamelCase directive names, so
+   a lowercase pattern matches nothing and "no output" then reads as success.
+
+   ```sh
+   sudo sshd -T -C addr=127.0.0.1,user=smores | \
+     grep -iE '^(passwordauthentication|kbdinteractiveauthentication|permitrootlogin|allowusers|authorizedkeysfile|pubkeyauthoptions|permituserrc|maxauthtries|logingracetime|allowtcpforwarding|allowstreamlocalforwarding|allowagentforwarding|persourcepenaltyexemptlist) '
+   sudo sshd -T -C addr=100.64.0.1,user=smores | grep -iE '^passwordauthentication '
+   ```
+
+   Compare the output against this table line by line. A line that is missing is
+   a failure, not a quiet pass:
+
+   | directive | expected |
+   | --- | --- |
+   | `PasswordAuthentication` | `no`, in both queries |
+   | `KbdInteractiveAuthentication` | `no` |
+   | `PermitRootLogin` | `no` |
+   | `AllowUsers` | `smores` |
+   | `AuthorizedKeysFile` | `/var/lib/homelab/.ssh/authorized_keys` |
+   | `PubkeyAuthOptions` | `none` — the per-key `no-touch-required` in `authorized_keys` is what sk login relies on |
+   | `PermitUserRC` | `no` |
+   | `MaxAuthTries` | `10` |
+   | `LoginGraceTime` | `60` |
+   | `AllowTcpForwarding` | `no` |
+   | `AllowStreamLocalForwarding` | `no` |
+   | `AllowAgentForwarding` | `no` |
+   | `PerSourcePenaltyExemptList` | `127.0.0.1,::1` |
+
+   `PasswordAuthentication yes` in either query means the drop-in is sorting
+   after `90-` or was not shipped; check `ls /etc/ssh/sshd_config.d/` on the
+   host before going further.
+
+7. Prove the file, its owner, its label and the doors. sshd reads this file as
+   the target user, not as root (`auth2-pubkey.c` switches uid before opening
+   it), which is why smores owns the directory and the file and why
+   `/var/lib/homelab` is `0711`: traversal for that account, no listing.
+
+   ```sh
+   ls -ld /var/lib/homelab /var/lib/homelab/.ssh /var/lib/homelab/.ssh/authorized_keys
+   # expect: drwx--x--x root root, drwx------ smores smores, -rw------- smores smores
+   ls -Z /var/lib/homelab/.ssh/authorized_keys
+   # expect: ... ssh_home_t ... — read it with ls -Z, because matchpathcon prints
+   # the policy default for the path rather than the file's actual context and so
+   # says ssh_home_t even for a var_lib_t file that sshd is denied
+   sudo restorecon -v /var/lib/homelab/.ssh/authorized_keys   # when it is not
+   sudo sshd -T -C addr=127.0.0.1,user=smores | grep -iE '^authorizedkeysfile '
+   # expect: authorizedkeysfile /var/lib/homelab/.ssh/authorized_keys
+   ```
+
+   Then prove the doors: the token and the key together log in, and either half
+   alone does not. **Until one of the key lines lands, sshd authenticates
+   nobody.** That is the intended failure direction — an empty authorised set
+   refuses every login rather than admitting a key that was never reviewed — not
+   an oversight.
+
+## 43. Retire Tailscale SSH on smortress
+
+`smortress-tailscale-up.service` no longer passes `--ssh`, and
+`smortress-tailscale-ssh-off.service` runs `tailscale set --ssh=false` on every
+boot. The second unit exists because tailscaled persists the preference in its
+state file: removing the flag fixes only the first enrollment, and a preference
+restored with the state — or a hand-run `tailscale up --ssh` — turns it back
+on. Nothing changes in firewalld; with the listener bound to loopback, nothing
+on the tailnet address is reachable at all.
+
+1. Do nothing here before section 42's steps 1–3 have run and section 44 has
+   created the token. This section removes one of the two routes in, and the
+   other one is the tunnel: rebooting the image without a key line in
+   `/var/lib/homelab/.ssh/authorized_keys` and without the token in the laptops'
+   wrapper leaves a console as the only way back.
+
+2. Deploy the image (section 37 step 2) and reboot:
+
+   ```sh
+   sudo bootc upgrade --enforce-container-sigpolicy
+   sudo systemctl reboot
+   ```
+
+3. Prove the preference and the unit:
+
+   ```sh
+   sudo systemctl status smortress-tailscale-ssh-off.service
+   tailscale debug prefs | jq -r .RunSSH    # expect: false
+   ```
+
+   `true` here means the unit did not run: check that
+   `/var/lib/tailscale/tailscaled.state` exists and that the unit is enabled
+   (`systemctl is-enabled smortress-tailscale-ssh-off.service`).
+
+4. Prove the old path is closed, from a tailnet device such as a laptop:
+
+   ```sh
+   ssh -o ConnectTimeout=5 smores@smortress true
+   # expect: connection refused, never a login attempt
+   tailscale status | grep smortress        # expect: still up, so Serve is unaffected
+   ```
+
+5. Clearing it by hand is the same one-liner, and the next boot repeats it:
+
+   ```sh
+   sudo tailscale set --ssh=false
+   ```
+
+## 44. Dedicated Access service token for `ssh.sammohr.dev`
+
+`tofu/access.tf` declares `cloudflare_zero_trust_access_service_token.ssh` (a
+one-year lifetime) and `cloudflare_zero_trust_access_policy.service_auth_ssh`,
+which admits that one token id. The `ssh` application attaches the new policy
+instead of the account-wide `service auth`, so the credential a laptop carries
+to `cloudflared access ssh` is the only one sshd admits — the account-wide token
+no longer reaches it. The scoping is one-directional: `memory`, `agent` and the
+backrest reader still attach `any_valid_service_token`, which matches every
+token in the account, so this token is admitted there too (step 3). Minting it is
+a `tofu apply`; no workflow and no repository file holds the secret.
+
+1. Apply. The token is created at the edge, and its secret appears only in
+   state:
+
+   ```sh
+   tofu -chdir=tofu plan -no-color
+   # expect: cloudflare_zero_trust_access_service_token.ssh (create),
+   # cloudflare_zero_trust_access_policy.service_auth_ssh (create),
+   # cloudflare_zero_trust_access_application.ssh (update) — nothing else
+   tofu -chdir=tofu apply -no-color
+   ```
+
+2. Deliver the pair where the wrapper reads it. The laptops reach sshd through
+   the dotfiles' `smortress-ssh` ProxyCommand, which reads
+   `~/.config/cloudflare/access.env` and refuses to run unless it is mode 600.
+   That file is derived, not authored: `scripts/secrets.sh` in the dotfiles
+   decrypts `sops.yaml` and writes it, and short-circuits on the ciphertext's
+   hash plus a marker, so a hand-edited env file survives only until the next
+   decrypt. Read the pair out of state once, into a file rather than into
+   scrollback:
+
+   ```sh
+   ( umask 077
+     tofu -chdir=tofu state show -no-color cloudflare_zero_trust_access_service_token.ssh |
+       sed -nE 's/^[[:space:]]*(client_id|client_secret)[[:space:]]*=[[:space:]]*"(.*)"$/\1=\2/p' \
+       >/tmp/cloudflare-access-ssh.env
+   )
+   ```
+
+   Copy `client_id` and `client_secret` into the password manager, set
+   `CLOUDFLARE_ACCESS_CLIENT_ID` and `CLOUDFLARE_ACCESS_CLIENT_SECRET` in the
+   dotfiles' `sops.yaml`, and let the delivery run on each laptop:
+
+   ```sh
+   sops sops.yaml          # dotfiles checkout: decrypt, paste both values, save
+   scripts/secrets.sh      # each laptop: rewrites ~/.config/cloudflare/access.env
+   rm -f /tmp/cloudflare-access-ssh.env
+   ```
+
+   They are a bearer credential: never in the repository, never in argv, never
+   in an image.
+
+3. Prove what the change does, and only that. `ssh` must admit this token; the
+   other three still attach the account-wide policy, so they admit it as well
+   and the drill has to say so:
+
+   ```sh
+   set -a
+   . ~/.config/cloudflare/access.env
+   set +a
+   probe() {
+     curl -sS -o /dev/null -w '%{http_code}\n' \
+       -H "CF-Access-Client-Id: $CLOUDFLARE_ACCESS_CLIENT_ID" \
+       -H "CF-Access-Client-Secret: $CLOUDFLARE_ACCESS_CLIENT_SECRET" \
+       "https://$1.sammohr.dev/"
+   }
+   probe ssh       # expect: never 302 to *.cloudflareaccess.com; the tunnel
+                   # forwards to sshd, whose answer is not HTTP
+   probe memory    # expect: not a 302 to *.cloudflareaccess.com — the request
+                   # passes Access and the MCP answers for itself, because
+                   # service_auth matches any valid token
+   probe agent     # expect: not a 302, same reason
+   probe recovery  # expect: not a 302 (the backrest reader), same reason
+   ```
+
+   A `302` to `*.cloudflareaccess.com` from any of these means the token is dead,
+   not that the scoping is tight. What this section buys is the other direction:
+   sshd no longer accepts the account-wide token, so a leak of *that* one buys
+   nothing on the ssh route. Scoping the remaining applications works the same
+   way, by replacing their `any_valid_service_token` include with a token-id or
+   token-tag include per application in `tofu/access.tf`.
+
+4. Rotation, when a machine leaves our control or the year is up. The resource
+   deliberately carries no `prevent_destroy`, so replacement is one command:
+
+   ```sh
+   tofu -chdir=tofu apply -no-color -replace=cloudflare_zero_trust_access_service_token.ssh
+   ```
+
+   That revokes the old secret at the edge and writes a new one into state; it
+   changes nothing in SOPS, and SOPS is what the laptops actually read, so a
+   rotation that stops here leaves each laptop presenting a revoked pair —
+   `smortress-ssh` then fails with a 403 that looks like a policy problem. So
+   rotation is the replace above **plus** step 2 again: state into the password
+   manager, then `sops.yaml`, then `scripts/secrets.sh` on every laptop. Delete
+   the old pair from the password manager afterwards.
+
+   Do not mint the replacement in Zero Trust → Access controls → Service
+   credentials → Service tokens. A dashboard token gets its own id, and
+   `service_auth_ssh` admits only the id `tofu` created, so a dashboard
+   replacement is refused at the edge while looking perfectly valid.
+
+   The `service token expiry` notification policy emails before the one-year
+   lifetime lapses, which is the reminder to do this.
+
+## 45. Build the sudo PIN database on smortress
+
+The image ships the PAM stack (`image/rootfs/etc/pam.d/sudo`), the sudoers gate
+(`image/rootfs/etc/sudoers.d/10-human-gate`) and a tmpfiles entry that declares
+`/etc/security/sudopin.db` as `0600 root:root`. **Nothing else may be committed.**
+The PIN, its hash and the database stay on the host: an eight-digit space is
+10^8 candidates, so a hash the agent account can read is a PIN an agent
+recovers in seconds. "Consistent" across hosts comes from typing the same PIN
+into each host's database, not from a shared file.
+
+The stack was proven on Fedora 45 (pam 1.7.2) with `pamtester` and real `sudo`,
+and three details decide whether it works at all:
+
+- the path is `/etc/security/sudopin.db` exactly. `db=` is opened literally:
+  Linux-PAM never appends `.db`, so a database called `sudopin` is one PAM never
+  opens;
+- the stored value is a **hash**, because the stack passes `crypt=crypt`. Without
+  it pam_userdb compares the typed PIN as plaintext against whatever is stored;
+- `gdbmtool` is the tool, not `db_load`: Fedora's `pam_userdb.so` links
+  `libgdbm`, so a libdb file is a file PAM cannot open.
+
+`pam_userdb` looks the hash up by the **PAM username**, so the key must be the
+account that runs sudo. That account is `smores` — the only login
+`ignition/smortress.bu` creates and the only name sshd's `AllowUsers` permits.
+The `store` below uses that key. One database can carry several keys with the
+same hash if that ever changes.
+
+Use a PIN that is **not** the FIDO2 PIN: a lost or leaked sudo PIN must not be a
+token secret.
+
+1. Deploy the image (section 37 step 2), then open a root shell. The long
+   account password works until the database exists, and everything below stays
+   inside this shell so neither the PIN nor its hash reaches an argv or an
+   environment a non-root process can read:
+
+   ```sh
+   sudo -i
+   ```
+
+2. Build the database. `openssl passwd -6 -stdin` reads the PIN from stdin and
+   returns a freshly salted sha512crypt hash; `read -rsp` keeps the PIN off the
+   screen and out of the shell history. The two entries have to match and the PIN
+   has to be eight digits, because a typo here is only discovered at the next
+   `sudo`, where the stack silently falls through to the account password:
+
+   ```sh
+   read -rsp 'new sudo PIN (8 digits, not the FIDO2 PIN): ' PIN; echo
+   read -rsp 'again: ' PIN2; echo
+   [[ $PIN =~ ^[0-9]{8}$ && $PIN == "$PIN2" ]] \
+     || { echo 'not eight digits, or the two entries differ' >&2; exit 1; }
+   hash=$(printf '%s\n' "$PIN" | openssl passwd -6 -stdin)
+   printf 'store smores %s\n' "$hash" | gdbmtool /etc/security/sudopin.db
+   unset PIN PIN2 hash
+   chmod 0600 /etc/security/sudopin.db
+   ls -l /etc/security/sudopin.db    # expect: -rw------- root root
+   gdbmtool /etc/security/sudopin.db list | cut -d' ' -f1 | grep -x smores
+   # expect: smores   (the hash itself is not printed)
+   ```
+
+   A database with the wrong key authenticates nobody through pam_userdb, and the
+   stack falls through to the account password at the same prompt (step 4). A
+   database at the wrong path is never opened at all: the PIN then simply never
+   matches.
+
+3. Prove the gate, in the root shell's parent session as `smores`:
+
+   ```sh
+   sudo -k; sudo true      # expect: one prompt; the PIN is accepted
+   sudo true               # expect: no prompt, same TTY, inside 30 minutes
+   ```
+
+   In a second terminal, `sudo true` prompts again — the ticket is per TTY.
+   An agent's own pty is a fresh context and gets nothing:
+
+   ```sh
+   script -qec 'sudo -n true' /dev/null
+   # expect: sudo: a password is required
+   ```
+
+4. Prove the fallback at **one** prompt, not two. The account password typed
+   where the PIN belongs authenticates, because pam_userdb caches the string the
+   user typed and pam_unix re-verifies that same value with `try_first_pass`. A
+   forgotten PIN is therefore not a lockout:
+
+   ```sh
+   sudo -k; sudo true      # type the account password, not the PIN
+   # expect: success, no second prompt
+   ```
+
+5. Prove the lockout. faillock writes one row per PAM transaction and sudo makes
+   three per invocation, so **five wrong prompts** — not five invocations — is
+   what costs 300 seconds. As `smores`, in a fresh TTY:
+
+   ```sh
+   sudo -k
+   for _ in 1 2 3 4 5; do printf 'wrong-pin\n' | sudo -S true; done
+   ```
+
+   Read the tally from the root shell of step 1, because sudo is locked and that
+   shell needs no prompt:
+
+   ```sh
+   faillock --user smores          # expect: five INVALID rows
+   faillock --user smores --reset  # the manual clear, from this shell
+   faillock --user smores          # expect: no rows
+   ```
+
+   And back as `smores`, prove that nothing authenticates while the tally
+   stands — not the PIN and not the account password:
+
+   ```sh
+   sudo true      # expect: refused, the correct PIN included
+   ```
+
+   That blanket refusal is the design, not a bug: `pam_faillock preauth` denies
+   before any comparison runs, so a locked account fails before pam_userdb or
+   pam_unix ever looks at what was typed. `authsucc` carries the same `deny` so
+   the first successful login after the window clears the tally. Recovery
+   *before* the window ends is a session that is already authenticated — the
+   `sudo -i` shell from step 1, or a console getty you have already logged into.
+
+   SSH over the tunnel is unaffected throughout: key auth never runs the `auth`
+   stack, so a faillock lockout costs sudo, not the host.
+
+6. An agent sharing your TTY inherits the ticket for up to 30 minutes. That is
+   the design's accepted residual; `log_subcmds` records what ran:
+
+   ```sh
+   sudo journalctl -g 'COMMAND=' -n 20 --no-pager
+   ```

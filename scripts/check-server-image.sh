@@ -57,6 +57,212 @@ check "the connector requires the decrypt unit" grep -qE '^Requires=.*sops-decry
 check "the connector is skipped without its ciphertext" has 'ConditionPathExists=/run/smortress/secrets/cloudflared-tunnel.yaml' units/systemd/smortress-cloudflared.service
 check "the tunnel token is in the decrypt manifest" grep -qE '^cloudflared-tunnel\.yaml[[:space:]]' image/rootfs/etc/smortress/secrets.manifest
 
+# sshd (design #748). Access through the tunnel is the only route in, so the
+# listener is loopback-only. The drop-in must also sort ahead of uCore's
+# 90-enable-localhost-passwords.conf: sshd reads its config twice, and the
+# second pass re-reads only the matching Match blocks with first-obtained-value
+# semantics, so a file sorting after 90- cannot undo uCore's
+# `PasswordAuthentication yes` for loopback.
+sshd_dir=image/rootfs/etc/ssh/sshd_config.d
+sshd_dropin=$sshd_dir/05-deny-loopback-passwords.conf
+sshd_dropins=("$sshd_dir"/*.conf)
+check "sshd ships exactly one drop-in" test "${#sshd_dropins[@]}" -eq 1
+check "the drop-in sorts ahead of uCore's 90- localhost-passwords file" \
+  test "$(basename "$sshd_dropin")" = 05-deny-loopback-passwords.conf
+check "sshd binds loopback for IPv4" has 'ListenAddress 127.0.0.1' "$sshd_dropin"
+check "sshd binds loopback for IPv6" has 'ListenAddress ::1' "$sshd_dropin"
+check "sshd binds no other address" test "$(count 'ListenAddress ' "$sshd_dropin")" -eq 2
+check "the loopback pair is exempt from the shared penalty counter" \
+  has 'PerSourcePenaltyExemptList 127.0.0.1,::1' "$sshd_dropin"
+check "ssh accepts keys from the Ignition file" \
+  has 'AuthorizedKeysFile /var/lib/homelab/.ssh/authorized_keys' "$sshd_dropin"
+# The dotted directory is what file_contexts maps to ssh_home_t; a plain
+# /var/lib/homelab/ssh would be var_lib_t and sshd could not read the file.
+check "the authorised set lives under a dot-prefixed directory" grep -qF '/.ssh/authorized_keys' "$sshd_dropin"
+check "ssh never accepts a password" has 'PasswordAuthentication no' "$sshd_dropin"
+# Comment lines are dropped: the file explains uCore's block by name.
+if grep -vE '^[[:space:]]*#' "$sshd_dropin" | grep -qF 'PasswordAuthentication yes'; then
+  bad "ssh never re-enables a password for loopback"
+else
+  ok "ssh never re-enables a password for loopback"
+fi
+check "keyboard-interactive stays off" has 'KbdInteractiveAuthentication no' "$sshd_dropin"
+check "root never logs in over ssh" has 'PermitRootLogin no' "$sshd_dropin"
+check "one account may log in" has 'AllowUsers smores' "$sshd_dropin"
+check "no TCP forwarding" has 'AllowTcpForwarding no' "$sshd_dropin"
+check "no stream-local forwarding" has 'AllowStreamLocalForwarding no' "$sshd_dropin"
+check "no agent forwarding" has 'AllowAgentForwarding no' "$sshd_dropin"
+check "no user rc file runs at login" has 'PermitUserRC no' "$sshd_dropin"
+check "auth tries are bounded" has 'MaxAuthTries 10' "$sshd_dropin"
+check "the grace time is bounded" has 'LoginGraceTime 60' "$sshd_dropin"
+# PubkeyAuthOptions stays unset (default `none`). verify-required is a hard
+# requirement, not a permission: with it set, sshd rejects every FIDO signature
+# without the UV assertion, and authorized_keys has no no-verify-required to
+# cancel it per key, so the touch-free resident sk- login could never work.
+# touch-required is refused for the mirror-image reason: it pins the opposite
+# decision where only the authorized_keys line should make it. Comments name the
+# options, so the directives are what is checked.
+for option in verify-required touch-required; do
+  if grep -vE '^[[:space:]]*#' "$sshd_dropin" | grep -qF -- "$option"; then
+    bad "ssh never pins sk signatures to $option"
+  else
+    ok "ssh never pins sk signatures to $option"
+  fi
+done
+# Everything that is not a comment after the Match line is inside the block, so
+# a global directive appended below it would silently become loopback-only.
+check "the loopback block comes last and re-denies passwords" test \
+  "$(awk '/^[[:space:]]*(#|$)/ {next} /^Match Address 127\.0\.0\.1,::1$/ {inblock=1; next} inblock' "$sshd_dropin" | tr -d '[:space:]')" \
+  = PasswordAuthenticationno
+
+# The authorised set (design #748, Entry). bootc does not reconcile /var, so the
+# file sshd points at arrives from Ignition inlining a committed repo file: an
+# image-baked copy would never appear on an installed host and a hand-written one
+# would drift. The resident sk- handle is generated with the token, so nothing in
+# the tree may carry real key material and the file ships as instructions only.
+ignition_bu=ignition/smortress.bu
+keys_source=ignition/smortress-authorized-keys
+# The list item for one path, up to the next item: a mode asserted inside it is
+# that file's mode and not a neighbour's.
+bu_block() {
+  awk -v head="    - path: $1" '
+    $0 == head { inblock = 1; next }
+    inblock && /^    - / { exit }
+    inblock { print }
+  ' "$ignition_bu"
+}
+in_block() { printf '%s\n' "$2" | grep -qF -- "$1"; }
+ak_path=$(sed -nE 's/^AuthorizedKeysFile[[:space:]]+([^[:space:]]+)$/\1/p' "$sshd_dropin")
+check "the drop-in names one authorised-keys file" test "$(printf '%s\n' "$ak_path" | grep -c .)" -eq 1
+check "Ignition writes the file the drop-in points at" grep -qF "path: $ak_path" "$ignition_bu"
+ak_block=$(bu_block "$ak_path")
+check "Ignition inlines the committed key file" in_block "local: $keys_source" "$ak_block"
+check "the delivered file is owner-readable only" in_block 'mode: 0600' "$ak_block"
+# sshd opens AuthorizedKeysFile with the target user's uid, so ownership and the
+# path's traversal both have to belong to that account.
+check "the delivered file is smores-owned twice over" \
+  test "$(printf '%s\n' "$ak_block" | grep -cF 'name: smores')" -eq 2
+ak_dir=$(dirname -- "$ak_path")
+check "Ignition creates the directory that file lives in" grep -qF "path: $ak_dir" "$ignition_bu"
+dir_block=$(bu_block "$ak_dir")
+check "the key directory belongs to the same account" \
+  test "$(printf '%s\n' "$dir_block" | grep -cF 'name: smores')" -eq 2
+check "the key directory is 0700" in_block 'mode: 0700' "$dir_block"
+# 0711 is the traversal sshd needs as smores; every child stays root-only.
+check "the key path is traversable by that account" \
+  has 'd /var/lib/homelab 0711 root root -' image/rootfs/etc/tmpfiles.d/smortress.conf
+check "the enrollment unit keeps the same traversal mode" \
+  has 'install -d -m 0711 /var/lib/homelab' units/systemd/smortress-tailscale-up.service
+check "the committed key file exists" test -s "$keys_source"
+if grep -qvE '^[[:space:]]*(#|$)' "$keys_source"; then
+  bad "the committed key file carries no key line"
+else
+  ok "the committed key file carries no key line"
+fi
+# git grep reads the index, so the exclusion is only the check's own pattern.
+if git grep -qF -- 'sk-ssh-ed25519@openssh.com' -- . ':(exclude)scripts/check-server-image.sh'; then
+  bad "no sk- handle is committed anywhere"
+else
+  ok "no sk- handle is committed anywhere"
+fi
+# Tailscale SSH stays off (design #748). Removing the flag from the enrollment
+# unit only fixes the first boot; the preference lives in tailscaled's state and
+# a separate unit re-asserts it every boot, which is why it must be enabled and
+# must not run before there is a state to write to.
+tailscale_up=units/systemd/smortress-tailscale-up.service
+tailscale_off=units/systemd/smortress-tailscale-ssh-off.service
+check "enrollment no longer asks for Tailscale SSH" has 'tailscale up --hostname=smortress' "$tailscale_up"
+if grep -vE '^[[:space:]]*#' "$tailscale_up" | grep -qE -- '--ssh([= ]|$)'; then
+  bad "enrollment never passes --ssh"
+else
+  ok "enrollment never passes --ssh"
+fi
+check "a unit re-asserts the preference at boot" has 'ExecStart=/usr/bin/tailscale set --ssh=false' "$tailscale_off"
+check "the preference is re-asserted after tailscaled starts" grep -qE '^Requires=tailscaled\.service' "$tailscale_off"
+check "the preference is re-asserted after enrollment" grep -qE '^After=.*smortress-tailscale-up\.service' "$tailscale_off"
+# Before `tailscale up` writes its state there is no preference to set, and the
+# enrollment unit's own exec is what creates it.
+check "the preference is not set before there is a state file" \
+  has 'ConditionPathExists=/var/lib/tailscale/tailscaled.state' "$tailscale_off"
+check "image enables the preference unit" has 'smortress-tailscale-ssh-off.service' image/Containerfile
+if grep -qE '^ExecStart=.*tailscale (up|set).*--ssh(=true)?([[:space:]]|$)' "$tailscale_off"; then
+  bad "the preference unit only ever disables Tailscale SSH"
+else
+  ok "the preference unit only ever disables Tailscale SSH"
+fi
+
+# sudo PIN gate (design #748, T6). Asserted line by line because order and jump
+# counts are the meaning: a matching PIN skips pam_unix and the authfail row, a
+# mistyped one falls to pam_unix with the same string cached, and only then does
+# the failure reach faillock. The last three auth rows carry `deny=5` for the
+# same tally; a bare `authsucc` stops clearing it at three rows.
+pam_sudo=image/rootfs/etc/pam.d/sudo
+expected_pam='auth required pam_faillock.so preauth deny=5 unlock_time=300
+auth [success=2 default=ignore] pam_userdb.so crypt=crypt db=/etc/security/sudopin.db
+auth [success=1 default=ignore] pam_unix.so try_first_pass
+auth [default=die] pam_faillock.so authfail deny=5 unlock_time=300
+auth sufficient pam_faillock.so authsucc deny=5 unlock_time=300
+account include system-auth
+password include system-auth
+session optional pam_keyinit.so revoke
+session required pam_limits.so
+session include system-auth'
+actual_pam=$(sed -E 's/[[:space:]]+/ /g; s/ $//' "$pam_sudo" | grep -Ev '^(#|$)' || true)
+if [[ $actual_pam == "$expected_pam" ]]; then
+  ok "the sudo stack is the reviewed ten rows in order"
+else
+  bad "the sudo stack is the reviewed ten rows in order: $(printf '%s' "$actual_pam" | tr '\n' ';')"
+fi
+# `db=` is opened literally: Linux-PAM never appends `.db`, so `/etc/security/sudopin`
+# would make pam_userdb open a file that does not exist and fail every time.
+check "pam_userdb opens the .db path literally" \
+  has 'db=/etc/security/sudopin.db' "$pam_sudo"
+# Without crypt=crypt the stored value is compared as plaintext, so the database
+# would have to hold the PIN itself.
+check "the stored PIN is compared as a crypt hash" has 'crypt=crypt' "$pam_sudo"
+check "the account phase is still declared" grep -qE '^account[[:space:]]+include[[:space:]]+system-auth$' "$pam_sudo"
+check "the password phase is still declared" grep -qE '^password[[:space:]]+include[[:space:]]+system-auth$' "$pam_sudo"
+check "the session phase is still declared" grep -qE '^session[[:space:]]+include[[:space:]]+system-auth$' "$pam_sudo"
+# pam_userdb matches the PAM username, not a fixed key, so the account that runs
+# sudo is the key the operator must put in the database.
+check "the only login account is smores" grep -qE '^[[:space:]]*- name: smores$' ignition/smortress.bu
+check "the stack documents that account as the pam_userdb key" grep -qF 'That account is smores' "$pam_sudo"
+
+sudoers_dropin=image/rootfs/etc/sudoers.d/10-human-gate
+expected_sudoers='Defaults timestamp_timeout=30
+Defaults timestamp_type=tty
+Defaults log_subcmds'
+actual_sudoers=$(grep -E '^Defaults[[:space:]]' "$sudoers_dropin")
+if [[ $actual_sudoers == "$expected_sudoers" ]]; then
+  ok "the sudoers gate is the reviewed three defaults in order"
+else
+  bad "the sudoers gate is the reviewed three defaults in order" "$actual_sudoers"
+fi
+check "the sudoers drop-in is installed 0440" has 'chmod 0440 /etc/sudoers.d/10-human-gate' image/Containerfile
+check "the sudoers drop-in is parsed at build time" has 'visudo -cf /etc/sudoers.d/10-human-gate' image/Containerfile
+# Access through the tunnel is the only route in, so a drop-in sshd refuses to
+# parse would cost a console recovery; the build parses the shipped config
+# instead of leaving the host to find out at boot.
+check "the sshd configuration is parsed at build time" has 'sshd -t -o HostKey=' image/Containerfile
+check "the build fails if pam_userdb is missing" has 'test -f /usr/lib64/security/pam_userdb.so' image/Containerfile
+# The PIN database is built by hand on the host (docs/manual-steps.md section
+# 45), so the tool has to be in the image the same way pam_userdb does.
+check "the build fails if gdbmtool is missing" has 'command -v gdbmtool >/dev/null' image/Containerfile
+check "tmpfiles declares the PIN database owner and mode" \
+  has 'f /etc/security/sudopin.db 0600 root root -' image/rootfs/etc/tmpfiles.d/smortress.conf
+# Neither the PIN, its hash nor its database may enter the repository: anything
+# the agent account can read is a PIN an agent recovers in seconds.
+if git ls-files | grep -qE 'sudopin|\.db$'; then
+  bad "no PIN database is tracked"
+else
+  ok "no PIN database is tracked"
+fi
+if grep -rIlE "\$6\$[./A-Za-z0-9]{8,}\$" image ignition units secrets 2>/dev/null | grep -q .; then
+  bad "no sha512crypt hash is tracked in the image or ignition tree"
+else
+  ok "no sha512crypt hash is tracked in the image or ignition tree"
+fi
+
 probe "policy rejects by default" jq -e '.default[0].type == "reject"' image/rootfs/etc/containers/policy.json
 # An empty docker scope is the transport default and shadows the global reject
 # for every registry reference, so it must not exist.
@@ -277,6 +483,27 @@ for unit in smortress-app-secrets.service smortress-tailscale-serve.service \
   smortress-immich-dump.timer; do
   check "image enables $unit" has "$unit" image/Containerfile
 done
+
+# Serve topology (review finding G1 of design #748). The wallpaper library is the
+# fourth core route and the only one that is not a loopback port: an absolute
+# directory target on 443 makes Serve publish it as static files, and a client
+# that carries no credential fetches it as `<tailnet>/wallpapers/`. The route
+# therefore has to be declared here rather than in a runbook, and the stale-route
+# pruning has to stay scoped to the tenant paths.
+serve_script=scripts/tailscale-serve.sh
+check "Serve declares the wallpaper library as static files" \
+  has "serve --bg --https=443 --set-path=/wallpapers \"\$wallpapers\"" "$serve_script"
+check "the wallpaper library is the dataset mount point" has 'WALLPAPERS_DIR:-/srv/wallpapers' "$serve_script"
+check "stale-route pruning only considers tenant handlers" \
+  has 'select(startswith("/apps/"))' "$serve_script"
+if grep -qE -- '--set-path=/wallpapers[^ ]* .*off' "$serve_script"; then
+  bad "pruning never removes the wallpaper route"
+else
+  ok "pruning never removes the wallpaper route"
+fi
+check "the Serve unit is ordered after the wallpapers dataset is ready" \
+  grep -qE '^After=.*zfs-ready@raw-wallpapers\.service' units/systemd/smortress-tailscale-serve.service
+
 # shellcheck source=app-images.sh disable=SC1091
 source scripts/app-images.sh
 for name in $(app_image_names); do

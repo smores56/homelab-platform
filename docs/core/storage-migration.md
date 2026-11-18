@@ -209,8 +209,9 @@ mise install -f yamllint python
 ```
 
 `scripts/bootstrap-task.sh` already reinstalls `conda:zsh` when its modules fail
-to load. The `dotfiles` SSH config and the wallpaper SFTP transport name
-`smores` instead of `core`.
+to load. The `dotfiles` SSH config names `smores` instead of `core`; the
+wallpaper SFTP transport this step used to name was deleted with the legacy
+stack, so there is nothing to rename there any more.
 
 ## E. Retire the old family
 
@@ -256,5 +257,6 @@ snapshots.
   and `smortress-restic-verify` pings Healthchecks.
 - `photos` and `books` drills start both applications after the documented
   `chown`/`chcon`.
-- `id` reports `smores`, `sshd -T` allows only `smores`, and
+- `id` reports `smores`, `sshd -T` allows only `smores` on a listener bound to
+  loopback (`127.0.0.1`/`::1`, #748: the Access tunnel is the only route in), and
   `/var/lib/homelab/{age,keys}` holds the identity and the HDD keyfile.

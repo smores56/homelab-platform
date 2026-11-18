@@ -209,12 +209,17 @@ zone with no application of its own is reachable only by the owner's identity.
   protected applications do carry `prevent_destroy`, so removing one of those
   needs `tofu state rm` first (same pattern as the retired hostnames below).
 
-- **Protected applications** keep the email allow policy and add `service auth`
-  (`non_identity`, any valid service token) where an unattended client connects:
-  `ssh` (`cloudflared access ssh`), `memory` (the MCP wrapper's device),
-  `agent` (a blessed device's proxy) and `backrest` (the hosted recovery reader
-  at `recovery.sammohr.dev`; its Worker also refuses every write RPC and strips
-  the repository credentials, see `docs/core/backrest.md`). `kanbei` keeps the email policy alone and
+- **Protected applications** keep the email allow policy and add a
+  `non_identity` decision where an unattended client connects. Two decisions
+  exist, and the difference matters: `service auth` accepts `any_valid_service_token`
+  in the account, while `ssh service token` names one token id.
+  `ssh` (`cloudflared access ssh`) attaches the token-scoped one, because it is
+  the endpoint a laptop presents a bearer token to and a leak must not buy
+  reachability to anything else. `memory` (the MCP wrapper's device), `agent` (a
+  blessed device's proxy) and `backrest` (the hosted recovery reader at
+  `recovery.sammohr.dev`; its Worker also refuses every write RPC and strips the
+  repository credentials, see `docs/core/backrest.md`) keep the account-wide one.
+  `kanbei` keeps the email policy alone and
   adds `allow_authenticate_via_warp`, so a device that already runs the
   Cloudflare One client skips the login; a device without it gets the ordinary
   Access redirect. `nanobot` is retired (SDLC #583): the cluster serves the same app on
@@ -224,9 +229,20 @@ zone with no application of its own is reachable only by the owner's identity.
   Settings); it is an account-wide prerequisite, not something this repository
   can declare.
 - The `service auth` policy is account-wide: any service token minted in that
-  account is accepted by those applications. Rotate a leaked token in
-  Zero Trust → Access controls → Service credentials → Service tokens; the notification policy emails before one
-  expires.
+  account is accepted by `memory`, `agent` and `backrest`. `ssh` attaches
+  `service_auth_ssh` instead, so it admits
+  `cloudflare_zero_trust_access_service_token.ssh` and no longer admits the
+  account-wide decision. Scoping stops there, in one direction: because
+  `any_valid_service_token` matches every token in the account, the ssh token is
+  still admitted by `memory`, `agent` and `backrest`, whose policies are
+  unchanged. Scoping those per application means replacing that include with a
+  token-id or token-tag include per application. Both policies live in
+  `tofu/access.tf`; the ssh token's one-year lifetime is its rotation schedule
+  (docs/manual-steps.md section 44), and the expiring-service-token notification
+  emails before it lapses. Rotate a leaked token by replacing the resource
+  (`tofu apply -replace=cloudflare_zero_trust_access_service_token.ssh`, section
+  44), not in Zero Trust → Access controls → Service credentials: a dashboard
+  token has its own id, which `service_auth_ssh` does not admit.
 
 ## CAA
 

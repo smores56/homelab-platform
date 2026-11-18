@@ -1,0 +1,49 @@
+# sudo on smortress (design #748, T6).
+#
+# The PIN is the gate an agent does not hold. An agent that spawns its own pty
+# gets a fresh, ticketless context and faces this stack.
+#
+# pam_userdb looks the hash up by the *PAM username*, not by a fixed key, so the
+# database must hold the PIN hash under the account that actually runs sudo.
+# That account is smores: it is the only login this image creates
+# (ignition/smortress.bu `passwd.users`, and sshd's `AllowUsers smores`).
+#
+# Two details decide whether this stack works at all, both verified on Fedora 45
+# (pam 1.7.2) with pamtester and real sudo:
+#   - `db=` is opened literally; Linux-PAM never appends `.db`, so the path must
+#     be exactly /etc/security/sudopin.db.
+#   - `crypt=crypt` is what makes the stored value a hash. Without it pam_userdb
+#     compares the typed PIN as plaintext against the stored string.
+# The database is a sha512crypt hash built on the host with gdbmtool (Fedora's
+# pam_userdb.so links libgdbm, not libdb), mode 0600 root:root, per
+# docs/manual-steps.md section 45. It is never in this image, never in SOPS and
+# never in the repository: those are all readable by the account the agents run
+# as, and an eight-digit space is 10^8 candidates, so a readable hash is a PIN an
+# agent recovers in seconds.
+#
+# The fallback keeps the long account password at the *same* prompt, not a second
+# one: pam_userdb caches the value the user typed, and pam_unix re-verifies that
+# same string with try_first_pass.
+#
+# `authsucc` carries the same `deny` as the two rows above it. A bare `authsucc`
+# still marks a success but silently stops clearing the tally once three rows are
+# recorded, so the counter outlives the login that should have wiped it.
+
+# Deny before the prompt, and before any comparison, when the account is locked.
+auth  required      pam_faillock.so preauth deny=5 unlock_time=300
+# The PIN. success=2 skips pam_unix and the authfail row when it matches.
+auth  [success=2 default=ignore] pam_userdb.so crypt=crypt db=/etc/security/sudopin.db
+# The account password, re-verifying the string the user already typed.
+auth  [success=1 default=ignore] pam_unix.so try_first_pass
+# Count the failure. faillock records one row per PAM transaction and sudo makes
+# three per invocation, so five wrong prompts, not five invocations, cost 300s.
+auth  [default=die] pam_faillock.so authfail deny=5 unlock_time=300
+# Clear the tally on success, with the deny the tally was counted against.
+auth  sufficient    pam_faillock.so authsucc deny=5 unlock_time=300
+# Fedora's stock sudo phases, unchanged. Dropping them would take the SELinux
+# session context, the limits and the account phase with them.
+account    include system-auth
+password   include system-auth
+session    optional pam_keyinit.so revoke
+session    required  pam_limits.so
+session    include system-auth

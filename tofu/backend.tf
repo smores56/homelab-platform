@@ -15,9 +15,13 @@
 # endpoint carries the same account tag as `var.account_id`.
 #
 # State contents: resource addresses and attributes, which are Cloudflare object
-# ids and settings — no token, no secret (the provider credential is environment
-# only). R2 encrypts objects at rest; there is no client-side state encryption
-# because there is no key to lose that way.
+# ids and settings, plus one exception — `client_secret` of
+# `cloudflare_zero_trust_access_service_token.ssh` is computed by the API and is
+# stored here, so the state holds one live credential and anyone who can read the
+# bucket or assume the CI identity can read the only token the ssh route accepts.
+# The provider credential itself is environment only. R2 encrypts objects at rest;
+# there is no client-side state encryption because there is no key to lose that
+# way.
 terraform {
   backend "s3" {
     bucket = "homelab-tofu-state"

@@ -61,7 +61,26 @@ RUN set -eux; \
     rm -rf /usr/libexec/smortress-src; \
     chmod 0755 /usr/libexec/apps-schema; \
     chmod 0644 /etc/pki/containers/smortress.pub /etc/smortress/secrets.manifest; \
-    chmod 0600 /etc/smortress/secrets/*.yaml
+    chmod 0600 /etc/smortress/secrets/*.yaml; \
+    chmod 0644 /etc/pam.d/sudo; \
+    chmod 0440 /etc/sudoers.d/10-human-gate; \
+    visudo -cf /etc/sudoers.d/10-human-gate
+
+# Access through the tunnel is the only route in (design #748), so an sshd that
+# refuses to parse would take the host off the network with no recovery but a
+# console. `sshd -t` parses the shipped /etc/ssh/sshd_config, which includes the
+# sshd_config.d drop-in; a container build carries no host keys yet (sshd-keygen
+# runs at first boot) and sshd refuses to parse without one, so the check runs
+# against a throwaway key that is deleted in the same layer.
+RUN set -eux; \
+    mkdir -p /run/sshd; \
+    tmp=$(mktemp -d); \
+    ssh-keygen -q -t ed25519 -N '' -f "$tmp/hostkey"; \
+    if ! sshd -t -o HostKey="$tmp/hostkey"; then \
+      echo "the shipped sshd configuration does not parse; this build must not ship" >&2; \
+      exit 1; \
+    fi; \
+    rm -rf "$tmp"
 
 # Host binaries: release artifacts with a pinned SHA-256, not distribution
 # packages, so the version that boots matches the version reviewed here.
@@ -101,6 +120,7 @@ RUN set -eux; \
       smortress-crypttab-fix.service \
       firewalld.service \
       smortress-tailscale-up.service \
+      smortress-tailscale-ssh-off.service \
       sops-decrypt.service \
       tailscaled.service \
       zfs-ready@raw-files.service \
@@ -141,10 +161,12 @@ RUN set -eux; \
 # services; ports are added there, never published on 0.0.0.0/::.
 RUN firewall-offline-cmd --set-default-zone=drop
 
-# Fail the build if the base is not digest-pinned or the policy no longer
-# rejects by default.
+# Fail the build if the base is not digest-pinned, the policy no longer rejects
+# by default, or the escalation tooling the runbooks depend on is absent.
 RUN set -eux; \
     case "${BASE_IMAGE}" in *@sha256:*) ;; *) echo "BASE_IMAGE is not digest-pinned" >&2; exit 1 ;; esac; \
     command -v python3 >/dev/null || { echo "the image has no python3 for the plan verifier" >&2; exit 1; }; \
     jq -e '.default[0].type == "reject"' /etc/containers/policy.json >/dev/null; \
-    jq -e '.transports.docker["ghcr.io/smores56/homelab-platform"][0].keyPath == "/etc/pki/containers/smortress.pub"' /etc/containers/policy.json >/dev/null
+    jq -e '.transports.docker["ghcr.io/smores56/homelab-platform"][0].keyPath == "/etc/pki/containers/smortress.pub"' /etc/containers/policy.json >/dev/null; \
+    test -f /usr/lib64/security/pam_userdb.so || { echo "pam_userdb.so is missing: it is the sudo PIN gate (design #748)" >&2; exit 1; }; \
+    command -v gdbmtool >/dev/null || { echo "gdbmtool is missing: the sudo PIN database (docs/manual-steps.md section 45) cannot be built with it" >&2; exit 1; }

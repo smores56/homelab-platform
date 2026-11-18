@@ -1,9 +1,10 @@
 # Core applications: Immich, OPDShelf, Syncthing (T5)
 
 The three applications that carry real data on smortress run as Podman Quadlets
-from the derived image. This document covers what each container is allowed to
-read and write, how its image reaches the host, how it is reached from the
-tailnet, and what its restore actually consists of. Operator steps are in
+from the derived image. A fourth Serve route, `/wallpapers`, publishes a dataset
+as static files and has no container behind it at all. This document covers what
+each container is allowed to read and write, how its image reaches the host, how
+it is reached from the tailnet, and what its restore actually consists of. Operator steps are in
 `docs/manual-steps.md` section 40; the Restic units they rely on are in
 `docs/core/restic-plane.md`. Agent-managed tenant apps from `homelab-apps` are a
 separate, unprivileged plane: see `docs/core/apps-tenant.md`.
@@ -192,11 +193,22 @@ which the firewall narrows to the tailnet.
 | Immich | `127.0.0.1:2283` | `https://smortress.<tailnet>.ts.net/` |
 | OPDShelf | `127.0.0.1:8083` | `https://smortress.<tailnet>.ts.net:8443/` |
 | Syncthing GUI | `127.0.0.1:8384` | `https://smortress.<tailnet>.ts.net:10000/` |
+| Wallpapers | `/srv/wallpapers` (static files) | `https://smortress.<tailnet>.ts.net/wallpapers/` |
 
-`smortress-tailscale-serve.service` re-declares these three routes at every boot.
+`smortress-tailscale-serve.service` re-declares these four routes at every boot.
 Serve state lives in tailscaled's state file, which is not a dataset and
 not worth backing up; re-applying the same route is idempotent. Nothing here is
 Funnel, and no public hostname serves an application.
+
+`/wallpapers` is the fourth route and the only one with no application behind
+it: `/srv/wallpapers` is the `raw/wallpapers` dataset, one directory of image
+files, and an absolute path is Serve's static-file target where a URL would be a
+proxy. Serve appends the trailing slash to the mount itself, so the route is
+`/wallpapers/`; that is the URL the wallpaper client fetches, and it carries no
+credential because Serve authenticates the device. A missing dataset therefore
+costs an empty listing, not a 404, which is why the Serve unit is ordered after
+`zfs-ready@raw-wallpapers.service` and the script refuses to declare the route
+when the directory is absent.
 
 Prerequisites, once per tailnet: MagicDNS on, HTTPS certificates enabled for the
 tailnet, and this host's TLS certificate provisioned (`tailscale cert` happens

@@ -1,0 +1,23 @@
+[Unit]
+# Tailscale SSH stays off (design #748). Access is the only route into sshd, and
+# a tailnet device reaches the host through the tunnel like any other client.
+#
+# The preference lives in tailscaled's state file, so removing `--ssh` from
+# smortress-tailscale-up.service fixes only the first enrollment: a preference
+# restored with the state, or a hand-run `tailscale up --ssh`, turns it back on.
+# Re-asserting it on every boot is one local call and is idempotent.
+#
+# Ordered after the enrollment unit so the first boot is covered too: the state
+# file this is conditioned on is what `tailscale up` writes.
+Description=Keep Tailscale SSH disabled on smortress
+Requires=tailscaled.service
+After=tailscaled.service smortress-tailscale-up.service
+ConditionPathExists=/var/lib/tailscale/tailscaled.state
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/tailscale set --ssh=false
+
+[Install]
+WantedBy=multi-user.target

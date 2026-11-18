@@ -1,18 +1,24 @@
 [Unit]
 # Declare the Tailscale Serve routes that front the loopback-published
-# applications: the three core apps on their own root paths, plus one
-# /apps/<name> path on 443 per reachable tenant app from the rendered plan.
+# applications: the three core apps on their own root paths, the wallpaper
+# library as static files under /wallpapers on 443, plus one /apps/<name> path on
+# 443 per reachable tenant app from the rendered plan.
 # Serve state lives in tailscaled's state file, which is not a recovery group,
 # so the routes are re-declared at every boot, and a route the plan no longer
 # names is removed. Every route is Funnel-free: tailnet clients only.
+#
+# The wallpapers route has no listener behind it: it is a directory on a dataset,
+# so the run must not declare it before that dataset is proven mounted -- and
+# with Wants rather than Requires, because a missing library may cost that one
+# route, never the three application routes.
 #
 # This unit needs an enrolled tailnet. Without one it fails visibly rather than
 # skipping, because a host whose applications answer on no route is a fault, not
 # a configuration choice.
 Description=Declare Tailscale Serve routes for the applications
 Requires=tailscaled.service
-After=network-online.target tailscaled.service smortress-tailscale-up.service
-Wants=network-online.target smortress-tailscale-up.service
+After=network-online.target tailscaled.service smortress-tailscale-up.service zfs-ready@raw-wallpapers.service
+Wants=network-online.target smortress-tailscale-up.service zfs-ready@raw-wallpapers.service
 
 [Service]
 Type=oneshot
