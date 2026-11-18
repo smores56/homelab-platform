@@ -66,6 +66,22 @@ RUN set -eux; \
     chmod 0440 /etc/sudoers.d/10-human-gate; \
     visudo -cf /etc/sudoers.d/10-human-gate
 
+# Access through the tunnel is the only route in (design #748), so an sshd that
+# refuses to parse would take the host off the network with no recovery but a
+# console. `sshd -t` parses the shipped /etc/ssh/sshd_config, which includes the
+# sshd_config.d drop-in; a container build carries no host keys yet (sshd-keygen
+# runs at first boot) and sshd refuses to parse without one, so the check runs
+# against a throwaway key that is deleted in the same layer.
+RUN set -eux; \
+    mkdir -p /run/sshd; \
+    tmp=$(mktemp -d); \
+    ssh-keygen -q -t ed25519 -N '' -f "$tmp/hostkey"; \
+    if ! sshd -t -o HostKey="$tmp/hostkey"; then \
+      echo "the shipped sshd configuration does not parse; this build must not ship" >&2; \
+      exit 1; \
+    fi; \
+    rm -rf "$tmp"
+
 # Host binaries: release artifacts with a pinned SHA-256, not distribution
 # packages, so the version that boots matches the version reviewed here.
 RUN set -eux; \

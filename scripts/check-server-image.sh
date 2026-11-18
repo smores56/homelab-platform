@@ -240,6 +240,10 @@ else
 fi
 check "the sudoers drop-in is installed 0440" has 'chmod 0440 /etc/sudoers.d/10-human-gate' image/Containerfile
 check "the sudoers drop-in is parsed at build time" has 'visudo -cf /etc/sudoers.d/10-human-gate' image/Containerfile
+# Access through the tunnel is the only route in, so a drop-in sshd refuses to
+# parse would cost a console recovery; the build parses the shipped config
+# instead of leaving the host to find out at boot.
+check "the sshd configuration is parsed at build time" has 'sshd -t -o HostKey=' image/Containerfile
 check "the build fails if pam_userdb is missing" has 'test -f /usr/lib64/security/pam_userdb.so' image/Containerfile
 check "tmpfiles declares the PIN database owner and mode" \
   has 'f /etc/security/sudopin.db 0600 root root -' image/rootfs/etc/tmpfiles.d/smortress.conf
