@@ -61,7 +61,10 @@ RUN set -eux; \
     rm -rf /usr/libexec/smortress-src; \
     chmod 0755 /usr/libexec/apps-schema; \
     chmod 0644 /etc/pki/containers/smortress.pub /etc/smortress/secrets.manifest; \
-    chmod 0600 /etc/smortress/secrets/*.yaml
+    chmod 0600 /etc/smortress/secrets/*.yaml; \
+    chmod 0644 /etc/pam.d/sudo; \
+    chmod 0440 /etc/sudoers.d/10-human-gate; \
+    visudo -cf /etc/sudoers.d/10-human-gate
 
 # Host binaries: release artifacts with a pinned SHA-256, not distribution
 # packages, so the version that boots matches the version reviewed here.
@@ -148,4 +151,5 @@ RUN set -eux; \
     case "${BASE_IMAGE}" in *@sha256:*) ;; *) echo "BASE_IMAGE is not digest-pinned" >&2; exit 1 ;; esac; \
     command -v python3 >/dev/null || { echo "the image has no python3 for the plan verifier" >&2; exit 1; }; \
     jq -e '.default[0].type == "reject"' /etc/containers/policy.json >/dev/null; \
-    jq -e '.transports.docker["ghcr.io/smores56/homelab-platform"][0].keyPath == "/etc/pki/containers/smortress.pub"' /etc/containers/policy.json >/dev/null
+    jq -e '.transports.docker["ghcr.io/smores56/homelab-platform"][0].keyPath == "/etc/pki/containers/smortress.pub"' /etc/containers/policy.json >/dev/null; \
+    test -f /usr/lib64/security/pam_userdb.so || { echo "pam_userdb.so is missing: it is the sudo PIN gate (design #748)" >&2; exit 1; }

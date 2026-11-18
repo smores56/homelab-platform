@@ -128,6 +128,61 @@ else
   ok "the preference unit only ever disables Tailscale SSH"
 fi
 
+# sudo PIN gate (design #748, T6). Asserted line by line because order is the
+# meaning: `sufficient` is what ends the stack on a correct PIN, and the
+# `[default=die]` authfail after it is what counts a wrong one. The last include
+# keeps the long account password behind the PIN, so a lost PIN is not a
+# lockout.
+pam_sudo=image/rootfs/etc/pam.d/sudo
+expected_pam='auth required pam_faillock.so preauth deny=5 unlock_time=300
+auth sufficient pam_userdb.so db=/etc/security/sudopin
+auth [default=die] pam_faillock.so authfail deny=5 unlock_time=300
+auth include system-auth'
+actual_pam=$(grep -E '^auth[[:space:]]' "$pam_sudo" | sed -E 's/[[:space:]]+/ /g; s/ $//')
+if [[ $actual_pam == "$expected_pam" ]]; then
+  ok "the sudo auth stack is the reviewed four lines in order"
+else
+  bad "the sudo auth stack is the reviewed four lines in order" "$actual_pam"
+fi
+check "the PIN database is a host path that is never an image path" \
+  has 'db=/etc/security/sudopin' "$pam_sudo"
+# The design replaces the auth stack only; dropping the other phases would take
+# the SELinux session context, the limits and xauth with it.
+check "the account phase is still declared" grep -qE '^account[[:space:]]+include[[:space:]]+system-auth$' "$pam_sudo"
+check "the session phase is still declared" grep -qE '^session[[:space:]]+include[[:space:]]+system-auth$' "$pam_sudo"
+# pam_userdb matches the PAM username, not a fixed key, so the account that runs
+# sudo is the key the operator must put in the database.
+check "the only login account is smores" grep -qE '^[[:space:]]*- name: smores$' ignition/smortress.bu
+check "the stack documents that account as the pam_userdb key" grep -qF 'That account is smores' "$pam_sudo"
+
+sudoers_dropin=image/rootfs/etc/sudoers.d/10-human-gate
+expected_sudoers='Defaults timestamp_timeout=30
+Defaults timestamp_type=tty
+Defaults log_subcmds'
+actual_sudoers=$(grep -E '^Defaults[[:space:]]' "$sudoers_dropin")
+if [[ $actual_sudoers == "$expected_sudoers" ]]; then
+  ok "the sudoers gate is the reviewed three defaults in order"
+else
+  bad "the sudoers gate is the reviewed three defaults in order" "$actual_sudoers"
+fi
+check "the sudoers drop-in is installed 0440" has 'chmod 0440 /etc/sudoers.d/10-human-gate' image/Containerfile
+check "the sudoers drop-in is parsed at build time" has 'visudo -cf /etc/sudoers.d/10-human-gate' image/Containerfile
+check "the build fails if pam_userdb is missing" has 'test -f /usr/lib64/security/pam_userdb.so' image/Containerfile
+check "tmpfiles declares the PIN database owner and mode" \
+  has 'f /etc/security/sudopin.db 0600 root root -' image/rootfs/etc/tmpfiles.d/smortress.conf
+# Neither the PIN, its hash nor its database may enter the repository: anything
+# the agent account can read is a PIN an agent recovers in seconds.
+if git ls-files | grep -qE 'sudopin|\.db$'; then
+  bad "no PIN database is tracked"
+else
+  ok "no PIN database is tracked"
+fi
+if grep -rIlE "\$6\$[./A-Za-z0-9]{8,}\$" image ignition units secrets 2>/dev/null | grep -q .; then
+  bad "no sha512crypt hash is tracked in the image or ignition tree"
+else
+  ok "no sha512crypt hash is tracked in the image or ignition tree"
+fi
+
 probe "policy rejects by default" jq -e '.default[0].type == "reject"' image/rootfs/etc/containers/policy.json
 # for every registry reference, so it must not exist.
 probe "no docker transport-wide accept" jq -e '.transports.docker[""] == null' image/rootfs/etc/containers/policy.json

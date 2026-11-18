@@ -1,0 +1,9 @@
+# The human gate for sudo on smortress (design #748, T6).
+#
+# 30 minutes, cached per TTY. A second sudo in the same terminal inside the
+# window does not prompt; a different TTY does. This is the deliberate soft spot
+# of the design — anything running in that TTY inherits root for up to 30
+# minutes — and `log_subcmds` is what makes what it ran readable afterwards.
+Defaults timestamp_timeout=30
+Defaults timestamp_type=tty
+Defaults log_subcmds

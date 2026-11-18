@@ -1,0 +1,40 @@
+# sudo on smortress (design #748, T6).
+#
+# The PIN is the gate an agent does not hold. An agent that spawns its own pty
+# gets a fresh, ticketless context and faces this stack; the long account
+# password stays behind the PIN through system-auth, so a lost or forgotten PIN
+# is the long password rather than a lockout.
+#
+# pam_userdb looks the hash up by the *PAM username*, not by a fixed key, so the
+# database must hold the PIN hash under the account that actually runs sudo.
+# That account is smores: it is the only login this image creates
+# (ignition/smortress.bu `passwd.users`, and sshd's `AllowUsers smores`). One
+# database can carry several keys with the same hash if that ever changes.
+#
+# The database itself lives only on the host. It is never in this image, never
+# in SOPS and never in the repository: those are all readable by the account the
+# agents run as, and an eight-digit space is 10^8 candidates, so a readable hash
+# is a PIN an agent recovers in seconds. docs/manual-steps.md section 45 builds
+# it with gdbmtool (Fedora's pam_userdb links libgdbm, not libdb), mode 0600
+# root:root.
+
+# Deny before the prompt so a locked account costs no hash comparison.
+auth  required      pam_faillock.so preauth deny=5 unlock_time=300
+# The PIN. `sufficient`, so a match ends the stack here.
+auth  sufficient    pam_userdb.so db=/etc/security/sudopin
+# Five wrong PINs cost five minutes. A deliberate denial handle: an agent can
+# lock sudo, and cannot get past it.
+auth  [default=die] pam_faillock.so authfail deny=5 unlock_time=300
+# The long password, and the faillock stack Fedora already carries in
+# system-auth, stays behind the PIN.
+auth  include       system-auth
+
+# The remaining phases are Fedora's stock sudo service, unchanged: the design
+# replaces the auth stack only, and dropping these would take the SELinux session
+# context, the limits and xauth with them.
+account   include   system-auth
+password  include   system-auth
+session   optional  pam_keyinit.so revoke
+session   required  pam_limits.so
+session   include   system-auth
+-session  optional  pam_xauth.so

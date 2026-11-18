@@ -3527,3 +3527,84 @@ workflow and no repository file holds the secret.
    Then repeat step 2 on the remaining laptops and delete the old pair from the
    password manager. The `service token expiry` notification policy emails
    before the one-year lifetime lapses, which is the reminder to do this.
+
+## 45. Build the sudo PIN database on smortress
+
+The image ships the PAM stack (`image/rootfs/etc/pam.d/sudo`), the sudoers gate
+(`image/rootfs/etc/sudoers.d/10-human-gate`) and a tmpfiles entry that declares
+`/etc/security/sudopin.db` as `0600 root:root`. **Nothing else may be committed.**
+The PIN, its hash and the database stay on the host: an eight-digit space is
+10^8 candidates, so a hash the agent account can read is a PIN an agent
+recovers in seconds. "Consistent" across hosts comes from typing the same PIN
+into each host's database, not from a shared file.
+
+`pam_userdb` looks the hash up by the **PAM username**, so the key must be the
+account that runs sudo. That account is `smores` — the only login
+`ignition/smortress.bu` creates and the only name sshd's `AllowUsers` permits.
+The `store` below uses that key. One database can carry several keys with the
+same hash if that ever changes.
+
+Use a PIN that is **not** the FIDO2 PIN: a lost or leaked sudo PIN must not be a
+token secret.
+
+1. Deploy the image (section 37 step 2), then open a root shell. The long
+   account password works until the database exists, and everything below stays
+   inside this shell so neither the PIN nor its hash reaches an argv or an
+   environment a non-root process can read:
+
+   ```sh
+   sudo -i
+   ```
+
+2. Build the database. `gdbmtool` is the tool: Fedora's `pam_userdb.so` links
+   `libgdbm`, not libdb, so `db_load` writes a file PAM cannot open.
+   `openssl passwd -6` is a sha512crypt hash; the salt is random.
+
+   ```sh
+   read -rsp 'new sudo PIN (8 digits, not the FIDO2 PIN): ' PIN; echo
+   hash=$(openssl passwd -6 -stdin <<<"$PIN")
+   printf 'store smores %s\n' "$hash" | gdbmtool /etc/security/sudopin.db
+   unset PIN hash
+   chmod 0600 /etc/security/sudopin.db
+   ls -l /etc/security/sudopin.db    # expect: -rw------- root root
+   gdbmtool /etc/security/sudopin.db list | cut -d' ' -f1 | grep -x smores
+   # expect: smores   (the hash itself is not printed)
+   ```
+
+   A database with the wrong key authenticates nobody: pam_userdb fails, and the
+   stack falls through to the long password.
+
+3. Prove the gate, in the root shell's parent session as `smores`:
+
+   ```sh
+   sudo -k; sudo true      # expect: one prompt; the PIN is accepted
+   sudo true               # expect: no prompt, same TTY, inside 30 minutes
+   ```
+
+   In a second terminal, `sudo true` prompts again — the ticket is per TTY.
+   An agent's own pty is a fresh context and gets nothing:
+
+   ```sh
+   script -qec 'sudo -n true' /dev/null
+   # expect: sudo: a password is required
+   ```
+
+4. Prove the fallback and the lockout. A wrong PIN falls through to the account
+   password, so a forgotten PIN is not a lockout:
+
+   ```sh
+   for _ in 1 2 3 4 5; do printf 'wrong-pin\n' | sudo -S true; done
+   faillock --user smores          # expect: five INVALID entries, then refused
+   sudo true                       # expect: refused for 300s
+   ```
+
+   The five-minute lockout clears itself; `sudo faillock --user smores --reset`
+   is only possible once it has. SSH over the tunnel is unaffected: key auth
+   never runs the `auth` stack, so a faillock lockout costs sudo, not the host.
+
+5. An agent sharing your TTY inherits the ticket for up to 30 minutes. That is
+   the design's accepted residual; `log_subcmds` records what ran:
+
+   ```sh
+   sudo journalctl -g 'COMMAND=' -n 20 --no-pager
+   ```
