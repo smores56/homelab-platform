@@ -128,27 +128,37 @@ else
   ok "the preference unit only ever disables Tailscale SSH"
 fi
 
-# sudo PIN gate (design #748, T6). Asserted line by line because order is the
-# meaning: `sufficient` is what ends the stack on a correct PIN, and the
-# `[default=die]` authfail after it is what counts a wrong one. The last include
-# keeps the long account password behind the PIN, so a lost PIN is not a
-# lockout.
+# sudo PIN gate (design #748, T6). Asserted line by line because order and jump
+# counts are the meaning: a matching PIN skips pam_unix and the authfail row, a
+# mistyped one falls to pam_unix with the same string cached, and only then does
+# the failure reach faillock. The last three auth rows carry `deny=5` for the
+# same tally; a bare `authsucc` stops clearing it at three rows.
 pam_sudo=image/rootfs/etc/pam.d/sudo
 expected_pam='auth required pam_faillock.so preauth deny=5 unlock_time=300
-auth sufficient pam_userdb.so db=/etc/security/sudopin
+auth [success=2 default=ignore] pam_userdb.so crypt=crypt db=/etc/security/sudopin.db
+auth [success=1 default=ignore] pam_unix.so try_first_pass
 auth [default=die] pam_faillock.so authfail deny=5 unlock_time=300
-auth include system-auth'
-actual_pam=$(grep -E '^auth[[:space:]]' "$pam_sudo" | sed -E 's/[[:space:]]+/ /g; s/ $//')
+auth sufficient pam_faillock.so authsucc deny=5 unlock_time=300
+account include system-auth
+password include system-auth
+session optional pam_keyinit.so revoke
+session required pam_limits.so
+session include system-auth'
+actual_pam=$(sed -E 's/[[:space:]]+/ /g; s/ $//' "$pam_sudo" | grep -Ev '^(#|$)' || true)
 if [[ $actual_pam == "$expected_pam" ]]; then
-  ok "the sudo auth stack is the reviewed four lines in order"
+  ok "the sudo stack is the reviewed ten rows in order"
 else
-  bad "the sudo auth stack is the reviewed four lines in order" "$actual_pam"
+  bad "the sudo stack is the reviewed ten rows in order: $(printf '%s' "$actual_pam" | tr '\n' ';')"
 fi
-check "the PIN database is a host path that is never an image path" \
-  has 'db=/etc/security/sudopin' "$pam_sudo"
-# The design replaces the auth stack only; dropping the other phases would take
-# the SELinux session context, the limits and xauth with it.
+# `db=` is opened literally: Linux-PAM never appends `.db`, so `/etc/security/sudopin`
+# would make pam_userdb open a file that does not exist and fail every time.
+check "pam_userdb opens the .db path literally" \
+  has 'db=/etc/security/sudopin.db' "$pam_sudo"
+# Without crypt=crypt the stored value is compared as plaintext, so the database
+# would have to hold the PIN itself.
+check "the stored PIN is compared as a crypt hash" has 'crypt=crypt' "$pam_sudo"
 check "the account phase is still declared" grep -qE '^account[[:space:]]+include[[:space:]]+system-auth$' "$pam_sudo"
+check "the password phase is still declared" grep -qE '^password[[:space:]]+include[[:space:]]+system-auth$' "$pam_sudo"
 check "the session phase is still declared" grep -qE '^session[[:space:]]+include[[:space:]]+system-auth$' "$pam_sudo"
 # pam_userdb matches the PAM username, not a fixed key, so the account that runs
 # sudo is the key the operator must put in the database.
