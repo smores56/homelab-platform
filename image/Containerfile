@@ -161,11 +161,12 @@ RUN set -eux; \
 # services; ports are added there, never published on 0.0.0.0/::.
 RUN firewall-offline-cmd --set-default-zone=drop
 
-# Fail the build if the base is not digest-pinned or the policy no longer
-# rejects by default.
+# Fail the build if the base is not digest-pinned, the policy no longer rejects
+# by default, or the escalation tooling the runbooks depend on is absent.
 RUN set -eux; \
     case "${BASE_IMAGE}" in *@sha256:*) ;; *) echo "BASE_IMAGE is not digest-pinned" >&2; exit 1 ;; esac; \
     command -v python3 >/dev/null || { echo "the image has no python3 for the plan verifier" >&2; exit 1; }; \
     jq -e '.default[0].type == "reject"' /etc/containers/policy.json >/dev/null; \
     jq -e '.transports.docker["ghcr.io/smores56/homelab-platform"][0].keyPath == "/etc/pki/containers/smortress.pub"' /etc/containers/policy.json >/dev/null; \
-    test -f /usr/lib64/security/pam_userdb.so || { echo "pam_userdb.so is missing: it is the sudo PIN gate (design #748)" >&2; exit 1; }
+    test -f /usr/lib64/security/pam_userdb.so || { echo "pam_userdb.so is missing: it is the sudo PIN gate (design #748)" >&2; exit 1; }; \
+    command -v gdbmtool >/dev/null || { echo "gdbmtool is missing: the sudo PIN database (docs/manual-steps.md section 45) cannot be built with it" >&2; exit 1; }

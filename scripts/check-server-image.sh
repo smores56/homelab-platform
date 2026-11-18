@@ -245,6 +245,9 @@ check "the sudoers drop-in is parsed at build time" has 'visudo -cf /etc/sudoers
 # instead of leaving the host to find out at boot.
 check "the sshd configuration is parsed at build time" has 'sshd -t -o HostKey=' image/Containerfile
 check "the build fails if pam_userdb is missing" has 'test -f /usr/lib64/security/pam_userdb.so' image/Containerfile
+# The PIN database is built by hand on the host (docs/manual-steps.md section
+# 45), so the tool has to be in the image the same way pam_userdb does.
+check "the build fails if gdbmtool is missing" has 'command -v gdbmtool >/dev/null' image/Containerfile
 check "tmpfiles declares the PIN database owner and mode" \
   has 'f /etc/security/sudopin.db 0600 root root -' image/rootfs/etc/tmpfiles.d/smortress.conf
 # Neither the PIN, its hash nor its database may enter the repository: anything
