@@ -3593,9 +3593,11 @@ on the tailnet address is reachable at all.
 one-year lifetime) and `cloudflare_zero_trust_access_policy.service_auth_ssh`,
 which admits that one token id. The `ssh` application attaches the new policy
 instead of the account-wide `service auth`, so the credential a laptop carries
-to `cloudflared access ssh` reaches sshd and nothing else — not the memory MCP,
-not the agent frontend, not the backup reader. Minting it is a `tofu apply`; no
-workflow and no repository file holds the secret.
+to `cloudflared access ssh` is the only one sshd admits — the account-wide token
+no longer reaches it. The scoping is one-directional: `memory`, `agent` and the
+backrest reader still attach `any_valid_service_token`, which matches every
+token in the account, so this token is admitted there too (step 3). Minting it is
+a `tofu apply`; no workflow and no repository file holds the secret.
 
 1. Apply. The token is created at the edge, and its secret appears only in
    state:
@@ -3624,8 +3626,9 @@ workflow and no repository file holds the secret.
    They are a bearer credential: never in the repository, never in argv, never
    in an image.
 
-3. Prove the scoping. The ssh token must be admitted at `ssh` and refused
-   everywhere else:
+3. Prove what the change does, and only that. `ssh` must admit this token; the
+   other three still attach the account-wide policy, so they admit it as well
+   and the drill has to say so:
 
    ```sh
    set -a; . ~/.config/cloudflared-access-ssh.env; set +a
@@ -3636,10 +3639,19 @@ workflow and no repository file holds the secret.
    }
    probe ssh       # expect: never 302 to *.cloudflareaccess.com; the tunnel
                    # forwards to sshd, whose answer is not HTTP
-   probe memory    # expect: 403
-   probe agent     # expect: 403
-   probe recovery  # expect: 403 (the backrest reader)
+   probe memory    # expect: not a 302 to *.cloudflareaccess.com — the request
+                   # passes Access and the MCP answers for itself, because
+                   # service_auth matches any valid token
+   probe agent     # expect: not a 302, same reason
+   probe recovery  # expect: not a 302 (the backrest reader), same reason
    ```
+
+   A `302` to `*.cloudflareaccess.com` from any of these means the token is dead,
+   not that the scoping is tight. What this section buys is the other direction:
+   sshd no longer accepts the account-wide token, so a leak of *that* one buys
+   nothing on the ssh route. Scoping the remaining applications works the same
+   way, by replacing their `any_valid_service_token` include with a token-id or
+   token-tag include per application in `tofu/access.tf`.
 
 4. Rotation, when a machine leaves our control or the year is up. The resource
    deliberately carries no `prevent_destroy`, so replacement is one command:

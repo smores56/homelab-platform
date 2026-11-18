@@ -65,8 +65,12 @@ resource "cloudflare_zero_trust_access_service_token" "ssh" {
 }
 
 # The scoped decision for that one token. It matches by token id, so a leaked
-# `service auth` token cannot reach sshd and this token cannot reach the memory
-# MCP, the agent frontend or the backup reader.
+# `service auth` token cannot reach sshd. That is the direction this change
+# closes, and only that one: `memory`, `agent` and the backrest reader still
+# attach the account-wide `any_valid_service_token` decision, which matches every
+# token in the account, so this token is admitted by all three as well. Scoping
+# them too means replacing that include with a token-id or token-tag include per
+# application.
 resource "cloudflare_zero_trust_access_policy" "service_auth_ssh" {
   account_id = var.account_id
   name       = "ssh service token"

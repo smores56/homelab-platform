@@ -229,12 +229,18 @@ zone with no application of its own is reachable only by the owner's identity.
   Settings); it is an account-wide prerequisite, not something this repository
   can declare.
 - The `service auth` policy is account-wide: any service token minted in that
-  account is accepted by `memory`, `agent` and `backrest`. Only
-  `cloudflare_zero_trust_access_service_token.ssh` reaches sshd, and it reaches
-  nothing else. Both live in `tofu/access.tf`; the ssh token's one-year lifetime
-  is its rotation schedule (docs/manual-steps.md section 44), and the
-  expiring-service-token notification emails before it lapses. Rotate a leaked
-  token in Zero Trust → Access controls → Service credentials → Service tokens.
+  account is accepted by `memory`, `agent` and `backrest`. `ssh` attaches
+  `service_auth_ssh` instead, so it admits
+  `cloudflare_zero_trust_access_service_token.ssh` and no longer admits the
+  account-wide decision. Scoping stops there, in one direction: because
+  `any_valid_service_token` matches every token in the account, the ssh token is
+  still admitted by `memory`, `agent` and `backrest`, whose policies are
+  unchanged. Scoping those per application means replacing that include with a
+  token-id or token-tag include per application. Both policies live in
+  `tofu/access.tf`; the ssh token's one-year lifetime is its rotation schedule
+  (docs/manual-steps.md section 44), and the expiring-service-token notification
+  emails before it lapses. Rotate a leaked token in Zero Trust → Access controls
+  → Service credentials → Service tokens.
 
 ## CAA
 
