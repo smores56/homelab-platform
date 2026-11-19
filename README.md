@@ -22,6 +22,7 @@ changes by pull request from a fork, so no PR workflow can read a secret.
 | `clusters/homelab/webhook/` | Inbound webhook receiver behind `agent-hooks.sammohr.dev` (`docs/webhook.md`) |
 | `apps/broker/` | Broker source and unit tests (Python stdlib, no dependencies) |
 | `apps/webhook/` | Webhook receiver source and unit tests (Python stdlib, no dependencies) |
+| `apps/agent_facade/` | MCP source facades and portable memory for the two agent deployments (`docs/agent-facade.md`) |
 | `images/nanobot/` | Agent image source (Dockerfile, entrypoint, `render.py`); published by `publish-nanobot.yml` |
 | `tests/policies/` | Static + runtime policy checks, fixtures, expectation tables |
 | `tests/tofu/` | Static assertions on the Cloudflare config (`tests/tofu/check.sh`) |
@@ -30,7 +31,7 @@ changes by pull request from a fork, so no PR workflow can read a secret.
 | `tests/access/` | Live Access default-deny probe (`tests/access/check.sh`, skips without a token) |
 | `tofu/` | Cloudflare OpenTofu (provider v5), Access default-deny, CAA (`docs/cloudflare.md`) |
 | `scripts/` | CI helpers, shellchecked |
-| `docs/` | Flux, tenancy, observability, broker, webhook, runbook, negative tests, manual steps |
+| `docs/` | Flux, tenancy, observability, broker, webhook, agent facade, runbook, negative tests, manual steps |
 
 ## Local checks
 
@@ -44,6 +45,7 @@ scripts/check-codeowners.sh
 tests/policies/check.sh                  # static policy, RBAC, network, broker and webhook checks
 python3 -m unittest discover -s apps/broker/tests -t apps/broker   # broker unit tests
 python3 -m unittest discover -s apps/webhook/tests -t apps/webhook  # webhook unit tests
+python3 -m unittest discover -s apps/agent_facade/tests -t apps/agent_facade  # agent facade unit tests
 tests/tofu/check.sh                      # Cloudflare config shape, no credentials
 tests/backup/check.sh                    # mirror script shape, no network
 tests/access/check.sh                    # live Access deny, skips without a token
