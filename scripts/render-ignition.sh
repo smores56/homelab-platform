@@ -6,9 +6,13 @@
 #   scripts/render-ignition.sh --synthetic --check  # CI: fixtures, no operator data
 #
 # Every value the template needs comes from a file under ignition/operator/
-# (gitignored) except the public cosign key and the Tang URL default. Nothing
-# here reads a private key. The rendered Ignition contains the two LUKS recovery
-# passphrases: it is written mode 0600 and is removed by FCOS after first boot.
+# (gitignored) except the public cosign key, the Tang URL default and the smores
+# account password hash. The hash is image ciphertext
+# (secrets/server/smores-password-hash.yaml): the same value is re-applied at boot
+# by units/systemd/smortress-password.service, so a reinstall must not need an
+# operator file. Nothing here reads a private key. The rendered Ignition contains
+# the two LUKS recovery passphrases and the account hash: it is written mode 0600
+# and is removed by FCOS after first boot.
 set -euo pipefail
 
 repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
@@ -53,6 +57,8 @@ if ! command -v "$butane" >/dev/null 2>&1; then
   echo "butane is not installed; run this under 'nix shell nixpkgs#butane' or set BUTANE" >&2
   exit 1
 fi
+sops_bin=${SOPS_BIN:-sops}
+hash_ciphertext=$repo/secrets/server/smores-password-hash.yaml
 
 die() { echo "render-ignition: $*" >&2; exit 1; }
 escape() {
@@ -65,6 +71,19 @@ escape() {
 
 require_file() { [[ -s $1 ]] || die "missing or empty operator file: $1"; }
 read_line() { local v=""; IFS= read -r v <"$1" || true; printf '%s' "$v"; }
+
+# sha512crypt: $6$<salt>$<86 base64-ish characters>. Synthetic mode and a --check
+# that cannot decrypt use it, so the template still renders to a valid hash.
+fixture_hash="\$6\$synthetic\$aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+# The hash comes from ciphertext, not from the operator tree: sops resolves its
+# identity itself (SOPS_AGE_KEY_FILE, SOPS_AGE_KEY_CMD or the default key file),
+# so this script never handles a key. The key name matches what the mint command
+# in docs/manual-steps.md section 37 writes; the manifest's `value` format is
+# what hands the bare hash to the boot unit.
+read_password_hash() {
+  "$sops_bin" --decrypt --extract '["hash"]' "$hash_ciphertext" 2>"$tmp/sops.err"
+}
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
@@ -85,24 +104,37 @@ if $synthetic; then
     >"$tmp/ignition/operator/ssh_authorized_keys"
   derived_image="${IMAGE_REPO}@sha256:0000000000000000000000000000000000000000000000000000000000000000"
   disk='/dev/disk/by-id/nvme-SyntheticDisk'
-  password_hash="\$6\$synthetic\$aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  password_hash=$fixture_hash
   root_pass='synthetic-root-recovery-passphrase-000000000000000000000000'
   data_pass='synthetic-data-recovery-passphrase-000000000000000000000000'
   tang_url='http://10.0.0.193:7654'
   tang_thumbprint=$(printf 'A%.0s' {1..43})
 else
   require_file "$repo/image/cosign.pub"
-  for f in derived-image disk smores-password-hash root-recovery-passphrase \
+  for f in derived-image disk root-recovery-passphrase \
     data-recovery-passphrase tang-thumbprint ssh_authorized_keys; do
     require_file "$repo/ignition/operator/$f"
   done
+  command -v "$sops_bin" >/dev/null 2>&1 \
+    || die "sops is not installed; run this under 'nix shell nixpkgs#sops' or set SOPS_BIN"
   if $stock; then
     derived_image=$UCORE_IMAGE
   else
     derived_image=$(read_line "$repo/ignition/operator/derived-image")
   fi
   disk=$(read_line "$repo/ignition/operator/disk")
-  password_hash=$(read_line "$repo/ignition/operator/smores-password-hash")
+  if ! password_hash=$(read_password_hash); then
+    # --check only proves the template and the plan render; the real render is the
+    # one that must not substitute anything for the owner's hash.
+    if $check; then
+      password_hash=$fixture_hash
+      echo "render-ignition: warning: could not read the account hash from ${hash_ciphertext#"$repo"/}" >&2
+      echo "render-ignition: warning: --check validates the template with a fixture hash; the install render needs the ciphertext and an age identity" >&2
+    else
+      sed 's/^/  /' "$tmp/sops.err" >&2 || true
+      die "cannot read the smores password hash from ${hash_ciphertext#"$repo"/}; mint it with sops (docs/manual-steps.md section 37) and re-run with SOPS_AGE_KEY_FILE pointing at the admin identity"
+    fi
+  fi
   root_pass=$(read_line "$repo/ignition/operator/root-recovery-passphrase")
   data_pass=$(read_line "$repo/ignition/operator/data-recovery-passphrase")
   tang_url='http://10.0.0.193:7654'
@@ -121,7 +153,7 @@ fi
 [[ $disk =~ ^/dev/disk/by-id/[A-Za-z0-9._:-]+$ ]] \
   || die "disk must be a /dev/disk/by-id path: $disk"
 [[ $password_hash =~ ^\$6\$[^$]{1,16}\$[./A-Za-z0-9]{86}$ ]] \
-  || die "smores password hash must be sha512crypt (openssl passwd -6)"
+  || die "the smores password hash must be sha512crypt (openssl passwd -6)"
 [[ $root_pass =~ ^[[:print:]]{12,}$ ]] \
   || die "root recovery passphrase must be >=12 printable characters and one line"
 [[ $data_pass =~ ^[[:print:]]{12,}$ ]] \

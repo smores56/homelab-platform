@@ -2400,8 +2400,6 @@ scratch install.
    ```sh
    install -d -m 0700 ignition/operator
    install -m 0644 "$HOME/.ssh/id_ed25519.pub" ignition/operator/ssh_authorized_keys
-   nix shell nixpkgs#openssl -c openssl passwd -6 >ignition/operator/smores-password-hash
-   chmod 0600 ignition/operator/smores-password-hash
    ( umask 077
      nix shell nixpkgs#openssl -c openssl rand -base64 48 \
        >ignition/operator/root-recovery-passphrase
@@ -2419,21 +2417,41 @@ scratch install.
    printf '%s\n' "$disk" >ignition/operator/disk
    ```
 
-   Put the two passphrase files and the core password in the recovery kit before
-   the install. The disk path must be the 931.5G 980's `/dev/disk/by-id` name;
-   the 970 and the 5 TB HDD are not install targets.
+   Put the two passphrase files and the account password in the recovery kit
+   before the install. The disk path must be the 931.5G 980's `/dev/disk/by-id`
+   name; the 970 and the 5 TB HDD are not install targets.
+
+3.1 Check the `smores` account password ciphertext. It is not an operator file:
+   the hash ships as ciphertext, because bootc never reconciles `/var` and a
+   reinstall must not need anything the installer carried.
+   `scripts/render-ignition.sh` reads it for the install and
+   `smortress-password.service` re-applies it at every boot.
+
+   ```sh
+   git ls-files secrets/server/smortress-password-hash.yaml
+   ```
+
+   A checkout already carries the ciphertext, so this is a check unless the
+   password changes; the mint steps live in "Changing the smores account
+   password" below.
 
 4. Render and validate Ignition. The rendered file contains the passphrases:
    keep it mode 0600 and remove it after the install.
 
    ```sh
-   nix shell nixpkgs#butane -c scripts/render-ignition.sh --check
-   nix shell nixpkgs#butane -c scripts/render-ignition.sh
+   export SOPS_AGE_KEY_FILE=/path/to/admin-keys.txt   # the admin age identity
+   nix shell nixpkgs#butane nixpkgs#sops -c scripts/render-ignition.sh --check
+   nix shell nixpkgs#butane nixpkgs#sops -c scripts/render-ignition.sh
    stat -c '%a %n' ignition/smortress.ign
    ```
 
    The first command must print `render-ignition: butane accepted`; the second
-   prints the exact `coreos-installer install` command to run.
+   prints the exact `coreos-installer install` command to run. Both decrypt
+   `secrets/server/smores-password-hash.yaml`, so sops has to find the admin
+   identity (`SOPS_AGE_KEY_FILE`, `SOPS_AGE_KEY_CMD` or the default
+   `~/.config/sops/age/keys.txt`) and be on `PATH` (`SOPS_BIN` overrides the
+   name). Without an identity, `--check` warns and validates the template with a
+   fixture hash; the install render refuses.
 
 5. Install from the Fedora CoreOS live ISO. Boot the amd64 live media, copy the
    repository and the rendered file to it, and run:
@@ -2618,6 +2636,59 @@ scratch install.
     a rollback, switch back to the digest you trust. Confirm the booted
     deployment with `rpm-ostree status`; `bootc rollback` undoes the OS
     deployment only, not `/var`, ZFS changes or database migrations.
+
+### Changing the smores account password
+
+The hash is one ciphertext file, `secrets/server/smortress-password-hash.yaml`,
+encrypted to the host and admin identities by `.sops.yaml`'s `secrets/server/`
+rule. Nothing reads that file on the host: `sops-decrypt.service` writes the bare
+hash into `/run/smortress/secrets/` at boot (`value` in `secrets.manifest`), and
+`smortress-password.service` re-applies it with `usermod -p`. The password itself
+lives in the recovery kit only.
+
+1. Mint the new ciphertext. The password never reaches a command line: it is read
+   from the terminal and hashed through stdin.
+
+   ```sh
+   ( umask 077
+     read -rsp 'smores account password: ' password; echo
+     printf 'hash: %s\n' \
+       "$(printf '%s\n' "$password" | nix shell nixpkgs#openssl -c openssl passwd -6 -stdin)" \
+       >secrets/server/smortress-password-hash.yaml
+     unset password
+   )
+   nix shell nixpkgs#sops -c sops --encrypt --in-place secrets/server/smortress-password-hash.yaml
+   head -1 secrets/server/smortress-password-hash.yaml   # must be `hash: ENC[`
+   ```
+
+   `sops --encrypt --in-place` takes both recipients from the creation rule for
+   that path, so no `--age` list is needed and the host identity can still
+   decrypt after the change. Commit the ciphertext; the password goes into the
+   recovery kit.
+
+2. Deploy and reboot. The unit reconciles at boot, so the new hash takes effect on
+   the next boot of a deployment that carries it:
+
+   ```sh
+   sudo bootc switch --enforce-container-sigpolicy \
+     "ghcr.io/smores56/homelab-platform/server@sha256:<digest from the run summary>"
+   sudo systemctl reboot
+   ```
+
+3. Prove it at the console, never over the SSH session the old password protects.
+   Log in on the physical or hypervisor console with the new password, then read
+   the unit and the field it wrote:
+
+   ```sh
+   sudo journalctl -b -u smortress-password.service --no-pager
+   sudo getent shadow smores | cut -d: -f2 | cut -c1-3   # must print $6$
+   ```
+
+   The journal must contain
+   `re-applied the smores password field from ciphertext`. A failed unit leaves
+   the previous password in place, which is recoverable over SSH; fix the
+   ciphertext (usually a missing `value` in the manifest line, or a value that is
+   not sha512crypt) and reboot again.
 
 ## 38. Restic plane (T3): R2 token, Healthchecks, first init, first drill
 

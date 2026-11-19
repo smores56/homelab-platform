@@ -24,8 +24,9 @@ ls scripts/storage-layout.sh
 - Offline recovery kit exists and its passphrases open the data LUKS
   (`docs/core/recovery-kit.md`).
 - `sudo /usr/libexec/smortress-restic-verify` is green.
-- You hold the `smores` password hash (`ignition/operator/smores-password-hash`,
-  `openssl passwd -6`), the YubiKey for `sudo`, and console access.
+- You hold the `smores` password (`secrets/server/smortress-password-hash.yaml`,
+  a sha512crypt hash minted with `openssl passwd -6`, docs/manual-steps.md
+  section 37), the YubiKey for `sudo`, and console access.
 - The SSD/HDD repositories have room for one more copy of the raw data
   (`df -h /var/lib/restic/ssd /var/lib/restic/hdd`).
 

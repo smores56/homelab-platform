@@ -502,6 +502,50 @@ while read -r name; do
   check "$name has committed ciphertext" test -s "secrets/server/$name"
 done < <(awk '!/^[[:space:]]*(#|$)/ { print $1 }' image/rootfs/etc/smortress/secrets.manifest)
 
+# The smores account password (design #767, T3). It was an operator file Ignition
+# read at install time; bootc never reconciles /var, so the value ships as
+# ciphertext instead and is consumed twice -- by the renderer for the install and
+# by a boot unit for the reconcile. Both readers must name the same file, the
+# manifest entry must stay `value` (usermod -p takes the bare hash), and the
+# operator file must be gone from every reader: a leftover requirement would make
+# a reinstall fail where the design says it must not.
+check "the account hash is a manifest value" \
+  grep -qE '^smores-password-hash\.yaml[[:space:]]+root[[:space:]]+root[[:space:]]+0400[[:space:]]+value$' \
+  image/rootfs/etc/smortress/secrets.manifest
+check "the renderer reads the hash from ciphertext" \
+  has 'secrets/server/smores-password-hash.yaml' scripts/render-ignition.sh
+if grep -rIl --exclude=check-server-image.sh 'ignition/operator/smores-password-hash' \
+    scripts units image docs ignition >/dev/null 2>&1; then
+  bad "the operator hash file is required nowhere"
+else
+  ok "the operator hash file is required nowhere"
+fi
+check "the password unit exists" test -s units/systemd/smortress-password.service
+check "image enables smortress-password.service" has 'smortress-password.service' image/Containerfile
+check "the password unit requires the decrypt unit" \
+  grep -qE '^Requires=.*sops-decrypt\.service' units/systemd/smortress-password.service
+check "the password unit is ordered after the decrypt unit" \
+  grep -qE '^After=.*sops-decrypt\.service' units/systemd/smortress-password.service
+check "the password unit is skipped without its ciphertext" \
+  has 'ConditionPathExists=/run/smortress/secrets/smores-password-hash.yaml' \
+  units/systemd/smortress-password.service
+# The hash belongs in exactly one place outside /etc/shadow: the argv of the one
+# usermod exec. A value in the unit file would be readable by every local user.
+check "the password unit runs the installed guard" \
+  has 'ExecStart=/usr/libexec/smortress-password' units/systemd/smortress-password.service
+check "the image installs the password guard" has 'scripts/smortress-password.sh' image/Containerfile
+if grep -vE '^[[:space:]]*#' units/systemd/smortress-password.service | grep -q 'usermod'; then
+  bad "the password unit carries no usermod of its own"
+else
+  ok "the password unit carries no usermod of its own"
+fi
+# shellcheck disable=SC2016  # the matched text is the guard's own line
+check "the guard applies the hash with usermod -p" \
+  has 'usermod -p "$hash" "$account"' scripts/smortress-password.sh
+check "the guard changes only smores" has 'account=smores' scripts/smortress-password.sh
+check "the guard refuses a non-sha512crypt value" \
+  has 'does not hold a sha512crypt hash' scripts/smortress-password.sh
+
 check "firewall binds tailscale0" has '<interface name="tailscale0"/>' image/rootfs/etc/firewalld/zones/tailscale.xml
 check "firewall permits ssh only on that zone" has '<service name="ssh"/>' image/rootfs/etc/firewalld/zones/tailscale.xml
 # A wildcard *listener* binds every address; `0.0.0.0` inside a CIDR

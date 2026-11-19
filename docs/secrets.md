@@ -9,11 +9,33 @@ decrypt it".
 | Operator tooling in this repository (`tofu`, scripts) | `secrets/*.yaml` | the admin identity only | the operator, via `sops -d` |
 | A workload this cluster runs | `clusters/**/*.sops.yaml` | the `flux-system` `sops-age` identity | Flux, with `spec.decryption` on the owning Kustomization |
 | A host unit in `smores56/nix-config` | `nix-config/secrets/smortress.yaml` | the admin and host identities | sops-nix at boot |
+| A host unit on the bootc plane | `secrets/server/*.yaml` | the host and admin identities | `sops-decrypt.service` at boot, into `/run/smortress/secrets` |
 | A host unit on the Nix-free plane | `/etc/homelab/secrets` | the operator bundle only, never in git | the `secrets` role from a decrypted directory |
 
 The admin identity is the operator's passphrase-wrapped age key. Trusting it in
 both repository stores is deliberate: everything here is maintained by one
 person, and the alternative — a ciphertext file nobody can edit — is worse.
+
+## Image ciphertext on the server
+
+`secrets/server/*.yaml` holds values a host unit needs at boot, carried inside
+this repository instead of only in the recovery kit. `.sops.yaml` encrypts that
+path to two recipients: the host identity, staged root-only at
+`/var/lib/homelab/age/keys.txt` from the kit, and the admin identity, so the
+operator can edit a value without the host.
+`sops-decrypt.service` writes each file into `/run/smortress/secrets` with the
+owner, mode and `format` named in
+`image/rootfs/etc/smortress/secrets.manifest`.
+
+| File | Read by | Rule |
+| --- | --- | --- |
+| `smores-password-hash.yaml` | `scripts/render-ignition.sh` (install) and `smortress-password.service` (every boot, `usermod -p`) | the `smores` account password, sha512crypt. Not in git as plaintext: only this ciphertext is, and the password itself is a recovery-kit item. `value` format, because `usermod -p` takes the bare hash. Rotate with `docs/manual-steps.md` section 37. |
+| `cloudflared-tunnel.yaml` | `smortress-cloudflared.service` | the SSH tunnel's connector token, `value` format, read through a systemd credential. |
+
+The account hash is the reason the path exists: bootc never reconciles `/var`, so
+a password written only by Ignition at install time would be whatever the last
+install left in `/etc/shadow`, and a reinstall would need the operator to carry
+the hash on the installer media.
 
 ## This repository's operator store
 
