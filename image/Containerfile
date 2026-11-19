@@ -39,7 +39,7 @@ COPY scripts/storage-layout.sh scripts/zfs-ready.sh scripts/sops-decrypt.sh scri
      scripts/smortress-restic-verify.sh scripts/smortress-restic-init.sh \
      scripts/smortress-restic-restore-drill.sh \
      scripts/app-secrets.sh scripts/immich-dump.sh scripts/tailscale-serve.sh \
-     scripts/apps-quota.sh scripts/apps-user.sh \
+     scripts/apps-quota.sh scripts/apps-user.sh scripts/agent-config-seed.sh \
      /usr/libexec/smortress-src/
 # Application Quadlets. The generator scans /usr/share/containers/systemd at
 # boot, and a quadlet is a generated unit, so nothing here is enabled with
@@ -54,6 +54,8 @@ COPY units/quadlet/immich.network units/quadlet/immich-postgres.container \
      units/quadlet/agent-local.network units/quadlet/agent-general.network \
      units/quadlet/agent-model.container units/quadlet/agent-local.container \
      units/quadlet/agent-general.container units/quadlet/agent-proxy.container \
+     units/quadlet/agent-facade-personal.container \
+     units/quadlet/agent-facade-general.container \
      /usr/share/containers/systemd/
 COPY secrets/server/ /etc/smortress/secrets/
 COPY image/cosign.pub /etc/pki/containers/smortress.pub
@@ -62,6 +64,19 @@ COPY image/cosign.pub /etc/pki/containers/smortress.pub
 # name and needs its own mode: the smortress-src loop below only strips `.sh`.
 COPY scripts/apps-schema.py /usr/libexec/apps-schema
 COPY apps/agent_proxy/proxy.py /usr/libexec/agent-proxy
+# The source facade (apps/agent_facade/) runs in the agent-runtime image, which
+# does not carry it and cannot be rebuilt here. The image therefore installs the
+# program and the data-plane libraries it imports under /usr/lib/agent-facade, and
+# the two facade Quadlets bind-mount that tree read-only -- the same delivery as
+# /usr/libexec/agent-proxy above, one directory instead of one file. The modules
+# are listed one by one rather than as a directory: tests/ must not reach the host
+# image, and a new module that is not listed here fails at import time in the
+# container instead of shipping silently.
+COPY libs/data_plane/ /usr/lib/agent-facade/libs/data_plane/
+COPY apps/agent_facade/__init__.py apps/agent_facade/__main__.py \
+     apps/agent_facade/contracts.py apps/agent_facade/memory.py \
+     apps/agent_facade/server.py apps/agent_facade/sources.py \
+     /usr/lib/agent-facade/apps/agent_facade/
 RUN set -eux; \
     for f in /usr/libexec/smortress-src/*.sh; do install -m 0755 "$f" "/usr/libexec/$(basename "${f%.sh}")"; done; \
     rm -rf /usr/libexec/smortress-src; \

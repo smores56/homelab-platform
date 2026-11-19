@@ -120,8 +120,10 @@ default and is required. Logs go to stderr, so stdout belongs to stdio alone.
 
 Every adapter is a `FixtureAdapter`: deterministic records held in process, no
 network, no live personal data, no filesystem walk. Nothing here issues or stores
-a secret, and no Quadlet, image pin or deployment wiring ships with this code —
-that is a separate step.
+a secret. `units/quadlet/agent-facade-{personal,general}.container` run this code
+as one container per deployment (`docs/agent-facade.md`, "Deployment"); a live
+adapter is still a separate step, so what a deployed facade answers today is its
+own fixtures.
 
 ## Test
 

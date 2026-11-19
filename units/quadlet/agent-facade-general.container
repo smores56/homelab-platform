@@ -1,0 +1,55 @@
+# The general deployment's source facade: the MCP server the general gateway
+# reads its sources and its memory through (apps/agent_facade/,
+# docs/agent-facade.md). Same shape as the personal one, on the internet-connected
+# network, with its own token and its own source table (`repos`, `books`).
+#
+# Code delivery is the agent-proxy pattern (units/quadlet/agent-proxy.container):
+# the same pinned agent-runtime image, `Entrypoint=python3` instead of the image's
+# gateway dispatcher, and the program itself bind-mounted from the HOST. The
+# program is not in the upstream image, so image/Containerfile installs it under
+# /usr/lib/agent-facade and this unit mounts that tree read-only.
+#
+# It publishes nothing: its only client is smortress-agent-general, which reaches
+# it by container name on agent-general.network. The facade's own egress is not
+# the point -- its adapters are in-process fixtures and it has no upstream host to
+# reach -- so what contains it is that nothing else on this host can dial it and
+# it holds no credential but its own revocable token.
+#
+# /memory is the memory subdirectory of the general state dataset: the gateway's
+# sessions and .env live one level up. smortress-agent-config.service creates it
+# with the dataset's uid and mode, because a directory podman has to create for a
+# bind mount would be root-owned inside a 0750 dataset.
+[Unit]
+Description=Agent source facade, general deployment (MCP on agent-general.network)
+Requires=zfs-ready@state-agent-general.service sops-decrypt.service smortress-app-secrets.service smortress-agent-config.service
+After=network-online.target zfs-ready@state-agent-general.service sops-decrypt.service smortress-app-secrets.service smortress-agent-config.service
+Wants=network-online.target
+
+[Container]
+Image=ghcr.io/smores56/homelab-platform/agent-runtime@sha256:276d44685c65c0cb2a25f190b63c65c8906f9dc76486fb1c05ae71b5826bda08
+ContainerName=smortress-agent-facade-general
+Network=agent-general.network
+User=1000:1000
+Entrypoint=python3
+Exec=-m apps.agent_facade --transport http --deployment general --token-file /run/secrets/agent-facade-general-token --memory-root /memory --host 0.0.0.0 --port 18005
+Secret=agent-facade-general-token,type=mount,target=/run/secrets/agent-facade-general-token,uid=1000,gid=1000,mode=0400
+Environment=PYTHONPATH=/usr/lib/agent-facade/libs:/usr/lib/agent-facade
+# The code tree is mounted read-only, so a bytecode cache write can only fail.
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=TZ=UTC
+# No :z here: /usr is a read-only composefs mount, so a relabel fails with EROFS.
+# /usr content is already readable by the container type; only dataset mounts relabel.
+Volume=/usr/lib/agent-facade:/usr/lib/agent-facade:ro
+Volume=/var/lib/agent/general/memory:/memory:z
+ReadOnly=true
+NoNewPrivileges=true
+DropCapability=ALL
+
+[Service]
+# 143 is SIGTERM, which a deliberate stop sends: not a failure.
+SuccessExitStatus=143
+Restart=on-failure
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target
