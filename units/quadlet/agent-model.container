@@ -1,0 +1,57 @@
+# The pinned local model server for the personal deployment: llama.cpp on the
+# GPU, reachable only from agent-local.network. No PublishPort and no other
+# network: the only client is the local gateway, by container name.
+#
+# `-c 65536` is a floor imposed by the runtime, not a tuning choice. Hermes
+# refuses a model whose context window is under 64,000 tokens ("below the
+# minimum 64,000 required by Hermes Agent"), so the server is started well above
+# the model's native 8,192 and the gateway config pins the same number
+# (image/rootfs/etc/smortress/agent/local-config.yaml). Raising one without the
+# other is how the gateway stops admitting the model.
+#
+# The model file is fetched by hand into the state/agent-model dataset
+# (docs/manual-steps.md section 40.7) and mounted read-only: it is a 4.7 GiB
+# artefact that is re-downloadable, so it is deliberately in no backup unit.
+#
+# GPU access is two directives, both needed: `AddDevice=nvidia.com/gpu=all`
+# names the device, and `SecurityLabelType=nvidia_container_t` is the SELinux
+# type the NVIDIA device nodes carry -- with the default container label the
+# process gets NVML "Insufficient Permissions" instead of a GPU. The device name
+# resolves through the CDI spec that smortress-nvidia-cdi.service generates at
+# boot, which is why this unit is ordered after it.
+#
+# `User=1000:1000` follows the platform convention, and the state/agent-* datasets
+# are owned by uid 1000 for it. The runtime image (agent-runtime) drops privileges
+# to uid 10000 internally, which is *not* honoured here on purpose: a container
+# uid that no dataset is owned by cannot write its own state. See the residual risk
+# in docs/core/applications.md.
+[Unit]
+Description=llama.cpp model server for the agent-local deployment
+Requires=zfs-ready@state-agent-model.service smortress-nvidia-cdi.service
+After=network-online.target zfs-ready@state-agent-model.service smortress-nvidia-cdi.service
+Wants=network-online.target
+
+[Container]
+Image=ghcr.io/smores56/homelab-platform/agent-model@sha256:ae96e52f8b2106ea82bad786ee2d08bb9b0a8c93403df9c27ae1bf065a118089
+ContainerName=smortress-agent-model
+Network=agent-local.network
+User=1000:1000
+AddDevice=nvidia.com/gpu=all
+SecurityLabelType=nvidia_container_t
+# The image entrypoint is the server binary, so Exec= is the argument list only.
+Exec=--host 0.0.0.0 --port 8080 -ngl 99 -c 65536 --jinja --alias local-agent -m /models/Qwen2.5-7B-Instruct-Q4_K_M.gguf
+Volume=/var/lib/agent/model:/models:ro,z
+ReadOnly=true
+NoNewPrivileges=true
+DropCapability=ALL
+
+[Service]
+# 143 is SIGTERM, which a deliberate stop sends: not a failure.
+SuccessExitStatus=143
+# Loading a 4.7 GiB model onto the GPU, and the first start after a reboot also
+# relabels the dataset, which is why the timeout is generous.
+Restart=on-failure
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target

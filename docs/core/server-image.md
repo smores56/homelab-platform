@@ -30,6 +30,12 @@ rollback path. Operator-only actions are in `docs/manual-steps.md` section 37.
 | `/usr/lib/systemd/system/smortress-app-secrets.service` | Turns the decrypted application secrets into Podman secrets before any container that declares one starts. |
 | `/usr/lib/systemd/system/smortress-tailscale-serve.service` | Re-declares the Tailscale Serve routes at boot; Serve state is not backed up. |
 | `/usr/lib/systemd/system/smortress-immich-dump.{service,timer}` | The logical Immich restore point inside the photos group, at 21:00 UTC, three hours before the R2 run. |
+| `/usr/share/containers/systemd/{agent-local,agent-general}.network` | The two agent networks: one internal (no route off the host) and one plain bridge (egress, for the hosted proxy). |
+| `/usr/share/containers/systemd/{agent-model,agent-local,agent-general,agent-proxy}.container` | The agent deployment Quadlets: the pinned llama.cpp server, the two Hermes gateways and the hosted-model proxy. |
+| `/usr/libexec/agent-proxy` | `apps/agent_proxy/proxy.py`, installed executable and not stripped of its `.py` name: the only program that holds the hosted provider key, pinned to one upstream host. |
+| `/etc/smortress/agent/{local,general}-config.yaml` | The runtime config templates `smortress-agent-config.service` copies into each state dataset on first boot. No key, no credential, no source path. |
+| `/usr/lib/systemd/system/smortress-agent-config.service` | Seeds each gateway's `config.yaml` (`cp -n`) and rewrites its `.env` `API_SERVER_KEY` from the decrypted ciphertext at every boot. |
+| `/usr/lib/systemd/system/smortress-nvidia-cdi.service` | Generates `/etc/cdi/nvidia.yaml` at boot so `AddDevice=nvidia.com/gpu=all` resolves for the model container; ordered before it. |
 
 `units/quadlet/pattern.container` is the canonical copy in the repository; the
 image ships it read-only as the base for a new application. A placeholder

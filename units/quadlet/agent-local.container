@@ -1,0 +1,67 @@
+# The personal Hermes gateway. It serves the OpenAI-compatible API that the web
+# UI and any tailnet client talk to, and it reaches exactly one model: the pinned
+# llama.cpp server on agent-local.network.
+#
+# This is the deployment's whole network boundary: agent-local.network is the only
+# network, and it is internal (no default route, no NAT), so the gateway has no
+# route off the host. The tailnet still reaches it because Serve forwards to
+# 127.0.0.1:18001, which is host-side DNAT -- a published port, not a route in
+# this container's namespace.
+#
+# There is no `User=` here, and that is not an omission. The image's own
+# entrypoint refuses an arbitrary uid (`--user 1000` exits with "not supported")
+# and asks instead for HERMES_UID/HERMES_GID, which remap its internal account
+# (uid 10000) to the platform uid and chown the data volume before the gateway
+# starts. The outcome is the platform convention -- state/agent-local is owned by
+# uid 1000 and the gateway writes as uid 1000 -- reached the way the image
+# supports. DropCapability is therefore not set either: the container starts as
+# root and the image's supervisor drops privileges itself, exactly as
+# units/quadlet/syncthing.container does. A compromise here is root *inside this
+# namespace*; there is no host path, no Podman socket and no SSH identity in it.
+#
+# There is no `API_SERVER_KEY_FILE`: the runtime reads the API server key from
+# `API_SERVER_KEY` in the environment or from `$HERMES_HOME/.env`, and Podman's
+# secret `type=env` keeps the trailing newline the decrypted file ends with (a
+# Bearer token that never compares equal). smortress-agent-config.service
+# therefore writes `API_SERVER_KEY=<value>` into /var/lib/agent/local/.env at boot
+# from the decrypted file, with the trailing newline stripped, and the secret is
+# still mounted here at uid 1000 mode 0400 for a runtime that learns `_FILE`.
+#
+# ReadOnly=false is deliberate and is the one departure from the pattern: the
+# runtime writes its SQLite state, sessions, logs and skills under HERMES_HOME,
+# which is this container's only write target. There is no host path, no Podman
+# socket and no SSH identity in it.
+[Unit]
+Description=Hermes Agent gateway, personal deployment (no egress)
+Requires=zfs-ready@state-agent-local.service sops-decrypt.service smortress-app-secrets.service smortress-agent-config.service
+After=network-online.target zfs-ready@state-agent-local.service sops-decrypt.service smortress-app-secrets.service smortress-agent-config.service
+Wants=network-online.target
+
+[Container]
+Image=ghcr.io/smores56/homelab-platform/agent-runtime@sha256:276d44685c65c0cb2a25f190b63c65c8906f9dc76486fb1c05ae71b5826bda08
+ContainerName=smortress-agent-local
+Network=agent-local.network
+Exec=gateway run
+Secret=agent-local-api-key,type=mount,target=/run/secrets/agent-local-api-key,uid=1000,gid=1000,mode=0400
+Environment=API_SERVER_ENABLED=true
+Environment=API_SERVER_HOST=0.0.0.0
+Environment=API_SERVER_PORT=18001
+Environment=HERMES_HOME=/opt/data
+Environment=HERMES_UID=1000
+Environment=HERMES_GID=1000
+Environment=TZ=UTC
+Volume=/var/lib/agent/local:/opt/data:z
+PublishPort=127.0.0.1:18001:18001
+# The runtime writes its state under /opt/data, so the root filesystem cannot be
+# read-only here. NoNewPrivileges stays; DropCapability cannot, see above.
+ReadOnly=false
+NoNewPrivileges=true
+
+[Service]
+# 143 is SIGTERM, which a deliberate stop sends: not a failure.
+SuccessExitStatus=143
+Restart=on-failure
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

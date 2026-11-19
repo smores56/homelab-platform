@@ -1,0 +1,42 @@
+# Personal deployment (agent-local). The image ships this file;
+# smortress-agent-config.service copies it to /var/lib/agent/local/config.yaml on
+# the first boot only. From then on the runtime and the operator own that copy:
+# nothing here is reconciled onto a live deployment.
+#
+# No api_key: the pinned llama.cpp server authenticates nothing, and the only peer
+# on agent-local.network is this gateway.
+#
+# context_length must equal the `-c` in units/quadlet/agent-model.container. The
+# runtime refuses a model under 64,000 tokens, and llama.cpp is told to serve
+# 65,536 so that the pin is honest rather than a number copied from a default.
+model:
+  provider: custom
+  base_url: http://smortress-agent-model:8080/v1
+  default: local-agent
+  context_length: 65536
+
+# Nothing in this deployment approves its own tool use: an approval is presented
+# in the chat and decided outside the runtime.
+approvals:
+  mode: manual
+
+agent:
+  # The personal side. Every toolset that can reach a network, start a process,
+  # write a file, or persist something the model chose is off, so the
+  # zero-egress network is not the only thing between the model and the world.
+  # Disabling is per toolset, so a toolset listed here is entirely unavailable.
+  disabled_toolsets:
+    - web
+    - search
+    - browser
+    - terminal
+    - file
+    - memory
+    - code_execution
+    - catalog
+    - computer_use
+    - cronjob
+    - delegation
+    - skills
+    - image_gen
+    - connections

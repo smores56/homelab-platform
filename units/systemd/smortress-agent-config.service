@@ -1,0 +1,46 @@
+[Unit]
+# One config file and one API-server key per deployment, seeded into the state
+# dataset before the gateway that reads them starts.
+#
+# The config is copied only when it is absent (`cp -n`): the runtime rewrites
+# config.yaml and an operator edits the copy in the dataset, so reconciling the
+# image's template onto a live deployment at every boot would silently revert
+# both.
+#
+# The key is rewritten at every boot, for two reasons. The runtime has no
+# `_FILE` variant and reads API_SERVER_KEY from $HERMES_HOME/.env, and Podman's
+# `type=env` secret keeps the trailing newline the decrypted file ends with, so a
+# Bearer token taken from it never compares equal. `sed` prefixes the decrypted
+# value, which drops nothing and adds no newline to it. These two keys are
+# self-issued and revocable; the hosted provider key is not here at all, it is in
+# agent-proxy.
+#
+# Requires= both datasets: without them the copy lands on the root filesystem and
+# the gateway starts against an empty home that looks configured.
+Description=Seed the agent runtime configs and their API-server keys
+Requires=zfs-ready@state-agent-local.service zfs-ready@state-agent-general.service sops-decrypt.service
+After=zfs-ready@state-agent-local.service zfs-ready@state-agent-general.service sops-decrypt.service
+Before=agent-local.service agent-general.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# The .env holds a credential: it is created under this umask and installed 0400.
+UMask=0077
+# Written out per deployment rather than looped: no shell variable, and therefore
+# no systemd environment substitution, stands between these paths and the files.
+ExecStart=/bin/sh -c 'set -eu; \
+cp -n /etc/smortress/agent/local-config.yaml /var/lib/agent/local/config.yaml; \
+chown 1000:1000 /var/lib/agent/local/config.yaml; \
+sed s/^/API_SERVER_KEY=/ /run/smortress/secrets/agent-local-api-key.yaml >/var/lib/agent/local/.env.new; \
+install -o 1000 -g 1000 -m 0400 /var/lib/agent/local/.env.new /var/lib/agent/local/.env; \
+rm -f /var/lib/agent/local/.env.new; \
+cp -n /etc/smortress/agent/general-config.yaml /var/lib/agent/general/config.yaml; \
+chown 1000:1000 /var/lib/agent/general/config.yaml; \
+sed s/^/API_SERVER_KEY=/ /run/smortress/secrets/agent-general-api-key.yaml >/var/lib/agent/general/.env.new; \
+install -o 1000 -g 1000 -m 0400 /var/lib/agent/general/.env.new /var/lib/agent/general/.env; \
+rm -f /var/lib/agent/general/.env.new'
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target

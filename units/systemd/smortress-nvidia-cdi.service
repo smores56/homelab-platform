@@ -1,0 +1,25 @@
+[Unit]
+# Quadlet starts rootful containers through crun and nvidia-container-runtime, and
+# a GPU is only addressable there by the CDI device name `nvidia.com/gpu=all`,
+# which exists only once /etc/cdi/nvidia.yaml does. The file is generated at boot
+# rather than baked into the image because it pins this host's driver version and
+# the device minor numbers of the cards that are actually present.
+#
+# Without it the model container fails at start ("no such device" from the OCI
+# runtime), which is a boot-time failure on a host whose whole personal-side agent
+# is that one container.
+Description=Generate the NVIDIA CDI specification for rootful Quadlets
+ConditionPathExists=/usr/bin/nvidia-ctk
+Before=agent-model.service
+After=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# nvidia-ctk does not create the directory itself, and /etc/cdi is not shipped.
+ExecStartPre=/usr/bin/mkdir -p /etc/cdi
+ExecStart=/usr/bin/nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

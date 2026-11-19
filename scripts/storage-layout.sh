@@ -32,6 +32,11 @@ declare -A dataset_mount=(
   [state/immich-dumps]=/var/lib/immich/dumps
   [state/syncthing-config]=/var/lib/syncthing/config
   [state/opdshelf]=/var/lib/opdshelf
+  # Agent deployments (SDLC #711): one state dataset per gateway, and one for the
+  # 4.7 GiB model file the personal gateway's server loads.
+  [state/agent-local]=/var/lib/agent/local
+  [state/agent-general]=/var/lib/agent/general
+  [state/agent-model]=/var/lib/agent/model
 )
 
 #: Tests run this exact table against a scratch tree. Nothing on the host sets
@@ -52,7 +57,8 @@ dataset_parents=(raw state)
 #: init-zpool plan is what --print-plan and its test compare.
 dataset_order=(raw/files raw/photos raw/books raw/music raw/wallpapers raw/git
   raw/apps raw/repo-archive state/immich-postgres state/immich-dumps
-  state/syncthing-config state/opdshelf)
+  state/syncthing-config state/opdshelf
+  state/agent-local state/agent-general state/agent-model)
 
 #: Dataset quotas. Until the core datasets carry a refreservation, the tenant is
 #: the only writer that can fill the pool, so the apps dataset is bounded here
@@ -88,12 +94,24 @@ declare -A unit_datasets=(
   [git]="raw/git"
   [apps]="raw/apps"
   [repo-archive]="raw/repo-archive"
+  # A gateway's state is its sessions, its memory and its skills: not derivable
+  # from anything else on the host, so it is a recovery point. The model file is
+  # not (see dataset_unrestored).
+  [agent-local]="state/agent-local"
+  [agent-general]="state/agent-general"
 )
-units=(files photos books music wallpapers git apps repo-archive)
+units=(files photos books music wallpapers git apps repo-archive agent-local agent-general)
+
+#: Datasets deliberately in no unit. state/agent-model holds one 4.7 GiB GGUF
+#: blob that docs/manual-steps.md section 40.8 re-downloads and verifies by
+#: checksum: backing it up would put a reconstructable artefact in every Restic
+#: snapshot and in R2, for no restore value at all. A restore that needs it runs
+#: the fetch; the gateway cannot start without it, which is loud and correct.
+dataset_unrestored=(state/agent-model)
 
 #: Directories that must exist for the state datasets to mount. They are not
 #: datasets themselves: a cache or a version history is rebuilt, not restored.
-state_parents=(/var/lib/immich /var/lib/syncthing)
+state_parents=(/var/lib/immich /var/lib/syncthing /var/lib/agent)
 
 dataset_name() { printf '%s/%s\n' "$pool" "$1"; }
 mountpoint_for() { printf '%s\n' "${dataset_mount[$1]:?unknown dataset key: $1}"; }

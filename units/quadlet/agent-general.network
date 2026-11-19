@@ -1,0 +1,9 @@
+# The general deployment's network. A plain bridge, because this side is
+# internet-connected by design: the proxy has to reach the one hosted provider it
+# is pinned to, and the gateway has to reach the proxy by container name. It
+# carries no personal source and no dataset shared with the personal deployment:
+# the two networks have no route to each other either way.
+[Unit]
+Description=Smortress agent-general network
+
+[Network]

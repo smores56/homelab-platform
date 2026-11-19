@@ -4,7 +4,9 @@
 # of a recovery group and not worth backing up: it is re-declared on every boot.
 #
 # The core applications own a root path on their own HTTPS port, because none of
-# them supports being served under a subpath. Tenant apps from `homelab-apps`
+# them supports being served under a subpath. The two agent gateways are not
+# applications with a root path to spare: 443, 8443 and 10000 are taken, so they
+# get one fixed path each on 443. Tenant apps from `homelab-apps`
 # get one `/apps/<name>` path each on 443 instead: Serve exposes root-path HTTPS
 # only on 443, 8443 and 10000, and those are taken. Their loopback ports come
 # from the rendered plan, never from a definition, and every path the plan no
@@ -41,6 +43,16 @@ declare -A core_routes=(
   [10000]=8384
 )
 
+# https/443 path -> loopback port, for the two agent gateway APIs. A fixed path
+# each, because their root paths are not available: Serve exposes root-path HTTPS
+# only on 443, 8443 and 10000, and those are taken. The hosted proxy on
+# 127.0.0.1:18003 is deliberately absent -- the gateway reaches it by container
+# name, and a tailnet path to it would let any device spend the provider key.
+declare -A core_path_routes=(
+  [/apps/agent-local]=18001
+  [/apps/agent-general]=18002
+)
+
 # Validate the whole plan through the shipped verifier before touching Serve:
 # a plan that names a foreign path, a malformed entry or an out-of-range port
 # must leave the previous routes untouched, not apply half of it. The verifier
@@ -58,20 +70,41 @@ if [[ -e $plan ]]; then
     plan_ok=false
     echo "tailscale-serve: could not read $plan; core routes only" >&2
   else
-    while IFS=$'\t' read -r path port; do
-      [[ -n $path && -n $port ]] || continue
-      app_routes[$path]=$port
+    # A tenant app may not take a path the core owns: the two loops would declare
+    # the same Serve handler and the last writer would win. Checked over the whole
+    # plan first, so a claim like that applies no route at all rather than the
+    # half before the offending entry.
+    while IFS=$'\t' read -r path _port; do
+      [[ -n $path ]] || continue
+      if [[ -n ${core_path_routes[$path]+x} ]]; then
+        plan_ok=false
+        echo "tailscale-serve: $plan claims $path, which a core route owns" >&2
+      fi
     done <<<"$rows"
+    if $plan_ok; then
+      while IFS=$'\t' read -r path port; do
+        [[ -n $path && -n $port ]] || continue
+        app_routes[$path]=$port
+      done <<<"$rows"
+    fi
   fi
 fi
 
 # Core ingress first: whatever is wrong with the tenant plan or the Serve
-# status, the three core applications and the wallpaper tree must stay
-# reachable. Nothing below this point may run before these declarations.
+# status, the three core applications, the two agent gateways and the wallpaper
+# tree must stay reachable. Nothing below this point may run before these
+# declarations.
 for https in "${!core_routes[@]}"; do
   backend=http://127.0.0.1:${core_routes[$https]}
   if ! "$tailscale_bin" serve --bg --https="$https" "$backend"; then
     fail "could not serve $backend on https/$https"
+  fi
+done
+
+for path in "${!core_path_routes[@]}"; do
+  backend=http://127.0.0.1:${core_path_routes[$path]}
+  if ! "$tailscale_bin" serve --bg --https=443 --set-path="$path" "$backend"; then
+    fail "could not serve $backend on https/443$path"
   fi
 done
 
@@ -93,12 +126,14 @@ status=$("$tailscale_bin" serve status --json) || {
 }
 
 # An app that left the plan, or the whole tenant, leaves no route behind. Only
-# `/apps/` handlers on 443 are ours: the root paths belong to the core apps, and
-# `/wallpapers` is not under that prefix either, so the static route survives
+# `/apps/` handlers on 443 are ours: the root paths belong to the core apps,
+# `/apps/agent-local` and `/apps/agent-general` belong to the core gateways, and
+# `/wallpapers` is not under that prefix either, so every one of those survives
 # every prune.
 while IFS= read -r path; do
   $plan_ok || break
   [[ -n $path ]] || continue
+  [[ -n ${core_path_routes[$path]+x} ]] && continue
   [[ -n ${app_routes[$path]+x} ]] && continue
   if ! "$tailscale_bin" serve --https=443 --set-path="$path" off; then
     echo "tailscale-serve: could not remove the stale route $path" >&2

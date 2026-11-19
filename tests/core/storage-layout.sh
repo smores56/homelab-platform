@@ -92,14 +92,27 @@ for unit in "${units[@]}"; do
 done
 eq "$duplicates" 0 'no dataset belongs to two units'
 
+# A dataset in no unit is a declared decision, not an omission: state/agent-model
+# holds a 4.7 GiB model blob that section 40.7 of the manual re-downloads and
+# verifies by checksum. It must be listed in dataset_unrestored and nowhere else.
 missing=0
 for key in "${dataset_order[@]}"; do
+  if [[ " ${dataset_unrestored[*]:-} " == *" $key "* ]]; then
+    continue
+  fi
   if [[ -z ${seen[$key]:-} ]]; then
     missing=$((missing + 1))
     printf '     no unit restores %s\n' "$key"
   fi
 done
-eq "$missing" 0 'every dataset is restored by a unit'
+eq "$missing" 0 'every dataset is restored by a unit or declared unrestorable'
+unrestored_orphan=0
+for key in "${dataset_unrestored[@]}"; do
+  [[ -n ${dataset_mount[$key]:-} ]] || unrestored_orphan=$((unrestored_orphan + 1))
+  [[ -n ${seen[$key]:-} ]] && unrestored_orphan=$((unrestored_orphan + 1))
+done
+eq "$unrestored_orphan" 0 'a dataset in no unit is known and in no unit'
+eq "${dataset_unrestored[0]:-}" state/agent-model 'only the model blob is outside every unit'
 
 eq "$(unit_keys files)" $'raw/files\nstate/syncthing-config' 'files pairs the vault with Syncthing state'
 eq "$(unit_keys photos)" $'raw/photos\nstate/immich-postgres\nstate/immich-dumps' \

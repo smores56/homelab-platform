@@ -2981,10 +2981,12 @@ tofu diff that moves `recovery.sammohr.dev` from the Worker route to the tunnel.
 The Access application does not change. Then run 39.6 again against the same
 hostname — the matrix is the acceptance criterion, not the platform.
 
-## 40. Applications (T5): publish images, expose them, prove restores
+## 40. Applications (T5) and agent deployments (T6): publish images, expose them, prove restores
 
 These steps make Immich, OPDShelf and Syncthing run from the derived image and
-prove that each one restores on scratch storage. Background and invariants are in
+prove that each one restores on scratch storage. Subsections 40.7 to 40.10 cover
+the agent deployments from SDLC #711: their three secrets, the pinned model file,
+and the two gateway routes on 443. Background and invariants are in
 `docs/core/applications.md`; the recovery groups are in
 `docs/core/restic-plane.md`. Prerequisites: the derived image from section 37 is
 booted, the age identity is staged root-only under `/var` (section 37), and the
@@ -3355,6 +3357,197 @@ sudo systemctl start smortress-immich-dump.timer
 
 The T6 cutover reuses these drills: it restores the same units from each of the
 three destinations before the legacy stack is retired.
+
+### 40.7 Create the three agent secrets
+
+The agent deployments need three single-value SOPS files, all `api_key: <value>`.
+Two are self-issued gateway keys; the third is the hosted provider key, and it is
+the only credential on this host that is not ours. `sops` finds the age recipients
+in `.sops.yaml`, so every command below runs from the repository root.
+
+Replace the seeded provider key first. The ciphertext committed with this change
+holds a random value: with it the proxy answers `401` from the provider, which is
+the loud failure it is supposed to be, and nothing else breaks.
+
+```sh
+sops secrets/server/agent-hosted-key.yaml      # set api_key: to the provider key
+sops secrets/server/agent-local-api-key.yaml   # optional: rotate, openssl rand -hex 32
+sops secrets/server/agent-general-api-key.yaml # optional: rotate the same way
+git commit -am 'chore(core): set the agent provider key'
+```
+
+Each file must stay a single scalar, because `image/rootfs/etc/smortress/secrets.manifest`
+declares it `value`: a second key or an empty value fails `sops-decrypt.service` at
+boot rather than publishing half a secret. The three manifest rows are exactly
+
+```text
+agent-local-api-key.yaml      root  root  0400  value
+agent-general-api-key.yaml    root  root  0400  value
+agent-hosted-key.yaml         root  root  0400  value
+```
+
+After the image is deployed (40.2), the decrypted copies are root-only and the
+gateway's own copy is 0400 for uid 1000:
+
+```sh
+sudo ls -l /run/smortress/secrets/agent-*.yaml
+sudo stat -c '%u:%g %a %n' /var/lib/agent/local/.env /var/lib/agent/general/.env
+```
+
+`smortress-agent-config.service` rewrites `.env` at every boot from the ciphertext,
+so a rotated gateway key lands with the next reboot -- the container reads
+`API_SERVER_KEY` from it, and the runtime has no `_FILE` variant to mount instead.
+
+### 40.8 Fetch the pinned model into the model dataset
+
+The model is not in any backup: 4.7 GiB of a blob that a checksum re-derives. It
+is fetched once into `state/agent-model`, which the pool unit must have created and
+mounted first.
+
+```sh
+sudo zfs get -H -o value mounted smortress/state/agent-model
+sudo chown 1000:1000 /var/lib/agent/model
+sudo curl -fL --retry 3 --continue-at -   -o /var/lib/agent/model/Qwen2.5-7B-Instruct-Q4_K_M.gguf.part \
+  'https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/resolve/main/Qwen2.5-7B-Instruct-Q4_K_M.gguf?download=true'
+```
+
+Verify before it is used. The size and the checksum are the pin; a partial or
+re-encoded download fails here, not inside llama.cpp:
+
+```sh
+echo '65b8fcd92af6b4fefa935c625d1ac27ea29dcb6ee14589c55a8f115ceaaa1423  /var/lib/agent/model/Qwen2.5-7B-Instruct-Q4_K_M.gguf.part' \
+  | sudo sha256sum -c -
+sudo stat -c '%s' /var/lib/agent/model/Qwen2.5-7B-Instruct-Q4_K_M.gguf.part   # 4683074240
+sudo mv /var/lib/agent/model/Qwen2.5-7B-Instruct-Q4_K_M.gguf.part \
+        /var/lib/agent/model/Qwen2.5-7B-Instruct-Q4_K_M.gguf
+sudo chown 1000:1000 /var/lib/agent/model/Qwen2.5-7B-Instruct-Q4_K_M.gguf
+```
+
+The name matters: `units/quadlet/agent-model.container` starts the server with
+`-m /models/Qwen2.5-7B-Instruct-Q4_K_M.gguf`. A different file name needs that
+unit changed as well, which is an image change.
+
+### 40.9 Validate the units and check the three listeners
+
+`systemd-analyze verify` parses the two hand-written units and needs no root, so it
+runs from the checkout before the deploy:
+
+```sh
+systemd-analyze verify units/systemd/smortress-nvidia-cdi.service \
+  units/systemd/smortress-agent-config.service
+```
+
+After the reboot, the generator's own dry run is what shows a Quadlet the image did
+not install, or one that names a network file that is not there: the generator
+drops the container and says so, and the unit is simply absent.
+
+```sh
+sudo /usr/lib/systemd/system-generators/podman-system-generator -dryrun -v 2>&1 \
+  | grep -E 'agent-(model|local|general|proxy)\.(service|network)'
+sudo podman quadlet list | grep agent
+systemctl cat agent-proxy.service | head -20
+```
+
+`systemctl cat` is the ground truth: it prints the unit the generator produced, so a
+`Network=` that resolved to nothing, or a `Secret=` that no Podman secret satisfies,
+is visible before anything is started.
+
+Start them in dependency order and read the one thing each step produces:
+
+```sh
+sudo systemctl start zfs-ready@state-agent-model.service zfs-ready@state-agent-local.service \
+  zfs-ready@state-agent-general.service
+sudo systemctl start smortress-nvidia-cdi.service
+sudo nvidia-ctk cdi list                                     # one device, nvidia.com/gpu=all
+sudo systemctl start smortress-agent-config.service
+sudo ls -l /var/lib/agent/local/config.yaml /var/lib/agent/general/config.yaml
+sudo systemctl start agent-proxy.service agent-model.service agent-general.service agent-local.service
+sudo podman ps --filter name=agent --format '{{.Names}}	{{.Status}}'
+```
+
+The proxy and the two gateways answer on loopback. The proxy check is also the only
+proof the provider key works: `200` on `/v1/models` means the key was accepted by the
+provider, `401` means the ciphertext still holds the seeded random value (40.7).
+
+```sh
+curl -fsS http://127.0.0.1:18003/healthz
+curl -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:18003/v1/models
+curl -fsS -H 'Accept: application/json' http://127.0.0.1:18003/v1/models | head -c 400
+```
+
+The model ids the account offers come back from that last call. The general config
+pins `qwen-3.8-27b`; an id the account does not offer fails the first turn at the
+provider, and the fix is that line in `/var/lib/agent/general/config.yaml`, not a
+change to the proxy.
+
+The gateways need their own key. It is one value in each `.env`, and the same value
+authenticates `/v1/models` and `/v1/chat/completions`:
+
+```sh
+key=$(sudo sed -n 's/^API_SERVER_KEY=//p' /var/lib/agent/local/.env)
+curl -fsS -H "Authorization: Bearer $key" http://127.0.0.1:18001/v1/models
+curl -fsS -H "Authorization: Bearer $key" -H 'Content-Type: application/json' \
+  -d '{"model":"hermes-agent","messages":[{"role":"user","content":"ping"}]}' \
+  http://127.0.0.1:18001/v1/chat/completions
+gkey=$(sudo sed -n 's/^API_SERVER_KEY=//p' /var/lib/agent/general/.env)
+curl -fsS -H "Authorization: Bearer $gkey" -H 'Content-Type: application/json' \
+  -d '{"model":"hermes-agent","messages":[{"role":"user","content":"ping"}]}' \
+  http://127.0.0.1:18002/v1/chat/completions
+```
+
+The gateways run the runtime's own supervisor, so its uid remap is the thing to
+read: the unit passes `HERMES_UID=1000`/`HERMES_GID=1000` because the image rejects
+an arbitrary `--user`, and the boot log must show the remap and files owned by 1000.
+
+```sh
+sudo podman logs smortress-agent-local 2>&1 | grep -E 'stage2|Changing hermes'
+sudo stat -c '%u:%g %a %n' /var/lib/agent/local /var/lib/agent/local/config.yaml
+```
+
+A `Permission denied` under `/opt/data` means the remap did not run: check that
+`HERMES_UID`/`HERMES_GID` are still in the unit and that the dataset is 0750
+`1000:1000`. Do not fix it by widening the dataset mode -- the next container in
+the same network would read it.
+
+The personal side must have no egress, and that is checked from inside its own
+namespace, not from the host:
+
+```sh
+sudo podman exec smortress-agent-local python3 -c \
+  'import socket; socket.create_connection(("1.1.1.1", 443), 3)' ; echo "exit=$?"
+sudo podman exec smortress-agent-model getent hosts example.com ; echo "exit=$?"
+```
+
+Both must fail (`exit=1` from `python3` or `getent`); the model call above still
+succeeding is what makes the failure meaningful.
+
+### 40.10 Check the two Serve routes
+
+`scripts/tailscale-serve.sh` declares `/apps/agent-local` and `/apps/agent-general`
+on 443 as core paths, before the tenant plan is applied, and the stale-route pruning
+skips both. After the deploy:
+
+```sh
+sudo systemctl start smortress-tailscale-serve.service
+tailscale serve status
+```
+
+The status must show `https://smortress.<tailnet>.ts.net:443` handlers `/`,
+`/wallpapers/`, `/apps/agent-local`, `/apps/agent-general`, and one `/apps/<name>`
+per tenant app. There is no handler for `127.0.0.1:18003` and there must never be
+one: the general gateway reaches the proxy by container name, and a tailnet path to
+the proxy would let any device spend the provider key. From a tailnet device:
+
+```sh
+read -r key   # paste the personal gateway key: sudo sed -n 's/^API_SERVER_KEY=//p' /var/lib/agent/local/.env
+curl -fsS -H "Authorization: Bearer $key" \
+  https://smortress.<tailnet>.ts.net/apps/agent-local/v1/models
+curl -fsS -o /dev/null -w '%{http_code}\n' \
+  https://smortress.<tailnet>.ts.net/apps/agent-general/v1/models
+```
+
+The first answers the gateway's model list; the second answers `401` without its own
+key, which is the correct answer for a request that carries no credential.
 
 ## 41. SSH tunnel (`ssh.sammohr.dev`)
 

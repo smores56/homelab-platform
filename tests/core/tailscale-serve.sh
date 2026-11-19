@@ -2,12 +2,14 @@
 # Offline checks for the Serve route generator (SDLC #726, T7 of #701).
 #
 # Serve is the tenant's only ingress. The core applications own their root
-# paths; each `homelab-apps` app gets one `/apps/<name>` path on 443 pointing at
-# the loopback port the renderer assigned. This proves the declaration half
-# without a tailnet: the fixed core routes, the wallpaper library as static files
-# under `/wallpapers`, one route per app, pruning of an app that left the plan
-# without touching that static route, and a refusal to build a route from a plan
-# that names a foreign path or port.
+# paths, the two agent gateways own `/apps/agent-local` and `/apps/agent-general`
+# on 443, and each `homelab-apps` app gets one `/apps/<name>` path on 443 pointing
+# at the loopback port the renderer assigned. This proves the declaration half
+# without a tailnet: the fixed core routes, the two core paths, the wallpaper
+# library as static files under `/wallpapers`, one route per app, pruning of an
+# app that left the plan without touching the static route or a core path, a
+# refused claim on a core path, and a refusal to build a route from a plan that
+# names a foreign path or port.
 #
 #   tests/core/tailscale-serve.sh
 set -uo pipefail
@@ -134,7 +136,10 @@ core_status() {
 {
   "TCP": {"443": {"HTTPS": true}, "8443": {"HTTPS": true}, "10000": {"HTTPS": true}},
   "Web": {
-    "host:443": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:2283"}}},
+    "host:443": {"Handlers": {
+      "/": {"Proxy": "http://127.0.0.1:2283"},
+      "/apps/agent-local": {"Proxy": "http://127.0.0.1:18001"},
+      "/apps/agent-general": {"Proxy": "http://127.0.0.1:18002"}}},
     "host:8443": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:8083"}}},
     "host:10000": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:8384"}}}
   }
@@ -167,6 +172,18 @@ serves() { # path target label
 serves host:443 / http://127.0.0.1:2283 '443 still fronts Immich'
 serves host:8443 / http://127.0.0.1:8083 '8443 still fronts OPDShelf'
 serves host:10000 / http://127.0.0.1:8384 '10000 still fronts Syncthing'
+
+# --- the two agent gateways own a fixed path each on 443 ----------------------
+
+serves host:443 /apps/agent-local http://127.0.0.1:18001 'the personal gateway gets /apps/agent-local'
+serves host:443 /apps/agent-general http://127.0.0.1:18002 'the general gateway gets /apps/agent-general'
+agent_declarations=$(grep -cE -- '--set-path=/apps/agent-(local|general) ' "$log")
+eq "$agent_declarations" 2 'each agent gateway is declared exactly once'
+if grep -qF -- 'http://127.0.0.1:18003' "$log"; then
+    bad 'the hosted proxy is never a Serve route'
+else
+    ok 'the hosted proxy is never a Serve route'
+fi
 
 # --- the wallpaper library is static files, not a listener --------------------
 
@@ -217,6 +234,7 @@ else
     ok 'a route for an app that left the plan is pruned'
 fi
 serves host:443 / http://127.0.0.1:2283 'pruning leaves the core root route alone'
+serves host:443 /apps/agent-local http://127.0.0.1:18001 'pruning leaves the personal gateway path alone'
 eq "$(static_served host:443 /wallpapers/)" "$wallpapers" 'pruning leaves the wallpaper route alone'
 if grep -E -- ' off$' "$log" | grep -qv -- '--set-path=/apps/'; then
     bad 'pruning only removes /apps/ handlers' "$(grep -E -- ' off$' "$log")"
@@ -230,11 +248,12 @@ reset_case
 jq '.Web["host:443"].Handlers["/apps/alpha"] = {"Proxy": "http://127.0.0.1:21234"}' "$status" >"$work/s" && mv "$work/s" "$status"
 run
 eq "$?" 0 'no plan is not an error'
-if served host:443 | grep -q '^/apps/'; then
+if served host:443 | grep -E '^/apps/' | grep -qvE '^/apps/agent-(local|general) '; then
     bad 'no plan removes every app route' "$(served host:443)"
 else
     ok 'no plan removes every app route'
 fi
+serves host:443 /apps/agent-local http://127.0.0.1:18001 'no plan keeps the core agent path'
 serves host:443 / http://127.0.0.1:2283 'no plan keeps the core root route'
 
 # --- Serve status is a nicety, not a precondition for core ingress ----------
@@ -242,8 +261,8 @@ serves host:443 / http://127.0.0.1:2283 'no plan keeps the core root route'
 reset_case
 plan_with "$(jq -cn --argjson a "$(app_entry alpha 21234 4001 1G internet)" '{alpha: $a}')" >"$plan"
 if FAKE_STATUS_FAIL=1 run; then ok 'an unreadable status still applies the plan'; else bad 'an unreadable status still applies the plan' "$(cat "$work/stderr")"; fi
-if [[ $(grep -c -- '--bg --https=' "$log") == 5 ]]; then
-    ok 'the core routes, the wallpaper route and the app route are declared without status'
+if [[ $(grep -c -- '--bg --https=' "$log") == 7 ]]; then
+    ok 'the core routes, the two core paths, the wallpaper route and the app route are declared without status'
 else
     bad 'the core routes, the wallpaper route and the app route are declared without status' "$(cat "$log")"
 fi
@@ -268,7 +287,7 @@ if WALLPAPERS_DIR=$work/absent run; then
 else
     ok 'a missing wallpaper directory fails the run'
 fi
-if [[ $(grep -c -- '--bg --https=' "$log") == 3 ]]; then
+if [[ $(grep -c -- '--bg --https=' "$log") == 5 ]]; then
     ok 'a missing wallpaper directory still leaves the core routes declared'
 else
     bad 'a missing wallpaper directory still leaves the core routes declared' "$(cat "$log")"
@@ -296,18 +315,41 @@ rejected 'a path traversal in the app name is rejected' \
 rejected 'an app entry that is not an object is rejected' \
     '{"apps": {"alpha": "x"}}'
 
+# A tenant app that claims a core path would be declared by two loops; the whole
+# plan is refused rather than letting the last writer win.
+reset_case
+plan_with "$(jq -cn --argjson a "$(app_entry agent-local 21234 4001 1G internet)" \
+  --argjson b "$(app_entry alpha 21235 4002 1G internet)" '{"agent-local": $a, alpha: $b}')" >"$plan"
+if run; then
+    bad 'a plan that claims a core path is rejected' "$(cat "$work/stdout")"
+else
+    ok 'a plan that claims a core path is rejected'
+fi
+if grep -qF -- 'which a core route owns' "$work/stderr"; then
+    ok 'the rejection names the core path'
+else
+    bad 'the rejection names the core path' "$(cat "$work/stderr")"
+fi
+if served host:443 | grep -qx '/apps/alpha http://127.0.0.1:21235'; then
+    bad 'a plan that claims a core path applies none of its routes' "$(served host:443)"
+else
+    ok 'a plan that claims a core path applies none of its routes'
+fi
+serves host:443 /apps/agent-local http://127.0.0.1:18001 'the refused plan leaves the core path alone'
+
 reset_case
 printf 'not json\n' >"$plan"
 if ! run; then ok 'invalid JSON is rejected'; else bad 'invalid JSON is rejected'; fi
 # A rejected plan must still leave the core applications and the wallpapers
 # route reachable, and must change no app route.
-if grep -qE -- '(--set-path=/apps/| off)' "$log"; then
-    bad 'a rejected plan changes no app route' "$(cat "$log")"
+tenant_traffic=$(grep -E -- '(--set-path=/apps/| off)' "$log" | grep -vE -- '--set-path=/apps/agent-(local|general) ')
+if [[ -n $tenant_traffic ]]; then
+    bad 'a rejected plan changes no app route' "$tenant_traffic"
 else
     ok 'a rejected plan changes no app route'
 fi
-if [[ $(grep -c -- '--bg --https=' "$log") == 4 ]]; then
-    ok 'a rejected plan still declares the core routes and the wallpapers route'
+if [[ $(grep -c -- '--bg --https=' "$log") == 6 ]]; then
+    ok 'a rejected plan still declares the core routes, the core paths and the wallpapers route'
 else
     bad 'a rejected plan still declares the core routes and the wallpapers route' "$(cat "$log")"
 fi
