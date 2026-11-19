@@ -24,8 +24,8 @@ fail=0
 ok() { printf 'ok   %s\n' "$1"; }
 bad() { printf 'FAIL %s\n' "$1" >&2; fail=1; }
 check() { local name=$1; shift; if "$@"; then ok "$name"; else bad "$name"; fi; }
-has() { grep -qF -- "$1" "$2"; }
-lacks() { ! grep -qF -- "$1" "$2"; }
+has() { grep -rqF -- "$1" "$2"; }
+lacks() { ! grep -rqF -- "$1" "$2"; }
 count() { grep -cF -- "$1" "$2" || true; }
 probe() { local name=$1; shift; if "$@" >/dev/null 2>&1; then ok "$name"; else bad "$name"; fi; }
 
