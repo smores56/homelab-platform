@@ -597,13 +597,13 @@ else
 fi
 for q in units/quadlet/agent-facade-personal.container units/quadlet/agent-facade-general.container; do
   check "$q mounts the installed tree" \
-    has 'Volume=/usr/lib/agent-facade:/usr/lib/agent-facade:ro,z' "$q"
+    has 'Volume=/usr/lib/agent-facade:/usr/lib/agent-facade:ro' "$q"
 done
 # The other half of the same delivery: a program the image installs on the HOST has
 # to be mounted into the container that runs it. agent-proxy shipped its `Exec=`
 # with no mount, so python3 exited on a path that was not in its namespace.
 check "the proxy unit mounts its own program" \
-  has 'Volume=/usr/libexec/agent-proxy:/usr/libexec/agent-proxy:ro,z' units/quadlet/agent-proxy.container
+  has 'Volume=/usr/libexec/agent-proxy:/usr/libexec/agent-proxy:ro' units/quadlet/agent-proxy.container
 check "Syncthing's sync port is permitted on the tailscale zone" \
   has '<port port="22000" protocol="tcp"/>' image/rootfs/etc/firewalld/zones/tailscale.xml
 check "Syncthing's QUIC port is permitted on the tailscale zone" \

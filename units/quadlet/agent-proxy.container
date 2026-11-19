@@ -47,7 +47,7 @@ User=1000:1000
 Secret=agent-hosted-key,type=mount,target=/run/secrets/agent-hosted-key,uid=1000,gid=1000,mode=0400
 Entrypoint=python3
 Exec=/usr/libexec/agent-proxy
-Volume=/usr/libexec/agent-proxy:/usr/libexec/agent-proxy:ro,z
+Volume=/usr/libexec/agent-proxy:/usr/libexec/agent-proxy:ro
 Environment=AGENT_PROXY_KEY_FILE=/run/secrets/agent-hosted-key
 Environment=AGENT_PROXY_HOST=0.0.0.0
 Environment=AGENT_PROXY_PORT=18003

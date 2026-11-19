@@ -37,7 +37,9 @@ Environment=PYTHONPATH=/usr/lib/agent-facade/libs:/usr/lib/agent-facade
 # The code tree is mounted read-only, so a bytecode cache write can only fail.
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=TZ=UTC
-Volume=/usr/lib/agent-facade:/usr/lib/agent-facade:ro,z
+# No :z here: /usr is a read-only composefs mount, so a relabel fails with EROFS.
+# /usr content is already readable by the container type; only dataset mounts relabel.
+Volume=/usr/lib/agent-facade:/usr/lib/agent-facade:ro
 Volume=/var/lib/agent/general/memory:/memory:z
 ReadOnly=true
 NoNewPrivileges=true

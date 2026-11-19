@@ -412,11 +412,10 @@ successful start — it is proven by serving representative data from it.
 - The proxy, the facades and their libraries are code the *host* image installs and
   the container mounts, so what runs is what the booted deployment carries: that is
   the point, and it is also the one place a container reads a host path. The mounts
-  are `:ro,z`, which relabels the source; `/usr` on this host is read-only, so if a
-  podman version ever refuses that relabel the unit fails at start with a
-  read-only-filesystem error and the fix is `:ro` without `z` -- the file is
-  already `bin_t`/`usr_t`, which `container_t` may read. The read-only property is
-  the invariant; the relabel is not.
+  are `:ro` with no `z`, deliberately: `/usr` is a read-only composefs mount, so a
+  relabel fails with `EROFS`, and the content is already `bin_t`/`usr_t`, which
+  `container_t` may read. Only dataset mounts relabel (`:z`); anything the bootc
+  image installs under `/usr` is mounted read-only and unrelabelled.
 - A facade token is a secret inside a restorable dataset: it sits in the seeded
   `config.yaml` under `state/agent-*`, so it is in Restic snapshots in R2 exactly as
   the gateway keys in `.env` already are. Both are self-issued and revocable, and
