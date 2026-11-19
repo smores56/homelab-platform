@@ -1,0 +1,52 @@
+# hermes-webui, pre-staged so a sealed deployment can start it cold.
+#
+# The upstream image finishes installing itself at container start: its
+# entrypoint (hermeswebui_init.bash) downloads uv from astral.sh, creates
+# /app/venv and installs requirements.txt from PyPI, then runs server.py. The
+# personal deployment has no route off the host, so that bootstrap can never
+# complete there; the install moves to build time instead.
+#
+# Four things are baked, and each one removes a specific boot-time fetch:
+#   * uv on PATH, so `command -v uv` short-circuits the astral.sh download.
+#   * /apptoo/, complete with a venv whose recorded paths already point at
+#     /app/venv. The entrypoint rsyncs /apptoo/ into /app on every start, which
+#     lands the venv exactly where its shebangs and pyvenv.cfg expect it.
+#   * /apptoo/venv/.deps_installed, the marker that makes the entrypoint skip
+#     the install branch entirely.
+#   * hindsight-client, because its install runs outside that marker's guard on
+#     every start and would otherwise reach PyPI on each boot.
+#
+# The base is the digest the spike gated on. A bump needs a new pin and a fresh
+# sealed-boot proof; a tag here would reintroduce the unpinned download the
+# bake exists to remove.
+FROM ghcr.io/nesquena/hermes-webui@sha256:df3fa2309f76d7ffd861cb7f812d15ce604fb1422fc3c9298bd7488e45eb2499
+
+# The entrypoint's root phase needs to write /etc/passwd; it drops privileges
+# itself once the volume ownership is aligned.
+USER root
+
+# Exact versions, resolved once and committed in requirements.lock: the image is
+# the only thing that ships these, so a range here would resolve differently on
+# a rebuild and change the digest without changing the source.
+COPY images/agent-webui/requirements.lock /tmp/requirements.lock
+
+RUN set -eux; \
+    python3 -m pip install --no-cache-dir --disable-pip-version-check "uv==0.13.9"; \
+    rsync -a /apptoo/ /app/; \
+    cd /app; \
+    uv venv venv; \
+    export VIRTUAL_ENV=/app/venv; \
+    uv pip install -r /tmp/requirements.lock; \
+    test -x /app/venv/bin/python3; \
+    touch /app/venv/.deps_installed; \
+    rsync -a /app/venv/ /apptoo/venv/; \
+    rm -rf /app
+
+# The entrypoint aligns hermeswebui to WANTED_UID/WANTED_GID from the
+# environment on every start, so the image's own account is only the pre-remap
+# default. State lives in a mounted volume, never here.
+EXPOSE 8787
+
+# Unchanged from upstream: the init script is what copies the baked tree into
+# place and executes the server.
+CMD ["/hermeswebui_init.bash"]
