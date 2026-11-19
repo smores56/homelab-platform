@@ -1,45 +1,42 @@
 [Unit]
-# One config file and one API-server key per deployment, seeded into the state
-# dataset before the gateway that reads them starts.
+# One config file, one API-server key, one facade token and one memory root per
+# deployment, seeded into the state dataset before the gateway and the facade that
+# read them start. The work is /usr/libexec/agent-config-seed: config and .env were
+# a shell one-liner while they were `cp` and `sed`, and the facade token adds a
+# read loop that must stay out of a unit line -- a value spliced into an
+# `ExecStart` is a value in the process table, and `sed s|…|$(cat secret)|` puts it
+# in argv as well.
 #
 # The config is copied only when it is absent (`cp -n`): the runtime rewrites
 # config.yaml and an operator edits the copy in the dataset, so reconciling the
-# image's template onto a live deployment at every boot would silently revert
-# both.
+# image's template onto a live deployment at every boot would silently revert both.
+# The same `cp -n` is why rotating a facade token is not only a `sops` edit: the
+# seeded config.yaml holds the old token where the template has
+# `__FACADE_TOKEN__`, and nothing rewrites it afterwards, so the rotation deletes
+# that file and lets this unit seed it again (docs/manual-steps.md section 40.11).
 #
-# The key is rewritten at every boot, for two reasons. The runtime has no
-# `_FILE` variant and reads API_SERVER_KEY from $HERMES_HOME/.env, and Podman's
-# `type=env` secret keeps the trailing newline the decrypted file ends with, so a
-# Bearer token taken from it never compares equal. `sed` prefixes the decrypted
-# value, which drops nothing and adds no newline to it. These two keys are
-# self-issued and revocable; the hosted provider key is not here at all, it is in
-# agent-proxy.
+# The key is rewritten at every boot, for two reasons. The runtime has no `_FILE`
+# variant and reads API_SERVER_KEY from $HERMES_HOME/.env, and podman's `type=env`
+# secret keeps the trailing newline the decrypted file ends with, so a Bearer token
+# taken from it never compares equal. The script prefixes the decrypted value,
+# which drops nothing and adds no newline to it. Both gateway keys and both facade
+# tokens are self-issued and revocable; the hosted provider key is not here at all,
+# it is in agent-proxy.
 #
 # Requires= both datasets: without them the copy lands on the root filesystem and
 # the gateway starts against an empty home that looks configured.
-Description=Seed the agent runtime configs and their API-server keys
+Description=Seed the agent runtime configs, their keys and the facade memory roots
 Requires=zfs-ready@state-agent-local.service zfs-ready@state-agent-general.service sops-decrypt.service
 After=zfs-ready@state-agent-local.service zfs-ready@state-agent-general.service sops-decrypt.service
-Before=agent-local.service agent-general.service
+Before=agent-local.service agent-general.service agent-facade-personal.service agent-facade-general.service
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-# The .env holds a credential: it is created under this umask and installed 0400.
+# The .env holds a credential and a seeded config.yaml holds a facade token: both
+# are created under this umask and installed with an explicit owner and mode.
 UMask=0077
-# Written out per deployment rather than looped: no shell variable, and therefore
-# no systemd environment substitution, stands between these paths and the files.
-ExecStart=/bin/sh -c 'set -eu; \
-cp -n /etc/smortress/agent/local-config.yaml /var/lib/agent/local/config.yaml; \
-chown 1000:1000 /var/lib/agent/local/config.yaml; \
-sed s/^/API_SERVER_KEY=/ /run/smortress/secrets/agent-local-api-key.yaml >/var/lib/agent/local/.env.new; \
-install -o 1000 -g 1000 -m 0400 /var/lib/agent/local/.env.new /var/lib/agent/local/.env; \
-rm -f /var/lib/agent/local/.env.new; \
-cp -n /etc/smortress/agent/general-config.yaml /var/lib/agent/general/config.yaml; \
-chown 1000:1000 /var/lib/agent/general/config.yaml; \
-sed s/^/API_SERVER_KEY=/ /run/smortress/secrets/agent-general-api-key.yaml >/var/lib/agent/general/.env.new; \
-install -o 1000 -g 1000 -m 0400 /var/lib/agent/general/.env.new /var/lib/agent/general/.env; \
-rm -f /var/lib/agent/general/.env.new'
+ExecStart=/usr/libexec/agent-config-seed
 TimeoutStartSec=60
 
 [Install]

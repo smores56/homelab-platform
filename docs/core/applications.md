@@ -2,9 +2,10 @@
 
 The three applications that carry real data on smortress run as Podman Quadlets
 from the derived image. A fourth Serve route, `/wallpapers`, publishes a dataset
-as static files and has no container behind it at all. Four more containers run
-the agent deployments: a pinned local model server, two Hermes gateways and one
-hosted-model proxy, split by authority (section "Agent deployments" below). This
+as static files and has no container behind it at all. Six more containers run
+the agent deployments: a pinned local model server, two Hermes gateways, one
+hosted-model proxy and one source facade per deployment, split by authority
+(section "Agent deployments" below). This
 document covers what each container is allowed to read and write, how its image
 reaches the host, how it is reached from the tailnet, and what its restore
 actually consists of. Operator steps are in `docs/manual-steps.md` section 40;
@@ -43,9 +44,10 @@ copies each upstream image into our namespace by digest (`skopeo copy --all
 | `agent-model` | `…/agent-model@sha256:ae96e52f…` | `ghcr.io/ggml-org/llama.cpp:server-cuda` |
 | `agent-runtime` | `…/agent-runtime@sha256:276d4468…` | `docker.io/nousresearch/hermes-agent:v0.23.1` |
 
-`agent-runtime` is drawn by three Quadlets: the two gateways and the hosted proxy.
-The proxy is a Python program in this repository (`apps/agent_proxy/`), so it needs
-no image of its own and no package manager, and a third pin would be a third thing
+`agent-runtime` is drawn by five Quadlets: the two gateways, the hosted proxy and
+the two source facades. The proxy and the facades are Python programs in this
+repository (`apps/agent_proxy/`, `apps/agent_facade/`), so they need
+no image of their own and no package manager, and a third pin would be a third thing
 to mirror for no gain.
 
 Immich stays on v3.0.3 until the cutover restore has passed: the existing
@@ -89,6 +91,8 @@ one Restic snapshot names every dataset the unit restores.
 | OPDShelf | `raw/books` — `/srv/books`, the catalog | `state/opdshelf` — `/var/lib/opdshelf`, edits, annotations and covers | `/books`; `DATA_DIR=/state` |
 | Personal agent | none — no personal source is mounted | `state/agent-local` — `/var/lib/agent/local`, sessions, memory, skills | `/opt/data` |
 | General agent | none — no repository or book tree is mounted | `state/agent-general` — `/var/lib/agent/general`, same shape | `/opt/data` |
+| Personal facade | none — its adapters are in-process fixtures | `state/agent-local` — `/var/lib/agent/local/memory`, the `local` memory profile and its derived index; the rest of that dataset is the gateway's | `/memory` (writable) |
+| General facade | none | `state/agent-general` — `/var/lib/agent/general/memory`, the `external` profile | `/memory` (writable) |
 | Local model | none | none: `state/agent-model` — `/var/lib/agent/model` is the GGUF file, and it is in no backup | `/models` (read-only) |
 | Syncthing | `raw/files` — `/srv/files`, the vault | `state/syncthing-config` — `/var/lib/syncthing/config`, identity and configuration | `/srv/files`; `/var/syncthing/config` |
 
@@ -125,8 +129,10 @@ though it belongs to the `files` unit.
 | Personal gateway key | `secrets/server/agent-local-api-key.yaml` | `/run/smortress/secrets/agent-local-api-key.yaml` (`value`, root 0400) | Podman secret `agent-local-api-key`, also mounted at uid 1000 mode 0400; `smortress-agent-config.service` writes it into `/var/lib/agent/local/.env` as `API_SERVER_KEY` (the runtime has no `_FILE` variant, and Podman's `type=env` keeps the file's trailing newline) |
 | General gateway key | `secrets/server/agent-general-api-key.yaml` | `/run/smortress/secrets/agent-general-api-key.yaml` (`value`, root 0400) | Same shape, `agent-general-api-key`, `/var/lib/agent/general/.env` |
 | Hosted provider key | `secrets/server/agent-hosted-key.yaml` | `/run/smortress/secrets/agent-hosted-key.yaml` (`value`, root 0400) | Podman secret `agent-hosted-key`, mounted read-only at `/run/secrets/agent-hosted-key` in `agent-proxy` only. Never in an environment, never in a config file, never in argv |
+| Personal facade token | `secrets/server/agent-facade-personal-token.yaml` | `/run/smortress/secrets/agent-facade-personal-token.yaml` (`value`, root 0400) | Podman secret `agent-facade-personal-token`, mounted at uid 1000 mode 0400 as `/run/secrets/agent-facade-personal-token` in `agent-facade-personal` only, which reads it through `--token-file`. The personal gateway holds the same value in its seeded `config.yaml` as `X-Deployment-Token` (section "Source facades") |
+| General facade token | `secrets/server/agent-facade-general-token.yaml` | `/run/smortress/secrets/agent-facade-general-token.yaml` (`value`, root 0400) | Same shape for `agent-facade-general` and the general gateway |
 
-`smortress-app-secrets.service` creates all five Podman secrets with
+`smortress-app-secrets.service` creates all seven Podman secrets with
 `--replace` on every boot, before any container that declares one. The values
 never appear in a unit file, in argv, in the image, or in this repository.
 
@@ -215,11 +221,12 @@ the other side's sources.
 
 | Deployment | Quadlets | Network | May reach | May not reach |
 | --- | --- | --- | --- | --- |
-| Personal | `agent-local`, `agent-model` | `agent-local.network`, `Internal=true` | each other, by container name | the internet, the LAN, the host, the general deployment -- no default route exists |
-| General | `agent-general`, `agent-proxy` | `agent-general.network`, a plain bridge | the pinned provider, through the proxy; each other, by container name | the personal deployment, every personal source |
+| Personal | `agent-local`, `agent-model`, `agent-facade-personal` | `agent-local.network`, `Internal=true` | each other, by container name | the internet, the LAN, the host, the general deployment -- no default route exists |
+| General | `agent-general`, `agent-proxy`, `agent-facade-general` | `agent-general.network`, a plain bridge | the pinned provider, through the proxy; each other, by container name | the personal deployment, every personal source |
 
 The personal gateway publishes `127.0.0.1:18001`; the general one publishes
-`127.0.0.1:18002`; the proxy publishes `127.0.0.1:18003`. A published port is
+`127.0.0.1:18002`; the proxy publishes `127.0.0.1:18003`. The two facades publish
+nothing at all. A published port is
 host-side DNAT *toward* a container, so it adds nothing to what that container can
 dial: the personal side still has no route off the host, which is why the sealed
 profile is a network property and not a firewall exception.
@@ -269,6 +276,51 @@ or SSH identity is mounted into either one. The proxy is the opposite case: it r
 one file as uid 1000 with every capability dropped, because its unit replaces the
 image's entrypoint with `python3`.
 
+### Source facades
+
+Each gateway reads its sources and its memory through one MCP server of its own
+deployment (`apps/agent_facade/`, `docs/agent-facade.md`), and that process is a
+container: `agent-facade-personal` serves `notes`, `tasks`, `mail`, `calendar`,
+`finance`, `brave`, `photos`, `music` and `workspace`; `agent-facade-general`
+serves `repos` and `books`. A source outside the table is not refused by a policy
+check, it has no adapter in that process at all. Every adapter is still an
+in-process fixture (`apps/agent_facade/README.md`), so a deployed facade answers its
+own records, not live data: what the split proves today is the reach, not the feed.
+
+Both run the same `agent-runtime` digest as the gateways, with
+`Entrypoint=python3` replacing the image's gateway dispatcher, exactly as the proxy
+does. The program is not in the upstream image and cannot be, so
+`image/Containerfile` installs it and the data-plane libraries it imports under
+`/usr/lib/agent-facade` on the host, and each unit bind-mounts that tree
+`/usr/lib/agent-facade` read-only. `PYTHONPATH` points at it inside the container,
+so the code that runs is the code in the booted deployment -- no image of our own,
+no package manager, and no second copy to drift.
+
+Neither facade publishes a port. The gateway is their only client, and it reaches
+them by container name (`http://smortress-agent-facade-personal:18004/mcp`,
+`http://smortress-agent-facade-general:18005/mcp`) on the deployment's own network.
+A published port would be a second way in with no consumer, and it would put an
+address in the operator's curl reach that nothing authenticates differently from
+the gateway's.
+
+The gateway reaches its facade with `mcp_servers` in the runtime config, sending
+`X-Deployment-Token`. That token is the facade's whole identity: one process, one
+token, and a request without it is `401` before the body is read. The template in
+the image carries the placeholder `__FACADE_TOKEN__`;
+`smortress-agent-config.service` replaces it from the deployment's decrypted
+ciphertext when the config is first seeded, so no token is in the image, in this
+document, or in a command line. Because that file is seeded with `cp -n`, rotating
+a token is `sops`, then delete the seeded `config.yaml` and let the unit seed it
+again (`docs/manual-steps.md` section 40.11).
+
+Memory is the one write target each facade has: `/memory` is
+`state/agent-local/memory` and `state/agent-general/memory`, the `local` and
+`external` profiles. It is a directory inside the dataset, not the dataset root, so
+the gateway's sessions, skills and `.env` stay out of reach. A facade therefore has no
+recovery unit of its own -- its records restore with `agent-local` or
+`agent-general`, which is exactly what those units name -- and the SQLite FTS index
+beside them is derived, so a restore that loses it costs one rebuild.
+
 ## Access paths
 
 | Application | Direct listener | Tailnet URL |
@@ -280,6 +332,7 @@ image's entrypoint with `python3`.
 | Personal agent gateway | `127.0.0.1:18001` | `https://smortress.<tailnet>.ts.net/apps/agent-local/v1` |
 | General agent gateway | `127.0.0.1:18002` | `https://smortress.<tailnet>.ts.net/apps/agent-general/v1` |
 | Hosted proxy | `127.0.0.1:18003` | none, on purpose: a tailnet path would let any device spend the provider key |
+| Source facades | nothing published | none: each gateway reaches its own facade by container name, and no device outside the deployment has any reason to |
 
 The two agent paths are a second table in `scripts/tailscale-serve.sh`
 (`core_path_routes`) rather than a fourth and fifth core *port*: 443, 8443 and
@@ -328,6 +381,14 @@ commands; the shape is:
   alternate port and **all folders paused**, then designate a primary. Peers
   must not be allowed to sync into a tree whose identity was just restored.
 
+A source facade has no drill of its own: its memory records are
+`state/agent-local/memory` or `state/agent-general/memory`, so restoring the
+`agent-local` or `agent-general` unit brings them back with the gateway's sessions
+in the same point in time. What the restore must then prove is that the facade
+serves them: `memory.search` answers from a restored profile without a rebuild, and
+if the derived FTS index did not come back, `memory.rebuild` recreates it from the
+record files.
+
 The rule that makes these drills meaningful: only a `verified`-tagged snapshot is
 a complete restore point, and a restored application is not proven by a
 successful start — it is proven by serving representative data from it.
@@ -348,6 +409,18 @@ successful start — it is proven by serving representative data from it.
   re-applies both ownership and label (`chown` + `chcon`) before the application
   starts, and the unit timeouts are sized for a first start that has to relabel.
   Snapshots are not touched: ZFS keeps `.zfs` hidden from directory walks.
+- The proxy, the facades and their libraries are code the *host* image installs and
+  the container mounts, so what runs is what the booted deployment carries: that is
+  the point, and it is also the one place a container reads a host path. The mounts
+  are `:ro,z`, which relabels the source; `/usr` on this host is read-only, so if a
+  podman version ever refuses that relabel the unit fails at start with a
+  read-only-filesystem error and the fix is `:ro` without `z` -- the file is
+  already `bin_t`/`usr_t`, which `container_t` may read. The read-only property is
+  the invariant; the relabel is not.
+- A facade token is a secret inside a restorable dataset: it sits in the seeded
+  `config.yaml` under `state/agent-*`, so it is in Restic snapshots in R2 exactly as
+  the gateway keys in `.env` already are. Both are self-issued and revocable, and
+  rotating one is section 40.11.
 - The machine learning container needs egress on first use and caches models
   outside the backup. A cold restore re-downloads them; smart search degrades
   until it finishes.

@@ -3358,12 +3358,13 @@ sudo systemctl start smortress-immich-dump.timer
 The T6 cutover reuses these drills: it restores the same units from each of the
 three destinations before the legacy stack is retired.
 
-### 40.7 Create the three agent secrets
+### 40.7 Create the five agent secrets
 
-The agent deployments need three single-value SOPS files, all `api_key: <value>`.
-Two are self-issued gateway keys; the third is the hosted provider key, and it is
-the only credential on this host that is not ours. `sops` finds the age recipients
-in `.sops.yaml`, so every command below runs from the repository root.
+The agent deployments need five single-value SOPS files. Three are `api_key:` keys:
+two self-issued gateway keys and the hosted provider key, which is the only
+credential on this host that is not ours. Two are `token:` values, one per source
+facade. `sops` finds the age recipients in `.sops.yaml`, so every command below
+runs from the repository root.
 
 Replace the seeded provider key first. The ciphertext committed with this change
 holds a random value: with it the proxy answers `401` from the provider, which is
@@ -3373,21 +3374,32 @@ the loud failure it is supposed to be, and nothing else breaks.
 sops secrets/server/agent-hosted-key.yaml      # set api_key: to the provider key
 sops secrets/server/agent-local-api-key.yaml   # optional: rotate, openssl rand -hex 32
 sops secrets/server/agent-general-api-key.yaml # optional: rotate the same way
+sops secrets/server/agent-facade-personal-token.yaml  # optional: rotate, openssl rand -hex 32
+sops secrets/server/agent-facade-general-token.yaml   # optional: rotate the same way
+```
+
+A facade token is not replaced by hand: the committed ciphertext already holds a
+fresh random one, so the two facade secrets need no edit at all unless you are
+rotating them (40.11).
+
+```sh
 git commit -am 'chore(core): set the agent provider key'
 ```
 
 Each file must stay a single scalar, because `image/rootfs/etc/smortress/secrets.manifest`
 declares it `value`: a second key or an empty value fails `sops-decrypt.service` at
-boot rather than publishing half a secret. The three manifest rows are exactly
+boot rather than publishing half a secret. The five manifest rows are exactly
 
 ```text
 agent-local-api-key.yaml      root  root  0400  value
 agent-general-api-key.yaml    root  root  0400  value
 agent-hosted-key.yaml         root  root  0400  value
+agent-facade-personal-token.yaml root root 0400 value
+agent-facade-general-token.yaml  root root 0400 value
 ```
 
-After the image is deployed (40.2), the decrypted copies are root-only and the
-gateway's own copy is 0400 for uid 1000:
+After the image is deployed (40.2), the decrypted copies are root-only and each
+container's own copy is 0400 for uid 1000:
 
 ```sh
 sudo ls -l /run/smortress/secrets/agent-*.yaml
@@ -3443,14 +3455,15 @@ drops the container and says so, and the unit is simply absent.
 
 ```sh
 sudo /usr/lib/systemd/system-generators/podman-system-generator -dryrun -v 2>&1 \
-  | grep -E 'agent-(model|local|general|proxy)\.(service|network)'
+  | grep -E 'agent-(model|local|general|proxy|facade-personal|facade-general)\.(service|network)'
 sudo podman quadlet list | grep agent
-systemctl cat agent-proxy.service | head -20
+systemctl cat agent-proxy.service agent-facade-personal.service | head -40
 ```
 
 `systemctl cat` is the ground truth: it prints the unit the generator produced, so a
-`Network=` that resolved to nothing, or a `Secret=` that no Podman secret satisfies,
-is visible before anything is started.
+`Network=` that resolved to nothing, a `Secret=` that no Podman secret satisfies, or
+a `Volume=` whose host path is missing (`statfs /usr/lib/agent-facade: no such file
+or directory`) is visible before anything is started.
 
 Start them in dependency order and read the one thing each step produces:
 
@@ -3461,9 +3474,17 @@ sudo systemctl start smortress-nvidia-cdi.service
 sudo nvidia-ctk cdi list                                     # one device, nvidia.com/gpu=all
 sudo systemctl start smortress-agent-config.service
 sudo ls -l /var/lib/agent/local/config.yaml /var/lib/agent/general/config.yaml
+sudo stat -c '%u:%g %a %n' /var/lib/agent/local/memory /var/lib/agent/general/memory
 sudo systemctl start agent-proxy.service agent-model.service agent-general.service agent-local.service
+sudo systemctl start agent-facade-personal.service agent-facade-general.service
 sudo podman ps --filter name=agent --format '{{.Names}}	{{.Status}}'
 ```
+
+Six containers answer `Up`: the proxy, the model server, the two gateways and the
+two facades. The two memory directories must be `1000:1000 0750` before the facades
+start -- the seed unit creates them, and a facade that lets podman create its own
+bind source gets a root-owned directory inside a 0750 dataset and fails its first
+memory write.
 
 The proxy and the two gateways answer on loopback. The proxy check is also the only
 proof the provider key works: `200` on `/v1/models` means the key was accepted by the
@@ -3548,6 +3569,123 @@ curl -fsS -o /dev/null -w '%{http_code}\n' \
 
 The first answers the gateway's model list; the second answers `401` without its own
 key, which is the correct answer for a request that carries no credential.
+
+### 40.11 Rotate a facade token
+
+A facade token lives in three places that have to move together: the ciphertext in
+git, the Podman secret the facade mounts, and the gateway's seeded `config.yaml`.
+The first two follow the image (`sops-decrypt.service` re-decrypts and
+`smortress-app-secrets.service` re-creates the secret on every boot), but the third
+does not: `smortress-agent-config.service` seeds the config with `cp -n`, so a
+deployed `config.yaml` holds the token it was seeded with and nothing rewrites it.
+Rotating therefore ends with deleting that file so the unit seeds it again.
+
+Rotate the ciphertext, then deploy it, then re-seed. Do not delete the config
+before the new ciphertext is running: the reseed would copy the *old* token back.
+
+```sh
+sops secrets/server/agent-facade-personal-token.yaml   # set token: to `openssl rand -hex 32`
+git commit -am 'chore(core): rotate the personal facade token'
+git push
+```
+
+Publish the image, then deploy it (40.2):
+
+```sh
+sudo bootc upgrade && sudo systemctl reboot
+```
+
+After that boot the decrypted file and the Podman secret already carry the new
+value; the gateway still has the old one. Delete the seeded config and let the seed
+unit rebuild it, then restart the two containers that read the token:
+
+```sh
+sudo rm /var/lib/agent/local/config.yaml
+sudo systemctl restart smortress-agent-config.service
+sudo stat -c '%u:%g %a %n' /var/lib/agent/local/config.yaml   # 1000:1000 0600
+sudo systemctl restart agent-facade-personal.service agent-local.service
+```
+
+A reboot does the same thing in one step (`sudo rm /var/lib/agent/local/config.yaml`
+then `sudo systemctl reboot`): the seed unit is ordered
+`Before=agent-local.service`, so the gateway starts against a config that already
+carries the new token. The general deployment is the same commands with
+`general` in place of `local` and `agent-facade-general-token.yaml` in place of the
+personal ciphertext. Verify with 40.12 -- a gateway whose config still holds the old
+token gets `401` from its facade, and the facade's log is where that shows up.
+
+### 40.12 Verify the facade wire from the gateway
+
+Three things have to be true and each has its own command: the facade answers an MCP
+client inside the deployment's network, it answers only with the token, and the
+gateway has registered its tools.
+
+The client is the gateway container itself -- it is on `agent-local.network` and its
+image carries `python3` -- and the token arrives on stdin, never in an argument:
+
+```sh
+sudo podman exec -i smortress-agent-local python3 -c '
+import json, sys, urllib.request
+token = sys.stdin.readline().strip()
+def call(method, ident, params=None):
+    request = urllib.request.Request(
+        "http://smortress-agent-facade-personal:18004/mcp",
+        data=json.dumps({"jsonrpc": "2.0", "id": ident, "method": method,
+                         "params": params or {}}).encode(),
+        headers={"Content-Type": "application/json", "X-Deployment-Token": token})
+    with urllib.request.urlopen(request, timeout=10) as answer:
+        return json.load(answer)
+print(call("initialize", 1)["result"]["serverInfo"])
+print([tool["name"] for tool in call("tools/list", 2)["result"]["tools"]])
+' < <(sudo cat /run/smortress/secrets/agent-facade-personal-token.yaml)
+```
+
+The first line is the server info: `agent-facade-personal`. The second is the tool
+list, and it is exactly `sources.describe`,
+`sources.read`, `sources.search`, `memory.read`, `memory.write`, `memory.search` and
+`memory.rebuild` -- no `repos`, no `books`, because the personal deployment has no
+adapter for them. The general deployment answers the same way at
+`http://smortress-agent-facade-general:18005/mcp` from `smortress-agent-general`,
+with `repos` and `books` and no personal source.
+
+A request with no token is `401` before any tool could run. This prints `401`:
+
+```sh
+sudo podman exec smortress-agent-local python3 -c '
+import urllib.error, urllib.request
+request = urllib.request.Request("http://smortress-agent-facade-personal:18004/mcp",
+                                 data=b"{}", headers={"Content-Type": "application/json"})
+try:
+    urllib.request.urlopen(request, timeout=10)
+except urllib.error.HTTPError as error:
+    print(error.code)
+'
+```
+
+The gateway's own view of the facade is the runtime's client, and its MCP subcommand
+is the direct way to ask it. It exits non-zero and prints the reason when the server
+is unreachable or refuses the token, so it is also the fastest diagnosis of a
+rotation that did not reach the config:
+
+```sh
+sudo podman exec -e HERMES_HOME=/opt/data smortress-agent-local hermes mcp test personal
+```
+
+The tool names the runtime registers are prefixed with the server name from
+`mcp_servers`, with dots turned into underscores: `mcp__personal__sources_describe`
+through `mcp__personal__memory_rebuild`, and `mcp__general__*` on the other side. A
+gateway that sees no `personal` server at all is a config problem, and the two things
+to read are whether the placeholder is gone and what the facade logged:
+
+```sh
+sudo grep -c '__FACADE_TOKEN__' /var/lib/agent/local/config.yaml   # 0 after seeding
+sudo podman logs smortress-agent-facade-personal 2>&1 | tail
+```
+
+The facade logs the method, the path and the status of every request it answers -- a
+`401` where the gateway's `initialize` should be is the old token in
+`config.yaml`, and 40.11 is the fix. The log carries no header and no token, so it is
+safe to paste into a bug report.
 
 ## 41. SSH tunnel (`ssh.sammohr.dev`)
 

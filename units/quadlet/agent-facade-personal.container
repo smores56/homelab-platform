@@ -1,0 +1,61 @@
+# The personal deployment's source facade: the MCP server the personal gateway
+# reads its sources and its memory through (apps/agent_facade/, docs/agent-facade.md).
+#
+# Code delivery is the agent-proxy pattern (units/quadlet/agent-proxy.container):
+# the same pinned agent-runtime image, `Entrypoint=python3` instead of the image's
+# gateway dispatcher, and the program itself bind-mounted from the HOST. The
+# program is not in the upstream image, so image/Containerfile installs it under
+# /usr/lib/agent-facade and this unit mounts that tree read-only. Nothing here is
+# a second copy of the code: the host path is the only copy, and the mount is
+# what makes it exist inside this namespace.
+#
+# It publishes nothing, and that is the boundary: its only client is
+# smortress-agent-local, which reaches it by container name on
+# agent-local.network. A published port would be a second way in with no
+# consumer, and Tailscale Serve would have to be told to skip it -- the same
+# reasoning as the hosted proxy, which publishes only for the operator's own
+# curl and is not a Serve route either.
+#
+# The token is a mounted file, never an environment variable and never an
+# argument: `--token-file` names it, the process reads it once, and it appears in
+# no log line and in no response. The gateway holds the same value in its seeded
+# config.yaml, which is why a facade token rotation is a two-step operator action
+# (docs/manual-steps.md section 40.11).
+#
+# /memory is the memory subdirectory of the personal state dataset, not the
+# dataset root: the gateway's sessions, skills and .env live one level up and are
+# none of this process's business. smortress-agent-config.service creates it with
+# the dataset's uid and mode, because a directory podman has to create for a bind
+# mount would be root-owned inside a 0750 dataset.
+[Unit]
+Description=Agent source facade, personal deployment (MCP on agent-local.network)
+Requires=zfs-ready@state-agent-local.service sops-decrypt.service smortress-app-secrets.service smortress-agent-config.service
+After=network-online.target zfs-ready@state-agent-local.service sops-decrypt.service smortress-app-secrets.service smortress-agent-config.service
+Wants=network-online.target
+
+[Container]
+Image=ghcr.io/smores56/homelab-platform/agent-runtime@sha256:276d44685c65c0cb2a25f190b63c65c8906f9dc76486fb1c05ae71b5826bda08
+ContainerName=smortress-agent-facade-personal
+Network=agent-local.network
+User=1000:1000
+Entrypoint=python3
+Exec=-m apps.agent_facade --transport http --deployment personal --token-file /run/secrets/agent-facade-personal-token --memory-root /memory --host 0.0.0.0 --port 18004
+Secret=agent-facade-personal-token,type=mount,target=/run/secrets/agent-facade-personal-token,uid=1000,gid=1000,mode=0400
+Environment=PYTHONPATH=/usr/lib/agent-facade/libs:/usr/lib/agent-facade
+# The code tree is mounted read-only, so a bytecode cache write can only fail.
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=TZ=UTC
+Volume=/usr/lib/agent-facade:/usr/lib/agent-facade:ro,z
+Volume=/var/lib/agent/local/memory:/memory:z
+ReadOnly=true
+NoNewPrivileges=true
+DropCapability=ALL
+
+[Service]
+# 143 is SIGTERM, which a deliberate stop sends: not a failure.
+SuccessExitStatus=143
+Restart=on-failure
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

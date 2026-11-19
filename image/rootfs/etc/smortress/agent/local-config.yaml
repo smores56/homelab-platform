@@ -40,3 +40,20 @@ agent:
     - skills
     - image_gen
     - connections
+
+# The personal deployment's source facade (units/quadlet/agent-facade-personal.container),
+# reached by container name on agent-local.network: it publishes nothing, so this
+# name is the only route to it. `personal` is the server name the runtime prefixes
+# every tool with (`mcp__personal__sources_describe`), and `trust: full` is right
+# because the facade is ours and its tools are typed and capped -- a source it does
+# not have is absent from its table, not refused by a permission check.
+#
+# The token is a placeholder, not a credential: smortress-agent-config.service
+# replaces it with the decrypted agent-facade-personal-token.yaml value when this
+# file is first seeded, and this template stays in the image with no token in it.
+mcp_servers:
+  personal:
+    url: http://smortress-agent-facade-personal:18004/mcp
+    headers:
+      X-Deployment-Token: __FACADE_TOKEN__
+    trust: full

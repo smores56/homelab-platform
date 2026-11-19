@@ -48,6 +48,8 @@ readonly app_quadlets=(
   units/quadlet/agent-local.container
   units/quadlet/agent-general.container
   units/quadlet/agent-proxy.container
+  units/quadlet/agent-facade-personal.container
+  units/quadlet/agent-facade-general.container
 )
 
 # Ports that are published on loopback for the operator's own curl and are
@@ -148,11 +150,23 @@ for _key in "${dataset_order[@]}"; do
   done
 done
 unset _key
+# A volume may name the dataset root or a directory inside it (the facades mount
+# `state/agent-*/memory`, because the gateway's sessions and .env are one level
+# up), so containment is what decides which instance a volume needs.
+instance_for_volume() {
+  local volume=$1 alias
+  for alias in "${!mount_to_instance[@]}"; do
+    if [[ $volume == "$alias" || $volume == "$alias"/* ]]; then
+      printf '%s\n' "${mount_to_instance[$alias]}"
+      return 0
+    fi
+  done
+  return 1
+}
 for q in "${app_quadlets[@]}"; do
   volumes=$(sed -n 's|^Volume=\([^:]*\).*|\1|p' "$q" | sort -u)
   for volume in $volumes; do
-    instance=${mount_to_instance[$volume]:-}
-    [[ -n $instance ]] || continue
+    instance=$(instance_for_volume "$volume") || continue
     if grep -qE "^Requires=.*zfs-ready@$instance.service" "$q"; then
       ok "$q requires zfs-ready@$instance"
     else
@@ -163,7 +177,7 @@ for q in "${app_quadlets[@]}"; do
     [[ -n $instance ]] || continue
     found=0
     for volume in $volumes; do
-      [[ ${mount_to_instance[$volume]:-} == "$instance" ]] && found=1
+      [[ $(instance_for_volume "$volume") == "$instance" ]] && found=1
     done
     ((found)) || bad "$q requires zfs-ready@$instance for a dataset it does not mount"
   done < <(grep -o 'zfs-ready@[a-z-]*\.service' "$q" | sed 's/zfs-ready@//; s/\.service//' | sort -u)
@@ -522,18 +536,161 @@ for toolset in web search browser terminal file memory code_execution catalog \
 done
 
 # The runtime has no _FILE variant, so the key reaches it through .env written by
-# the seed unit -- from the decrypted ciphertext, at the container's uid.
-if grep -q 'agent-local-api-key.yaml' units/systemd/smortress-agent-config.service &&
-  grep -q 'agent-general-api-key.yaml' units/systemd/smortress-agent-config.service; then
+# the seed unit -- from the decrypted ciphertext, at the container's uid. The unit
+# delegates to a script now that seeding also splices a token into a YAML file: a
+# value built inside an `ExecStart` line is a value in the process table.
+seed_script=scripts/agent-config-seed.sh
+# shellcheck disable=SC2016  # the matched text is the seed script's own source line
+if grep -qF 'for spec in personal:local general:general; do' "$seed_script" &&
+  grep -qF 'api_key=$secrets_dir/agent-$state-api-key.yaml' "$seed_script" &&
+  grep -q 'ExecStart=/usr/libexec/agent-config-seed' units/systemd/smortress-agent-config.service; then
   ok 'the seed unit derives both gateway keys from their ciphertext'
 else
   bad 'the seed unit derives both gateway keys from their ciphertext'
 fi
-if grep -qF -- '-m 0400' units/systemd/smortress-agent-config.service &&
-  grep -q 'cp -n /etc/smortress/agent/local-config.yaml' units/systemd/smortress-agent-config.service; then
+# shellcheck disable=SC2016  # the matched text is the seed script's own source line
+if grep -qF -- '-m 0400' "$seed_script" &&
+  grep -qF 'cp -n "$template" "$config"' "$seed_script"; then
   ok 'the seed unit is idempotent and keeps the key owner-only'
 else
   bad 'the seed unit is idempotent and keeps the key owner-only'
+fi
+# The facade token must not travel through argv or a command substitution: the
+# script reads it with `read` and splices it with parameter expansion.
+if grep -qF 'while IFS= read -r line' "$seed_script" &&
+  ! grep -vE '^[[:space:]]*#' "$seed_script" | grep -qE '\$\(cat|sed .*\$\(|awk -v token'; then
+  ok 'the facade token is read into a variable, never into argv'
+else
+  bad 'the facade token is read into a variable, never into argv'
+fi
+
+# 12. Code delivery. A Quadlet hands `Exec=`/`Entrypoint=` a program that has to
+#     exist inside the container's own filesystem, and the agent-runtime image is
+#     not ours: nothing this repository builds is in it. So every absolute path a
+#     unit names is either bind-mounted from the host tree or one of the
+#     interpreters every image carries. agent-proxy shipped
+#     `Exec=/usr/libexec/agent-proxy` with no mount, and python3 started against a
+#     path that was not there -- this is the assertion that would have caught it.
+readonly image_interpreters=(/bin/sh /bin/bash /usr/bin/python3 /usr/bin/env /usr/bin/sh)
+volume_container_paths() { sed -n 's|^Volume=[^:]*:\([^:]*\).*|\1|p' "$1"; }
+secret_targets() { sed -n 's/^Secret=.*target=\([^,]*\).*/\1/p' "$1"; }
+covered_by_volume() { # quadlet path
+  local container_path
+  while IFS= read -r container_path; do
+    [[ -n $container_path ]] || continue
+    [[ $2 == "$container_path" || $2 == "$container_path"/* ]] && return 0
+  done < <(volume_container_paths "$1")
+  return 1
+}
+covered_by_secret() { # quadlet path
+  local target
+  while IFS= read -r target; do
+    [[ -n $target && $2 == "$target" ]] && return 0
+  done < <(secret_targets "$1")
+  return 1
+}
+for q in "${app_quadlets[@]}"; do
+  while IFS= read -r path; do
+    [[ -n $path ]] || continue
+    accounted=0
+    for interpreter in "${image_interpreters[@]}"; do
+      [[ $path == "$interpreter" ]] && accounted=1
+    done
+    if ((!accounted)) && covered_by_volume "$q" "$path"; then accounted=1; fi
+    if ((!accounted)) && covered_by_secret "$q" "$path"; then accounted=1; fi
+    if ((accounted)); then
+      ok "$q delivers $path"
+    else
+      bad "$q delivers $path" "no Volume= or Secret= puts it inside the container"
+    fi
+  done < <(sed -n 's/^\(Exec\|Entrypoint\)=//p' "$q" | tr ' ' '\n' |
+    grep -E '^/[A-Za-z0-9._/-]+$' | sort -u)
+done
+# The same rule for the facade in particular: its program is a Python package, so
+# what has to be inside the container is the directory PYTHONPATH names.
+for q in units/quadlet/agent-facade-personal.container units/quadlet/agent-facade-general.container; do
+  if [[ $(sed -n 's/^Environment=PYTHONPATH=//p' "$q") == /usr/lib/agent-facade/libs:/usr/lib/agent-facade ]] &&
+    covered_by_volume "$q" /usr/lib/agent-facade; then
+    ok "$q mounts the tree its PYTHONPATH names"
+  else
+    bad "$q mounts the tree its PYTHONPATH names"
+  fi
+done
+
+# 13. The two source facades (T2b). They complete the deployment split: each
+#     gateway reads its sources and its memory through one facade process of its
+#     own deployment, whose only client is that gateway. Container name, port and
+#     deployment are one decision in two files (the unit and the gateway template),
+#     so both sides are checked against each other.
+for spec in personal:local:18004 general:general:18005; do
+  deployment=${spec%%:*}
+  rest=${spec#*:}
+  state=${rest%%:*}
+  port=${rest##*:}
+  q=units/quadlet/agent-facade-$deployment.container
+  template=image/rootfs/etc/smortress/agent/$state-config.yaml
+
+  eq "$(grep -c '^Network=' "$q")" 1 "$q declares exactly one network"
+  eq "$(sed -n 's/^Network=//p' "$q")" "agent-$state.network" \
+    "the $deployment facade is on its own deployment's network only"
+  if grep -q '^PublishPort=' "$q"; then
+    bad "$q publishes nothing" "$(grep '^PublishPort=' "$q")"
+  else
+    ok "$q publishes nothing"
+  fi
+  if grep -q '^ReadOnly=true$' "$q" && grep -q '^NoNewPrivileges=true$' "$q" &&
+    grep -q '^DropCapability=ALL$' "$q" && grep -q '^User=1000:1000$' "$q"; then
+    ok "$q runs hardened as uid 1000 with a read-only root filesystem"
+  else
+    bad "$q runs hardened as uid 1000 with a read-only root filesystem"
+  fi
+  if grep -q '^Entrypoint=python3$' "$q"; then
+    ok "$q bypasses the runtime entrypoint"
+  else
+    bad "$q bypasses the runtime entrypoint"
+  fi
+  exec_line=$(sed -n 's/^Exec=//p' "$q")
+  for want in '-m apps.agent_facade' '--transport http' "--deployment $deployment" \
+    "--token-file /run/secrets/agent-facade-$deployment-token" \
+    '--memory-root /memory' '--host 0.0.0.0' "--port $port"; do
+    if [[ " $exec_line " == *" $want "* ]]; then
+      ok "$q runs the facade with $want"
+    else
+      bad "$q runs the facade with $want" "$exec_line"
+    fi
+  done
+  eq "$(sed -n 's/^Secret=//p' "$q" | cut -d, -f1)" "agent-facade-$deployment-token" \
+    "$q mounts its deployment token by name"
+  if grep -q "^Volume=/var/lib/agent/$state/memory:/memory:z$" "$q"; then
+    ok "$q mounts only the memory subdirectory of the $state dataset"
+  else
+    bad "$q mounts only the memory subdirectory of the $state dataset"
+  fi
+  # The gateway is the facade's only client, so its template must name the facade's
+  # container and port, carry the placeholder rather than a token, and trust it.
+  mcp_block=$(sed -n '/^mcp_servers:/,$p' "$template")
+  if grep -qE "^  $deployment:\$" <<<"$mcp_block" &&
+    grep -qF "url: http://smortress-agent-facade-$deployment:$port/mcp" <<<"$mcp_block" &&
+    grep -qE '^ +X-Deployment-Token: __FACADE_TOKEN__$' <<<"$mcp_block" &&
+    grep -qE '^    trust: full$' <<<"$mcp_block"; then
+    ok "the $state template wires the $deployment facade at $port with no token in it"
+  else
+    bad "the $state template wires the $deployment facade at $port with no token in it" "$mcp_block"
+  fi
+  # shellcheck disable=SC2016  # the matched text is the seed script's own source line
+  if grep -qF 'agent-facade-$deployment-token.yaml' "$seed_script" &&
+    grep -qF '__FACADE_TOKEN__' "$seed_script"; then
+    ok "the seed unit substitutes the $deployment placeholder"
+  else
+    bad "the seed unit substitutes the $deployment placeholder"
+  fi
+done
+# A token in a template would be a credential in an image both gateways share, and
+# the placeholder is only safe while it is exactly the placeholder.
+if grep -rhn 'X-Deployment-Token:' "${agent_templates[@]}" | grep -qvE ': __FACADE_TOKEN__$'; then
+  bad 'no agent config template carries a facade token'
+else
+  ok 'no agent config template carries a facade token'
 fi
 
 printf '\n%d checks, %d failed\n' "$((pass + fail))" "$fail"

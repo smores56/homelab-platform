@@ -572,7 +572,38 @@ check "the CDI unit runs the documented command" \
 for unit in smortress-nvidia-cdi.service smortress-agent-config.service; do
   check "image enables $unit" has "$unit" image/Containerfile
 done
-probe "agent config seeding is idempotent" grep -q 'cp -n /etc/smortress/agent/local-config.yaml' units/systemd/smortress-agent-config.service
+# shellcheck disable=SC2016  # the matched text is a line of the seed script
+probe "agent config seeding is idempotent" grep -qF 'cp -n "$template" "$config"' scripts/agent-config-seed.sh
+# The seed work moved from an ExecStart one-liner into the script, because splicing
+# a token into a YAML file from a unit line would put it in the process table.
+check "the image installs the seed script" has 'scripts/agent-config-seed.sh' image/Containerfile
+check "the seed unit runs the installed script" \
+  has 'ExecStart=/usr/libexec/agent-config-seed' units/systemd/smortress-agent-config.service
+
+# The source facades (T2b). They run in the agent-runtime image, which carries
+# neither the program nor the libraries it imports, so the image installs both under
+# /usr/lib/agent-facade and the Quadlets bind-mount that tree read-only. Every
+# module is listed: a new file that is not in the COPY list is an import error in
+# the container, and tests/ must not reach the host image.
+check "image installs the facade libraries" \
+  has 'libs/data_plane/ /usr/lib/agent-facade/libs/data_plane/' image/Containerfile
+for module in apps/agent_facade/*.py; do
+  check "image installs ${module#apps/agent_facade/}" has "$module" image/Containerfile
+done
+if grep -qF 'apps/agent_facade/tests' image/Containerfile; then
+  bad "the image ships no facade test suite"
+else
+  ok "the image ships no facade test suite"
+fi
+for q in units/quadlet/agent-facade-personal.container units/quadlet/agent-facade-general.container; do
+  check "$q mounts the installed tree" \
+    has 'Volume=/usr/lib/agent-facade:/usr/lib/agent-facade:ro,z' "$q"
+done
+# The other half of the same delivery: a program the image installs on the HOST has
+# to be mounted into the container that runs it. agent-proxy shipped its `Exec=`
+# with no mount, so python3 exited on a path that was not in its namespace.
+check "the proxy unit mounts its own program" \
+  has 'Volume=/usr/libexec/agent-proxy:/usr/libexec/agent-proxy:ro,z' units/quadlet/agent-proxy.container
 check "Syncthing's sync port is permitted on the tailscale zone" \
   has '<port port="22000" protocol="tcp"/>' image/rootfs/etc/firewalld/zones/tailscale.xml
 check "Syncthing's QUIC port is permitted on the tailscale zone" \

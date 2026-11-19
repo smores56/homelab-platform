@@ -117,8 +117,41 @@ Error codes: `unauthorized`, `unknown_tool`, `validation`, `unknown_source`,
 - **No cross-deployment import.** Records carry a profile and `import_records`
   refuses a record from another one; the facades have no path that copies from
   one deployment's memory to the other.
-- **No deployment wiring here.** Quadlets, image pins and secret delivery are a
-  separate change; this code is offline fixtures until an adapter is provisioned.
+- **No deployment wiring here.** Quadlets, image pins and secret delivery are
+  described in `docs/core/applications.md` ("Source facades") and
+  `docs/manual-steps.md` section 40; this document stops at the process.
+
+## Deployment
+
+Two containers, one per deployment, both on `agent-runtime` at the pinned digest
+with `Entrypoint=python3` replacing the image's gateway dispatcher:
+
+| Quadlet | Container name | Network | Port | Memory root |
+| --- | --- | --- | --- | --- |
+| `agent-facade-personal` | `smortress-agent-facade-personal` | `agent-local.network` (internal, no egress) | `18004` | `/memory` = `state/agent-local/memory` |
+| `agent-facade-general` | `smortress-agent-facade-general` | `agent-general.network` | `18005` | `/memory` = `state/agent-general/memory` |
+
+Neither publishes a port. The only client is that deployment's gateway, which
+reaches the facade by container name (`http://smortress-agent-facade-personal:18004/mcp`,
+`http://smortress-agent-facade-general:18005/mcp`): a published port would be a
+second route in with no consumer, and Tailscale Serve would have to be taught to
+skip it.
+
+Code delivery is a bind mount, not an image. The program is not in the upstream
+runtime image, so `image/Containerfile` installs it on the host at
+`/usr/lib/agent-facade` -- the package at `apps/agent_facade/`, the libraries it
+imports at `libs/data_plane/` -- and the units mount that tree read-only and point
+`PYTHONPATH` at it. The same pattern as `agent-proxy`, whose unit mounts
+`/usr/libexec/agent-proxy` for the same reason; a unit that names a program it does
+not mount is a container that cannot start.
+
+Each container runs as uid 1000 with `ReadOnly=true`, `NoNewPrivileges=true` and
+`DropCapability=ALL`, holds one token as a mounted file, and writes nowhere but
+`/memory`. The gateway's `mcp_servers` entry sends that token as
+`X-Deployment-Token`; the image's config template carries the placeholder
+`__FACADE_TOKEN__` and `smortress-agent-config.service` substitutes the decrypted
+value when it seeds the file, so the token is in no image, no document and no
+command line.
 
 ## Checks
 
