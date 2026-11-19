@@ -9,6 +9,10 @@
 # decrypted file, and the one host-networked container has an explicit firewall
 # boundary instead of a published port.
 #
+# Agent deployments (#711): the personal gateway and its model server share one
+# internal network with no egress, the general gateway and the hosted proxy share
+# the egress network, and only the proxy may name the provider key.
+#
 #   tests/core/app-quadlets.sh
 set -uo pipefail
 
@@ -40,7 +44,17 @@ readonly app_quadlets=(
   units/quadlet/immich-machine-learning.container
   units/quadlet/opdshelf.container
   units/quadlet/syncthing.container
+  units/quadlet/agent-model.container
+  units/quadlet/agent-local.container
+  units/quadlet/agent-general.container
+  units/quadlet/agent-proxy.container
 )
+
+# Ports that are published on loopback for the operator's own curl and are
+# deliberately not a Serve route. 18003 is the hosted proxy: the gateway reaches
+# it by container name on agent-general.network, so a tailnet path to it would
+# only widen who can spend the provider key.
+readonly no_serve_ports=(18003)
 
 app_names=$(app_image_names)
 
@@ -180,7 +194,9 @@ published=$(
   } | sort -u
 )
 for port in $published; do
-  if grep -qE "\[[0-9]+\]=${port}$" scripts/tailscale-serve.sh; then
+  if [[ " ${no_serve_ports[*]} " == *" $port "* ]]; then
+    ok "port $port is loopback-only diagnostics, not a Serve route"
+  elif grep -qE "\[[^]]*\]=${port}$" scripts/tailscale-serve.sh; then
     ok "port $port has a Serve route"
   else
     bad "port $port has a Serve route"
@@ -191,7 +207,7 @@ while IFS= read -r port; do
   if ! grep -qw "$port" <<<"$published"; then
     bad "Serve port $port belongs to a loopback listener"
   fi
-done < <(grep -oE '\[[0-9]+\]=[0-9]+' scripts/tailscale-serve.sh | cut -d= -f2 | sort -u)
+done < <(grep -oE '\[[^]]*\]=[0-9]+' scripts/tailscale-serve.sh | cut -d= -f2 | sort -u)
 
 # 5. The one non-HTTP container publishes nothing and is bounded by the
 #    firewall instead; nothing may auto-update a pinned application image.
@@ -386,6 +402,139 @@ for q in "${app_quadlets[@]}"; do
     bad "$q treats a SIGTERM stop as success"
   fi
 done
+
+# 11. The agent deployments (#711). Two networks split by authority: the personal
+#     side has one internal network and therefore no route off the host, the
+#     general side has egress and is the only side that can spend a hosted key --
+#     which it does not hold. These are the properties a misread of the units
+#     would silently undo.
+agent_local=units/quadlet/agent-local.container
+agent_general=units/quadlet/agent-general.container
+agent_model=units/quadlet/agent-model.container
+agent_proxy=units/quadlet/agent-proxy.container
+agent_templates=(image/rootfs/etc/smortress/agent/local-config.yaml
+  image/rootfs/etc/smortress/agent/general-config.yaml)
+
+if grep -q '^Internal=true$' units/quadlet/agent-local.network; then
+  ok 'the personal network has no egress'
+else
+  bad 'the personal network has no egress'
+fi
+if grep -q '^Internal=' units/quadlet/agent-general.network; then
+  bad 'the general network has egress'
+else
+  ok 'the general network has egress'
+fi
+for q in "$agent_local" "$agent_general" "$agent_model" "$agent_proxy"; do
+  eq "$(grep -c '^Network=' "$q")" 1 "$q declares exactly one network"
+done
+eq "$(sed -n 's/^Network=//p' "$agent_local")" agent-local.network \
+  'the personal gateway is on the internal network only'
+eq "$(sed -n 's/^Network=//p' "$agent_general")" agent-general.network \
+  'the general gateway is on the egress network only'
+eq "$(sed -n 's/^Network=//p' "$agent_proxy")" agent-general.network \
+  'the proxy is on the egress network only'
+eq "$(sed -n 's/^Network=//p' "$agent_model")" agent-local.network \
+  'the model server is on the internal network only'
+
+# The stateful runtimes cannot be read-only; the model server can, and the proxy
+# holds the credential file, so it is.
+if grep -q '^ReadOnly=true$' "$agent_model" && grep -q '^ReadOnly=true$' "$agent_proxy"; then
+  ok 'the model server and the proxy have a read-only root filesystem'
+else
+  bad 'the model server and the proxy have a read-only root filesystem'
+fi
+for q in "$agent_local" "$agent_general"; do
+  if grep -q '^ReadOnly=false$' "$q" && grep -q '^NoNewPrivileges=true$' "$q"; then
+    ok "$q is writable state under the same hardening"
+  else
+    bad "$q is writable state under the same hardening"
+  fi
+  # The runtime image refuses `--user <arbitrary uid>` ("not supported") and asks
+  # for HERMES_UID/HERMES_GID, which remap its internal account to the platform uid
+  # and chown the volume. A `User=` here would be a container that cannot start, so
+  # the uid-1000 convention is reached the way the image supports.
+  if grep -q '^Environment=HERMES_UID=1000$' "$q" &&
+    grep -q '^Environment=HERMES_GID=1000$' "$q" &&
+    ! grep -q '^User=' "$q"; then
+    ok "$q remaps the runtime to uid 1000 instead of forcing --user"
+  else
+    bad "$q remaps the runtime to uid 1000 instead of forcing --user"
+  fi
+done
+
+# GPU access is a device plus the SELinux type the device nodes carry: without the
+# type, NVML answers "Insufficient Permissions" instead of a GPU.
+if grep -q '^AddDevice=nvidia.com/gpu=all$' "$agent_model" &&
+  grep -q '^SecurityLabelType=nvidia_container_t$' "$agent_model"; then
+  ok 'the model server addresses the GPU through the CDI device and its label'
+else
+  bad 'the model server addresses the GPU through the CDI device and its label'
+fi
+if grep -q 'nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml' units/systemd/smortress-nvidia-cdi.service &&
+  grep -q '^Before=agent-model.service$' units/systemd/smortress-nvidia-cdi.service &&
+  grep -qE '^(Requires|After)=.*smortress-nvidia-cdi.service' "$agent_model"; then
+  ok 'the CDI spec is generated before the model container starts'
+else
+  bad 'the CDI spec is generated before the model container starts'
+fi
+
+# The provider key is one file, read by one program. Nothing else may name it.
+key_mentioning=$(grep -l 'agent-hosted-key' units/quadlet/*.container "${agent_templates[@]}" 2>/dev/null |
+  sort | paste -sd' ')
+eq "$key_mentioning" "$agent_proxy" 'only the proxy names the hosted key'
+if grep -rqE '^[[:space:]]*api_key:' "${agent_templates[@]}"; then
+  bad 'no agent config template carries an api key'
+else
+  ok 'no agent config template carries an api key'
+fi
+if grep -q '^Exec=/usr/libexec/agent-proxy$' "$agent_proxy" &&
+  grep -qF 'apps/agent_proxy/proxy.py /usr/libexec/agent-proxy' image/Containerfile; then
+  ok 'the proxy unit runs the shipped program'
+else
+  bad 'the proxy unit runs the shipped program'
+fi
+# The runtime image's entrypoint is a dispatcher into an s6 tree that boots the
+# gateway; the proxy is one program, and it also refuses an arbitrary --user.
+if grep -q '^Entrypoint=python3$' "$agent_proxy" && grep -q '^User=1000:1000$' "$agent_proxy"; then
+  ok 'the proxy bypasses the runtime entrypoint and runs as uid 1000'
+else
+  bad 'the proxy bypasses the runtime entrypoint and runs as uid 1000'
+fi
+
+# The runtime refuses a model under 64,000 tokens, so the server's window and the
+# config's pin are one decision in two files.
+model_context=$(sed -n 's/^Exec=.*-c \([0-9]*\).*/\1/p' "$agent_model")
+config_context=$(sed -n 's/^  context_length: //p' image/rootfs/etc/smortress/agent/local-config.yaml)
+if [[ -n $model_context && $model_context == "$config_context" ]] && ((model_context >= 64000)); then
+  ok "the local context window is pinned to $model_context on both sides"
+else
+  bad 'the local context window is pinned on both sides' "model=$model_context config=$config_context"
+fi
+local_disabled=$(sed -n '/^  disabled_toolsets:/,/^[^ -]/p' image/rootfs/etc/smortress/agent/local-config.yaml)
+for toolset in web search browser terminal file memory code_execution catalog \
+  computer_use cronjob delegation skills image_gen connections; do
+  if grep -qE "^[[:space:]]+- ${toolset}$" <<<"$local_disabled"; then
+    ok "the personal config disables the $toolset toolset"
+  else
+    bad "the personal config disables the $toolset toolset"
+  fi
+done
+
+# The runtime has no _FILE variant, so the key reaches it through .env written by
+# the seed unit -- from the decrypted ciphertext, at the container's uid.
+if grep -q 'agent-local-api-key.yaml' units/systemd/smortress-agent-config.service &&
+  grep -q 'agent-general-api-key.yaml' units/systemd/smortress-agent-config.service; then
+  ok 'the seed unit derives both gateway keys from their ciphertext'
+else
+  bad 'the seed unit derives both gateway keys from their ciphertext'
+fi
+if grep -qF -- '-m 0400' units/systemd/smortress-agent-config.service &&
+  grep -q 'cp -n /etc/smortress/agent/local-config.yaml' units/systemd/smortress-agent-config.service; then
+  ok 'the seed unit is idempotent and keeps the key owner-only'
+else
+  bad 'the seed unit is idempotent and keeps the key owner-only'
+fi
 
 printf '\n%d checks, %d failed\n' "$((pass + fail))" "$fail"
 ((fail == 0))

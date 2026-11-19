@@ -457,8 +457,12 @@ done < <(awk '!/^[[:space:]]*(#|$)/ { print $1 }' image/rootfs/etc/smortress/sec
 check "firewall binds tailscale0" has '<interface name="tailscale0"/>' image/rootfs/etc/firewalld/zones/tailscale.xml
 check "firewall permits ssh only on that zone" has '<service name="ssh"/>' image/rootfs/etc/firewalld/zones/tailscale.xml
 # A wildcard *listener* binds every address; `0.0.0.0` inside a CIDR
-# (10.0.0.0/8) is a destination and must not trip this.
-if grep -rInE '\b0\.0\.0\.0\b|\[::\]' units image/rootfs 2>/dev/null | grep -v 'PublishPort=127.0.0.1' | grep -q .; then
+# (10.0.0.0/8) is a destination and must not trip this. A Quadlet `Exec=` or
+# `Environment=` bind is inside the container's own network namespace: it is
+# reachable only through a published port or the container network, and the
+# publish address is checked above, so it is not a host listener.
+if grep -rInE '\b0\.0\.0\.0\b|\[::\]' units image/rootfs 2>/dev/null |
+  grep -vE 'PublishPort=127\.0\.0\.1|^units/quadlet/[^:]+:[0-9]+:(Exec=|Environment=)' | grep -q .; then
   bad "no wildcard listener address in units or rootfs"
 else
   ok "no wildcard listener address in units or rootfs"
@@ -513,6 +517,49 @@ for name in $(app_image_names); do
     bad "$name runs the signed mirror at its pinned digest"
   fi
 done
+# Agent deployments (#711). The hosted proxy is the one program that holds a
+# provider credential, so the checks that matter are that it is the program the
+# image ships, that its upstream cannot be moved at runtime, and that the GPU
+# device is declared with the SELinux type the driver needs.
+check "image installs the agent proxy" \
+  has 'apps/agent_proxy/proxy.py /usr/libexec/agent-proxy' image/Containerfile
+check "the image makes the agent proxy executable" has 'chmod 0755 /usr/libexec/apps-schema /usr/libexec/agent-proxy' image/Containerfile
+# `COPY image/rootfs/ /` is what puts these in the image, so a template that is
+# missing from the tree is missing from the image.
+check "image rootfs carries the agent config templates" \
+  test -s image/rootfs/etc/smortress/agent/local-config.yaml -a -s image/rootfs/etc/smortress/agent/general-config.yaml
+for template in local-config.yaml general-config.yaml; do
+  # The image ships them through `COPY image/rootfs/ /`, so a template that is not
+  # tracked here is not in the image either.
+  check "the agent template $template exists" test -s "image/rootfs/etc/smortress/agent/$template"
+  # Any `api_key:` with a value would put a credential in a template that both
+  # gateways receive.
+  if grep -qE '^[[:space:]]*api_key:[[:space:]]*[^[:space:]]' \
+      "image/rootfs/etc/smortress/agent/$template"; then
+    bad "the agent template $template carries no api key"
+  else
+    ok "the agent template $template carries no api key"
+  fi
+done
+check "the proxy pins its upstream as a constant" has 'UPSTREAM_HOST = "api.neuralwatt.com"' apps/agent_proxy/proxy.py
+# A runtime knob for the host would be the same hole as a request field.
+if grep -qE 'environ\[.*(UPSTREAM|PROVIDER)' apps/agent_proxy/proxy.py ||
+  grep -qE 'os\.environ\.get\("AGENT_PROXY_UPSTREAM' apps/agent_proxy/proxy.py; then
+  bad "the proxy's upstream is not configurable at runtime"
+else
+  ok "the proxy's upstream is not configurable at runtime"
+fi
+check "the proxy reads its key from a file" has 'DEFAULT_KEY_FILE = "/run/secrets/agent-hosted-key"' apps/agent_proxy/proxy.py
+check "the model container requires the CDI spec unit" \
+  grep -qE '^Requires=.*smortress-nvidia-cdi\.service' units/quadlet/agent-model.container
+check "the model container is ordered after the CDI spec unit" \
+  grep -qE '^After=.*smortress-nvidia-cdi\.service' units/quadlet/agent-model.container
+check "the CDI unit runs the documented command" \
+  has 'nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml' units/systemd/smortress-nvidia-cdi.service
+for unit in smortress-nvidia-cdi.service smortress-agent-config.service; do
+  check "image enables $unit" has "$unit" image/Containerfile
+done
+probe "agent config seeding is idempotent" grep -q 'cp -n /etc/smortress/agent/local-config.yaml' units/systemd/smortress-agent-config.service
 check "Syncthing's sync port is permitted on the tailscale zone" \
   has '<port port="22000" protocol="tcp"/>' image/rootfs/etc/firewalld/zones/tailscale.xml
 check "Syncthing's QUIC port is permitted on the tailscale zone" \

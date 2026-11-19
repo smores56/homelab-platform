@@ -1,13 +1,16 @@
-# Core applications: Immich, OPDShelf, Syncthing (T5)
+# Core applications: Immich, OPDShelf, Syncthing (T5), agent deployments (T6)
 
 The three applications that carry real data on smortress run as Podman Quadlets
 from the derived image. A fourth Serve route, `/wallpapers`, publishes a dataset
-as static files and has no container behind it at all. This document covers what
-each container is allowed to read and write, how its image reaches the host, how
-it is reached from the tailnet, and what its restore actually consists of. Operator steps are in
-`docs/manual-steps.md` section 40; the Restic units they rely on are in
-`docs/core/restic-plane.md`. Agent-managed tenant apps from `homelab-apps` are a
-separate, unprivileged plane: see `docs/core/apps-tenant.md`.
+as static files and has no container behind it at all. Four more containers run
+the agent deployments: a pinned local model server, two Hermes gateways and one
+hosted-model proxy, split by authority (section "Agent deployments" below). This
+document covers what each container is allowed to read and write, how its image
+reaches the host, how it is reached from the tailnet, and what its restore
+actually consists of. Operator steps are in `docs/manual-steps.md` section 40;
+the Restic units they rely on are in `docs/core/restic-plane.md`. Agent-managed
+tenant apps from `homelab-apps` are a separate, unprivileged plane: see
+`docs/core/apps-tenant.md`.
 
 There is no second control plane: a deployment change is an image change plus a
 maintenance-window reboot, and `podman-auto-update.timer` is masked. A Quadlet
@@ -37,6 +40,13 @@ copies each upstream image into our namespace by digest (`skopeo copy --all
 | `immich-valkey` | `…/immich-valkey@sha256:3add1a33…` | `docker.io/valkey/valkey:9` |
 | `opdshelf` | `…/opdshelf@sha256:b82f94f7…` | `docker.io/koalilla/opds-server@sha256:b82f94f7…` |
 | `syncthing` | `…/syncthing@sha256:2b71da7c…` | `docker.io/syncthing/syncthing:2.1.7` |
+| `agent-model` | `…/agent-model@sha256:ae96e52f…` | `ghcr.io/ggml-org/llama.cpp:server-cuda` |
+| `agent-runtime` | `…/agent-runtime@sha256:276d4468…` | `docker.io/nousresearch/hermes-agent:v0.23.1` |
+
+`agent-runtime` is drawn by three Quadlets: the two gateways and the hosted proxy.
+The proxy is a Python program in this repository (`apps/agent_proxy/`), so it needs
+no image of its own and no package manager, and a third pin would be a third thing
+to mirror for no gain.
 
 Immich stays on v3.0.3 until the cutover restore has passed: the existing
 database was written by that version, and moving a major version belongs in its
@@ -77,6 +87,9 @@ one Restic snapshot names every dataset the unit restores.
 | --- | --- | --- | --- |
 | Immich | `raw/photos` — `/srv/photos`, the asset library | `state/immich-postgres` — `/var/lib/immich/postgres` (the dataset root is `PGDATA`); `state/immich-dumps` — `/var/lib/immich/dumps` | `/data/library`; Postgres `/data`; the dump writes into the dump dataset |
 | OPDShelf | `raw/books` — `/srv/books`, the catalog | `state/opdshelf` — `/var/lib/opdshelf`, edits, annotations and covers | `/books`; `DATA_DIR=/state` |
+| Personal agent | none — no personal source is mounted | `state/agent-local` — `/var/lib/agent/local`, sessions, memory, skills | `/opt/data` |
+| General agent | none — no repository or book tree is mounted | `state/agent-general` — `/var/lib/agent/general`, same shape | `/opt/data` |
+| Local model | none | none: `state/agent-model` — `/var/lib/agent/model` is the GGUF file, and it is in no backup | `/models` (read-only) |
 | Syncthing | `raw/files` — `/srv/files`, the vault | `state/syncthing-config` — `/var/lib/syncthing/config`, identity and configuration | `/srv/files`; `/var/syncthing/config` |
 
 `photos` is therefore one snapshot over `/srv/photos`,
@@ -109,10 +122,18 @@ though it belongs to the `files` unit.
 | --- | --- | --- | --- |
 | Immich database password | `secrets/server/immich-db-password.yaml` | `/run/smortress/secrets/immich-db-password.yaml` (`value`, root 0400) | Podman secret `immich-db-password`, mounted at uid 1000 mode 0400; the server reads `DB_PASSWORD_FILE`, Postgres reads `POSTGRES_PASSWORD_FILE` |
 | OPDShelf admin password | `secrets/server/opdshelf-admin-password.yaml` | `/run/smortress/secrets/opdshelf-admin-password.yaml` (`value`, root 0400) | Podman secret `opdshelf-admin-password`, `type=env` as `ADMIN_PASSWORD` (the image has no `_FILE` variant) |
+| Personal gateway key | `secrets/server/agent-local-api-key.yaml` | `/run/smortress/secrets/agent-local-api-key.yaml` (`value`, root 0400) | Podman secret `agent-local-api-key`, also mounted at uid 1000 mode 0400; `smortress-agent-config.service` writes it into `/var/lib/agent/local/.env` as `API_SERVER_KEY` (the runtime has no `_FILE` variant, and Podman's `type=env` keeps the file's trailing newline) |
+| General gateway key | `secrets/server/agent-general-api-key.yaml` | `/run/smortress/secrets/agent-general-api-key.yaml` (`value`, root 0400) | Same shape, `agent-general-api-key`, `/var/lib/agent/general/.env` |
+| Hosted provider key | `secrets/server/agent-hosted-key.yaml` | `/run/smortress/secrets/agent-hosted-key.yaml` (`value`, root 0400) | Podman secret `agent-hosted-key`, mounted read-only at `/run/secrets/agent-hosted-key` in `agent-proxy` only. Never in an environment, never in a config file, never in argv |
 
-`smortress-app-secrets.service` creates both Podman secrets with
+`smortress-app-secrets.service` creates all five Podman secrets with
 `--replace` on every boot, before any container that declares one. The values
 never appear in a unit file, in argv, in the image, or in this repository.
+
+The provider key is the one credential here that is not self-issued: it comes from
+the hosted account, and only `agent-proxy` may hold it. That is the whole reason
+the proxy exists -- a gateway runs a broad tool surface (browser, terminal, file)
+and would otherwise sit next to the credential (see the next section).
 
 Both containers run as uid 1000, which is what the legacy data is owned by and
 what Immich's own rootless compose uses. That is why the secrets are mounted per
@@ -186,6 +207,68 @@ cannot reach the sync protocol, the GUI, or SSH.
 restored `config.xml`. It stays at the image default (all addresses on 22000),
 which the firewall narrows to the tailnet.
 
+## Agent deployments
+
+Two deployments, split by authority rather than by feature. The split is what makes
+the per-session taint question disappear: nothing reachable from one side carries
+the other side's sources.
+
+| Deployment | Quadlets | Network | May reach | May not reach |
+| --- | --- | --- | --- | --- |
+| Personal | `agent-local`, `agent-model` | `agent-local.network`, `Internal=true` | each other, by container name | the internet, the LAN, the host, the general deployment -- no default route exists |
+| General | `agent-general`, `agent-proxy` | `agent-general.network`, a plain bridge | the pinned provider, through the proxy; each other, by container name | the personal deployment, every personal source |
+
+The personal gateway publishes `127.0.0.1:18001`; the general one publishes
+`127.0.0.1:18002`; the proxy publishes `127.0.0.1:18003`. A published port is
+host-side DNAT *toward* a container, so it adds nothing to what that container can
+dial: the personal side still has no route off the host, which is why the sealed
+profile is a network property and not a firewall exception.
+
+The model server (`agent-model`) is llama.cpp pinned at
+`ghcr.io/ggml-org/llama.cpp:server-cuda`, started with `-c 65536`. That number is a
+floor the runtime imposes -- Hermes refuses a model under 64,000 tokens -- and
+`image/rootfs/etc/smortress/agent/local-config.yaml` pins the same value as
+`model.context_length`. The two are one decision in two files, and changing one
+without the other stops the gateway admitting the model. The GGUF itself
+(`Qwen2.5-7B-Instruct-Q4_K_M.gguf`, 4,683,074,240 bytes) is fetched into
+`state/agent-model` by hand and verified by checksum
+(`docs/manual-steps.md` section 40.8); it is the one dataset in no backup unit.
+
+GPU access is two directives: `AddDevice=nvidia.com/gpu=all` and
+`SecurityLabelType=nvidia_container_t`. The device name resolves through
+`/etc/cdi/nvidia.yaml`, generated at boot by `smortress-nvidia-cdi.service`
+because the spec pins this host's driver and the cards that are actually present.
+Without the label the process gets NVML `Insufficient Permissions` instead of a
+GPU; with `label=disable` it works and the container's SELinux confinement is gone.
+
+`smortress-agent-config.service` seeds each deployment's `config.yaml` from the
+image's template *once* (`cp -n`): the runtime rewrites that file and an operator
+edits the copy in the dataset. It rewrites `.env` on every boot instead, because
+the runtime takes its `API_SERVER_KEY` from the environment or from
+`$HERMES_HOME/.env`, and neither the image nor Podman's secret plumbing supplies a
+key without a trailing newline (a Bearer token that never compares equal). The
+`agent` template's `disabled_toolsets` list closes web, search, browser, terminal,
+file, memory, code execution, catalog, computer use, cron jobs, delegation,
+skills, image generation and connections.
+
+`agent-proxy` is the only container that holds the hosted key and the only one that
+may dial the provider: `apps/agent_proxy/proxy.py`, stdlib only, one pinned host,
+three OpenAI-compatible paths plus `/healthz`, a 1 MiB request cap, and responses
+relayed unbuffered so `stream: true` still streams. The general gateway's model
+block has no `api_key` at all, so a compromise of that gateway costs one revocable
+gateway key.
+
+Read-only is not available to the two gateways: the runtime writes its SQLite
+state, sessions, logs and skills under `HERMES_HOME`, which is their only write
+target, so those units say `ReadOnly=false` explicitly instead of inheriting a
+hardening they cannot keep. `NoNewPrivileges=true` stays. `DropCapability=ALL`
+cannot: the image's supervisor has to reach its own uid (see the uid note under
+Residual risks), so the gateways have the same shape as Syncthing -- root inside
+the namespace, privileges dropped by the image -- and no host path, Podman socket
+or SSH identity is mounted into either one. The proxy is the opposite case: it runs
+one file as uid 1000 with every capability dropped, because its unit replaces the
+image's entrypoint with `python3`.
+
 ## Access paths
 
 | Application | Direct listener | Tailnet URL |
@@ -194,8 +277,17 @@ which the firewall narrows to the tailnet.
 | OPDShelf | `127.0.0.1:8083` | `https://smortress.<tailnet>.ts.net:8443/` |
 | Syncthing GUI | `127.0.0.1:8384` | `https://smortress.<tailnet>.ts.net:10000/` |
 | Wallpapers | `/srv/wallpapers` (static files) | `https://smortress.<tailnet>.ts.net/wallpapers/` |
+| Personal agent gateway | `127.0.0.1:18001` | `https://smortress.<tailnet>.ts.net/apps/agent-local/v1` |
+| General agent gateway | `127.0.0.1:18002` | `https://smortress.<tailnet>.ts.net/apps/agent-general/v1` |
+| Hosted proxy | `127.0.0.1:18003` | none, on purpose: a tailnet path would let any device spend the provider key |
 
-`smortress-tailscale-serve.service` re-declares these four routes at every boot.
+The two agent paths are a second table in `scripts/tailscale-serve.sh`
+(`core_path_routes`) rather than a fourth and fifth core *port*: 443, 8443 and
+10000 are the only root-path HTTPS ports Serve has, and they are taken. A tenant
+plan that claims either path is refused whole, and the stale-route pruning skips
+both, so a run without a plan cannot delete them.
+
+`smortress-tailscale-serve.service` re-declares these six routes at every boot.
 Serve state lives in tailscaled's state file, which is not a dataset and
 not worth backing up; re-applying the same route is idempotent. Nothing here is
 Funnel, and no public hostname serves an application.
@@ -259,3 +351,33 @@ successful start — it is proven by serving representative data from it.
 - The machine learning container needs egress on first use and caches models
   outside the backup. A cold restore re-downloads them; smart search degrades
   until it finishes.
+- The general deployment is internet-connected by design. Its containment is the
+  container boundary and the proxy, not a network rule: it mounts no personal
+  source, holds no credential it could leak beyond its own revocable gateway key,
+  and its tool output can still carry whatever the hosted model reads. Treat
+  anything it fetches as untrusted input, not as data the personal side may act on.
+- The personal deployment has no egress at all, which is verified as a network
+  property (`Internal=true`, no default route) rather than as a firewall rule. A
+  future change that attaches a second network to `agent-local` would silently
+  undo it; `tests/core/app-quadlets.sh` asserts the unit declares exactly one
+  network, and which one.
+- The runtime's defaults are broad: `computer_use`, `cronjob`, `delegation`,
+  `skills`, `image_gen`, `connections` and `session_search` are enabled unless the
+  config says otherwise, and disabling is per toolset with no per-tool switch.
+  The personal template closes them; the general one deliberately does not, and
+  the difference is a decision recorded in the template, not an oversight.
+- The two gateways do not set `User=`. The pinned image's entrypoint rejects an
+  arbitrary uid outright (`container started with --user 1000 ... not supported`,
+  exit 1) and offers `HERMES_UID`/`HERMES_GID` instead, which remap its internal
+  account (uid 10000) to the platform uid and chown the data volume at boot. The
+  dataset therefore stays owned by uid 1000 and the gateway writes as uid 1000 --
+  the platform convention, reached the way the image supports. The costs are
+  explicit: the container starts as root *inside its own namespace* and the image's
+  supervisor drops privileges itself, so `DropCapability=ALL` is not set (a root
+  process that cannot `setuid` never becomes the agent). That is the same shape as
+  Syncthing, and the same reason. If the mapping ever fails, section 40.9 of the
+  manual shows where it is logged (`[stage2] Changing hermes UID to 1000`).
+- The two gateway keys are the one case of a secret inside a restorable dataset:
+  the runtime reads `API_SERVER_KEY` from `$HERMES_HOME/.env` in `state/agent-*`,
+  so they are in Restic snapshots in R2 exactly as Syncthing's GUI key already is.
+  Both are self-issued and revocable. The provider key is in no dataset at all.

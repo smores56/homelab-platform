@@ -1,0 +1,51 @@
+# The general Hermes gateway. Same runtime and same shape as the personal one, on
+# the internet-connected side and pointed at the proxy instead of a local model.
+#
+# The gateway never holds the hosted provider key. Its model block names
+# `http://smortress-agent-proxy:18003/v1` with no `api_key`, and the only copy of
+# the provider credential is in agent-proxy (units/quadlet/agent-proxy.container):
+# a gateway compromise therefore costs this host's gateway key, not the hosted
+# account. That is the whole reason for the extra hop.
+#
+# `API_SERVER_KEY` is written by smortress-agent-config.service for the same
+# reason as on the personal side: the runtime has no `_FILE` variant and Podman's
+# `type=env` secret keeps its trailing newline.
+#
+# ReadOnly=false is deliberate: the runtime writes its state under HERMES_HOME,
+# which is the mounted dataset and its only write target. There is no `User=`
+# here for the same reason as on the personal side: the image refuses an
+# arbitrary uid and asks for HERMES_UID/HERMES_GID, so the container starts as
+# root and the image's own supervisor drops to the remapped uid 1000. See
+# units/quadlet/agent-local.container for the full note.
+[Unit]
+Description=Hermes Agent gateway, general deployment (hosted models via the proxy)
+Requires=zfs-ready@state-agent-general.service sops-decrypt.service smortress-app-secrets.service smortress-agent-config.service
+After=network-online.target zfs-ready@state-agent-general.service sops-decrypt.service smortress-app-secrets.service smortress-agent-config.service agent-proxy.service
+Wants=network-online.target agent-proxy.service
+
+[Container]
+Image=ghcr.io/smores56/homelab-platform/agent-runtime@sha256:276d44685c65c0cb2a25f190b63c65c8906f9dc76486fb1c05ae71b5826bda08
+ContainerName=smortress-agent-general
+Network=agent-general.network
+Exec=gateway run
+Secret=agent-general-api-key,type=mount,target=/run/secrets/agent-general-api-key,uid=1000,gid=1000,mode=0400
+Environment=API_SERVER_ENABLED=true
+Environment=API_SERVER_HOST=0.0.0.0
+Environment=API_SERVER_PORT=18002
+Environment=HERMES_HOME=/opt/data
+Environment=HERMES_UID=1000
+Environment=HERMES_GID=1000
+Environment=TZ=UTC
+Volume=/var/lib/agent/general:/opt/data:z
+PublishPort=127.0.0.1:18002:18002
+ReadOnly=false
+NoNewPrivileges=true
+
+[Service]
+# 143 is SIGTERM, which a deliberate stop sends: not a failure.
+SuccessExitStatus=143
+Restart=on-failure
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

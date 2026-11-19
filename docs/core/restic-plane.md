@@ -39,9 +39,25 @@ and is never referenced by this plane.
 A unit is the application, and it names the datasets restored together: `files`
 (`raw/files` + `state/syncthing-config`), `photos` (`raw/photos` +
 `state/immich-postgres` + `state/immich-dumps`), `books` (`raw/books` +
-`state/opdshelf`), and the raw-only `music`, `wallpapers`, `git`, `apps` and
-`repo-archive`. The table in `scripts/storage-layout.sh` is the single source;
-`/srv` holds raw data and `/var/lib` holds the state no raw file regenerates.
+`state/opdshelf`), `agent-local` (`state/agent-local`) and `agent-general`
+(`state/agent-general`) for the two agent deployments, and the raw-only `music`,
+`wallpapers`, `git`, `apps` and `repo-archive`. The table in `scripts/storage-layout.sh`
+is the single source; `/srv` holds raw data and `/var/lib` holds the state no raw
+file regenerates.
+
+`state/agent-model` is the one dataset in **no** unit, and the table says so
+(`dataset_unrestored`): it holds the 4.7 GiB GGUF blob the personal model server
+loads, which `docs/manual-steps.md` section 40.8 re-downloads and verifies by
+checksum. Backing it up would put a fully reconstructable artefact in every
+snapshot and in R2 for no restore value, so a cold restore fetches it instead.
+The gateway cannot start without it, which is a loud failure rather than a silent
+one.
+
+An agent gateway's state is a recovery point: `state/agent-local` and
+`state/agent-general` hold the runtime's sessions, memory and skills, none of which
+any raw file regenerates. Restoring one returns the agent to a point in time; it
+must be started after the restore with its own state directory owned by uid 1000,
+exactly as any other application dataset.
 
 A job snapshots **every dataset in its unit** and passes all of their staging
 paths to one restic snapshot:

@@ -1,0 +1,26 @@
+# General deployment (agent-general). The image ships this file;
+# smortress-agent-config.service copies it to /var/lib/agent/general/config.yaml on
+# the first boot only. From then on the runtime and the operator own that copy.
+#
+# No api_key, and that is the point of the deployment: the provider credential is
+# held by agent-proxy (apps/agent_proxy/README.md), which adds the Authorization
+# header on the way out. This gateway reaches the proxy by container name on
+# agent-general.network and never sees the key.
+#
+# context_length is the hosted model's window, so the runtime does not have to
+# discover it per request.
+model:
+  provider: custom
+  base_url: http://smortress-agent-proxy:18003/v1
+  default: qwen-3.8-27b
+  context_length: 262128
+
+# Nothing in this deployment approves its own tool use: an approval is presented
+# in the chat and decided outside the runtime.
+approvals:
+  mode: manual
+
+# The toolsets stay at the runtime's defaults here on purpose. This is the
+# internet-connected side, it mounts no personal source, and it holds no
+# credential worth reaching: the closure in the personal config is about
+# authority, not about a network that is already sealed.

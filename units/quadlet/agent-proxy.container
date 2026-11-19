@@ -1,0 +1,60 @@
+# The fixed hosted-model proxy: the only thing on this host that holds the
+# provider key, and the only thing that may dial the provider.
+#
+# `apps/agent_proxy/proxy.py` is the whole implementation: stdlib only, one
+# pinned upstream host compiled into the binary (a source change and a rebuild
+# to move it, never a request field), three OpenAI-compatible paths plus
+# /healthz, a 1 MiB request cap, and streaming responses passed through
+# unbuffered so `stream: true` keeps working.
+#
+# What it may reach: agent-general.network and nothing else -- no personal
+# network, no host network. What may reach it: the general gateway by container
+# name, and the host operator on 127.0.0.1:18003 for a health check. It is
+# deliberately *not* a Serve route: a tailnet path to the proxy would let any
+# tailnet device spend the hosted key.
+#
+# Entrypoint=python3 replaces the runtime image's entrypoint on purpose. That
+# entrypoint is a dispatcher into an s6 supervision tree that boots the gateway,
+# refuses an arbitrary `--user`, and would ignore a program it does not know;
+# this container is one file and needs none of it. Overriding it is also what
+# lets the proxy run as uid 1000 with every capability dropped.
+#
+# The key is a mounted file, never an environment variable: the proxy reads
+# AGENT_PROXY_KEY_FILE at startup, keeps it in memory, and never logs it or
+# places it in argv. A missing or empty key file stops the unit instead of
+# serving requests that could only fail upstream.
+#
+# AGENT_PROXY_HOST is the wildcard address *inside this container*, not a host
+# listener: the published port is loopback-only, and a process bound to loopback
+# in this namespace would never see the DNATed traffic that arrives on eth0.
+[Unit]
+Description=Hosted-model proxy for the agent-general deployment
+Requires=sops-decrypt.service smortress-app-secrets.service
+After=network-online.target sops-decrypt.service smortress-app-secrets.service
+Wants=network-online.target
+
+[Container]
+Image=ghcr.io/smores56/homelab-platform/agent-runtime@sha256:276d44685c65c0cb2a25f190b63c65c8906f9dc76486fb1c05ae71b5826bda08
+ContainerName=smortress-agent-proxy
+Network=agent-general.network
+User=1000:1000
+Secret=agent-hosted-key,type=mount,target=/run/secrets/agent-hosted-key,uid=1000,gid=1000,mode=0400
+Entrypoint=python3
+Exec=/usr/libexec/agent-proxy
+Environment=AGENT_PROXY_KEY_FILE=/run/secrets/agent-hosted-key
+Environment=AGENT_PROXY_HOST=0.0.0.0
+Environment=AGENT_PROXY_PORT=18003
+Environment=TZ=UTC
+PublishPort=127.0.0.1:18003:18003
+ReadOnly=true
+NoNewPrivileges=true
+DropCapability=ALL
+
+[Service]
+# 143 is SIGTERM, which a deliberate stop sends: not a failure.
+SuccessExitStatus=143
+Restart=on-failure
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

@@ -27,6 +27,11 @@ app_images=(
   'immich-valkey|docker.io/valkey/valkey:9|sha256:3add1a336a920ea54770a001ab6feb3da5fceea96a40373a3a2cd469b815f0b7'
   'opdshelf|docker.io/koalilla/opds-server@sha256:b82f94f72b41686fd9169a2269d65550f411a97dfa341a330df88b0bfab0af35|sha256:b82f94f72b41686fd9169a2269d65550f411a97dfa341a330df88b0bfab0af35'
   'syncthing|docker.io/syncthing/syncthing:2.1.7|sha256:2b71da7c0d0a91a6ae5285ad079226fecc0a365d08b27720e1f7037b018f7546'
+  # Agent deployments (SDLC #711). agent-model is the pinned local inference
+  # server; agent-runtime is Hermes, used by both gateways and by the hosted
+  # proxy, which is why the proxy needs no third image and no package manager.
+  'agent-model|ghcr.io/ggml-org/llama.cpp:server-cuda|sha256:ae96e52f8b2106ea82bad786ee2d08bb9b0a8c93403df9c27ae1bf065a118089'
+  'agent-runtime|docker.io/nousresearch/hermes-agent:v0.23.1|sha256:276d44685c65c0cb2a25f190b63c65c8906f9dc76486fb1c05ae71b5826bda08'
 )
 
 # app_image_ref NAME -> the only reference a Quadlet may contain.
