@@ -18,17 +18,19 @@
 # The key is rewritten at every boot, for two reasons. The runtime has no `_FILE`
 # variant and reads API_SERVER_KEY from $HERMES_HOME/.env, and podman's `type=env`
 # secret keeps the trailing newline the decrypted file ends with, so a Bearer token
-# taken from it never compares equal. The script prefixes the decrypted value,
+# taken from it never compares equal. The web UI's `webui.env` carries the same key
+# and its own password gate for the same reason: neither process has a `_FILE`
+# variant. The script prefixes the decrypted value,
 # which drops nothing and adds no newline to it. Both gateway keys and both facade
 # tokens are self-issued and revocable; the hosted provider key is not here at all,
 # it is in agent-proxy.
 #
 # Requires= both datasets: without them the copy lands on the root filesystem and
 # the gateway starts against an empty home that looks configured.
-Description=Seed the agent runtime configs, their keys and the facade memory roots
+Description=Seed the agent runtime configs, their keys, the web UI env and the facade memory roots
 Requires=zfs-ready@state-agent-local.service zfs-ready@state-agent-general.service sops-decrypt.service
 After=zfs-ready@state-agent-local.service zfs-ready@state-agent-general.service sops-decrypt.service
-Before=agent-local.service agent-general.service agent-facade-personal.service agent-facade-general.service
+Before=agent-local.service agent-general.service agent-facade-personal.service agent-facade-general.service agent-webui-personal.service agent-webui-general.service
 
 [Service]
 Type=oneshot

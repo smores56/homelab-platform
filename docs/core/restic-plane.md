@@ -55,9 +55,11 @@ one.
 
 An agent gateway's state is a recovery point: `state/agent-local` and
 `state/agent-general` hold the runtime's sessions, memory and skills, none of which
-any raw file regenerates. Restoring one returns the agent to a point in time; it
-must be started after the restore with its own state directory owned by uid 1000,
-exactly as any other application dataset.
+any raw file regenerates. The deployment's web UI keeps its chats and workspaces
+under `webui/` in the same dataset, so one snapshot returns the whole deployment to
+a point in time. Restoring one returns the agent to that point; it must be started
+after the restore with its own state directory owned by uid 1000, exactly as any
+other application dataset.
 
 A job snapshots **every dataset in its unit** and passes all of their staging
 paths to one restic snapshot:

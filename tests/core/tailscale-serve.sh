@@ -134,14 +134,19 @@ run() {
 core_status() {
     cat >"$status" <<'EOF'
 {
-  "TCP": {"443": {"HTTPS": true}, "8443": {"HTTPS": true}, "10000": {"HTTPS": true}},
+  "TCP": {"443": {"HTTPS": true}, "8443": {"HTTPS": true}, "10000": {"HTTPS": true},
+          "8444": {"HTTPS": true}, "8445": {"HTTPS": true}},
   "Web": {
     "host:443": {"Handlers": {
       "/": {"Proxy": "http://127.0.0.1:2283"},
       "/apps/agent-local": {"Proxy": "http://127.0.0.1:18001"},
-      "/apps/agent-general": {"Proxy": "http://127.0.0.1:18002"}}},
+      "/apps/agent-general": {"Proxy": "http://127.0.0.1:18002"},
+      "/apps/agent-ui-personal": {"Proxy": "http://127.0.0.1:18006"},
+      "/apps/agent-ui-general": {"Proxy": "http://127.0.0.1:18007"}}},
     "host:8443": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:8083"}}},
-    "host:10000": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:8384"}}}
+    "host:10000": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:8384"}}},
+    "host:8444": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:18006"}}},
+    "host:8445": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:18007"}}}
   }
 }
 EOF
@@ -177,6 +182,8 @@ serves host:10000 / http://127.0.0.1:8384 '10000 still fronts Syncthing'
 
 serves host:443 /apps/agent-local http://127.0.0.1:18001 'the personal gateway gets /apps/agent-local'
 serves host:443 /apps/agent-general http://127.0.0.1:18002 'the general gateway gets /apps/agent-general'
+serves host:8444 / http://127.0.0.1:18006 'the personal UI gets its own HTTPS port'
+serves host:8445 / http://127.0.0.1:18007 'the general UI gets its own HTTPS port'
 agent_declarations=$(grep -cE -- '--set-path=/apps/agent-(local|general) ' "$log")
 eq "$agent_declarations" 2 'each agent gateway is declared exactly once'
 if grep -qF -- 'http://127.0.0.1:18003' "$log"; then
@@ -261,10 +268,10 @@ serves host:443 / http://127.0.0.1:2283 'no plan keeps the core root route'
 reset_case
 plan_with "$(jq -cn --argjson a "$(app_entry alpha 21234 4001 1G internet)" '{alpha: $a}')" >"$plan"
 if FAKE_STATUS_FAIL=1 run; then ok 'an unreadable status still applies the plan'; else bad 'an unreadable status still applies the plan' "$(cat "$work/stderr")"; fi
-if [[ $(grep -c -- '--bg --https=' "$log") == 7 ]]; then
+if [[ $(grep -c -- '--bg --https=' "$log") == 9 ]]; then
     ok 'the core routes, the two core paths, the wallpaper route and the app route are declared without status'
 else
-    bad 'the core routes, the wallpaper route and the app route are declared without status' "$(cat "$log")"
+    bad 'the core routes, the two core paths, the wallpaper route and the app route are declared without status' "$(cat "$log")"
 fi
 
 # --- an unpublishable wallpaper route fails the run --------------------------
@@ -287,7 +294,7 @@ if WALLPAPERS_DIR=$work/absent run; then
 else
     ok 'a missing wallpaper directory fails the run'
 fi
-if [[ $(grep -c -- '--bg --https=' "$log") == 5 ]]; then
+if [[ $(grep -c -- '--bg --https=' "$log") == 7 ]]; then
     ok 'a missing wallpaper directory still leaves the core routes declared'
 else
     bad 'a missing wallpaper directory still leaves the core routes declared' "$(cat "$log")"
@@ -348,8 +355,8 @@ if [[ -n $tenant_traffic ]]; then
 else
     ok 'a rejected plan changes no app route'
 fi
-if [[ $(grep -c -- '--bg --https=' "$log") == 6 ]]; then
-    ok 'a rejected plan still declares the core routes, the core paths and the wallpapers route'
+if [[ $(grep -c -- '--bg --https=' "$log") == 8 ]]; then
+    ok 'a rejected plan still declares the core routes, the two core paths and the wallpapers route'
 else
     bad 'a rejected plan still declares the core routes and the wallpapers route' "$(cat "$log")"
 fi

@@ -50,6 +50,8 @@ readonly app_quadlets=(
   units/quadlet/agent-proxy.container
   units/quadlet/agent-facade-personal.container
   units/quadlet/agent-facade-general.container
+  units/quadlet/agent-webui-personal.container
+  units/quadlet/agent-webui-general.container
 )
 
 # Ports that are published on loopback for the operator's own curl and are
@@ -731,6 +733,44 @@ if grep -rhn 'X-Deployment-Token:' "${agent_templates[@]}" | grep -qvE ': __FACA
 else
   ok 'no agent config template carries a facade token'
 fi
+
+# 7. Each web UI is a client of its own deployment's gateway and nothing else. It
+#    shares the gateway's network -- the personal one internal, so the UI has no
+#    route off the host either -- and the pairing is asserted in both directions:
+#    a UI that named the other deployment's gateway would answer from the wrong
+#    authority domain while looking healthy.
+for spec in \
+  personal:local:18006:agent-local.network:smortress-agent-local:18001 \
+  general:general:18007:agent-general.network:smortress-agent-general:18002; do
+  IFS=: read -r deployment state port network gateway gport <<<"$spec"
+  q=units/quadlet/agent-webui-$deployment.container
+  mapfile -t nets < <(sed -n 's/^Network=//p' "$q")
+  eq "${#nets[@]}" 1 "$q declares exactly one network"
+  eq "${nets[0]:-}" "$network" "$q joins only $network"
+  eq "$(sed -n 's/^PublishPort=//p' "$q")" "127.0.0.1:$port:8787" \
+    "$q publishes loopback $port, the UI's own port"
+  eq "$(sed -n 's/^Image=//p' "$q")" "$(app_image_ref agent-webui)" \
+    "$q runs the built web UI at the pinned digest"
+  eq "$(sed -n 's/^EnvironmentFile=//p' "$q")" "/var/lib/agent/$state/webui.env" \
+    "$q takes its key and password from the seeded file"
+  eq "$(sed -n 's/^Volume=//p' "$q")" "/var/lib/agent/$state/webui:/data:z" \
+    "$q mounts only its deployment's UI directory"
+  if grep -qxF "Environment=HERMES_WEBUI_GATEWAY_BASE_URL=http://$gateway:$gport" "$q"; then
+    ok "$q points at its own deployment's gateway"
+  else
+    bad "$q points at its own deployment's gateway" "$(grep -F 'GATEWAY_BASE_URL' "$q")"
+  fi
+  if ! grep -qE '^Environment=(HERMES_WEBUI_PASSWORD|HERMES_WEBUI_GATEWAY_API_KEY)=' "$q"; then
+    ok "$q carries no credential in the unit"
+  else
+    bad "$q carries no credential in the unit"
+  fi
+  if grep -qF 'agent-hosted-key' "$q"; then
+    bad "$q never names the hosted provider key"
+  else
+    ok "$q never names the hosted provider key"
+  fi
+done
 
 printf '\n%d checks, %d failed\n' "$((pass + fail))" "$fail"
 ((fail == 0))

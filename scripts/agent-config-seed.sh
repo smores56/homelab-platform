@@ -15,13 +15,16 @@
 #      `_FILE` variant and podman's `type=env` secret keeps the trailing newline the
 #      decrypted file ends with, so a Bearer token taken from it never compares
 #      equal. These keys are self-issued and revocable; the hosted provider key is
-#      not here at all, it is in agent-proxy.
+#      not here at all, it is in agent-proxy. The same reason writes `webui.env`:
+#      the web UI takes its gateway key and its own password from the environment
+#      and has no `_FILE` variant either.
 #
-# It also creates `<dataset>/memory` for each facade. The facades bind-mount that
+# It also creates `<dataset>/memory` for each facade and `<dataset>/webui` with its
+# `state` and `workspace` children for the web UI. Each container bind-mounts a
 # subdirectory rather than the dataset root (the gateway's sessions, skills and
 # .env are one level up), and a bind source podman has to create would land as
-# root:root 0755 inside a dataset owned by uid 1000 at 0750 -- so the facade's
-# first memory write would fail on a directory it is supposed to own. Running
+# root:root 0755 inside a dataset owned by uid 1000 at 0750 -- so the container's
+# first write would fail on a directory it is supposed to own. Running
 # `install -d` here every boot also re-applies the owner and mode to a directory a
 # Restic restore left root-owned.
 #
@@ -78,6 +81,7 @@ for spec in personal:local general:general; do
   template=$template_dir/$state-config.yaml
   facade_token=$secrets_dir/agent-facade-$deployment-token.yaml
   api_key=$secrets_dir/agent-$state-api-key.yaml
+  ui_password=$secrets_dir/agent-ui-$deployment-password.yaml
 
   # A missing dataset means zfs-ready@state-agent-<deployment> did not run, and the
   # copy would land on the root filesystem: a gateway that starts against an empty
@@ -85,6 +89,7 @@ for spec in personal:local general:general; do
   [[ -d $home ]] || die "$home is missing; zfs-ready@state-agent-$state.service did not run"
   [[ -s $template ]] || die "the image has no config template for $state"
   [[ -s $api_key ]] || die "$api_key is missing; sops-decrypt did not produce it"
+  [[ -s $ui_password ]] || die "$ui_password is missing; sops-decrypt did not produce it"
 
   cp -n "$template" "$config"
   chown 1000:1000 "$config"
@@ -107,7 +112,22 @@ for spec in personal:local general:general; do
   install -o 1000 -g 1000 -m 0400 "$home/.env.new" "$home/.env"
   rm -f "$home/.env.new"
 
-  install -d -o 1000 -g 1000 -m 0750 "$home/memory"
+  # The web UI reads both of these from its environment and offers no `_FILE`
+  # variant, so the values are written here and passed with EnvironmentFile=.
+  # Builtins only: no `$(cat …)` in an external command's argv.
+  ui_password_value=$(read_secret "$ui_password")
+  [[ -n $ui_password_value ]] || die "$ui_password is empty"
+  api_key_value=$(read_secret "$api_key")
+  {
+    printf 'HERMES_WEBUI_GATEWAY_API_KEY=%s\n' "$api_key_value"
+    printf 'HERMES_WEBUI_PASSWORD=%s\n' "$ui_password_value"
+  } >"$home/webui.env.new"
+  install -o 1000 -g 1000 -m 0400 "$home/webui.env.new" "$home/webui.env"
+  rm -f "$home/webui.env.new"
+  unset api_key_value ui_password_value
 
-  echo "agent-config-seed: $state is seeded (config, .env, memory root)"
+  install -d -o 1000 -g 1000 -m 0750 "$home/memory" \
+    "$home/webui" "$home/webui/state" "$home/webui/workspace"
+
+  echo "agent-config-seed: $state is seeded (config, .env, webui.env, memory and UI roots)"
 done

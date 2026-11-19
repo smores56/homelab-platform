@@ -39,6 +39,11 @@ app_images=(
   # proxy, which is why the proxy needs no third image and no package manager.
   'agent-model|ghcr.io/ggml-org/llama.cpp:server-cuda|sha256:ae96e52f8b2106ea82bad786ee2d08bb9b0a8c93403df9c27ae1bf065a118089'
   'agent-runtime|docker.io/nousresearch/hermes-agent:v0.23.1|sha256:276d44685c65c0cb2a25f190b63c65c8906f9dc76486fb1c05ae71b5826bda08'
+  # Built by this repository (SDLC #775), not mirrored: upstream's entrypoint
+  # installs its Python dependencies from PyPI at container start, which a sealed
+  # deployment can never do. The digest is the publish-agent-webui run for the
+  # Containerfile at that path; a rebuild prints a new row.
+  'agent-webui|built:images/agent-webui/Containerfile|sha256:fb50509ef43bcdbe4dc5bda35d725a839ba851a3455a74bb5135d706cf622220'
 )
 
 # app_image_ref NAME -> the only reference a Quadlet may contain.

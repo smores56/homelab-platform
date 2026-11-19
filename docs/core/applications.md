@@ -51,10 +51,14 @@ the digest that run produced.
 | `syncthing` | `…/syncthing@sha256:2b71da7c…` | `docker.io/syncthing/syncthing:2.1.7` |
 | `agent-model` | `…/agent-model@sha256:ae96e52f…` | `ghcr.io/ggml-org/llama.cpp:server-cuda` |
 | `agent-runtime` | `…/agent-runtime@sha256:276d4468…` | `docker.io/nousresearch/hermes-agent:v0.23.1` |
+| `agent-webui` | `…/agent-webui@sha256:fb50509e…` | built from `images/agent-webui/Containerfile` |
 
-A built row appears here once a publish run has produced its digest. It is the
-same trust story with one difference: the digest is the last build's, so the row
-and the run that printed it are the record of what is deployed.
+`agent-webui` is the one built row. It is the same trust story with one
+difference: the digest is the last build's, so the row and the run that printed it
+are the record of what is deployed. Upstream's image cannot be mirrored into
+service, because its entrypoint installs the dependencies from PyPI at container
+start and the personal deployment has no route off the host; the Containerfile
+moves that install to build time.
 
 `agent-runtime` is drawn by five Quadlets: the two gateways, the hosted proxy and
 the two source facades. The proxy and the facades are Python programs in this
@@ -144,6 +148,8 @@ though it belongs to the `files` unit.
 | Hosted provider key | `secrets/server/agent-hosted-key.yaml` | `/run/smortress/secrets/agent-hosted-key.yaml` (`value`, root 0400) | Podman secret `agent-hosted-key`, mounted read-only at `/run/secrets/agent-hosted-key` in `agent-proxy` only. Never in an environment, never in a config file, never in argv |
 | Personal facade token | `secrets/server/agent-facade-personal-token.yaml` | `/run/smortress/secrets/agent-facade-personal-token.yaml` (`value`, root 0400) | Podman secret `agent-facade-personal-token`, mounted at uid 1000 mode 0400 as `/run/secrets/agent-facade-personal-token` in `agent-facade-personal` only, which reads it through `--token-file`. The personal gateway holds the same value in its seeded `config.yaml` as `X-Deployment-Token` (section "Source facades") |
 | General facade token | `secrets/server/agent-facade-general-token.yaml` | `/run/smortress/secrets/agent-facade-general-token.yaml` (`value`, root 0400) | Same shape for `agent-facade-general` and the general gateway |
+| Personal UI password | `secrets/server/agent-ui-personal-password.yaml` | `/run/smortress/secrets/agent-ui-personal-password.yaml` (`value`, root 0400) | Not a Podman secret: `smortress-agent-config.service` writes it into `/var/lib/agent/local/webui.env` as `HERMES_WEBUI_PASSWORD`, which `agent-webui-personal` reads through `EnvironmentFile=`. The UI has no `_FILE` variant, and `type=env` would carry the file's trailing newline into a comparison that never matches |
+| General UI password | `secrets/server/agent-ui-general-password.yaml` | `/run/smortress/secrets/agent-ui-general-password.yaml` (`value`, root 0400) | Same shape, `/var/lib/agent/general/webui.env`. One password per deployment: the two UIs are separate authority domains, so a leak on one must not open the other |
 
 `smortress-app-secrets.service` creates all seven Podman secrets with
 `--replace` on every boot, before any container that declares one. The values
@@ -234,12 +240,13 @@ the other side's sources.
 
 | Deployment | Quadlets | Network | May reach | May not reach |
 | --- | --- | --- | --- | --- |
-| Personal | `agent-local`, `agent-model`, `agent-facade-personal` | `agent-local.network`, `Internal=true` | each other, by container name | the internet, the LAN, the host, the general deployment -- no default route exists |
-| General | `agent-general`, `agent-proxy`, `agent-facade-general` | `agent-general.network`, a plain bridge | the pinned provider, through the proxy; each other, by container name | the personal deployment, every personal source |
+| Personal | `agent-local`, `agent-model`, `agent-facade-personal`, `agent-webui-personal` | `agent-local.network`, `Internal=true` | each other, by container name | the internet, the LAN, the host, the general deployment -- no default route exists |
+| General | `agent-general`, `agent-proxy`, `agent-facade-general`, `agent-webui-general` | `agent-general.network`, a plain bridge | the pinned provider, through the proxy; each other, by container name | the personal deployment, every personal source |
 
 The personal gateway publishes `127.0.0.1:18001`; the general one publishes
-`127.0.0.1:18002`; the proxy publishes `127.0.0.1:18003`. The two facades publish
-nothing at all. A published port is
+`127.0.0.1:18002`; the proxy publishes `127.0.0.1:18003`; the personal web UI
+publishes `127.0.0.1:18006` and the general one `127.0.0.1:18007`. The two facades
+publish nothing at all. A published port is
 host-side DNAT *toward* a container, so it adds nothing to what that container can
 dial: the personal side still has no route off the host, which is why the sealed
 profile is a network property and not a firewall exception.
@@ -345,11 +352,16 @@ beside them is derived, so a restore that loses it costs one rebuild.
 | Personal agent gateway | `127.0.0.1:18001` | `https://smortress.<tailnet>.ts.net/apps/agent-local/v1` |
 | General agent gateway | `127.0.0.1:18002` | `https://smortress.<tailnet>.ts.net/apps/agent-general/v1` |
 | Hosted proxy | `127.0.0.1:18003` | none, on purpose: a tailnet path would let any device spend the provider key |
+| Personal web UI | `127.0.0.1:18006` | `https://smortress.<tailnet>.ts.net:8444/` |
+| General web UI | `127.0.0.1:18007` | `https://smortress.<tailnet>.ts.net:8445/` |
 | Source facades | nothing published | none: each gateway reaches its own facade by container name, and no device outside the deployment has any reason to |
 
 The two agent paths are a second table in `scripts/tailscale-serve.sh`
-(`core_path_routes`) rather than a fourth and fifth core *port*: 443, 8443 and
-10000 are the only root-path HTTPS ports Serve has, and they are taken. A tenant
+(`core_path_routes`): the clients that address those APIs already use a path, and
+443, 8443 and 10000 were the ports already taken. The browser UIs cannot work that
+way -- a web UI emits absolute asset and link URLs, so a path prefix on 443 would
+send the browser to the tailnet root, which is Immich -- and they get two more
+entries in `core_routes` (8444 and 8445) instead. A tenant
 plan that claims either path is refused whole, and the stale-route pruning skips
 both, so a run without a plan cannot delete them.
 
