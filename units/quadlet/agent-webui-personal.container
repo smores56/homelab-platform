@@ -1,0 +1,57 @@
+# The personal deployment's browser UI. It is a client of the personal gateway
+# and nothing else: the only peer it can reach is smortress-agent-local:18001 on
+# agent-local.network, which is internal, so the UI has no route off the host
+# either. The tailnet still reaches it because Serve forwards to
+# 127.0.0.1:18006, which is host-side DNAT -- a published port, not a route in
+# this container's namespace.
+#
+# The image is built by this repository rather than mirrored: upstream's
+# entrypoint installs its Python dependencies from PyPI at container start, and a
+# container with no egress can never finish that. images/agent-webui bakes the
+# install, so the only work left at start is the entrypoint's rsync of the baked
+# tree into /app.
+#
+# ReadOnly=false is deliberate. The entrypoint's root phase rewrites /etc/passwd
+# to align the image's account with WANTED_UID, creates /app from the baked copy
+# and chowns the volume; none of that survives a read-only root. The writers are
+# this container's own layer and the mounted dataset, and there is no host path,
+# no Podman socket and no SSH identity in it.
+#
+# The gateway key and the UI password arrive through EnvironmentFile, written by
+# smortress-agent-config.service: the UI reads both from the environment, has no
+# _FILE variant, and Podman's type=env secret would carry the ciphertext's
+# trailing newline into a password that never compares equal.
+[Unit]
+Description=Hermes Web UI, personal deployment (no egress)
+Requires=zfs-ready@state-agent-local.service sops-decrypt.service smortress-agent-config.service
+After=network-online.target zfs-ready@state-agent-local.service sops-decrypt.service smortress-agent-config.service agent-local.service
+Wants=network-online.target agent-local.service
+
+[Container]
+Image=ghcr.io/smores56/homelab-platform/agent-webui@sha256:fb50509ef43bcdbe4dc5bda35d725a839ba851a3455a74bb5135d706cf622220
+ContainerName=smortress-agent-webui-personal
+Network=agent-local.network
+Environment=HERMES_WEBUI_CHAT_BACKEND=gateway
+Environment=HERMES_WEBUI_GATEWAY_BASE_URL=http://smortress-agent-local:18001
+Environment=HERMES_WEBUI_STATE_DIR=/data/state
+Environment=HERMES_WEBUI_DEFAULT_WORKSPACE=/data/workspace
+Environment=HERMES_WEBUI_SKIP_ONBOARDING=1
+Environment=WANTED_UID=1000
+Environment=WANTED_GID=1000
+Environment=TZ=UTC
+EnvironmentFile=/var/lib/agent/local/webui.env
+Volume=/var/lib/agent/local/webui:/data:z
+PublishPort=127.0.0.1:18006:8787
+ReadOnly=false
+NoNewPrivileges=true
+
+[Service]
+# 143 is SIGTERM, which a deliberate stop sends: not a failure.
+SuccessExitStatus=143
+Restart=on-failure
+# First start creates the virtual environment's bytecode caches from the baked
+# tree, which the entrypoint's startup drain then has to flush.
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

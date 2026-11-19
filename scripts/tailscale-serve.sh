@@ -34,20 +34,29 @@ fail() {
 
 command -v jq >/dev/null 2>&1 || fail "jq is missing"
 
-# https port -> loopback port. 443 Immich, 8443 OPDShelf, 10000 Syncthing GUI.
-# The wallpaper library is deliberately absent: it is a directory published as
-# static files under a path on 443, not a loopback port with a root path.
+# https port -> loopback port. 443 Immich, 8443 OPDShelf, 10000 Syncthing GUI,
+# 8444 the personal web UI, 8445 the general one. The wallpaper library is
+# deliberately absent: it is a directory published as static files under a path on
+# 443, not a loopback port with a root path.
 declare -A core_routes=(
   [443]=2283
   [8443]=8083
   [10000]=8384
+  [8444]=18006
+  [8445]=18007
 )
 
 # https/443 path -> loopback port, for the two agent gateway APIs. A fixed path
-# each, because their root paths are not available: Serve exposes root-path HTTPS
-# only on 443, 8443 and 10000, and those are taken. The hosted proxy on
-# 127.0.0.1:18003 is deliberately absent -- the gateway reaches it by container
-# name, and a tailnet path to it would let any device spend the provider key.
+# each, because the documents and clients that address them already use
+# /apps/agent-local/v1 and /apps/agent-general/v1, and an API client can be told a
+# path. The hosted proxy on 127.0.0.1:18003 is deliberately absent -- the gateway
+# reaches it by container name, and a tailnet path to it would let any device
+# spend the provider key.
+#
+# The browser UIs are NOT here: a web UI emits absolute asset and link URLs
+# (`/static/…`, `/login`), which a path prefix on 443 cannot serve -- the browser
+# would ask the tailnet root, which is Immich. They get their own HTTPS ports in
+# core_routes instead.
 declare -A core_path_routes=(
   [/apps/agent-local]=18001
   [/apps/agent-general]=18002
@@ -91,9 +100,9 @@ if [[ -e $plan ]]; then
 fi
 
 # Core ingress first: whatever is wrong with the tenant plan or the Serve
-# status, the three core applications, the two agent gateways and the wallpaper
-# tree must stay reachable. Nothing below this point may run before these
-# declarations.
+# status, the core applications, the two agent gateways, their two web UIs and the
+# wallpaper tree must stay reachable. Nothing below this point may run before
+# these declarations.
 for https in "${!core_routes[@]}"; do
   backend=http://127.0.0.1:${core_routes[$https]}
   if ! "$tailscale_bin" serve --bg --https="$https" "$backend"; then

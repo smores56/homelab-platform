@@ -56,6 +56,8 @@ COPY units/quadlet/immich.network units/quadlet/immich-postgres.container \
      units/quadlet/agent-general.container units/quadlet/agent-proxy.container \
      units/quadlet/agent-facade-personal.container \
      units/quadlet/agent-facade-general.container \
+     units/quadlet/agent-webui-personal.container \
+     units/quadlet/agent-webui-general.container \
      /usr/share/containers/systemd/
 COPY secrets/server/ /etc/smortress/secrets/
 COPY image/cosign.pub /etc/pki/containers/smortress.pub

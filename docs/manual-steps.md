@@ -2984,9 +2984,10 @@ hostname — the matrix is the acceptance criterion, not the platform.
 ## 40. Applications (T5) and agent deployments (T6): publish images, expose them, prove restores
 
 These steps make Immich, OPDShelf and Syncthing run from the derived image and
-prove that each one restores on scratch storage. Subsections 40.7 to 40.10 cover
-the agent deployments from SDLC #711: their three secrets, the pinned model file,
-and the two gateway routes on 443. Background and invariants are in
+prove that each one restores on scratch storage. Subsections 40.7 to 40.13 cover
+the agent deployments from SDLC #711 and their browser UIs from #775: their seven
+secrets, the pinned model file, the two gateway routes on 443, the two UI ports and
+the facade wire. Background and invariants are in
 `docs/core/applications.md`; the recovery groups are in
 `docs/core/restic-plane.md`. Prerequisites: the derived image from section 37 is
 booted, the age identity is staged root-only under `/var` (section 37), and the
@@ -3387,13 +3388,16 @@ sudo systemctl start smortress-immich-dump.timer
 The T6 cutover reuses these drills: it restores the same units from each of the
 three destinations before the legacy stack is retired.
 
-### 40.7 Create the five agent secrets
+### 40.7 Create the seven agent secrets
 
-The agent deployments need five single-value SOPS files. Three are `api_key:` keys:
-two self-issued gateway keys and the hosted provider key, which is the only
+The agent deployments need seven single-value SOPS files. Three are `api_key:`
+keys: two self-issued gateway keys and the hosted provider key, which is the only
 credential on this host that is not ours. Two are `token:` values, one per source
-facade. `sops` finds the age recipients in `.sops.yaml`, so every command below
-runs from the repository root.
+facade. Two are `password:` values, the browser UI's login gate, one per
+deployment -- separate on purpose, because the two UIs are separate authority
+domains and a password leaked from one must not open the other. `sops` finds the
+age recipients in `.sops.yaml`, so every command below runs from the repository
+root.
 
 Replace the seeded provider key first. The ciphertext committed with this change
 holds a random value: with it the proxy answers `401` from the provider, which is
@@ -3405,11 +3409,15 @@ sops secrets/server/agent-local-api-key.yaml   # optional: rotate, openssl rand 
 sops secrets/server/agent-general-api-key.yaml # optional: rotate the same way
 sops secrets/server/agent-facade-personal-token.yaml  # optional: rotate, openssl rand -hex 32
 sops secrets/server/agent-facade-general-token.yaml   # optional: rotate the same way
+sops secrets/server/agent-ui-personal-password.yaml   # optional: rotate, openssl rand -hex 32
+sops secrets/server/agent-ui-general-password.yaml    # optional: rotate the same way
 ```
 
-A facade token is not replaced by hand: the committed ciphertext already holds a
-fresh random one, so the two facade secrets need no edit at all unless you are
-rotating them (40.11).
+A facade token and a UI password are not replaced by hand: the committed
+ciphertexts already hold fresh random values, so those four secrets need no edit
+at all unless you are rotating them (40.11 for the tokens; a UI password is
+rewritten into `webui.env` at every boot, so rotating it is the same sops-and-
+deploy cycle followed by a restart of the one UI).
 
 ```sh
 git commit -am 'chore(core): set the agent provider key'
@@ -3417,7 +3425,7 @@ git commit -am 'chore(core): set the agent provider key'
 
 Each file must stay a single scalar, because `image/rootfs/etc/smortress/secrets.manifest`
 declares it `value`: a second key or an empty value fails `sops-decrypt.service` at
-boot rather than publishing half a secret. The five manifest rows are exactly
+boot rather than publishing half a secret. The seven manifest rows are exactly
 
 ```text
 agent-local-api-key.yaml      root  root  0400  value
@@ -3425,6 +3433,8 @@ agent-general-api-key.yaml    root  root  0400  value
 agent-hosted-key.yaml         root  root  0400  value
 agent-facade-personal-token.yaml root root 0400 value
 agent-facade-general-token.yaml  root root 0400 value
+agent-ui-personal-password.yaml  root root 0400 value
+agent-ui-general-password.yaml   root root 0400 value
 ```
 
 After the image is deployed (40.2), the decrypted copies are root-only and each
@@ -3432,7 +3442,8 @@ container's own copy is 0400 for uid 1000:
 
 ```sh
 sudo ls -l /run/smortress/secrets/agent-*.yaml
-sudo stat -c '%u:%g %a %n' /var/lib/agent/local/.env /var/lib/agent/general/.env
+sudo stat -c '%u:%g %a %n' /var/lib/agent/local/.env /var/lib/agent/general/.env \
+  /var/lib/agent/local/webui.env /var/lib/agent/general/webui.env
 ```
 
 `smortress-agent-config.service` rewrites `.env` at every boot from the ciphertext,
@@ -3574,8 +3585,9 @@ succeeding is what makes the failure meaningful.
 ### 40.10 Check the two Serve routes
 
 `scripts/tailscale-serve.sh` declares `/apps/agent-local` and `/apps/agent-general`
-on 443 as core paths, before the tenant plan is applied, and the stale-route pruning
-skips both. After the deploy:
+on 443 as core paths and 8444/8445 as core ports for the two web UIs, before the
+tenant plan is applied, and the stale-route pruning skips both paths. After the
+deploy:
 
 ```sh
 sudo systemctl start smortress-tailscale-serve.service
@@ -3584,7 +3596,9 @@ tailscale serve status
 
 The status must show `https://smortress.<tailnet>.ts.net:443` handlers `/`,
 `/wallpapers/`, `/apps/agent-local`, `/apps/agent-general`, and one `/apps/<name>`
-per tenant app. There is no handler for `127.0.0.1:18003` and there must never be
+per tenant app, plus root handlers on `:8444` and `:8445` for the two web UIs. The
+UIs are ports rather than paths because a web UI emits absolute asset and link
+URLs: behind a path prefix the browser would ask the tailnet root, which is Immich. There is no handler for `127.0.0.1:18003` and there must never be
 one: the general gateway reaches the proxy by container name, and a tailnet path to
 the proxy would let any device spend the provider key. From a tailnet device:
 
@@ -3715,6 +3729,96 @@ The facade logs the method, the path and the status of every request it answers 
 `401` where the gateway's `initialize` should be is the old token in
 `config.yaml`, and 40.11 is the fix. The log carries no header and no token, so it is
 safe to paste into a bug report.
+
+### 40.13 Verify the two browser UIs
+
+Both UIs run the image this repository builds (40.1). The first thing to check is
+therefore that starting them installs nothing: upstream's entrypoint fetches uv
+from astral.sh, builds the venv and installs from PyPI, and the bake exists so that
+none of it happens.
+
+```sh
+sudo systemctl start agent-webui-personal.service agent-webui-general.service
+sudo journalctl -u agent-webui-personal.service -n 60 --no-pager \
+  | grep -E 'already installed|Existing virtual environment|skipping|listening'
+```
+
+Expect all of `uv already installed`, `Existing virtual environment found —
+reusing`, `Dependencies already installed — skipping`, `hindsight-client already
+installed` and `listening on http://0.0.0.0:8787`. A `Downloading uv` or a failing
+`uv pip install` means the image that started is not the baked one, and on the
+sealed personal side it would also have failed outright.
+
+Both publish on loopback only, behind their own password gates:
+
+```sh
+for port in 18006 18007; do
+  curl -sS -o /dev/null -w "$port / -> %{http_code} %{redirect_url}\n" http://127.0.0.1:$port/
+  curl -sS -o /dev/null -w "$port /login -> %{http_code} /health -> " http://127.0.0.1:$port/login
+  curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:$port/health
+done
+```
+
+Each `/` answers `302` toward `/login?next=/`, each `/login` answers `200`, and
+`/health` answers `200` without a session. A `200` on `/` means no password
+reached the process: read `sudo sed -n 's/^HERMES_WEBUI_PASSWORD=.*/HERMES_WEBUI_PASSWORD=<set>/p'
+/var/lib/agent/local/webui.env` -- the file must exist, be `1000:1000 0400`, and
+carry both lines.
+
+The personal UI has no route off the host, and that is a property of its network
+rather than of the UI:
+
+```sh
+sudo podman exec smortress-agent-webui-personal python3 -c \
+  'import socket; socket.create_connection(("1.1.1.1", 443), 3)'; echo "exit=$?"
+sudo podman exec smortress-agent-webui-personal cat /proc/net/route
+```
+
+The first must exit non-zero and the second must show no default route. The general
+UI runs on the egress network, so the same probe there succeeds; that difference is
+the split, not a defect.
+
+Each UI must be a client of its own deployment's gateway. Ask one question in each
+and read the gateway's log:
+
+```sh
+sudo podman logs --since 2m smortress-agent-local 2>&1 | grep -c 'POST /v1'
+sudo podman logs --since 2m smortress-agent-general 2>&1 | grep -c 'POST /v1'
+```
+
+The deployment whose UI answered is the deployment whose count moves. A personal
+question that moves the general gateway's count is the crossing this split exists to
+prevent, and the UI's `HERMES_WEBUI_GATEWAY_BASE_URL` is the thing to read.
+
+From a tailnet device, open the two UIs and sign in with each deployment's own
+password -- they are separate on purpose:
+
+```sh
+sops -d secrets/server/agent-ui-personal-password.yaml
+sops -d secrets/server/agent-ui-general-password.yaml
+```
+
+* `https://smortress.<tailnet>.ts.net:8444/` is the personal UI: it answers from the
+  pinned local model, and its model picker is the runtime's, not a hosted one.
+* `https://smortress.<tailnet>.ts.net:8445/` is the general UI: it answers from the
+  hosted provider, through `agent-proxy`.
+
+The first-run wizard is disabled (`HERMES_WEBUI_SKIP_ONBOARDING=1`): in gateway mode
+the UI has no agent source mounted, so the wizard reports `Missing imports:
+run_agent` and offers a setup path this deployment does not use. Agent features that
+need that source (model auto-detection, personality routing, CLI session import) are
+absent in both UIs; the facades are the tool surface.
+
+Rotating a UI password is the same sops-and-deploy cycle as 40.11, without its
+reseed step: `smortress-agent-config.service` rewrites `webui.env` at every boot, so
+the new value is in place after the boot that ships the new ciphertext, and
+
+```sh
+sudo systemctl restart agent-webui-personal.service
+```
+
+is enough once the image is running. Deleting `webui.env` is never part of the
+procedure: it is rewritten, not seeded once.
 
 ## 41. SSH tunnel (`ssh.sammohr.dev`)
 
