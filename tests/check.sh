@@ -308,22 +308,39 @@ fi
 
 if [[ -f docs/manual-steps.md ]] \
     && grep -q 'systemd-cryptenroll --fido2-device=auto --fido2-with-client-pin=yes' docs/manual-steps.md \
-    && grep -q 'pamu2fcfg -N -u smores' docs/manual-steps.md; then
+    && grep -q 'pamu2fcfg -n -u smores' docs/manual-steps.md; then
   ok "manual-steps.md carries the token enrolment commands"
 else
   bad "manual-steps.md carries the token enrolment commands"
 fi
 
-# --- escalation (sudo PIN) --------------------------------------------------
+# --- escalation (sudo: password + touch) ------------------------------------
 
-# The same stack runs on smortress, so this file is compared byte for byte with
-# the design rather than by keyword: drift here means two hosts that gate
-# differently, which is the one thing the design says must not happen.
+# smortress gates sudo with a different second factor (a YubiKey TOTP, in another
+# repository), so this laptop's file is compared byte for byte with the design
+# rather than by keyword: a dropped module or a jump index one line off is
+# escalation an agent can reach, and the failure is silent.
 sudo_pam=image/rootfs/etc/pam.d/sudo
 expected=$(cat <<'EOT'
+# Escalation asks for two things: the account password (pam_unix) and a touch on
+# a key listed in /etc/u2f_mappings (pam_u2f). /etc/pam.d/login keeps its own
+# stack for the lock screen and a TTY, and that one still asks for the token's
+# FIDO2 PIN; this file must not.
+#
+# pinverification=0 is the point. The FIDO2 PIN is shared with the disk keyslot,
+# and eight wrong PINs block the token and wipe every credential on it, so a
+# sudo prompt that any process running as smores can trigger must never be able
+# to spend that budget.
+#
+# userpresence=1 makes the touch mandatory. No nouserok: a missing mapping, or a
+# key holding no credential for smores, has to fail this stack closed.
+#
+# faillock: pam_unix's default=1 jumps over pam_u2f to authfail, so a wrong
+# password is never followed by a touch prompt; pam_u2f's success=1 jumps over
+# authfail to authsucc, so a full success is what clears the tally.
 auth  required      pam_faillock.so preauth deny=5 unlock_time=300
-auth  [success=2 default=ignore] pam_userdb.so crypt=crypt db=/etc/security/sudopin.db
-auth  [success=1 default=ignore] pam_unix.so try_first_pass
+auth  [success=ok default=1] pam_unix.so try_first_pass
+auth  [success=1 default=ignore] pam_u2f.so authfile=/etc/u2f_mappings cue userpresence=1 pinverification=0
 auth  [default=die] pam_faillock.so authfail deny=5 unlock_time=300
 auth  sufficient    pam_faillock.so authsucc deny=5 unlock_time=300
 account    include system-auth
@@ -334,22 +351,70 @@ session    include system-auth
 EOT
 )
 if [[ $(cat "$sudo_pam" 2>/dev/null) == "$expected" ]] \
-    && [[ $(wc -l <"$sudo_pam" 2>/dev/null) -eq 10 ]]; then
-  ok "the shipped sudo PAM stack is the design's ten lines, byte for byte"
+    && [[ $(wc -l <"$sudo_pam" 2>/dev/null) -eq 26 ]]; then
+  ok "the shipped sudo PAM stack is the design's file, byte for byte"
 else
-  bad "the shipped sudo PAM stack is the design's ten lines, byte for byte" \
+  bad "the shipped sudo PAM stack is the design's file, byte for byte" \
     "$(diff <(printf '%s\n' "$expected") "$sudo_pam" 2>&1)"
 fi
 
-# Without crypt=crypt pam_userdb compares the stored value as plaintext, so the
-# database would hold the PIN itself. db= is opened literally too: Linux-PAM
-# never appends .db, so the name in the stack is the whole file name.
-if grep -qx 'auth  \[success=2 default=ignore\] pam_userdb\.so crypt=crypt db=/etc/security/sudopin\.db' \
-    "$sudo_pam" 2>/dev/null; then
-  ok "the PIN is compared as a hash against the literal .db path"
+# Both factors, in the order a human types them, with the tally controls
+# wrapping them: a wrong password must reach authfail without spending a touch,
+# and only both together may reach authsucc.
+preauth=$(grep -n 'pam_faillock\.so preauth' "$sudo_pam" 2>/dev/null | cut -d: -f1)
+unix_line=$(grep -n 'pam_unix\.so' "$sudo_pam" 2>/dev/null | cut -d: -f1)
+u2f_line=$(grep -n 'pam_u2f\.so' "$sudo_pam" 2>/dev/null | cut -d: -f1)
+authfail=$(grep -n 'pam_faillock\.so authfail' "$sudo_pam" 2>/dev/null | cut -d: -f1)
+authsucc=$(grep -n 'pam_faillock\.so authsucc' "$sudo_pam" 2>/dev/null | cut -d: -f1)
+if [[ -n $preauth && -n $unix_line && -n $u2f_line && -n $authfail && -n $authsucc ]] \
+    && ((preauth < unix_line && unix_line < u2f_line && u2f_line < authfail && authfail < authsucc)); then
+  ok "preauth, password, touch, authfail and authsucc run in that order"
 else
-  bad "the PIN is compared as a hash against the literal .db path" \
-    "crypt=crypt is what makes the file a hash; db= is opened as given"
+  bad "preauth, password, touch, authfail and authsucc run in that order" \
+    "preauth=${preauth:-none} password=${unix_line:-none} u2f=${u2f_line:-none} authfail=${authfail:-none} authsucc=${authsucc:-none}"
+fi
+
+# default=1 jumps over pam_u2f to authfail, so a wrong password never prompts for
+# a touch and still records a faillock row. success=ok has to be spelled out:
+# under a bare default=1 a correct password would jump to authfail as well.
+if grep -qx 'auth  \[success=ok default=1\] pam_unix\.so try_first_pass' "$sudo_pam" 2>/dev/null; then
+  ok "a wrong password skips the touch and lands on authfail"
+else
+  bad "a wrong password skips the touch and lands on authfail" \
+    "success=ok is what keeps a good password out of the default=1 jump"
+fi
+
+# success=1 jumps over authfail to authsucc, which is the only line that clears
+# the tally; default=ignore routes a missing, refused or absent touch to it.
+if grep -qx 'auth  \[success=1 default=ignore\] pam_u2f\.so authfile=/etc/u2f_mappings cue userpresence=1 pinverification=0' \
+    "$sudo_pam" 2>/dev/null; then
+  ok "the touch is pam_u2f with no PIN, and a success clears the tally"
+else
+  bad "the touch is pam_u2f with no PIN, and a success clears the tally"
+fi
+
+# pinverification=0 is the reason this file is not /etc/pam.d/login: the FIDO2
+# PIN is shared with the disk keyslot, and eight wrong PINs wipe every
+# credential on the token. Any process running as smores can make sudo prompt,
+# so that budget is not one sudo may spend. userpresence=1 is what makes the
+# second factor a touch instead of nothing.
+if grep -q 'pinverification=0' "$sudo_pam" 2>/dev/null \
+    && grep -q 'userpresence=1' "$sudo_pam" \
+    && ! grep -q 'pinverification=1' "$sudo_pam"; then
+  ok "sudo asks for a touch and never for the FIDO2 PIN"
+else
+  bad "sudo asks for a touch and never for the FIDO2 PIN" \
+    "pinverification=0 keeps the disk keyslot's PIN budget out of sudo's reach"
+fi
+
+# Without nouserok a missing authfile, or a key with no credential for smores,
+# fails the module; with it those cases return PAM_IGNORE and the touch quietly
+# stops being a factor. Comments mention the word, so only the rule lines count.
+if ! grep -vE '^[[:space:]]*#' "$sudo_pam" 2>/dev/null | grep -q 'nouserok'; then
+  ok "a missing mapping fails the stack closed"
+else
+  bad "a missing mapping fails the stack closed" \
+    "nouserok turns a missing authfile or credential into PAM_IGNORE"
 fi
 
 # A bare authsucc stops clearing the tally at three rows, and interspersed typos
@@ -362,16 +427,6 @@ else
     "a bare authsucc stops clearing the tally at three rows"
 fi
 
-# try_first_pass is what makes one prompt serve both credentials: pam_userdb
-# caches the value typed there and pam_unix re-verifies it, so the account
-# password is the fallback the design promises.
-if grep -qx 'auth  \[success=1 default=ignore\] pam_unix\.so try_first_pass' \
-    "$sudo_pam" 2>/dev/null; then
-  ok "the account password is the fallback at the same prompt"
-else
-  bad "the account password is the fallback at the same prompt"
-fi
-
 if grep -qx 'account    include system-auth' "$sudo_pam" 2>/dev/null \
     && grep -qx 'password   include system-auth' "$sudo_pam" \
     && grep -qx 'session    optional pam_keyinit.so revoke' "$sudo_pam" \
@@ -382,12 +437,13 @@ else
   bad "the sudo stack keeps the stock account, password and session phases"
 fi
 
-# The PIN is what an agent lacks. A token line or a permitting module here would
-# put escalation back within reach of whatever the session already holds.
-if ! grep -qE 'pam_u2f|pam_permit' "$sudo_pam" 2>/dev/null; then
-  ok "the sudo stack asks for the PIN, not the token"
+# The PIN, the PIN database and a permitting module are all gone. Any of them
+# back in this file would put escalation within reach of whatever the session
+# already holds.
+if ! grep -qE 'pam_permit|pam_userdb|sudopin|pam_oath' "$sudo_pam" 2>/dev/null; then
+  ok "the sudo stack asks for a password and a touch, nothing else"
 else
-  bad "the sudo stack asks for the PIN, not the token"
+  bad "the sudo stack asks for a password and a touch, nothing else"
 fi
 
 expected=$(cat <<'EOT'
@@ -403,25 +459,40 @@ else
   bad "the shipped sudoers drop-in is the design's, byte for byte"
 fi
 
-if grep -qx 'f /etc/security/sudopin.db 0600 root root -' \
-    image/rootfs/usr/lib/tmpfiles.d/smorespro.conf 2>/dev/null; then
-  ok "tmpfiles declares the PIN database root-only"
-else
-  bad "tmpfiles declares the PIN database root-only"
+# /etc/u2f_mappings is public credential data: a key handle and a public key per
+# token, no secret. It ships so that a fresh host needs no hand-written file, and
+# because both stacks read it. pam_u2f parses it as root and refuses one that
+# group or other can write, which is the mode this asserts.
+# The credential must carry no +pin option: pam_u2f turns +pin into a PIN
+# request even when the stack says pinverification=0, and an enrolment run with
+# pamu2fcfg -N writes exactly that, which would put the sudo prompt back in the
+# business of spending the token's PIN budget.
+# The line is username:keyHandle,publicKey,options[:keyHandle,publicKey,options]...
+# One credential per key: the owner's three 5C Nanos (one per laptop, one
+# spare) all authenticate the same account, so the count is a minimum, not an
+# equality -- replacing a key changes it. Base64url and base64 both appear in
+# real pamu2fcfg output, so the class carries +, / and =.
+mappings=image/rootfs/etc/u2f_mappings
+map_line=$(sed -n 1p "$mappings" 2>/dev/null)
+cred_re='^[A-Za-z0-9_+/=-]{20,},[A-Za-z0-9_+/=-]{40,}(,[A-Za-z0-9_+-]*){0,3}$'
+map_ok=0
+if [[ -n $map_line && $(wc -l <"$mappings" 2>/dev/null) -eq 1 && $map_line == smores:* ]]; then
+  map_ok=1
+  map_count=0
+  IFS=: read -r -a map_creds <<<"${map_line#smores:}"
+  for cred in "${map_creds[@]}"; do
+    [[ $cred =~ $cred_re ]] || map_ok=0
+    map_count=$((map_count + 1))
+  done
+  [[ $map_count -ge 2 ]] || map_ok=0
+  [[ $map_line =~ \+pin ]] && map_ok=0
 fi
-
-# The db= name has to be the path tmpfiles declares, and nothing else may stand
-# in for it: an extensionless symlink under the old name would mean the stack
-# and the declaration disagree about which file holds the PIN.
-dbpath=$(sed -n 's/.*pam_userdb\.so .*db=\([^ ]*\).*/\1/p' "$sudo_pam" 2>/dev/null)
-dbdecl=$(awk '$1 == "f" && $2 ~ /sudopin/ { print $2 }' \
-  image/rootfs/usr/lib/tmpfiles.d/smorespro.conf 2>/dev/null)
-if [[ -n $dbpath && $dbpath == "$dbdecl" ]] \
-    && [[ ! -e image/rootfs/etc/security/sudopin && ! -L image/rootfs/etc/security/sudopin ]]; then
-  ok "the db= path is the declared PIN database and no symlink shadows it"
+[[ $(stat -c %a "$mappings" 2>/dev/null) == 644 ]] || map_ok=0
+if [[ $map_ok -eq 1 ]]; then
+  ok "the shipped mapping is smores' per-key credentials, no +pin, group/other not writable"
 else
-  bad "the db= path is the declared PIN database and no symlink shadows it" \
-    "stack: ${dbpath:-none}, tmpfiles: ${dbdecl:-none}"
+  bad "the shipped mapping is smores' per-key credentials, no +pin, group/other not writable" \
+    "$mappings is missing or malformed: plug in one 5C Nano at a time and run pamu2fcfg -u smores for the first and pamu2fcfg -n -u smores for each further key, then join them with ':' (docs/manual-steps.md section 2)"
 fi
 
 if grep -q 'chmod 0440 /etc/sudoers.d/10-human-gate' image/Containerfile \
@@ -437,29 +508,35 @@ else
   bad "nothing in the tree grants NOPASSWD"
 fi
 
-# The PIN, its hash and the database are never in the tree: an eight-digit
-# space is 10^8 candidates, so a committed hash is a leaked PIN. Only the steps
-# that build it by hand are.
+# The PIN database, its builder and any crypt hash of an account password are
+# gone from the tree; a file named after them would be a leftover from a host
+# that still had one. The scan stays, scoped to the tree that ships, so a
+# re-introduction is caught where the removal is tested rather than nowhere.
 # shellcheck disable=SC2016 # the literal $6$ is what must not appear
 if ! grep -rqF '$6$' image docs README.md \
-    && [[ -z $(find . \( -path ./.git -o -path ./.worktrees \) -prune -o \
-        \( -name 'sudopin*' -o -name '*.gdbm' \) -type f -print) ]]; then
-  ok "no PIN hash or database is committed"
+    && [[ -z $(find image docs scripts tests README.md \
+        \( -name 'sudopin*' -o -name '*.gdbm' \) -type f -print 2>/dev/null) ]] \
+    && ! grep -rqE 'pam_userdb|gdbmtool' image docs README.md; then
+  ok "no PIN database, no crypt hash and no pam_userdb anywhere in the tree"
 else
-  bad "no PIN hash or database is committed"
+  bad "no PIN database, no crypt hash and no pam_userdb anywhere in the tree"
 fi
 
-if grep -q 'read -rsp .new sudo PIN' docs/manual-steps.md \
-    && grep -q 'openssl passwd -6 -stdin' docs/manual-steps.md \
-    && grep -q 'store smores' docs/manual-steps.md \
-    && grep -q 'fetch smores' docs/manual-steps.md \
-    && grep -q 'chmod 0600 /etc/security/sudopin.db' docs/manual-steps.md \
-    && grep -q 'faillock --user smores --reset' docs/manual-steps.md \
-    && ! grep -qE '^[[:space:]]*(sudo[[:space:]]+)?db_load' docs/manual-steps.md; then
-  ok "manual-steps.md hashes the PIN with openssl and stores it with gdbmtool"
+if grep -q 'image/rootfs/etc/u2f_mappings' docs/manual-steps.md \
+    && grep -q 'pamu2fcfg -n -u smores' docs/manual-steps.md \
+    && grep -q 'bootc upgrade' docs/manual-steps.md \
+    && ! grep -qE 'gdbmtool|sudopin' docs/manual-steps.md; then
+  ok "manual-steps.md rotates the shipped mapping instead of building a PIN database"
 else
-  bad "manual-steps.md hashes the PIN with openssl and stores it with gdbmtool" \
-    "pam_userdb links libgdbm, so db_load -T -t hash writes a database it cannot read"
+  bad "manual-steps.md rotates the shipped mapping instead of building a PIN database"
+fi
+
+if grep -q 'sudo -k; sudo true' docs/manual-steps.md \
+    && grep -q 'faillock --user smores --reset' docs/manual-steps.md \
+    && grep -q 'unplugged' docs/manual-steps.md; then
+  ok "manual-steps.md proves the password + touch gate and its recovery"
+else
+  bad "manual-steps.md proves the password + touch gate and its recovery"
 fi
 
 # --- shell ------------------------------------------------------------------

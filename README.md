@@ -13,18 +13,22 @@ The migration runbook is `docs/switch.md`.
 | --- | --- |
 | `image/pins.env` | every external reference; the only file a base or NymVPN refresh edits |
 | `image/Containerfile` | the derived image: one explicit package set, config copy, unit enables, `bootc container lint` |
-| `image/rootfs/` | files copied into `/`: greetd autologin, portal override, signature policy, the NymVPN unit and its polkit action, the `login` PAM stack the lock screen and TTY share, and the sudo PIN stack |
+| `image/rootfs/` | files copied into `/`: greetd autologin, portal override, signature policy, the NymVPN unit and its polkit action, the `login` and `sudo` PAM stacks, and the FIDO2 mapping both of them read |
 | `image/cosign.pub` | the public half of the signing key shared with `homelab-platform` |
 | `scripts/refresh-pins.sh` | resolves the base digest and the NymVPN release; `--check` for the watcher, `--write` to pin |
 | `scripts/build-image.sh` | local build; never pushes or signs |
-| `docs/manual-steps.md` | the steps only a hand at the keyboard can do: token enrolment for the lock screen, the disk keyslot, the sudo PIN database |
+| `docs/manual-steps.md` | the steps only a hand at the keyboard can do: token enrolment for the disk keyslot, the lock screen and sudo, and rotating the FIDO2 mapping |
 | `tests/check.sh` | static checks over the files above |
 
 ## Rules
 
 - The base is always digest-pinned. `scripts/build-image.sh` and the
   Containerfile both refuse a tag.
-- No secrets, private keys, or per-machine state enter the image.
+- No secrets, private keys, or per-machine state enter the image. The one
+  carve-out is `/etc/u2f_mappings`: it is public credential data (a key handle
+  and a public key per token, useless without the token itself, and bound to
+  this hostname), not a secret and not machine state, and shipping it is what
+  lets a fresh host gate sudo on a touch without a hand at the keyboard.
 - The shipped policy rejects by default, requires a signature only for this
   image's repository, and allows unsigned pulls from `docker.io`, `quay.io`,
   and `registry.fedoraproject.org` so `podman pull` and local builds keep

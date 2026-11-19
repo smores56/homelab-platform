@@ -1,9 +1,10 @@
 # Operator steps
 
 Everything here needs a human at the keyboard: a token in a port, a PIN, or a
-reboot. The image ships the mechanism and nothing else — no credential, PIN,
-hash or database is in this repository or in the image, by design. Run the
-steps in order, once per machine, from the running laptop.
+reboot. The image ships the mechanism and the public half of the token mapping —
+key handles and public keys, which are not secrets — and nothing else: no
+password, PIN, hash or private key is in this repository or in the image, by
+design. Run the steps in order, once per machine, from the running laptop.
 
 ## 1. Enrol the key for disk unlock
 
@@ -88,28 +89,60 @@ If either one fails, `Ctrl+Alt+F2` on a booted system is the way back in; the
 initramfs prompt is the only place a broken boot can strand you, and the
 passphrase keyslot was never touched.
 
-## 2. Enrol the key for the lock screen and TTY
+## 2. The key for the lock screen, TTY and sudo
 
-The lock screen and a TTY authenticate through `/etc/pam.d/login`, which this
-image shadows to run `pam_u2f.so pinverification=1 cue` ahead of the password
-stack. What is missing on a fresh host is the mapping file the module reads —
-one line binding one credential to the account — and only the physical key can
-produce it:
+Two PAM stacks read one mapping file, `/etc/u2f_mappings`:
+
+- `/etc/pam.d/login` (the lock screen and a TTY) runs
+  `pam_u2f.so pinverification=1 cue` ahead of the password stack: the token's
+  FIDO2 PIN, then a touch.
+- `/etc/pam.d/sudo` runs
+  `pam_u2f.so authfile=/etc/u2f_mappings cue userpresence=1 pinverification=0`
+  between `pam_unix` and faillock: the account password, then a touch, and no
+  PIN. The FIDO2 PIN is the same one the disk keyslot uses, and eight wrong PINs
+  block the token and wipe every credential on it, so a sudo prompt that any
+  process running as `smores` can trigger must never be able to spend that
+  budget. That is the one place the two stacks differ; the lock screen is
+  unchanged.
+
+The mapping is public credential data — a key handle and a public key per token,
+no secret — so it is committed at `image/rootfs/etc/u2f_mappings` and shipped to
+`/etc/u2f_mappings` with the rest of `image/rootfs`. A fresh host therefore needs
+no hand-written file; what it needs is a mapping that describes credentials the
+owner's keys actually hold.
+
+All three 5C Nanos are registered (one per laptop, one spare), so any of them
+opens both stacks. To rotate the mapping, or to add a replaced key, plug in one
+5C Nano at a time and register on the laptop itself, from the repository root.
+The first key prints the username; every further key uses `-n`, which prints
+only its credential, because a second `smores:` inside the line would be read as
+a key handle:
 
 ```sh
-sudo pamu2fcfg -N -u smores | sudo tee /etc/u2f_mappings >/dev/null
-sudo chmod 0644 /etc/u2f_mappings
+first=$(pamu2fcfg -u smores)      # key 1 in the port
+second=$(pamu2fcfg -n -u smores)  # key 2
+third=$(pamu2fcfg -n -u smores)   # key 3, the spare
+printf '%s:%s:%s\n' "$first" "$second" "$third" >image/rootfs/etc/u2f_mappings
 ```
 
-`-N` marks the credential as requiring PIN verification, which is the property
-the module line enforces. The command asks for the FIDO2 PIN set in step 1 and
-then for a touch.
+Then commit the file and `bootc upgrade`: the running host keeps its current
+mapping until the new deployment boots, and `bootc rollback` restores the old
+one. Neither command needs root — `pamu2fcfg` only talks to the token. The
+`printf` is not decoration: `pamu2fcfg` ends its line without a newline, so
+writing its output directly would give a one-credential file with no terminator
+and no room for an appended second credential.
 
 Leave the origin alone. `pamu2fcfg` defaults the relying party to
 `pam://$HOSTNAME` and `pam_u2f.so` verifies against that same default — which is
-why the PAM line carries no `origin=` option and must not gain one. Renaming
-the machine invalidates the mapping; delete `/etc/u2f_mappings` and run the two
-commands again.
+why neither PAM line carries an `origin=` option and neither may gain one.
+Registering on another machine, or renaming this one, invalidates the mapping:
+re-register with the laptop's own name and commit the result.
+
+Register without `-N`. It writes `+pin` into the credential, and `pam_u2f`
+turns `+pin` into a PIN request even where a stack says `pinverification=0`, so
+the sudo gate would start asking for the disk's PIN. The credential's
+`+presence` (the default) plus `userpresence=1` in the sudo line are what make
+the touch mandatory in both stacks.
 
 Lock the session (`Super+Alt+L`) and unlock it:
 
@@ -125,83 +158,40 @@ Lock the session (`Super+Alt+L`) and unlock it:
 # password instead, let it fail, and answer the password prompt that follows
 ```
 
-If the token is lost or its PIN is blocked, unlock from the TTY, remove
-`/etc/u2f_mappings`, and the lock screen is password-only again until a new
-mapping exists. A blocked PIN is a token reset, which erases every resident
-credential at once — the disk keyslot from step 1 included, which is why the
-passphrase stays enrolled.
+If the token is lost or its PIN is blocked, the lock screen still opens with the
+account password: `sufficient` leaves system-auth's password behind `pam_u2f`.
+A blocked PIN is a token reset, which erases every resident credential at once —
+the disk keyslot from step 1 included, which is why the passphrase stays
+enrolled. A replaced key is a rotation of the mapping above.
 
-## 3. Build the sudo PIN database
+## 3. Prove the sudo gate
 
-`/etc/pam.d/sudo` authenticates against an eight-digit PIN in a gdbm database,
-`/etc/security/sudopin.db`. The key is the PAM user name, and the account that
-logs in and runs sudo on this machine is **`smores`**.
-
-The shipped module line is
-`pam_userdb.so crypt=crypt db=/etc/security/sudopin.db`. Two options decide what
-the file may hold:
-
-- `crypt=crypt` makes the stored value a **sha512crypt hash**, not the PIN. That
-  is what the design asks for: an eight-digit space is 10^8 candidates, so
-  anything an unprivileged process can read is not a secret — a hash at least
-  keeps a reader of the file from holding the PIN itself.
-- `db=` is opened literally. Linux-PAM never appends `.db`, so the path in the
-  stack is the whole file name and the image ships no second name for it.
-
-`db_load -T -t hash` is never the tool here, whatever the file holds: Fedora's
-`pam_userdb` links libgdbm and cannot read a Berkeley DB file.
-
-Take the PIN at a prompt, hash it, and store the hash under the key `smores`.
-`openssl passwd -6 -stdin` reads the PIN from standard input, so it never
-appears in an argument list where `ps` would show it:
+sudo asks for two things and has no version of itself that asks for one. Type
+the account password, then touch the key when `cue` prints its reminder. With
+the key unplugged, or the key left untouched, sudo fails: the password alone is
+not a second factor.
 
 ```sh
-read -rsp 'new sudo PIN (8 digits): ' pin; echo
-read -rsp 'again: ' pin2; echo
-[[ $pin =~ ^[0-9]{8}$ && $pin == "$pin2" ]] \
-  || { echo 'not eight digits, or the two entries differ' >&2; exit 1; }
-hash=$(printf '%s\n' "$pin" | openssl passwd -6 -stdin)
-unset pin pin2
-sudo rm -f /etc/security/sudopin.db
-printf 'store smores %s\n' "$hash" | sudo gdbmtool /etc/security/sudopin.db
-unset hash
-sudo chown root:root /etc/security/sudopin.db
-sudo chmod 0600 /etc/security/sudopin.db
-printf 'fetch smores\n' | sudo gdbmtool -r /etc/security/sudopin.db
-```
-
-The last line prints the hash back, which is the check that the key is spelled
-`smores` and nothing else is in the database.
-
-Nothing here is recoverable later: no copy in this repository, in SOPS or in the
-image, on purpose — a hash an agent can read is a PIN an agent can hold. Build
-the same PIN by hand on the other host; consistency comes from that, never from
-a shared file.
-
-Before relying on the gate, make sure a way to root exists that is not sudo:
-`su -` on root's password if one is set, or a rescue boot. A forgotten PIN is
-not the case this covers — the account password answers that at the sudo prompt
-— it covers a stack that no longer parses.
-
-Prove it:
-
-```sh
-sudo -k; sudo true      # the PIN
+sudo -k; sudo true      # password, then touch
 sudo true               # no prompt: the same TTY, inside 30 minutes
 ```
 
-- A different TTY prompts again (`timestamp_type=tty`), and a process without a
-  TTY gets no ticket at all.
-- The fallback is **one prompt, not two**. `pam_userdb` caches the value typed
-  at that prompt and `pam_unix.so try_first_pass` re-verifies it, so typing the
-  account password instead of the PIN authenticates without a second prompt.
-  The TTY that asks twice in step 2 is the `pam_u2f` lock-screen stack, where
-  two different modules ask for two different credentials; that does not happen
-  here.
+- The ticket lasts 30 minutes and only on the TTY that earned it
+  (`timestamp_timeout=30`, `timestamp_type=tty` in
+  `/etc/sudoers.d/10-human-gate`). A different TTY prompts again, and a process
+  without a TTY gets no ticket at all.
+- A wrong password is never followed by a touch prompt: `pam_unix`'s jump sends
+  it straight to faillock, so a bad password cannot be probed with the key in
+  hand.
 - faillock counts one row per PAM transaction and sudo makes three per
   invocation, so **five wrong prompts**, not five invocations, are what cost
-  five minutes. A successful authentication clears the tally. While the lock
-  stands the correct password is refused too, because `preauth` denies the
-  transaction before anything compares a value. Clear it manually from a root
-  shell reached without sudo: `faillock --user smores --reset`.
+  five minutes. A success clears the tally. While the lock stands the correct
+  password is refused too, because `preauth` denies the transaction before
+  anything compares a value. Clear it manually from a root shell reached
+  without sudo: `faillock --user smores --reset`.
 - Every sudo command raises its subcommands in the journal (`log_subcmds`).
+
+Before relying on the gate, make sure a way to root exists that is not sudo:
+`su -` on root's password if one is set, or a rescue boot. This gate has no
+lost-key path — an unplugged token is a refused sudo, by design — so the
+console is what covers a missing or broken key.
