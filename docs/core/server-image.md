@@ -81,7 +81,9 @@ CI is `.github/workflows/publish-server-image.yml`: a push to `main` touching
    Podman's `--digestfile`, signs that digest with
    `cosign sign --key env://COSIGN_PRIVATE_KEY`, and verifies it against the
    committed public key;
-4. prints the digest for the operator to pin in
+4. moves `:latest` onto that digest, from `main` runs only and only after the
+   signature verified;
+5. prints the digest for the operator to pin in
    `ignition/operator/derived-image`.
 
 The workflow is never triggered by `pull_request`, holds no secret in that
@@ -173,6 +175,35 @@ sudo bootc rollback
 database migration. Application and base images are pinned; `podman-auto-update.timer`,
 `bootc-fetch-apply-updates.timer`, `rpm-ostreed-automatic.timer` and `zincati`
 are masked, so every deployment change lands in a maintenance-window reboot.
+
+## Moving a host forward by hand
+
+A running host's deployment reference is a digest, and `bootc upgrade` only
+re-checks the reference it was given, so a digest-pinned host never moves: the
+operator switches it to the new digest. CI also moves `:latest` onto every
+signed `main` build, so a host can follow that instead and then upgrade with one
+command:
+
+```sh
+sudo bootc switch --enforce-container-sigpolicy \
+  ghcr.io/smores56/homelab-platform/server:latest
+sudo bootc upgrade --enforce-container-sigpolicy   # every later update
+```
+
+Signature policy applies to the tag unchanged: `signedIdentity: matchRepository`
+authorizes any reference in `ghcr.io/smores56/homelab-platform`, and the
+signature is attached to the digest the tag resolves to, so a tag that points at
+an unsigned or branch-built digest is still refused.
+
+What the tag gives up is the deploy receiver's descendancy check: the receiver
+refuses a signed image whose commit does not descend from the deployed one, and
+nothing on the host makes that comparison for a hand-run upgrade. Moving
+`:latest` backwards therefore deploys an older build, which is why only `main`
+runs may move the tag and why the receiver stays the authoritative path. A
+tag-following host is the operator's convenience, not the deployment policy.
+
+The install path keeps a digest (`ignition/operator/derived-image`): a fresh host
+must come up on the build that was verified, not on whatever `:latest` names.
 
 ## Disks and encryption
 

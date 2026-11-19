@@ -94,11 +94,33 @@ jobs:
           # The lookaside tag is <repo>:<sha256-hex>.sig, not repo:tag:<hex>.sig.
           skopeo inspect --raw "docker://${IMAGE_REPO}:${digest/:/-}.sig" >/dev/null
           cosign verify --key image/cosign.pub "$image@$digest"
+          # `latest` is the operator's manual handle for `bootc switch` and
+          # `bootc upgrade`; the install path and the deploy receiver stay
+          # digest-only. It moves only after the digest is signed and verified,
+          # and only from main, so a dispatch from a branch can never point it at
+          # a build that would not have deployed.
+          if [[ $GITHUB_REF == refs/heads/main ]]; then
+            podman tag "$image" "${IMAGE_REPO}:latest"
+            podman push --authfile "$authfile" "${IMAGE_REPO}:latest"
+            # Prove the tag resolves to the digest that was just verified; a
+            # second push from another run must not leave `latest` elsewhere.
+            latest_digest=$(skopeo inspect --format '{{.Digest}}' \
+              "docker://${IMAGE_REPO}:latest")
+            if [[ $latest_digest != "$digest" ]]; then
+              echo "::error::latest resolves to $latest_digest, not $digest"
+              exit 1
+            fi
+          else
+            echo "::notice::not moving :latest; this run is $GITHUB_REF, not main"
+          fi
           {
             echo "### Derived server image"
             echo
             echo "- \`$image\`"
             echo "- \`${IMAGE_REPO}@${digest}\`"
+            if [[ $GITHUB_REF == refs/heads/main ]]; then
+              echo "- \`${IMAGE_REPO}:latest\` (manual updates only)"
+            fi
             echo
             echo "Pin the digest in \`ignition/operator/derived-image\`."
           } >>"$GITHUB_STEP_SUMMARY"

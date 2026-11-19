@@ -2589,6 +2589,33 @@ scratch install.
 14. Repeat steps 5–12 on the scratch disk before the production wipe. Record
     the `bootc rollback` output and the two reboot-stage journals in #705.
 
+15. Move an installed host to a newer build. The deployment reference is a
+    digest, so `bootc upgrade` re-checks that exact digest and never moves on
+    its own; switch explicitly, then upgrade as usual:
+
+    ```sh
+    sudo bootc switch --enforce-container-sigpolicy \
+      "ghcr.io/smores56/homelab-platform/server@sha256:<digest from the run summary>"
+    sudo systemctl reboot
+    ```
+
+    A host may follow CI's moving `:latest` tag instead. Only `main` runs move
+    that tag, and only after the signature verified, so every later update is
+    one command:
+
+    ```sh
+    sudo bootc switch --enforce-container-sigpolicy \
+      ghcr.io/smores56/homelab-platform/server:latest
+    sudo systemctl reboot
+    sudo bootc upgrade --enforce-container-sigpolicy   # from then on
+    ```
+
+    Signature policy still applies to the tag. What it gives up is the deploy
+    receiver's descendancy check, so a tag moved backwards would deploy an older
+    build; the receiver stays the authoritative path. Confirm the booted
+    deployment with `rpm-ostree status`; `bootc rollback` undoes the OS
+    deployment only, not `/var`, ZFS changes or database migrations.
+
 ## 38. Restic plane (T3): R2 token, Healthchecks, first init, first drill
 
 This section brings the three repositories up. It assumes section 37 finished:
