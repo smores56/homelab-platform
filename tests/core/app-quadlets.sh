@@ -772,5 +772,79 @@ for spec in \
   fi
 done
 
+# 8. The finance collector: the one process with egress that writes into the
+#    personal dataset. It runs the repository's own code out of the booted image,
+#    as uid 1000, with a read-only root, on a network of its own -- never the
+#    deployment's, because the general network carries the provider key.
+collector=units/systemd/smortress-agent-collect-finance.service
+collector_timer=units/systemd/smortress-agent-collect-finance.timer
+if [[ -f $collector ]]; then
+  ok "$collector exists"
+else
+  bad "$collector exists"
+fi
+if [[ -f $collector ]]; then
+  eq "$(grep -cE -- '--network ' "$collector")" 1 "$collector names exactly one network"
+  if grep -q -- '--network agent-collect.network' "$collector"; then
+    ok "$collector is on the collector network"
+  else
+    bad "$collector is on the collector network" "$(grep -- '--network' "$collector")"
+  fi
+  if grep -qE -- '--network agent-(local|general)\.network' "$collector"; then
+    bad "$collector is not on a deployment network"
+  else
+    ok "$collector is not on a deployment network"
+  fi
+  for flag in '--read-only' '--cap-drop=all' '--security-opt no-new-privileges' '--user 1000:1000'; do
+    if grep -qF -- "$flag" "$collector"; then
+      ok "$collector runs with $flag"
+    else
+      bad "$collector runs with $flag"
+    fi
+  done
+  if grep -qF -- '--secret simplefin-access-url,type=mount,uid=1000,gid=1000,mode=0400' "$collector"; then
+    ok "$collector mounts only its own credential"
+  else
+    bad "$collector mounts only its own credential"
+  fi
+  if grep -qE -- 'agent-(hosted-key|facade-(personal|general)-token)' "$collector"; then
+    bad "$collector never names another deployment's secret"
+  else
+    ok "$collector never names another deployment's secret"
+  fi
+  image=$(grep -oE 'ghcr\.io/smores56/homelab-platform/[a-z-]+@sha256:[0-9a-f]{64}' "$collector" | head -1)
+  if app_image_matches "$image"; then
+    ok "$collector runs a pinned image from the table"
+  else
+    bad "$collector runs a pinned image from the table" "$image"
+  fi
+  if grep -qF -- '/usr/lib/agent-facade:/usr/lib/agent-facade:ro' "$collector"; then
+    ok "$collector runs the code the booted image ships"
+  else
+    bad "$collector runs the code the booted image ships"
+  fi
+fi
+if [[ -f $collector_timer ]]; then
+  eq "$(sed -n 's/^Unit=//p' "$collector_timer")" smortress-agent-collect-finance.service \
+    "$collector_timer runs the collector"
+  if grep -qxF 'Persistent=true' "$collector_timer"; then
+    ok "$collector_timer closes a missed run on the next boot"
+  else
+    bad "$collector_timer closes a missed run on the next boot"
+  fi
+else
+  bad "$collector_timer exists"
+fi
+if grep -qF 'units/quadlet/agent-collect.network' image/Containerfile; then
+  ok "the collector network ships in the image"
+else
+  bad "the collector network ships in the image"
+fi
+if grep -qF 'simplefin-access-url' scripts/app-secrets.sh; then
+  ok "the access URL becomes a Podman secret"
+else
+  bad "the access URL becomes a Podman secret"
+fi
+
 printf '\n%d checks, %d failed\n' "$((pass + fail))" "$fail"
 ((fail == 0))

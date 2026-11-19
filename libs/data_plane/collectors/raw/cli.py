@@ -34,8 +34,11 @@ from .finance import collect_simplefin
 from .mail import SOURCE_ID as MAIL_SOURCE
 from .mail import collect_maildir
 from .replica import CollectReport, RawReplica
+from .simplefin import AccessUrl, fetch_accountset
 
 EXIT_REFUSED = 3
+#: Days of overlap on the provider request, so a boundary transaction is not lost.
+_WINDOW_OVERLAP_DAYS = 7
 
 _SOURCE_IDS = {
     "mail": MAIL_SOURCE,
@@ -129,8 +132,20 @@ def _parser() -> argparse.ArgumentParser:
     calendar.add_argument("--entities", required=True)
 
     finance = subparsers.add_parser("finance", help="a SimpleFIN AccountSet document")
-    finance.add_argument("--accountset", required=True, help="path to the AccountSet JSON")
-    finance.add_argument("--accountset-url", required=True, help="the access URL")
+    finance.add_argument(
+        "--accountset", default=None, help="path to an AccountSet JSON already on disk"
+    )
+    finance.add_argument(
+        "--access-url-file",
+        default=None,
+        help="read the AccountSet from SimpleFIN with the access URL in this file",
+    )
+    finance.add_argument(
+        "--accountset-url",
+        default=None,
+        help="the credential-free access URL used in the observation key "
+        "(default: derived from --access-url-file)",
+    )
     finance.add_argument(
         "--include-pending",
         action="store_true",
@@ -146,6 +161,32 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _access_url(args: argparse.Namespace) -> AccessUrl:
+    try:
+        raw = Path(args.access_url_file).read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ValidationError(f"{args.access_url_file} is unreadable") from exc
+    return AccessUrl.parse(raw)
+
+
+def _fetched_accountset(access: AccessUrl, args: argparse.Namespace) -> Mapping:
+    """Read one AccountSet over the network, with an explicit bounded window."""
+
+    now = args.now if args.now is not None else int(datetime.now(timezone.utc).timestamp())
+    # The overlap is deliberate: the provider's window is inclusive by date, and
+    # a transaction that posts just after midnight must not fall between two runs.
+    start = datetime.fromtimestamp(
+        now - (args.window_days + _WINDOW_OVERLAP_DAYS) * 86400, timezone.utc
+    ).date()
+    end = datetime.fromtimestamp(now, timezone.utc).date()
+    return fetch_accountset(
+        access,
+        start_date=start.isoformat(),
+        end_date=end.isoformat(),
+        pending=args.include_pending,
+    )
+
+
 def run(args: argparse.Namespace) -> int:
     root = Path(args.root)
     generation = StagingGeneration(
@@ -155,6 +196,18 @@ def run(args: argparse.Namespace) -> int:
     )
     captured_at = args.captured_at or _captured_at()
 
+    try:
+        return _collect(args, generation, captured_at)
+    except DataPlaneError:
+        # A refusal must not leave a staging generation behind: it would be
+        # picked up by nothing, and a run in the same second would write into it.
+        generation.abort()
+        raise
+
+
+def _collect(
+    args: argparse.Namespace, generation: StagingGeneration, captured_at: str
+) -> int:
     if args.source == "mail":
         report = collect_maildir(
             args.maildir,
@@ -165,12 +218,27 @@ def run(args: argparse.Namespace) -> int:
     elif args.source == "calendar":
         report = collect_calendar(args.entities, generation, captured_at=captured_at)
     elif args.source == "finance":
-        try:
-            accountset = json.loads(Path(args.accountset).read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise ValidationError(f"{args.accountset} is not readable JSON") from exc
-        if not isinstance(accountset, Mapping):
-            raise ValidationError(f"{args.accountset} is not an object")
+        if bool(args.accountset) == bool(args.access_url_file):
+            raise ValidationError(
+                "finance wants exactly one of --accountset and --access-url-file"
+            )
+        if args.access_url_file:
+            access = _access_url(args)
+            accountset = _fetched_accountset(access, args)
+            args.accountset_url = args.accountset_url or access.url
+        else:
+            try:
+                accountset = json.loads(
+                    Path(args.accountset).read_text(encoding="utf-8")
+                )
+            except (OSError, json.JSONDecodeError) as exc:
+                raise ValidationError(f"{args.accountset} is not readable JSON") from exc
+            if not isinstance(accountset, Mapping):
+                raise ValidationError(f"{args.accountset} is not an object")
+        if not args.accountset_url:
+            raise ValidationError(
+                "finance wants --accountset-url, or --access-url-file to derive it"
+            )
         report = collect_simplefin(
             accountset,
             generation,

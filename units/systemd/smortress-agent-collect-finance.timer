@@ -1,0 +1,14 @@
+[Unit]
+Description=Daily SimpleFIN collection into the personal replica
+
+[Timer]
+# 06:30 UTC, before the working day: a posted transaction from yesterday is in
+# the replica before anyone asks the agent about it. Persistent, because a missed
+# run is a gap in the replica and the next boot should close it.
+OnCalendar=*-*-* 06:30:00
+AccuracySec=1m
+Persistent=true
+Unit=smortress-agent-collect-finance.service
+
+[Install]
+WantedBy=timers.target

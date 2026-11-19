@@ -58,6 +58,7 @@ COPY units/quadlet/immich.network units/quadlet/immich-postgres.container \
      units/quadlet/agent-facade-general.container \
      units/quadlet/agent-webui-personal.container \
      units/quadlet/agent-webui-general.container \
+     units/quadlet/agent-collect.network \
      /usr/share/containers/systemd/
 COPY secrets/server/ /etc/smortress/secrets/
 COPY image/cosign.pub /etc/pki/containers/smortress.pub
@@ -78,6 +79,7 @@ COPY libs/data_plane/ /usr/lib/agent-facade/libs/data_plane/
 COPY apps/agent_facade/__init__.py apps/agent_facade/__main__.py \
      apps/agent_facade/contracts.py apps/agent_facade/memory.py \
      apps/agent_facade/server.py apps/agent_facade/sources.py \
+     apps/agent_facade/replica_sources.py \
      /usr/lib/agent-facade/apps/agent_facade/
 RUN set -eux; \
     for f in /usr/libexec/smortress-src/*.sh; do install -m 0755 "$f" "/usr/libexec/$(basename "${f%.sh}")"; done; \
@@ -170,6 +172,7 @@ RUN set -eux; \
       smortress-tailscale-serve.service \
       smortress-cloudflared.service \
       smortress-immich-dump.timer \
+      smortress-agent-collect-finance.timer \
       var-lib-restic-ssd.mount \
       var-lib-restic-hdd.mount \
       smortress-restic-init.service \

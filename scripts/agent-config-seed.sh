@@ -127,7 +127,7 @@ for spec in personal:local general:general; do
   unset api_key_value ui_password_value
 
   install -d -o 1000 -g 1000 -m 0750 "$home/memory" \
-    "$home/webui" "$home/webui/state" "$home/webui/workspace"
+    "$home/replica" "$home/webui" "$home/webui/state" "$home/webui/workspace"
 
   echo "agent-config-seed: $state is seeded (config, .env, webui.env, memory and UI roots)"
 done

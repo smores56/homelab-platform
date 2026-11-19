@@ -3820,6 +3820,76 @@ sudo systemctl restart agent-webui-personal.service
 is enough once the image is running. Deleting `webui.env` is never part of the
 procedure: it is rewritten, not seeded once.
 
+### 40.14 Claim the SimpleFIN access URL and run the collector once
+
+The finance collector needs one credential this repository cannot invent: the
+access URL SimpleFIN issues for your account. It is a secret, so it arrives as
+ciphertext and never as an environment variable or an argument.
+
+The ciphertext ships seeded with a random value, which is a loud failure rather
+than a silent one: the first request cannot authenticate and the collector
+publishes nothing. Claim a real one and replace it.
+
+1. Ask SimpleFIN for a setup token (their dashboard does this), then claim it. The
+   claim is single-use and returns the access URL:
+
+   ```sh
+   read -r setup_token   # paste the setup token
+   python3 - <<'PY'
+   import base64, sys
+   print(base64.b64decode(sys.stdin.read().strip()).decode())
+   PY
+   ```
+
+   That prints the claim URL; `curl -X POST <claim-url>` answers with the access
+   URL. It embeds the account's username and password, so do not paste it into a
+   shell that logs.
+
+2. Write it into the ciphertext and deploy it:
+
+   ```sh
+   sops secrets/server/simplefin-access-url.yaml   # set access_url: to the claimed URL
+   git commit -am 'chore(core): claim the SimpleFIN access URL'
+   git push && sudo bootc upgrade && sudo systemctl reboot
+   ```
+
+3. After the boot, prove the secret is where the unit expects it and run the
+   collector once by hand before the timer does:
+
+   ```sh
+   sudo stat -c '%u:%g %a %n' /run/smortress/secrets/simplefin-access-url.yaml
+   sudo systemctl start smortress-agent-collect-finance.service
+   sudo journalctl -u smortress-agent-collect-finance.service -n 20 --no-pager
+   sudo podman secret inspect simplefin-access-url
+   ```
+
+   The unit prints one JSON report; the run is good when `published` names a
+   generation and `objects` counts the transactions. A refusal exits 3 and
+   publishes nothing, and its message names the endpoint by host and path -- never
+   the credential.
+
+4. Read the generation back, and confirm the deployment can see it without any
+   network of its own:
+
+   ```sh
+   sudo ls -ld /var/lib/agent/local/replica/finance/published/*/
+   sudo find /var/lib/agent/local/replica/finance -maxdepth 2 -user 1000 -printf '%u:%g %p\n'
+   ```
+
+   Every published generation must be owned by uid 1000. A `.staging` directory
+   left behind means a run was interrupted mid-enumeration; it is safe to remove,
+   because nothing publishes from there.
+
+5. Turn the timer on and check it is scheduled:
+
+   ```sh
+   sudo systemctl list-timers smortress-agent-collect-finance.timer
+   ```
+
+The collector writes into `state/agent-local`, so the raw replica is in the
+personal recovery group and a Restic restore returns the transactions with the
+deployment (`docs/core/restic-plane.md`).
+
 ## 41. SSH tunnel (`ssh.sammohr.dev`)
 
 `ssh.sammohr.dev` gets its own Cloudflare tunnel. The host tunnel is locally
