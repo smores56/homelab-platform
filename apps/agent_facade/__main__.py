@@ -29,7 +29,7 @@ from typing import Iterable
 
 from data_plane.errors import DataPlaneError
 
-from . import contracts, memory, server, sources
+from . import contracts, memory, replica_sources, server, sources
 
 DEFAULT_TRANSPORT = "stdio"
 DEFAULT_HOST = "127.0.0.1"
@@ -100,6 +100,16 @@ def _parser() -> argparse.ArgumentParser:
         ),
         help="cap for a returned body and for a written memory value",
     )
+    parser.add_argument(
+        "--replica",
+        action="append",
+        default=[],
+        metavar="SOURCE=DIR",
+        help=(
+            "answer one source of this deployment from a published raw generation "
+            "at DIR instead of the fixture (mail, calendar, finance, brave)"
+        ),
+    )
     return parser
 
 
@@ -125,6 +135,20 @@ def _token(token_file: str | None) -> str | None:
     return _env(TOKEN_ENV)
 
 
+def _replicas(specs: Iterable[str]) -> dict[str, Path]:
+    """Parse ``SOURCE=DIR`` arguments, refusing a duplicate source."""
+
+    roots: dict[str, Path] = {}
+    for spec in specs:
+        name, separator, directory = spec.partition("=")
+        if not separator or not name.strip() or not directory.strip():
+            raise ConfigError(f"--replica wants SOURCE=DIR, got {spec!r}")
+        if name in roots:
+            raise ConfigError(f"--replica names {name!r} twice")
+        roots[name] = Path(directory)
+    return roots
+
+
 def build_facade(args: argparse.Namespace) -> server.Facade:
     """Build one deployment's facade from parsed configuration."""
 
@@ -136,9 +160,10 @@ def build_facade(args: argparse.Namespace) -> server.Facade:
     token = _token(args.token_file)
     if token is None:
         LOG.warning("no deployment token configured; every tool call will be refused")
+    replacements = replica_sources.adapters_for(deployment, _replicas(args.replica))
     return server.Facade(
         deployment=deployment,
-        catalog=sources.Catalog.for_deployment(deployment),
+        catalog=sources.Catalog.for_deployment(deployment, replacements=replacements),
         store=memory.MemoryIndex(args.memory_root, deployment),
         token=token,
         max_body_bytes=args.max_body_bytes,
