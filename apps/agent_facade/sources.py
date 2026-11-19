@@ -247,14 +247,41 @@ class Catalog:
                 )
 
     @classmethod
-    def for_deployment(cls, deployment: Visibility) -> Catalog:
+    def for_deployment(
+        cls,
+        deployment: Visibility,
+        *,
+        replacements: Mapping[str, SourceAdapter] | None = None,
+    ) -> Catalog:
+        """One deployment's catalog, optionally with sources answered from disk.
+
+        A replacement may only take the place of a source this deployment's table
+        already names, and it must carry that table's contract: the visibility of
+        the result is therefore the table's decision, not the caller's.
+        """
+
         table = SOURCES_BY_DEPLOYMENT.get(deployment)
         if table is None:
             raise ContractError(
                 f"deployment must be one of {', '.join(item.value for item in DEPLOYMENTS)}, "
                 f"got {deployment!r}"
             )
-        return cls(deployment=deployment, adapters=table)
+        if not replacements:
+            return cls(deployment=deployment, adapters=table)
+        merged = dict(table)
+        for name, replacement in replacements.items():
+            incumbent = merged.get(name)
+            if incumbent is None:
+                raise UnknownSource(
+                    f"source {name!r} is not reachable from the {deployment.value} "
+                    f"deployment; it serves {', '.join(sorted(table))}"
+                )
+            if replacement.contract != incumbent.contract:
+                raise ContractError(
+                    f"replacement for {name!r} does not carry the deployment's contract"
+                )
+            merged[name] = replacement
+        return cls(deployment=deployment, adapters=MappingProxyType(merged))
 
     def names(self) -> tuple[str, ...]:
         return tuple(self.adapters)

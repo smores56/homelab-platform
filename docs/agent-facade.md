@@ -52,6 +52,36 @@ its table; `Catalog` raises `ContractError` when it does not, and `Facade` refus
 a catalog or memory profile of another deployment. A registry where the tables
 share a name is a startup failure.
 
+## Fixtures, and the replica that replaces them
+
+The table's adapters are fixtures: deterministic in-process records, no network,
+no filesystem walk. They exist so the tool surface is complete and provable before
+any provider plumbing runs, and every tool test uses them.
+
+A published raw generation can answer for a source instead. `--replica
+SOURCE=DIR` (repeatable) builds a `ReplicaAdapter` over the newest published
+generation at `DIR`, and `Catalog.for_deployment(deployment, replacements=...)`
+puts it in the table. Two properties make that safe:
+
+- The replacement may only take the place of a source the deployment's table
+  already names, and it must carry **that table's contract**. Visibility is
+  therefore the table's decision, never the caller's: a personal facade cannot
+  gain `books` by being pointed at a directory, and the general facade cannot
+  gain `mail`.
+- What is projected is title and body for search and for `sources.read`. The
+  bytes stay in the generation, so a record can be re-read or re-projected;
+  nothing is written back. Provenance carries exactly the three fields a memory
+  record may cite: `source_id`, `revision` (the sha256 of the object that
+  produced the record) and `captured_at` (the collector's stamp).
+
+Derived objects are not records: the Maildir epoch map, the ICS projection, the
+AccountSet summary and the account/connection objects are skipped, and Brave
+contributes its `urls` rows only. The raw layer is `docs/raw-replicas.md`.
+
+The Quadlets do not pass `--replica` yet: a source only gains one when its
+collector's dataset exists on the host, which arrives with the collector units.
+Until then both deployments serve the fixtures.
+
 ## Tool contract
 
 | Tool | Arguments | Result | Refusals |

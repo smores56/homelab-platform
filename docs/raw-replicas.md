@@ -147,6 +147,15 @@ Fidelity limits: retention expiry, user deletion and profile recreation are
 indistinguishable; the work Mac is a declared gap; the headless Sync profile and
 its seed are removed, so there is no sync history.
 
+## Who reads a generation
+
+`apps/agent_facade/replica_sources.py` projects a published generation into the
+facade's record shape, so `sources.read` and `sources.search` answer from the raw
+objects instead of the fixtures. The projection is deliberately thin -- title and
+body -- and the adapter inherits its contract from the deployment's own source
+table, so pointing a facade at a directory cannot widen what it may reach
+(`docs/agent-facade.md`).
+
 ## What a collector does not do
 
 - It does not commit. The caller publishes with `commit_next(complete=True)` once
