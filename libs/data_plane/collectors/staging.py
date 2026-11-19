@@ -167,10 +167,28 @@ class StagingGeneration:
         self._staging.mkdir(parents=True, exist_ok=True)
 
     @property
+    def root(self) -> Path:
+        return self._root
+
+    @property
+    def generation_id(self) -> str:
+        return self._generation_id
+
+    @property
     def published_path(self) -> Path:
         if self._published_path is None:
             raise PublishError("generation is not published")
         return self._published_path
+
+    def has_object(self, object_id: str) -> bool:
+        """True when this generation already holds that object."""
+
+        return object_id in self._objects
+
+    def is_tombstoned(self, object_id: str) -> bool:
+        """True when this generation names the object as deleted."""
+
+        return object_id in self._tombstones
 
     def put(self, object_id: str, data: bytes, metadata: dict) -> None:
         self._require_open()
@@ -209,6 +227,17 @@ class StagingGeneration:
             (objects / filename).unlink(missing_ok=True)
             del self._objects[object_id]
         self._tombstones.add(object_id)
+
+    def commit_next(self, *, complete: bool = False) -> Path:
+        """Publish with the next cursor, for a source that has none of its own.
+
+        A file-backed collector has no external cursor: its completeness is the
+        enumeration itself. Giving each generation the next number keeps the
+        commit's monotonic, gapless rule meaningful without inventing state a
+        provider never supplied.
+        """
+
+        return self.commit(self._base_cursor() + 1, complete=complete)
 
     def abort(self) -> None:
         if self._closed:

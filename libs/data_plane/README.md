@@ -20,6 +20,7 @@ provider SDK. The same code runs in the local and external planes.
 | `backup.runner` | One recursive ZFS snapshot, staged backup, copies, prune, freshness, check |
 | `collectors.relay` | Authenticated, schema-validated, rate-limited, idempotent ingest |
 | `collectors.staging` | Staging generation, atomic publish, cursors, tombstones, fidelity limits |
+| `collectors.raw` | Raw mail, calendar, finance and Brave replicas; the absence ledger (`docs/raw-replicas.md`) |
 | `memory.file_memory` | Portable per-profile file memory with provenance and tombstones |
 | `migration` | Ordered migration phases and the plan-driven backup gate |
 | `github.backup` | Safe argv for mirror/bundle capture and a verifiable manifest |
@@ -28,6 +29,9 @@ provider SDK. The same code runs in the local and external planes.
 ## Invariants
 
 - **Authority is per field.** No database is called disposable because its media survives.
+- **Raw first.** A replica stores the provider's bytes; an index, a ledger view or an
+  ICS projection is derived and rebuildable, never the evidence. Absence is carried
+  forward with a reason, not read as deletion (`docs/raw-replicas.md`).
 - **Personal is local-only.** `IdentityIssuer` rejects a personal scope on the external profile.
 - **Destructive, bulk, irreversible, and local-to-general writes need a human.**
   The gate binds a token to the operation hash, intent id, and source epoch; it is

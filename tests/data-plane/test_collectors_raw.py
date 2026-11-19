@@ -1,0 +1,607 @@
+"""Raw collector tests: enumeration, epochs, absence, and the refusals.
+
+Every case is a real on-disk fixture in a temporary directory: a Maildir, a
+directory of calendar entities, an AccountSet document, and a SQLite database the
+test writes itself. No network, no provider, no credentials.
+"""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+import tempfile
+import unittest
+from pathlib import Path
+
+from data_plane.collectors.raw import (
+    ABSENCE_NO_TOMBSTONE,
+    ABSENCE_PROVIDER_WINDOW,
+    ABSENCE_RETENTION,
+    ABSENT_SINCE,
+    RawReplica,
+    carry_forward,
+    collect_brave_db,
+    collect_calendar,
+    collect_maildir,
+    collect_simplefin,
+    previous_replica,
+)
+from data_plane.collectors.staging import StagingGeneration
+from data_plane.errors import EpochError, ManifestError, PublishError, ValidationError
+
+CAPTURED = "2026-11-19T00:00:00+00:00"
+
+
+def _generation(root: Path, name: str = "gen-0001") -> StagingGeneration:
+    return StagingGeneration(root, name, source_id="test.source")
+
+
+def _publish(generation: StagingGeneration) -> Path:
+    return generation.commit_next(complete=True)
+
+
+def _maildir(root: Path, folder: str = "") -> Path:
+    base = root / folder if folder else root
+    for name in ("cur", "new", "tmp"):
+        (base / name).mkdir(parents=True, exist_ok=True)
+    return base
+
+
+def _message(path: Path, key: str, *, flags: str = "", body: str = "hello") -> None:
+    name = f"{key}:2,{flags}" if flags else key
+    spool = "cur" if flags else "new"
+    (path / spool / name).write_bytes(
+        (
+            f"From: someone@example.com\r\n"
+            f"To: me@example.com\r\n"
+            f"Subject: {key}\r\n"
+            f"Message-ID: <{key}@example.com>\r\n"
+            f"Date: Tue, 18 Nov 2026 10:00:00 +0000\r\n"
+            f"\r\n{body}\r\n"
+        ).encode("utf-8")
+    )
+
+
+class ReplicaTests(unittest.TestCase):
+    def test_reads_verified_objects(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            generation = _generation(root)
+            generation.put("a", b"one", {"kind": "test"})
+            published = _publish(generation)
+
+            replica = RawReplica(root)
+            self.assertEqual(replica.generation_id, "gen-0001")
+            self.assertEqual(replica.read("a"), b"one")
+            self.assertEqual(replica.metadata("a"), {"kind": "test"})
+            self.assertEqual(replica.path, published)
+
+    def test_tampered_object_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            generation = _generation(root)
+            generation.put("a", b"one", {})
+            published = _publish(generation)
+            (published / "objects" / "a").write_bytes(b"two")
+
+            with self.assertRaises(ManifestError):
+                RawReplica(root).read("a")
+
+    def test_no_generation_is_a_named_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            with self.assertRaises(ManifestError):
+                RawReplica(Path(work))
+
+    def test_carry_forward_marks_absence_once(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            first = _generation(root)
+            first.put("kept", b"keep", {})
+            first.put("gone", b"bye", {})
+            _publish(first)
+
+            second = _generation(root, "gen-0002")
+            second.put("kept", b"keep", {})
+            carried = carry_forward(
+                second,
+                previous_replica(second),
+                reason=ABSENCE_NO_TOMBSTONE,
+                captured_at="2026-11-19T00:00:00+00:00",
+            )
+            self.assertEqual(carried, 1)
+            _publish(second)
+
+            third = _generation(root, "gen-0003")
+            carry_forward(
+                third,
+                previous_replica(third),
+                reason=ABSENCE_NO_TOMBSTONE,
+                captured_at="2026-12-01T00:00:00+00:00",
+            )
+            _publish(third)
+
+            metadata = RawReplica(root, "gen-0003").metadata("gone")
+            self.assertEqual(metadata[ABSENT_SINCE], "2026-11-19T00:00:00+00:00")
+            self.assertEqual(metadata["absence_reason"], ABSENCE_NO_TOMBSTONE)
+
+    def test_carry_forward_never_resurrects_a_tombstone(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            first = _generation(root)
+            first.put("gone", b"bye", {})
+            _publish(first)
+
+            second = _generation(root, "gen-0002")
+            second.delete("gone")
+            self.assertEqual(
+                carry_forward(
+                    second,
+                    previous_replica(second),
+                    reason=ABSENCE_NO_TOMBSTONE,
+                    captured_at=CAPTURED,
+                ),
+                0,
+            )
+            _publish(second)
+            self.assertFalse(RawReplica(root, "gen-0002").object_ids())
+
+    def test_carry_forward_refuses_an_empty_reason(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            generation = _generation(Path(work))
+            with self.assertRaises(ValidationError):
+                carry_forward(
+                    generation, None, reason="  ", captured_at=CAPTURED
+                )
+
+
+class MailTests(unittest.TestCase):
+    def test_collects_both_spools_with_flags(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            inbox = _maildir(root / "mail")
+            sent = _maildir(root / "mail", ".Sent")
+            _message(inbox, "aaa")
+            _message(inbox, "bbb", flags="RS")
+            _message(sent, "ccc", flags="S")
+
+            generation = _generation(root / "replica")
+            report = collect_maildir(
+                root / "mail",
+                generation,
+                uidvalidity={"INBOX": 7, ".Sent": 3},
+                captured_at=CAPTURED,
+            )
+            _publish(generation)
+
+            self.assertEqual(report.objects, 3)
+            self.assertEqual(report.details["folders"], {"INBOX": 2, ".Sent": 1})
+            replica = RawReplica(root / "replica")
+            metadata = replica.metadata("mail::INBOX::bbb")
+            self.assertEqual(metadata["flags"], ["R", "S"])
+            self.assertEqual(metadata["uidvalidity"], 7)
+            self.assertIn(b"Subject: bbb", replica.read("mail::INBOX::bbb"))
+            self.assertEqual(
+                json.loads(replica.read("mail::_uidvalidity")),
+                {"INBOX": 7, ".Sent": 3},
+            )
+
+    def test_tmp_is_a_refusal(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            inbox = _maildir(root / "mail")
+            (inbox / "tmp" / "in-flight").write_bytes(b"partial")
+            with self.assertRaises(PublishError):
+                collect_maildir(
+                    root / "mail",
+                    _generation(root / "replica"),
+                    uidvalidity={"INBOX": 1},
+                    captured_at=CAPTURED,
+                )
+
+    def test_duplicate_key_is_a_refusal(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            inbox = _maildir(root / "mail")
+            _message(inbox, "same")
+            _message(inbox, "same", flags="S")
+            with self.assertRaises(PublishError):
+                collect_maildir(
+                    root / "mail",
+                    _generation(root / "replica"),
+                    uidvalidity={"INBOX": 1},
+                    captured_at=CAPTURED,
+                )
+
+    def test_missing_uidvalidity_is_a_refusal(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            _maildir(root / "mail")
+            with self.assertRaises(ValidationError):
+                collect_maildir(
+                    root / "mail",
+                    _generation(root / "replica"),
+                    uidvalidity={},
+                    captured_at=CAPTURED,
+                )
+
+    def test_uidvalidity_change_is_a_new_epoch(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            inbox = _maildir(root / "mail")
+            _message(inbox, "aaa")
+            first = _generation(root / "replica")
+            collect_maildir(
+                root / "mail", first, uidvalidity={"INBOX": 7}, captured_at=CAPTURED
+            )
+            _publish(first)
+
+            second = _generation(root / "replica", "gen-0002")
+            with self.assertRaises(EpochError):
+                collect_maildir(
+                    root / "mail", second, uidvalidity={"INBOX": 8}, captured_at=CAPTURED
+                )
+
+    def test_a_vanished_folder_is_a_refusal(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            inbox = _maildir(root / "mail")
+            _maildir(root / "mail", ".Sent")
+            _message(inbox, "aaa")
+            first = _generation(root / "replica")
+            collect_maildir(
+                root / "mail",
+                first,
+                uidvalidity={"INBOX": 7, ".Sent": 3},
+                captured_at=CAPTURED,
+            )
+            _publish(first)
+
+            for name in ("cur", "new", "tmp"):
+                (root / "mail" / ".Sent" / name).rmdir()
+            (root / "mail" / ".Sent").rmdir()
+            second = _generation(root / "replica", "gen-0002")
+            with self.assertRaises(PublishError):
+                collect_maildir(
+                    root / "mail",
+                    second,
+                    uidvalidity={"INBOX": 7},
+                    captured_at=CAPTURED,
+                )
+
+    def test_expunge_is_tombstoned(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            inbox = _maildir(root / "mail")
+            _message(inbox, "aaa")
+            _message(inbox, "bbb")
+            first = _generation(root / "replica")
+            collect_maildir(
+                root / "mail", first, uidvalidity={"INBOX": 7}, captured_at=CAPTURED
+            )
+            _publish(first)
+
+            (inbox / "new" / "bbb").unlink()
+            second = _generation(root / "replica", "gen-0002")
+            report = collect_maildir(
+                root / "mail", second, uidvalidity={"INBOX": 7}, captured_at=CAPTURED
+            )
+            self.assertEqual(report.deleted, 1)
+            _publish(second)
+            self.assertNotIn("mail::INBOX::bbb", RawReplica(root / "replica").object_ids())
+
+
+class CalendarTests(unittest.TestCase):
+    def _write(self, directory: Path, name: str, entity: dict) -> None:
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / name).write_text(json.dumps(entity), encoding="utf-8")
+
+    def test_keeps_rrule_and_derives_ics(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            entities = root / "entities"
+            self._write(
+                entities,
+                "e1.json",
+                {
+                    "id": "e1",
+                    "uid": "uid-1",
+                    "revision": "3",
+                    "summary": "Weekly, with a comma",
+                    "dtstart": "2026-11-19T10:00:00",
+                    "dtend": "2026-11-19T11:00:00",
+                    "rrule": "FREQ=WEEKLY;COUNT=5",
+                    "attendees": [{"email": "a@example.com", "name": "A"}],
+                    "alarms": [{"trigger": "-PT15M"}],
+                },
+            )
+            generation = _generation(root / "replica")
+            report = collect_calendar(entities, generation, captured_at=CAPTURED)
+            _publish(generation)
+
+            self.assertEqual(report.objects, 1)
+            replica = RawReplica(root / "replica")
+            raw = json.loads(replica.read("calendar::e1"))
+            self.assertEqual(raw["rrule"], "FREQ=WEEKLY;COUNT=5")
+            ics = replica.read("calendar::e1::ics").decode("utf-8")
+            self.assertIn("RRULE:FREQ=WEEKLY;COUNT=5\r\n", ics)
+            self.assertIn("SUMMARY:Weekly\\, with a comma", ics)
+            self.assertIn("ATTENDEE;CN=\"A\":mailto:a@example.com", ics)
+            self.assertIn("BEGIN:VALARM", ics)
+            self.assertNotIn("EXDATE", ics)
+            self.assertEqual(ics.count("BEGIN:VEVENT"), 1)
+
+    def test_explicit_deletion_is_tombstoned_and_absence_is_not(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            entities = root / "entities"
+            self._write(entities, "e1.json", {"id": "e1", "uid": "uid-1"})
+            self._write(entities, "e2.json", {"id": "e2", "uid": "uid-2"})
+            first = _generation(root / "replica")
+            collect_calendar(entities, first, captured_at=CAPTURED)
+            _publish(first)
+
+            # e1 is deleted by the provider; e2 simply stops appearing.
+            self._write(entities, "e1.json", {"id": "e1", "uid": "uid-1", "deleted": True})
+            (entities / "e2.json").unlink()
+            second = _generation(root / "replica", "gen-0002")
+            report = collect_calendar(entities, second, captured_at=CAPTURED)
+            self.assertEqual(report.deleted, 1)
+            _publish(second)
+
+            replica = RawReplica(root / "replica", "gen-0002")
+            self.assertEqual(replica.object_ids(), ("calendar::e2", "calendar::e2::ics"))
+            metadata = replica.metadata("calendar::e2")
+            self.assertEqual(metadata["absence_reason"], ABSENCE_NO_TOMBSTONE)
+            self.assertEqual(metadata[ABSENT_SINCE], CAPTURED)
+
+    def test_two_entities_with_one_id_are_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            entities = root / "entities"
+            self._write(entities, "a.json", {"id": "same", "uid": "u1"})
+            self._write(entities, "b.json", {"id": "same", "uid": "u2"})
+            with self.assertRaises(PublishError):
+                collect_calendar(entities, _generation(root / "replica"), captured_at=CAPTURED)
+
+
+class FinanceTests(unittest.TestCase):
+    def _accountset(self) -> dict:
+        return {
+            "connections": [{"conn_id": "conn-1", "name": "Schwab"}],
+            "accounts": [
+                {
+                    "id": "acct-1",
+                    "name": "Checking",
+                    "currency": "USD",
+                    "balance": "100.00",
+                    "extra": {"provider": "schwab"},
+                    "transactions": [
+                        {
+                            "id": "txn-1",
+                            "amount": "-12.34",
+                            "description": "Coffee",
+                            "posted": 1763500000,
+                        },
+                        {
+                            "id": "txn-2",
+                            "amount": "-1.00",
+                            "description": "Pending thing",
+                            "pending": True,
+                            "posted": 0,
+                        },
+                    ],
+                }
+            ],
+        }
+
+    def test_stores_raw_records_keyed_and_hashed(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            generation = _generation(root / "replica")
+            report = collect_simplefin(
+                self._accountset(),
+                generation,
+                accountset_url="https://sfin.example/access",
+                captured_at=CAPTURED,
+                include_pending=True,
+                now=1763500000,
+            )
+            _publish(generation)
+
+            self.assertEqual(report.details["transactions"], 2)
+            self.assertEqual(report.details["pending"], 1)
+            replica = RawReplica(root / "replica")
+            metadata = replica.metadata("finance::txn::acct-1::txn-1")
+            self.assertEqual(metadata["conn_id"], "conn-1")
+            self.assertEqual(metadata["accountset_url"], "https://sfin.example/access")
+            self.assertFalse(metadata["pending"])
+            self.assertEqual(len(metadata["record_sha256"]), 64)
+            self.assertIn(b"provider", replica.read("finance::account::acct-1"))
+            self.assertIn(b"Pending thing", replica.read("finance::accountset"))
+
+    def test_errors_block_publication(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            accountset = self._accountset()
+            accountset["errlist"] = ["login required"]
+            with self.assertRaises(PublishError):
+                collect_simplefin(
+                    accountset,
+                    _generation(root / "replica"),
+                    accountset_url="https://sfin.example/access",
+                    captured_at=CAPTURED,
+                    include_pending=True,
+                )
+
+    def test_missing_data_blocks_publication(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            accountset = self._accountset()
+            accountset["accounts"][0]["act"] = {"missingdata": ["balance"]}
+            with self.assertRaises(PublishError):
+                collect_simplefin(
+                    accountset,
+                    _generation(root / "replica"),
+                    accountset_url="https://sfin.example/access",
+                    captured_at=CAPTURED,
+                    include_pending=True,
+                )
+
+    def test_pending_must_be_requested(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            with self.assertRaises(ValidationError):
+                collect_simplefin(
+                    self._accountset(),
+                    _generation(root / "replica"),
+                    accountset_url="https://sfin.example/access",
+                    captured_at=CAPTURED,
+                )
+
+    def test_window_absence_is_carried_forward(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            now = 1763500000
+            first = _generation(root / "replica")
+            collect_simplefin(
+                self._accountset(),
+                first,
+                accountset_url="https://sfin.example/access",
+                captured_at=CAPTURED,
+                include_pending=True,
+                now=now,
+            )
+            _publish(first)
+
+            old = self._accountset()
+            old["accounts"][0]["transactions"] = [
+                {
+                    "id": "txn-old",
+                    "amount": "-5.00",
+                    "description": "Ancient",
+                    "posted": now - 200 * 86400,
+                }
+            ]
+            second = _generation(root / "replica", "gen-0002")
+            report = collect_simplefin(
+                old,
+                second,
+                accountset_url="https://sfin.example/access",
+                captured_at="2026-11-20T00:00:00+00:00",
+                include_pending=True,
+                now=now,
+            )
+            self.assertEqual(report.deleted, 0)
+            _publish(second)
+
+            replica = RawReplica(root / "replica", "gen-0002")
+            metadata = replica.metadata("finance::txn::acct-1::txn-1")
+            self.assertEqual(metadata["absence_reason"], ABSENCE_PROVIDER_WINDOW)
+            self.assertNotIn("finance::txn::acct-1::txn-old", replica.object_ids())
+
+
+class BraveTests(unittest.TestCase):
+    def _database(self, path: Path) -> None:
+        connection = sqlite3.connect(path)
+        try:
+            connection.execute("CREATE TABLE urls (id INTEGER PRIMARY KEY, url TEXT, title TEXT)")
+            connection.execute("CREATE TABLE visits (id INTEGER PRIMARY KEY, url INTEGER, visit_time INTEGER)")
+            connection.execute("CREATE TABLE visit_source (id INTEGER PRIMARY KEY, source INTEGER)")
+            connection.execute(
+                "INSERT INTO urls (url, title) VALUES ('https://example.com', 'Example')"
+            )
+            connection.execute("INSERT INTO visits (url, visit_time) VALUES (1, 1234)")
+            connection.execute("INSERT INTO visit_source (source) VALUES (0)")
+            connection.commit()
+        finally:
+            connection.close()
+
+    def test_stores_the_database_and_every_table(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            database = root / "History"
+            self._database(database)
+
+            generation = _generation(root / "replica")
+            report = collect_brave_db(
+                database,
+                generation,
+                device="smorespro",
+                profile="Default",
+                captured_at=CAPTURED,
+            )
+            _publish(generation)
+
+            self.assertEqual(report.details["tables"]["urls"], 1)
+            replica = RawReplica(root / "replica")
+            self.assertEqual(replica.read("brave::db"), database.read_bytes())
+            dump = json.loads(replica.read("brave::table::urls"))
+            self.assertEqual(dump["columns"], ["id", "url", "title"])
+            self.assertEqual(dump["rows"], [[1, "https://example.com", "Example"]])
+            self.assertEqual(
+                replica.metadata("brave::table::visits")["rows"], 1
+            )
+
+    def test_a_wal_sibling_is_a_refusal(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            database = root / "History"
+            self._database(database)
+            Path(str(database) + "-wal").write_bytes(b"")
+            with self.assertRaises(PublishError):
+                collect_brave_db(
+                    database,
+                    _generation(root / "replica"),
+                    device="smorespro",
+                    profile="Default",
+                    captured_at=CAPTURED,
+                )
+
+    def test_not_a_database_is_a_named_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            database = root / "History"
+            database.write_bytes(b"not sqlite at all")
+            with self.assertRaises(PublishError):
+                collect_brave_db(
+                    database,
+                    _generation(root / "replica"),
+                    device="smorespro",
+                    profile="Default",
+                    captured_at=CAPTURED,
+                )
+
+    def test_absence_is_carried_forward_as_retention(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            database = root / "History"
+            self._database(database)
+            first = _generation(root / "replica")
+            collect_brave_db(
+                database, first, device="smorespro", profile="Default", captured_at=CAPTURED
+            )
+            _publish(first)
+
+            # A second copy without the urls table: retention cannot be told
+            # apart from a user deletion, so the old table stays, marked absent.
+            second_db = root / "History2"
+            connection = sqlite3.connect(second_db)
+            try:
+                connection.execute("CREATE TABLE visits (id INTEGER PRIMARY KEY)")
+                connection.commit()
+            finally:
+                connection.close()
+            second = _generation(root / "replica", "gen-0002")
+            collect_brave_db(
+                second_db, second, device="smorespro", profile="Default", captured_at=CAPTURED
+            )
+            _publish(second)
+
+            replica = RawReplica(root / "replica", "gen-0002")
+            metadata = replica.metadata("brave::table::urls")
+            self.assertEqual(metadata["absence_reason"], ABSENCE_RETENTION)
+            self.assertIn("brave::table::visits", replica.object_ids())
+
+
+if __name__ == "__main__":
+    unittest.main()
