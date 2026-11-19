@@ -457,12 +457,25 @@ done < <(awk '!/^[[:space:]]*(#|$)/ { print $1 }' image/rootfs/etc/smortress/sec
 check "firewall binds tailscale0" has '<interface name="tailscale0"/>' image/rootfs/etc/firewalld/zones/tailscale.xml
 check "firewall permits ssh only on that zone" has '<service name="ssh"/>' image/rootfs/etc/firewalld/zones/tailscale.xml
 # A wildcard *listener* binds every address; `0.0.0.0` inside a CIDR
-# (10.0.0.0/8) is a destination and must not trip this. A Quadlet `Exec=` or
-# `Environment=` bind is inside the container's own network namespace: it is
-# reachable only through a published port or the container network, and the
-# publish address is checked above, so it is not a host listener.
-if grep -rInE '\b0\.0\.0\.0\b|\[::\]' units image/rootfs 2>/dev/null |
-  grep -vE 'PublishPort=127\.0\.0\.1|^units/quadlet/[^:]+:[0-9]+:(Exec=|Environment=)' | grep -q .; then
+# (10.0.0.0/8) is a destination and must not trip this.
+#
+# A Quadlet `Exec=` or `Environment=` address is inside the container's own
+# network namespace and is reachable only through a published port (checked
+# above) -- unless the unit joins the host network, where the same address is a
+# host listener again and nothing may excuse it.
+wildcard_hits=
+while IFS= read -r line; do
+  [[ -n $line ]] || continue
+  if [[ $line == *PublishPort=127.0.0.1* ]]; then
+    continue
+  fi
+  file=${line%%:*}
+  if [[ $line =~ :[0-9]+:(Exec|Environment)= ]] && ! grep -q '^Network=host' "$file"; then
+    continue
+  fi
+  wildcard_hits+=$line$'\n'
+done < <(grep -rInE '\b0\.0\.0\.0\b|\[::\]' units image/rootfs 2>/dev/null)
+if [[ -n $wildcard_hits ]]; then
   bad "no wildcard listener address in units or rootfs"
 else
   ok "no wildcard listener address in units or rootfs"
