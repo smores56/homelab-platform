@@ -57,28 +57,43 @@ check "the connector requires the decrypt unit" grep -qE '^Requires=.*sops-decry
 check "the connector is skipped without its ciphertext" has 'ConditionPathExists=/run/smortress/secrets/cloudflared-tunnel.yaml' units/systemd/smortress-cloudflared.service
 check "the tunnel token is in the decrypt manifest" grep -qE '^cloudflared-tunnel\.yaml[[:space:]]' image/rootfs/etc/smortress/secrets.manifest
 
-# sshd (design #748). Access through the tunnel is the only route in, so the
-# listener is loopback-only. The drop-in must also sort ahead of uCore's
-# 90-enable-localhost-passwords.conf: sshd reads its config twice, and the
-# second pass re-reads only the matching Match blocks with first-obtained-value
-# semantics, so a file sorting after 90- cannot undo uCore's
-# `PasswordAuthentication yes` for loopback.
+# sshd (design #767). The tailnet is the only route in and the firewall is the
+# filter, so the drop-in carries no ListenAddress at all: sshd listens on every
+# local address, the default zone is `drop`, and only tailscale0 accepts ssh. The
+# tailnet address is per node, so no address could be bound at build time. The
+# drop-in must still sort ahead of uCore's 90-enable-localhost-passwords.conf:
+# sshd reads its config twice, and the second pass re-reads only the matching
+# Match blocks with first-obtained-value semantics, so a file sorting after 90-
+# cannot undo uCore's `PasswordAuthentication yes` for loopback.
 sshd_dir=image/rootfs/etc/ssh/sshd_config.d
-sshd_dropin=$sshd_dir/05-deny-loopback-passwords.conf
+sshd_dropin=$sshd_dir/05-tailnet-ssh.conf
 sshd_dropins=("$sshd_dir"/*.conf)
 check "sshd ships exactly one drop-in" test "${#sshd_dropins[@]}" -eq 1
-check "the drop-in sorts ahead of uCore's 90- localhost-passwords file" \
-  test "$(basename "$sshd_dropin")" = 05-deny-loopback-passwords.conf
-check "sshd binds loopback for IPv4" has 'ListenAddress 127.0.0.1' "$sshd_dropin"
-check "sshd binds loopback for IPv6" has 'ListenAddress ::1' "$sshd_dropin"
-check "sshd binds no other address" test "$(count 'ListenAddress ' "$sshd_dropin")" -eq 2
-check "the loopback pair is exempt from the shared penalty counter" \
-  has 'PerSourcePenaltyExemptList 127.0.0.1,::1' "$sshd_dropin"
-check "ssh accepts keys from the Ignition file" \
-  has 'AuthorizedKeysFile /var/lib/homelab/.ssh/authorized_keys' "$sshd_dropin"
-# The dotted directory is what file_contexts maps to ssh_home_t; a plain
-# /var/lib/homelab/ssh would be var_lib_t and sshd could not read the file.
-check "the authorised set lives under a dot-prefixed directory" grep -qF '/.ssh/authorized_keys' "$sshd_dropin"
+check "the drop-in is the tailnet one" test "$(basename "$sshd_dropin")" = 05-tailnet-ssh.conf
+# A ListenAddress would either name one interface's address (impossible: the
+# tailnet address is per node) or hard-code every address, which the tree-wide
+# wildcard scan below forbids.
+if grep -qE '^[[:space:]]*ListenAddress' "$sshd_dropin"; then
+  bad "sshd leaves the listen addresses at its default"
+else
+  ok "sshd leaves the listen addresses at its default"
+fi
+# Tailnet clients arrive from their own addresses, so there is no single shared
+# penalty counter left to exempt.
+check "no address is exempt from the penalty counter" lacks 'PerSourcePenaltyExemptList' "$sshd_dropin"
+# The key ships in the image at a path root reads: /etc/ssh is etc_t and
+# world-readable, so sshd needs no uid switch, no traversal mode of its own and
+# no Ignition run.
+check "ssh reads the image-shipped key file" \
+  has 'AuthorizedKeysFile /etc/ssh/authorized_keys.d/smores' "$sshd_dropin"
+# Directive lines only: the file names the retired path in a comment, which must
+# not read as a directive. Nothing may point AuthorizedKeysFile back into /var,
+# where bootc reconciles nothing and only Ignition can write.
+if grep -vE '^[[:space:]]*#' "$sshd_dropin" | grep -qF '/var/lib/homelab'; then
+  bad "no authorised keys are delivered through /var"
+else
+  ok "no authorised keys are delivered through /var"
+fi
 check "ssh never accepts a password" has 'PasswordAuthentication no' "$sshd_dropin"
 # Comment lines are dropped: the file explains uCore's block by name.
 if grep -vE '^[[:space:]]*#' "$sshd_dropin" | grep -qF 'PasswordAuthentication yes'; then
@@ -98,7 +113,7 @@ check "the grace time is bounded" has 'LoginGraceTime 60' "$sshd_dropin"
 # PubkeyAuthOptions stays unset (default `none`). verify-required is a hard
 # requirement, not a permission: with it set, sshd rejects every FIDO signature
 # without the UV assertion, and authorized_keys has no no-verify-required to
-# cancel it per key, so the touch-free resident sk- login could never work.
+# cancel it per key, so a touch-free resident sk- login could never work.
 # touch-required is refused for the mirror-image reason: it pins the opposite
 # decision where only the authorized_keys line should make it. Comments name the
 # options, so the directives are what is checked.
@@ -115,50 +130,43 @@ check "the loopback block comes last and re-denies passwords" test \
   "$(awk '/^[[:space:]]*(#|$)/ {next} /^Match Address 127\.0\.0\.1,::1$/ {inblock=1; next} inblock' "$sshd_dropin" | tr -d '[:space:]')" \
   = PasswordAuthenticationno
 
-# The authorised set (design #748, Entry). bootc does not reconcile /var, so the
-# file sshd points at arrives from Ignition inlining a committed repo file: an
-# image-baked copy would never appear on an installed host and a hand-written one
-# would drift. The resident sk- handle is generated with the token, so nothing in
-# the tree may carry real key material and the file ships as instructions only.
-ignition_bu=ignition/smortress.bu
-keys_source=ignition/smortress-authorized-keys
-# The list item for one path, up to the next item: a mode asserted inside it is
-# that file's mode and not a neighbour's.
-bu_block() {
-  awk -v head="    - path: $1" '
-    $0 == head { inblock = 1; next }
-    inblock && /^    - / { exit }
-    inblock { print }
-  ' "$ignition_bu"
-}
-in_block() { printf '%s\n' "$2" | grep -qF -- "$1"; }
+# The authorised set ships in the image (design #767): one ed25519 line, root
+# owned 0644 under /etc/ssh, so sshd opens it as root and a key change arrives
+# with `bootc upgrade`. It replaces the Ignition-delivered /var/lib/homelab/.ssh
+# pair, which had to be smores-owned under a 0711 parent because sshd switches to
+# the target uid before opening AuthorizedKeysFile, and which could only be
+# written once, at install time, by an Ignition config that then drifted from the
+# token in the operator's pocket.
 ak_path=$(sed -nE 's/^AuthorizedKeysFile[[:space:]]+([^[:space:]]+)$/\1/p' "$sshd_dropin")
 check "the drop-in names one authorised-keys file" test "$(printf '%s\n' "$ak_path" | grep -c .)" -eq 1
-check "Ignition writes the file the drop-in points at" grep -qF "path: $ak_path" "$ignition_bu"
-ak_block=$(bu_block "$ak_path")
-check "Ignition inlines the committed key file" in_block "local: $keys_source" "$ak_block"
-check "the delivered file is owner-readable only" in_block 'mode: 0600' "$ak_block"
-# sshd opens AuthorizedKeysFile with the target user's uid, so ownership and the
-# path's traversal both have to belong to that account.
-check "the delivered file is smores-owned twice over" \
-  test "$(printf '%s\n' "$ak_block" | grep -cF 'name: smores')" -eq 2
-ak_dir=$(dirname -- "$ak_path")
-check "Ignition creates the directory that file lives in" grep -qF "path: $ak_dir" "$ignition_bu"
-dir_block=$(bu_block "$ak_dir")
-check "the key directory belongs to the same account" \
-  test "$(printf '%s\n' "$dir_block" | grep -cF 'name: smores')" -eq 2
-check "the key directory is 0700" in_block 'mode: 0700' "$dir_block"
-# 0711 is the traversal sshd needs as smores; every child stays root-only.
-check "the key path is traversable by that account" \
-  has 'd /var/lib/homelab 0711 root root -' image/rootfs/etc/tmpfiles.d/smortress.conf
-check "the enrollment unit keeps the same traversal mode" \
-  has 'install -d -m 0711 /var/lib/homelab' units/systemd/smortress-tailscale-up.service
-check "the committed key file exists" test -s "$keys_source"
-if grep -qvE '^[[:space:]]*(#|$)' "$keys_source"; then
-  bad "the committed key file carries no key line"
+keys_file=image/rootfs$ak_path
+check "the image ships the file the drop-in points at" test -s "$keys_file"
+if grep -qvE '^ssh-ed25519 [A-Za-z0-9+/]+[=]{0,2}([[:space:]].*)?$' "$keys_file"; then
+  bad "the shipped key file carries only ed25519 key lines"
 else
-  ok "the committed key file carries no key line"
+  ok "the shipped key file carries only ed25519 key lines"
 fi
+if grep -q 'sk-' "$keys_file"; then
+  bad "the shipped key file carries no FIDO handle"
+else
+  ok "the shipped key file carries no FIDO handle"
+fi
+check "the shipped set is one key" test "$(grep -c '^ssh-ed25519 ' "$keys_file")" -eq 1
+# The build refuses the same two mistakes, so a bad edit never reaches a host
+# whose only other way in is the console.
+check "the build refuses an empty key file" has 'test -s /etc/ssh/authorized_keys.d/smores' image/Containerfile
+check "the build refuses a FIDO handle in the key file" \
+  has "grep -q 'sk-ssh-ed25519' /etc/ssh/authorized_keys.d/smores" image/Containerfile
+# Nothing delivers a key through Ignition any more. The operator's rollback key
+# in smortress.bu is a different path and stays.
+check "ignition no longer writes an authorised-keys file" lacks 'path: /var/lib/homelab/.ssh' ignition/smortress.bu
+check "the Ignition key source is gone" test ! -e ignition/smortress-authorized-keys
+# /var/lib/homelab keeps 0711 for its other tenants (the age identity, app and
+# Tailscale state); no key path lives under it now.
+check "the state directory keeps its traversal mode" \
+  has 'd /var/lib/homelab 0711 root root -' image/rootfs/etc/tmpfiles.d/smortress.conf
+check "the enrollment unit creates the state directory at the same mode" \
+  has 'install -d -m 0711 /var/lib/homelab' units/systemd/smortress-tailscale-up.service
 # git grep reads the index, so the exclusion is only the check's own pattern.
 if git grep -qF -- 'sk-ssh-ed25519@openssh.com' -- . ':(exclude)scripts/check-server-image.sh'; then
   bad "no sk- handle is committed anywhere"

@@ -6,15 +6,23 @@ name: tofu-plan-pr
 # ones (`CLOUDFLARE_PLAN_API_TOKEN`, `R2_STATE_READONLY_*`); the write token
 # stays in `tofu-apply.yml`, which never runs on a PR.
 #
+# The Tailscale pair is the one credential here that is not read-only by scope:
+# `TAILSCALE_OAUTH_CLIENT_*` has no narrower scope than `policy_file`, which can
+# rewrite the whole tailnet, so a plan reaches a credential that could write. What
+# keeps that safe is that a plan saves no policy, the API evaluates
+# `tailscale_acl.tests` on any save, and guards 3 and 4 below refuse a PR that
+# could run something other than the reviewed HCL.
+#
 # Four guards, because on `pull_request` the workflow file that runs is the PR
 # head's, not the base one:
 #
 #   1. fork PRs receive no environment secrets at all; the job says so and
 #      stops before anything reads a credential;
 #   2. the job uses `cloudflare-plan`, not `cloudflare`: a separate environment
-#      holding only the read-only pair, restricted to `main` and `smores/*`. A
-#      branch edit that declares `environment: cloudflare` is refused before any
-#      secret is injected, so the write token is unreachable from a branch;
+#      holding only the read-only pair and the Tailscale client, restricted to
+#      `main` and `smores/*`. A branch edit that declares `environment:
+#      cloudflare` is refused before any secret is injected, so the write token
+#      is unreachable from a branch;
 #   3. a PR touching `.github/` or `scripts/` fails closed: the head workflow
 #      is the one holding the token, so CI changes need an owner bypass after a
 #      human read, never an automatic plan;
@@ -114,16 +122,21 @@ jobs:
           # guard: read-only-credentials
           # Read-only by contract (docs/manual-steps.md step 14). A workflow edit
           # on a branch can therefore reach only a credential that can read.
+          # The Tailscale pair is the exception to that word: `policy_file`
+          # cannot be read-only, so the header's note is what bounds it.
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PLAN_API_TOKEN }}
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_STATE_READONLY_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_STATE_READONLY_SECRET_ACCESS_KEY }}
+          TAILSCALE_OAUTH_CLIENT_ID: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
+          TAILSCALE_OAUTH_CLIENT_SECRET: ${{ secrets.TAILSCALE_OAUTH_CLIENT_SECRET }}
         run: |
           set -o pipefail
-          for name in CLOUDFLARE_API_TOKEN AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; do
+          for name in CLOUDFLARE_API_TOKEN AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY \
+            TAILSCALE_OAUTH_CLIENT_ID TAILSCALE_OAUTH_CLIENT_SECRET; do
             if [[ -z ${!name:-} ]]; then
-              echo "::error::$name is absent from the cloudflare environment."
-              echo "::error::A silent skip would let a PR merge without a plan; provision the read-only credentials."
-              echo "::error::See docs/manual-steps.md step 14."
+              echo "::error::$name is absent from the cloudflare-plan environment."
+              echo "::error::A silent skip would let a PR merge without a plan; provision the credentials."
+              echo "::error::See docs/manual-steps.md steps 14 and 46."
               exit 1
             fi
           done

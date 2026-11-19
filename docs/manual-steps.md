@@ -4023,135 +4023,80 @@ in `tofu/access.tf`, so nothing there changes.
    post-login 404, is the proof that DNS, Access, the ingress and the connector
    agree.
 
-## 42. Loopback-only sshd on smortress
+From #767's T1 on (section 42) the tailnet is the primary route and this tunnel is
+the rollback: sshd listens on every address, so the connector reaches it through
+loopback, and T6 deletes the connector, the Access application and the token once
+every client is proven on the tailnet.
 
-`image/rootfs/etc/ssh/sshd_config.d/05-deny-loopback-passwords.conf` binds sshd
-to `127.0.0.1` and `::1`, points `AuthorizedKeysFile` at
-`/var/lib/homelab/.ssh/authorized_keys`, and repeats uCore's
-`Match Address 127.0.0.1,::1` with `PasswordAuthentication no`.
+## 42. Tailnet-only sshd on smortress
 
-The repetition is load-bearing, not redundancy. uCore ships
-`90-enable-localhost-passwords.conf`, which sets that block to `yes` so
+`image/rootfs/etc/ssh/sshd_config.d/05-tailnet-ssh.conf` is the only sshd
+drop-in. It carries no `ListenAddress`, so sshd listens on every local address,
+and it points `AuthorizedKeysFile` at `/etc/ssh/authorized_keys.d/smores`, the one
+`ssh-ed25519` line shipped in the image. The network half of the login is
+firewalld: the default zone is `drop`, only `tailscale0` sits in the `tailscale`
+zone, and that zone accepts `ssh` plus Syncthing's 22000/tcp+udp (design #767).
+
+Nothing binds the tailnet address: it is per node and unknown at build time, so
+the interface is the gate. The loopback `Match` block at the end of the drop-in
+stays for a different reason. uCore ships `90-enable-localhost-passwords.conf`,
+which sets `PasswordAuthentication yes` for `Match Address 127.0.0.1,::1` so
 Cockpit's web login can use the core password. sshd parses its configuration
 twice; the second pass re-reads only the matching `Match` blocks and keeps the
-first value it obtains, so the *earlier file* wins. Our file sorts at `05-`
-for that reason. A drop-in sorting after `90-` is silently ignored.
+first value it obtains, so the *earlier file* wins. Our file sorts at `05-` for
+that reason; a drop-in sorting after `90-` is silently ignored.
 
-**The order of these steps is a lockout guard.** The image retires Tailscale SSH
-(section 43) and the `05-` drop-in replaces `AuthorizedKeysFile` with a file
-only Ignition writes, so a reboot before both key lines exist authenticates
-nobody: every step after it would have to be done from a console. Write the key
-lines and prove their label (steps 1–3) *before* the upgrade and reboot in
-step 4.
+**The order of these steps is a lockout guard.** The key and the drop-in ship in
+the same image, so the reboot in step 1 cannot strand you for want of a key line —
+but the *route* has to exist first. A laptop reaches port 22 through the tailnet
+(section 46) or, until #767's T6 deletes it, the Cloudflare tunnel (section 41).
+Firewalld admits `ssh` on `tailscale0` alone, so a LAN address never gets in, and
+a host whose tailnet policy does not admit the laptop is reachable only from the
+console or through the tunnel.
 
-Sections 42 to 44 run in one order across the two repositories: section 44
-first, because the dotfiles step that installs the laptops' wrapper is handed
-the token `tofu apply` creates there and cannot be pointed at one that does not
-exist yet; then this section; then the cutover.
-
-The key file comes from Ignition, inlining `ignition/smortress-authorized-keys`:
-bootc does not reconcile `/var`, so an image-baked copy would never appear on an
-installed host. The committed file carries instructions and no key, which is why
-steps 1–3 are the ones that make login possible at all.
-
-1. Create the resident key, on a laptop that still has a working route to the
-   host — Tailscale SSH before section 43, the tunnel from section 41 after it.
-   Do it first: the reboot in step 4 removes the first route, and the second one
-   needs the token section 44 creates. The FIDO2 handle is generated with the
-   token and never enters the repository, so this is the only step that produces
-   it; run it once per laptop, on the laptop:
-
-   ```sh
-   ssh-keygen -O resident -O no-touch-required -t ed25519-sk -f ~/.ssh/id_smortress
-   ```
-
-   `-O resident` keeps the handle on the token, so the private half never leaves
-   it; `-O no-touch-required` is what stops a docked token from demanding a touch
-   it cannot prove anything with. `ssh-keygen -K` downloads the resident handles
-   again if the public line is needed on a machine that lost it.
-
-2. Fresh install: put both key lines into the delivered file before rendering.
-   The `no-touch-required` option belongs on the line, not in the sshd config:
-   the drop-in deliberately carries no `PubkeyAuthOptions verify-required`, which
-   sshd treats as a hard requirement that `authorized_keys` cannot cancel per
-   key.
-
-   ```sh
-   printf 'no-touch-required %s\n' "$(cat ~/.ssh/id_smortress.pub)" \
-     >>ignition/smortress-authorized-keys
-   cat ~/.ssh/id_smortress-access.pub >>ignition/smortress-authorized-keys
-   scripts/render-ignition.sh
-   git checkout -- ignition/smortress-authorized-keys
-   ```
-
-   The `git checkout` is not tidying up: `scripts/check-server-image.sh` fails
-   on any non-comment line in that file and on any resident `sk-` handle
-   anywhere in the tree, and a handle committed to the repository would be
-   re-delivered to every future install with an Ignition config that no longer
-   matches the token. The file stays instructions-only in git; the rendering
-   already happened, so the installer still carries the keys.
-
-   The second line is the file key, and the pair is deliberate: the Access token
-   gets a client to sshd and the key gets the client in, so a leaked token
-   authenticates nothing and a copied key reaches nothing.
-
-3. On a host that is already installed, append to the live file instead, still
-   before the upgrade. `/var/lib/homelab` is root-owned `0711` and `.ssh` exists
-   on such a host only because Ignition created it at install time, so a bare
-   `>>` fails with `Permission denied`; `install -d` is idempotent where the
-   directory is already correct:
-
-   ```sh
-   sudo install -d -o smores -g smores -m 0700 /var/lib/homelab/.ssh
-   printf 'no-touch-required %s\n' "$(cat ~/.ssh/id_smortress.pub)" |
-     sudo tee -a /var/lib/homelab/.ssh/authorized_keys >/dev/null
-   cat ~/.ssh/id_smortress-access.pub |
-     sudo tee -a /var/lib/homelab/.ssh/authorized_keys >/dev/null
-   sudo chown smores:smores /var/lib/homelab/.ssh/authorized_keys
-   sudo chmod 0600 /var/lib/homelab/.ssh/authorized_keys
-   ```
-
-   `tee` writes as root, so the owner and mode have to be set afterwards: sshd
-   opens `AuthorizedKeysFile` as the target user, and a root-owned `0600` file
-   authorises nobody. A directory made by hand also inherits `var_lib_t` from
-   `/var/lib/homelab` rather than the `ssh_home_t` Fedora's `file_contexts`
-   assigns to `/.ssh`, and sshd is denied a `var_lib_t` key file — so read the
-   label off the file and fix it before going further:
-
-   ```sh
-   ls -Z /var/lib/homelab/.ssh /var/lib/homelab/.ssh/authorized_keys
-   # expect: ... ssh_home_t ... on both, not var_lib_t
-   sudo restorecon -Rv /var/lib/homelab/.ssh
-   ```
-
-4. Deploy the image and reboot. Only now, with both key lines and their label in
-   place:
+1. Deploy the image (section 37 step 2) and reboot:
 
    ```sh
    sudo bootc upgrade
    sudo systemctl reboot
    ```
 
-5. Prove the listener is loopback-only:
+2. Prove the listener. One wildcard socket per family, no address-specific one:
+   sshd has no `ListenAddress` on purpose, and a line naming one address would be
+   wrong the moment the node's tailnet address changed.
 
    ```sh
    sudo ss -ltnp '( sport = :22 )'
-   # expect: 127.0.0.1:22 and [::1]:22, and no tailnet or LAN address
+   # expect: one wildcard IPv4 socket and one wildcard IPv6 socket, both from
+   # sshd; a 127.0.0.1 row would mean a ListenAddress came back
+   grep -rn ListenAddress /etc/ssh/sshd_config /etc/ssh/sshd_config.d/
+   # expect: no output — the shipped drop-in sets none
    ```
 
-6. Prove the password decision survived uCore's file. The loopback query is the
-   one that matters; the second query shows the global context. Both greps are
-   case-insensitive on purpose: OpenSSH 10 prints CamelCase directive names, so
-   a lowercase pattern matches nothing and "no output" then reads as success.
+3. Prove the firewall, not the listener, is the gate:
+
+   ```sh
+   sudo firewall-cmd --get-default-zone               # expect: drop
+   sudo firewall-cmd --zone=tailscale --list-all       # expect: ssh, 22000/tcp+udp, interface tailscale0
+   sudo firewall-cmd --zone=drop --list-all            # expect: no services and no ports
+   ```
+
+   From a machine that is **not** on the tailnet, `nc -vz smortress 22` must hang
+   and then time out. A `Connection refused` there means sshd is not listening at
+   all, so step 2 failed rather than the firewall working.
+
+4. Prove the password decision survived uCore's file. Both greps are
+   case-insensitive on purpose: OpenSSH 10 prints CamelCase directive names, so a
+   lowercase pattern matches nothing and "no output" then reads as success.
 
    ```sh
    sudo sshd -T -C addr=127.0.0.1,user=smores | \
-     grep -iE '^(passwordauthentication|kbdinteractiveauthentication|permitrootlogin|allowusers|authorizedkeysfile|pubkeyauthoptions|permituserrc|maxauthtries|logingracetime|allowtcpforwarding|allowstreamlocalforwarding|allowagentforwarding|persourcepenaltyexemptlist) '
+     grep -iE '^(passwordauthentication|kbdinteractiveauthentication|permitrootlogin|allowusers|authorizedkeysfile|pubkeyauthoptions|permituserrc|maxauthtries|logingracetime|allowtcpforwarding|allowstreamlocalforwarding|allowagentforwarding) '
    sudo sshd -T -C addr=100.64.0.1,user=smores | grep -iE '^passwordauthentication '
    ```
 
-   Compare the output against this table line by line. A line that is missing is
-   a failure, not a quiet pass:
+   Compare the output against this table line by line. A line that is missing is a
+   failure, not a quiet pass:
 
    | directive | expected |
    | --- | --- |
@@ -4159,42 +4104,43 @@ steps 1–3 are the ones that make login possible at all.
    | `KbdInteractiveAuthentication` | `no` |
    | `PermitRootLogin` | `no` |
    | `AllowUsers` | `smores` |
-   | `AuthorizedKeysFile` | `/var/lib/homelab/.ssh/authorized_keys` |
-   | `PubkeyAuthOptions` | `none` — the per-key `no-touch-required` in `authorized_keys` is what sk login relies on |
+   | `AuthorizedKeysFile` | `/etc/ssh/authorized_keys.d/smores` |
+   | `PubkeyAuthOptions` | `none` — a per-key option in `authorized_keys` decides, never the daemon |
    | `PermitUserRC` | `no` |
    | `MaxAuthTries` | `10` |
    | `LoginGraceTime` | `60` |
    | `AllowTcpForwarding` | `no` |
    | `AllowStreamLocalForwarding` | `no` |
    | `AllowAgentForwarding` | `no` |
-   | `PerSourcePenaltyExemptList` | `127.0.0.1,::1` |
 
-   `PasswordAuthentication yes` in either query means the drop-in is sorting
-   after `90-` or was not shipped; check `ls /etc/ssh/sshd_config.d/` on the
-   host before going further.
+   `PasswordAuthentication yes` in the loopback query means the drop-in is sorting
+   after `90-` or was not shipped; check `ls /etc/ssh/sshd_config.d/` on the host
+   before going further.
 
-7. Prove the file, its owner, its label and the doors. sshd reads this file as
-   the target user, not as root (`auth2-pubkey.c` switches uid before opening
-   it), which is why smores owns the directory and the file and why
-   `/var/lib/homelab` is `0711`: traversal for that account, no listing.
+5. Prove the key file. Root-owned, world-readable, labelled `etc_t`: sshd opens it
+   as root, so nothing about ownership or SELinux has to be fixed by hand — which
+   is the whole reason this path replaced `/var/lib/homelab/.ssh`:
 
    ```sh
-   ls -ld /var/lib/homelab /var/lib/homelab/.ssh /var/lib/homelab/.ssh/authorized_keys
-   # expect: drwx--x--x root root, drwx------ smores smores, -rw------- smores smores
-   ls -Z /var/lib/homelab/.ssh/authorized_keys
-   # expect: ... ssh_home_t ... — read it with ls -Z, because matchpathcon prints
-   # the policy default for the path rather than the file's actual context and so
-   # says ssh_home_t even for a var_lib_t file that sshd is denied
-   sudo restorecon -v /var/lib/homelab/.ssh/authorized_keys   # when it is not
-   sudo sshd -T -C addr=127.0.0.1,user=smores | grep -iE '^authorizedkeysfile '
-   # expect: authorizedkeysfile /var/lib/homelab/.ssh/authorized_keys
+   ls -lZ /etc/ssh/authorized_keys.d/smores
+   # expect: -rw-r--r--. 1 root root ... system_u:object_r:etc_t:s0
+   ssh-keygen -lf /etc/ssh/authorized_keys.d/smores
+   # expect: one 256-bit ED25519 line
    ```
 
-   Then prove the doors: the token and the key together log in, and either half
-   alone does not. **Until one of the key lines lands, sshd authenticates
-   nobody.** That is the intended failure direction — an empty authorised set
-   refuses every login rather than admitting a key that was never reviewed — not
-   an oversight.
+6. Prove the doors, from a laptop on the tailnet with the key in place:
+
+   ```sh
+   ssh smortress true          # expect: success, with no password prompt
+   ```
+
+   `Permission denied (publickey)` means the laptop is not offering the shipped
+   key. A timeout means the tailnet policy (section 46) or the firewall is
+   refusing the address; `tailscale ping smortress` says which.
+
+7. Both routes coexist until #767's T6. The tunnel still reaches this same
+   listener through loopback — firewalld accepts loopback unconditionally — so
+   section 41's wrapper keeps working while the tailnet is proven.
 
 ## 43. Retire Tailscale SSH on smortress
 
@@ -4203,14 +4149,14 @@ steps 1–3 are the ones that make login possible at all.
 boot. The second unit exists because tailscaled persists the preference in its
 state file: removing the flag fixes only the first enrollment, and a preference
 restored with the state — or a hand-run `tailscale up --ssh` — turns it back
-on. Nothing changes in firewalld; with the listener bound to loopback, nothing
-on the tailnet address is reachable at all.
+on. Nothing changes in firewalld: sshd listens on every address now (section 42),
+so this preference is what stops tailscaled from intercepting port 22 on the
+tailnet, and the `tailscale` zone already accepts `ssh` for OpenSSH.
 
-1. Do nothing here before section 42's steps 1–3 have run and section 44 has
-   created the token. This section removes one of the two routes in, and the
-   other one is the tunnel: rebooting the image without a key line in
-   `/var/lib/homelab/.ssh/authorized_keys` and without the token in the laptops'
-   wrapper leaves a console as the only way back.
+1. Do nothing here before section 42 is done and one route works: the tailnet
+   (section 46) or the tunnel (section 44). This section removes Tailscale SSH
+   from the picture, and a host with neither route is reachable only from the
+   console.
 
 2. Deploy the image (section 37 step 2) and reboot:
 
@@ -4230,11 +4176,14 @@ on the tailnet address is reachable at all.
    `/var/lib/tailscale/tailscaled.state` exists and that the unit is enabled
    (`systemctl is-enabled smortress-tailscale-ssh-off.service`).
 
-4. Prove the old path is closed, from a tailnet device such as a laptop:
+4. Prove port 22 is OpenSSH and not tailscaled, from a tailnet device such as a
+   laptop:
 
    ```sh
-   ssh -o ConnectTimeout=5 smores@smortress true
-   # expect: connection refused, never a login attempt
+   ssh -v -o BatchMode=yes -o ConnectTimeout=5 smortress true 2>&1 |
+     grep -m1 -i 'remote software version'
+   # expect: remote software version OpenSSH_... — Tailscale SSH would answer
+   # with its own banner, and a tailnet identity instead of a key
    tailscale status | grep smortress        # expect: still up, so Serve is unaffected
    ```
 
@@ -4568,3 +4517,117 @@ assumed, and four details decide whether the stack works at all:
      label and the directory's must let `sudo_t` write them. If a correct code
      still fails, or the usersfile keeps its old mtime after a success, check
      `ausearch -m avc -ts recent` before looking anywhere else.
+
+## 46. Tailnet policy and enrollment key (design #767, T1)
+
+`tofu/tailscale.tf` owns the tailnet policy: one `tailscale_acl` resource, gated on
+`var.tailnet`, that admits `group:owner` — the address `var.email` already pins —
+to `smortress` on 22, on Serve's 443/8443/10000 and on Syncthing's 22000, and
+admits nothing else. Tailscale accepts only what a rule accepts, so the default is
+deny without a rule saying so. The resource carries `tests`, which the Tailscale
+API evaluates every time the policy is saved: a rule that widens access fails the
+plan instead of reaching the tailnet. The provider reads its OAuth client from
+`TAILSCALE_OAUTH_CLIENT_ID` and `TAILSCALE_OAUTH_CLIENT_SECRET`, and no credential
+is committed.
+
+Tailnet Lock is the other half of the gate, and it lives in the admin console: it
+decides which nodes may join at all. The signing nodes are smorespro and the Linux
+laptop. smortress never signs, so it enrolls with an auth key that was pre-signed
+when it was minted.
+
+Nothing here is planned while `tailnet` is empty. The provider does refuse to
+configure without credentials even then, so the zone's plan and apply need the
+OAuth client exported too (step 4) — do that before the merge that names the
+tailnet.
+
+1. Mint the host's enrollment key. Admin console → Settings → Keys → **Generate
+   auth key**, with **Pre-signed** ticked (the tailnet is locked and smortress
+   cannot sign itself) and **Reusable** off (the node enrolls once). Encrypt it to
+   the host identity, the only identity that reads image ciphertext:
+
+   ```sh
+   ( umask 077
+     printf 'authkey: %s\n' 'tskey-auth-...' >/tmp/tailscale.yaml
+     sops --encrypt --input-type yaml --output-type yaml \
+       --filename-override secrets/server/tailscale.yaml \
+       /tmp/tailscale.yaml >secrets/server/tailscale.yaml
+     rm -f /tmp/tailscale.yaml
+   )
+   ```
+
+   `smortress-tailscale-up.service` reads `authkey:` out of the decrypted file and
+   skips enrollment when the ciphertext is absent, so this file and its manifest
+   line (`tailscale.yaml`, which this task adds) have to land together, and the
+   ciphertext lands before the image that lists it: `scripts/sops-decrypt.sh` fails
+   closed on a manifest entry without its ciphertext.
+
+2. Mint the OAuth client that may write the policy. Admin console → Settings →
+   OAuth clients → **New client**, scope **policy_file** and nothing else.
+   Encrypt it to the admin identity only: it can rewrite the whole tailnet, so no
+   host and no cluster identity may read it.
+
+   ```sh
+   ( umask 077
+     printf 'client_id: %s\nclient_secret: %s\n' '<id>' '<secret>' >/tmp/tailscale-oauth.yaml
+     sops --encrypt --input-type yaml --output-type yaml \
+       --filename-override secrets/tailscale.yaml \
+       /tmp/tailscale-oauth.yaml >secrets/tailscale.yaml
+     rm -f /tmp/tailscale-oauth.yaml
+   )
+   ```
+
+   This admin-only file is one of the two places the client lives. The other is
+   the two GitHub environments below, and both hold the same client: rotate one
+   without the other and a plan or an apply fails at provider configuration.
+
+3. Write the Tailnet Lock disablement secrets down. `tailscale lock init
+   --gen-disablements 10` on smorespro prints them once; they belong in
+   `secrets/tailnet-lock.yaml` (admin identity only) and in the paper kit. Losing
+   all of them means the lock cannot be turned off without rebuilding the tailnet.
+
+4. Wire the client into CI. The two environment secrets are named after the
+   variables the provider reads, so nothing else has to map them:
+   `TAILSCALE_OAUTH_CLIENT_ID` and `TAILSCALE_OAUTH_CLIENT_SECRET`, in **both**
+   the `cloudflare` environment (apply) and the `cloudflare-plan` environment
+   (pre-merge plan and drift), holding the same client as
+   `secrets/tailscale.yaml`. Terraform configures a provider whenever a resource
+   of that provider is in the configuration, `count = 0` included, so the apply
+   job fails at provider configuration — before it reads a resource, and with
+   `tailnet` still empty — until those two secrets exist.
+
+   ```sh
+   gh secret set TAILSCALE_OAUTH_CLIENT_ID --env cloudflare --repo smores56/homelab-platform
+   gh secret set TAILSCALE_OAUTH_CLIENT_SECRET --env cloudflare --repo smores56/homelab-platform
+   gh secret set TAILSCALE_OAUTH_CLIENT_ID --env cloudflare-plan --repo smores56/homelab-platform
+   gh secret set TAILSCALE_OAUTH_CLIENT_SECRET --env cloudflare-plan --repo smores56/homelab-platform
+   ```
+
+   `scripts/check-pr-secret-boundary.sh` allowlists exactly those two names in
+   `tofu-plan-pr.yml`: `policy_file` has no read-only scope, so what keeps the
+   pre-merge plan safe is that it plans and never saves a policy.
+
+5. Name the tailnet in `tofu/terraform.tfvars` (`tailnet = "..."`, the label before
+   `.ts.net`).
+
+6. Apply. The merge that sets `tailnet` runs `tofu-apply.yml`, which plans first
+   and stops on anything destructive. A local plan exports the same two values and
+   the R2 state pair:
+
+   ```sh
+   export TAILSCALE_OAUTH_CLIENT_ID=$(sops -d --extract '["client_id"]' secrets/tailscale.yaml)
+   export TAILSCALE_OAUTH_CLIENT_SECRET=$(sops -d --extract '["client_secret"]' secrets/tailscale.yaml)
+   tofu -chdir=tofu plan          # expect: tailscale_acl.this will be created
+   ```
+
+7. Prove the policy, from a laptop:
+
+   ```sh
+   tailscale status                          # expect: smortress listed
+   ssh smortress true                        # expect: success (section 42)
+   curl -sS --max-time 5 http://smortress:80/ && echo open || echo closed
+   # expect: closed — the policy admits 22, 443, 8443, 10000 and 22000 only
+   ```
+
+   From a device that is not in `group:owner` — a phone on another account, or a
+   node carrying `tag:untrusted` — port 22 on smortress must not answer. `tailscale
+   ping smortress` still succeeds there: the policy drops the port, not the node.

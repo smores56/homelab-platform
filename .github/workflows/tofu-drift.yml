@@ -5,8 +5,11 @@ name: tofu-drift
 # exists only for changes that did not come through a merge. It never applies.
 #
 # It uses the read-only pair on purpose: detection is a read, and a scheduled
-# job is the least-attended thing in this repository. The result lands in one
-# issue labelled `tofu-drift`, updated in place, so a clean week closes it.
+# job is the least-attended thing in this repository. The Tailscale OAuth client
+# has no read-only equivalent — `policy_file` can write — so the job holds one
+# that could rewrite the tailnet, and what keeps it a read is that no step here
+# applies. The result lands in one issue labelled `tofu-drift`, updated in
+# place, so a clean week closes it.
 on:
   schedule:
     # Mondays, 05:17 UTC: the weekly preflight/backup wave is done, and the
@@ -44,11 +47,14 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PLAN_API_TOKEN }}
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_STATE_READONLY_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_STATE_READONLY_SECRET_ACCESS_KEY }}
+          TAILSCALE_OAUTH_CLIENT_ID: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
+          TAILSCALE_OAUTH_CLIENT_SECRET: ${{ secrets.TAILSCALE_OAUTH_CLIENT_SECRET }}
         run: |
           set -o pipefail
-          for name in CLOUDFLARE_API_TOKEN AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; do
+          for name in CLOUDFLARE_API_TOKEN AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY \
+            TAILSCALE_OAUTH_CLIENT_ID TAILSCALE_OAUTH_CLIENT_SECRET; do
             if [[ -z ${!name:-} ]]; then
-              echo "::error::$name absent from the cloudflare environment (docs/manual-steps.md step 14)"
+              echo "::error::$name absent from the cloudflare-plan environment (docs/manual-steps.md steps 14 and 46)"
               exit 1
             fi
           done

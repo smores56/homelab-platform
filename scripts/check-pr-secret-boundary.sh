@@ -5,9 +5,12 @@
 # a `secrets.*` reference inside a `pull_request`-triggered workflow is dead
 # code at best and a latent exfiltration path at worst. One file is exempt:
 # `tofu-plan-pr.yml` makes the merge an informed approval by planning on the
-# PR, and it may hold only the read-only pair. Every other workflow keeps the
-# blanket ban, and the exemption is checked structurally here rather than
-# trusted: the guards below are what make the exemption safe.
+# PR, and it may hold only the read-only pair, plus the Tailscale OAuth client
+# the tailnet policy's provider demands before it configures (`policy_file` has
+# no read-only scope, so that one can write and is bounded by the guards, not by
+# its scope). Every other workflow keeps the blanket ban, and the exemption is
+# checked structurally here rather than trusted: the guards below are what make
+# the exemption safe.
 #
 # `pull_request_target` stays forbidden outright. It also stops working by
 # default in public repositories on 2026-12-02 (GitHub changelog), so nothing
@@ -20,7 +23,10 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 exempt=.github/workflows/tofu-plan-pr.yml
-readonly -a allowed=(CLOUDFLARE_PLAN_API_TOKEN R2_STATE_READONLY_ACCESS_KEY_ID R2_STATE_READONLY_SECRET_ACCESS_KEY)
+readonly -a allowed=(
+  CLOUDFLARE_PLAN_API_TOKEN R2_STATE_READONLY_ACCESS_KEY_ID R2_STATE_READONLY_SECRET_ACCESS_KEY
+  TAILSCALE_OAUTH_CLIENT_ID TAILSCALE_OAUTH_CLIENT_SECRET
+)
 
 shopt -s nullglob
 files=(.github/workflows/*.yml .github/workflows/*.yaml)
@@ -79,8 +85,8 @@ if [[ -f $exempt ]]; then
 fi
 
 if ((status != 0)); then
-  echo "fork PRs must not reach any secret except the read-only GITHUB_TOKEN and the read-only tofu plan pair" >&2
+  echo "fork PRs must not reach any secret except the read-only GITHUB_TOKEN, the read-only tofu plan pair and the Tailscale OAuth client" >&2
   exit 1
 fi
 
-echo "no pull_request workflow references secrets beyond GITHUB_TOKEN and the read-only plan pair"
+echo "no pull_request workflow references secrets beyond GITHUB_TOKEN, the read-only plan pair and the Tailscale OAuth client"

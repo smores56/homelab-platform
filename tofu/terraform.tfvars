@@ -19,3 +19,8 @@ ssh_tunnel_id = "bc44b9af-3d18-496b-8ef2-f6e6f73f5fad"
 # Empty until the in-VM CSR client has registered; see docs/manual-steps.md
 # step 16. The CAA records are created only once this is set.
 acme_account_id = ""
+
+# Empty until the tailnet policy is applied at cutover. The ACL resource in
+# tofu/tailscale.tf is gated on this, so a checkout that has not named the
+# tailnet plans nothing about it.
+tailnet = ""

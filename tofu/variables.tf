@@ -90,3 +90,14 @@ variable "acme_directory" {
   description = "ACME directory URL of that account, used to derive its account URI. Staging here pins staging: a CAA accounturi never mixes the two."
   default     = "https://acme-v02.api.letsencrypt.org/directory"
 }
+
+variable "tailnet" {
+  type        = string
+  description = "Tailnet name (the label before .ts.net) whose policy tofu/tailscale.tf owns. Empty until the owner supplies it at cutover, and the ACL resource is gated on it so nothing about the tailnet is planned while it is empty."
+  default     = ""
+
+  validation {
+    condition     = var.tailnet == "" || can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?$", var.tailnet))
+    error_message = "tailnet is either empty or the tailnet name (lowercase, no dots, no .ts.net suffix)."
+  }
+}

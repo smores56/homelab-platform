@@ -24,7 +24,8 @@ rollback path. Operator-only actions are in `docs/manual-steps.md` section 37.
 | `/usr/lib/systemd/system/smortress-zpool.service` | Creates or imports the `smortress` pool on the encrypted data device. |
 | `/usr/lib/systemd/system/smortress-cryptsetup-hdd.service` | Opens the HDD LUKS with its keyfile; non-blocking by contract. |
 | `/etc/firewalld/zones/tailscale.xml` | Binds `tailscale0`, permits SSH and Syncthing's 22000/tcp+udp; the default zone is `drop`. |
-| `/etc/ssh/sshd_config.d/05-deny-loopback-passwords.conf` | The only route into sshd: loopback listeners in both families, `AuthorizedKeysFile` under `/var/lib/homelab/.ssh`, no forwarding, and the `Match Address 127.0.0.1,::1` block that stops uCore's `90-enable-localhost-passwords.conf` from re-enabling password auth. It sorts at `05-` because sshd keeps the first value it obtains in the second config pass. `PubkeyAuthOptions` is deliberately unset, so the per-key `no-touch-required` on each `authorized_keys` line is the whole sk policy. |
+| `/etc/ssh/sshd_config.d/05-tailnet-ssh.conf` | The one sshd drop-in (design #767). No `ListenAddress` at all, so sshd listens on every local address and the firewall decides who reaches it: the default zone is `drop` and only `tailscale0` accepts `ssh`. No forwarding, `AllowUsers smores`, key-only auth, and the `Match Address 127.0.0.1,::1` block that stops uCore's `90-enable-localhost-passwords.conf` from re-enabling password auth on the loopback route Cockpit and the tunnel's connector still use during the cutover. It sorts at `05-` because sshd keeps the first value it obtains in the second config pass. `PubkeyAuthOptions` is deliberately unset, so a per-key option on an `authorized_keys` line stays the whole sk policy. |
+| `/etc/ssh/authorized_keys.d/smores` | The one login key: a single `ssh-ed25519` line for `smores@smortress`, root-owned `0644` under `etc_t`, so sshd opens it as root and a key change arrives with `bootc upgrade`. It is the `AuthorizedKeysFile`; nothing reads `~/.ssh` and no Ignition step delivers a key. No FIDO handle, because a resident `sk-` credential is generated with a token and cannot be reviewed in git. |
 | `/usr/lib/systemd/system/smortress-tailscale-ssh-off.service` | Re-asserts `tailscale set --ssh=false` at every boot; tailscaled persists the preference, so removing the flag from the enrollment unit is not enough. Tailscale SSH is retired. |
 | `/etc/pam.d/sudo` and `/etc/sudoers.d/10-human-gate` | The sudo gate: the account password plus an eight-digit YubiKey TOTP. `pam_faillock` preauth, `pam_unix` (a wrong password jumps past the next two rows into `authfail`, so no code prompt appears), a `pam_succeed_if tty =~ /dev/tty*` break-glass that needs the password alone at the physical console, `pam_oath` against `/var/lib/homelab/sudo/users.oath` with `digits=8 window=1` and no `no_usersfile_okay`, so a missing usersfile fails closed, then `authfail` and `authsucc`. A 30-minute ticket per TTY and `log_subcmds`. The usersfile is host-local root-only state written by `scripts/enroll-yubikey-totp.sh` and never enters the image; `docs/manual-steps.md` section 45 enrolls, proves and repairs it. |
 | `/usr/share/smortress/quadlet/pattern.container` | Quadlet base pattern; not enabled, no `[Install]`. |
@@ -137,14 +138,16 @@ before bootc takes over. `bootc switch` takes `--enforce-container-sigpolicy`;
 `bootc upgrade` has no such flag and honors the container policy regardless, so
 a reference without a valid signature is refused by either command.
 
-Ignition likewise delivers `/var/lib/homelab/.ssh/authorized_keys`, inlining the
-committed `ignition/smortress-authorized-keys`, because bootc does not reconcile
-`/var`: an image-baked copy would never appear on an installed host. The
-committed file carries instructions and no key — a resident `sk-` handle can only
-be created with the token — so sshd authenticates nobody until a key line is
-appended (`docs/manual-steps.md` section 42). The file and its `.ssh` directory
-are smores-owned, and `/var/lib/homelab` is `0711`, because sshd opens
-`AuthorizedKeysFile` with the target user's uid rather than root's.
+The login key is image content, not Ignition content:
+`/etc/ssh/authorized_keys.d/smores` ships with the one `ssh-ed25519` line and the
+`05-` drop-in points `AuthorizedKeysFile` at it. It replaced the Ignition-delivered
+`/var/lib/homelab/.ssh/authorized_keys`, which existed only because bootc does not
+reconcile `/var`: sshd opens `AuthorizedKeysFile` with the target user's uid, so
+that path needed a smores-owned directory under a `0711` traversal plus the
+`ssh_home_t` label Fedora's `file_contexts` gives `/.ssh`, and a hand-written key
+could drift from the deployment. `/etc/ssh` is `etc_t` and world-readable and the
+shipped file is root-owned `0644`, so sshd reads it as root: no ownership
+machinery, no label step, and a key change is one commit and one `bootc upgrade`.
 
 ## Install path
 
@@ -279,7 +282,10 @@ policy); the default-reject policy applies to Podman pulls as well, so an
 unsigned application image fails before it can start. The
 firewall default zone is `drop`, `tailscale0` is the only interface in the
 `tailscale` zone, and that zone has SSH plus any application port added when its
-Quadlet is installed. Nothing publishes `0.0.0.0` or `::`.
+Quadlet is installed. Nothing but sshd listens on a wildcard address, and that is
+deliberate: sshd takes no `ListenAddress` because the tailnet address is per node,
+so the firewall — not the listener — is the gate. Quadlets and units never name
+one, and `scripts/check-server-image.sh` asserts that tree-wide.
 
 ## Secrets
 

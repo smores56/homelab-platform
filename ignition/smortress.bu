@@ -20,12 +20,13 @@ passwd:
   users:
     - name: smores
       # Dead on this image, on purpose. sshd's AuthorizedKeysFile is
-      # /var/lib/homelab/.ssh/authorized_keys, set by the 05- drop-in, so nothing
-      # reads ~/.ssh/authorized_keys and this key authenticates nobody while that
-      # deployment is running. It is kept for one case: `bootc rollback` to a
-      # deployment without the drop-in restores sshd's default AuthorizedKeysFile,
-      # and this then becomes the key that gets in over Tailscale SSH again. It is
-      # not, and must not become, a second AuthorizedKeysFile path.
+      # /etc/ssh/authorized_keys.d/smores, shipped in the image with the one
+      # ed25519 key (design #767), so nothing reads ~/.ssh/authorized_keys and
+      # this key authenticates nobody while that deployment is running. It is
+      # kept for one case: `bootc rollback` to a deployment whose drop-in still
+      # names the Ignition file restores that path, and this then becomes the key
+      # a console-free rollback can log in with. It is not, and must not become,
+      # a second AuthorizedKeysFile path.
       ssh_authorized_keys_local:
         - ignition/operator/ssh_authorized_keys
       password_hash: '@SMORES_PASSWORD_HASH@'
@@ -34,25 +35,11 @@ storage:
   directories:
     - path: /etc/ucore-autorebase
       mode: 0754
-    # sshd's AuthorizedKeysFile (image/rootfs/etc/ssh/sshd_config.d/
-    # 05-deny-loopback-passwords.conf). The dot prefix is load-bearing: Fedora's
-    # file_contexts maps /.ssh to ssh_home_t, so sshd reads it with no semanage,
-    # no custom policy module and no policycoreutils in the image; a plain
-    # /var/lib/homelab/ssh would be var_lib_t and denied.
-    #
-    # smores owns the directory and the file because sshd opens
-    # AuthorizedKeysFile with the target user's uid, not root's
-    # (auth2-pubkey.c user_key_allowed2() calls temporarily_use_uid() first). A
-    # root-owned 0600 file, or a parent smores cannot enter, is EACCES and
-    # authorises nobody; that is why /var/lib/homelab is 0711 in
-    # image/rootfs/etc/tmpfiles.d/smortress.conf. bootc does not reconcile /var,
-    # so Ignition is the only delivery path that survives an upgrade.
-    - path: /var/lib/homelab/.ssh
-      mode: 0700
-      user:
-        name: smores
-      group:
-        name: smores
+  # The authorised-key directory that used to sit under /var/lib/homelab is gone
+  # with the Ignition-delivered key set (design #767): the key ships in the image
+  # at /etc/ssh/authorized_keys.d/smores. /var/lib/homelab itself stays, at 0711
+  # from image/rootfs/etc/tmpfiles.d/smortress.conf, because the age identity and
+  # the applications' state live under it.
   # FCOS owns p1 BIOS-BOOT, p2 EFI-SYSTEM, p3 boot and p4 root. The approved
   # "two encrypted storage roots" intent is kept: p4 is the LUKS root and a new
   # p5 carries the LUKS data device. Renumbering the FCOS boot partitions is not
@@ -121,20 +108,6 @@ storage:
       overwrite: true
       contents:
         local: image/rootfs/etc/containers/registries.d/ghcr.io-smortress.yaml
-    # The authorised key set itself. It is inlined from a committed repo file
-    # because the resident sk- handle is generated with the token and cannot
-    # exist here; the committed file carries the instructions and no key. Until
-    # a key line is appended, sshd authenticates nobody, which is the intended
-    # direction (docs/manual-steps.md section 42).
-    - path: /var/lib/homelab/.ssh/authorized_keys
-      mode: 0600
-      user:
-        name: smores
-      group:
-        name: smores
-      overwrite: true
-      contents:
-        local: ignition/smortress-authorized-keys
 
 systemd:
   units:

@@ -339,7 +339,7 @@ else
   if [[ $last_rule == *'http_status:404'* ]]; then ok "ssh ingress ends with a 404 catch-all"; else bad "ssh ingress ends with a 404 catch-all"; fi
 fi
 if [[ -f tofu/terraform.tfvars ]]; then ok "committed tfvars exists"; else bad "committed tfvars exists"; fi
-for key in account_id domain email host_tunnel_id cluster_tunnel_id ssh_tunnel_id; do
+for key in account_id domain email host_tunnel_id cluster_tunnel_id ssh_tunnel_id tailnet; do
   if grep -qE "^[[:space:]]*${key}[[:space:]]*=" tofu/terraform.tfvars 2>/dev/null; then
     ok "tfvars sets $key"
   else
@@ -473,6 +473,16 @@ if grep -q 'secrets.CLOUDFLARE_API_TOKEN' "$apply"; then
 else
   bad "the write token lives only in the apply workflow"
 fi
+# The tailscale provider configures whenever a tailscale resource is in the
+# configuration, `count = 0` included, so an apply needs the OAuth client even
+# while `tailnet` is empty: it travels with the Cloudflare pair in the same steps.
+for name in TAILSCALE_OAUTH_CLIENT_ID TAILSCALE_OAUTH_CLIENT_SECRET; do
+  if grep -qF "$name: \${{ secrets.$name }}" "$apply"; then
+    ok "the apply workflow exports $name"
+  else
+    bad "the apply workflow exports $name"
+  fi
+done
 
 # The pre-merge plan: the required check that makes the merge meaningful, with
 # read-only credentials because on a pull_request the head workflow runs.
@@ -495,6 +505,16 @@ if grep -qE 'secrets\.(CLOUDFLARE_API_TOKEN|R2_STATE_ACCESS_KEY_ID|R2_STATE_SECR
 else
   ok "the pre-merge plan never holds the write credentials"
 fi
+# The same client the apply holds, because the provider configures before it
+# reads a resource. `policy_file` has no read-only scope, so the guards are what
+# bound it; scripts/check-pr-secret-boundary.sh allowlists the two names.
+for name in TAILSCALE_OAUTH_CLIENT_ID TAILSCALE_OAUTH_CLIENT_SECRET; do
+  if grep -qF "$name: \${{ secrets.$name }}" "$pr"; then
+    ok "the pre-merge plan exports $name"
+  else
+    bad "the pre-merge plan exports $name"
+  fi
+done
 if grep -q 'head.repo.full_name' "$pr"; then ok "the pre-merge plan fails closed for forks"; else bad "the pre-merge plan fails closed for forks"; fi
 if grep -qE '\\?\(\\?\.github|\.github\|scripts' "$pr"; then
   ok "the pre-merge plan refuses a PR that changes CI"
@@ -519,6 +539,13 @@ else
   ok "drift detection holds no write token"
 fi
 if grep -q 'tofu-drift' "$drift"; then ok "drift detection reports through one issue"; else bad "drift detection reports through one issue"; fi
+for name in TAILSCALE_OAUTH_CLIENT_ID TAILSCALE_OAUTH_CLIENT_SECRET; do
+  if grep -qF "$name: \${{ secrets.$name }}" "$drift"; then
+    ok "drift exports $name"
+  else
+    bad "drift exports $name"
+  fi
+done
 
 # `|| status=$?` only assigns on failure, so every plan needs the initializer or
 # a successful plan falls into the error branch and reports "exit ".
@@ -546,6 +573,59 @@ if grep -rniE 'cloudflare[_-]?(api[_-])?token' clusters/ | grep -qi nanobot; the
   bad "nanobot holds no Cloudflare token"
 else
   ok "nanobot holds no Cloudflare token"
+fi
+
+# The tailnet policy (design #767, T1). sshd on smortress answers the tailnet
+# only, so the rules that decide who may open port 22 are code, gated on the
+# tailnet name the owner supplies at cutover, with the API's own policy tests
+# refusing a widening rule before an apply.
+echo "== tailnet policy"
+has 'the tailnet policy is a tailscale_acl resource' 'resource "tailscale_acl" "this"'
+has 'the policy is gated on var.tailnet' 'count[[:space:]]*=[[:space:]]*var\.tailnet == "" \? 0 : 1'
+has 'tailnet is a variable' 'variable "tailnet"'
+has 'an empty tailnet is valid' 'var\.tailnet == "" \|\| can\(regex'
+has 'the ACL is the jsonencode of one local' 'acl[[:space:]]*=[[:space:]]*jsonencode\(local\.tailnet_policy\)'
+has 'the policy admits the owner to sshd' '"smortress:22"'
+has 'the policy admits Serve traffic' '"smortress:443,8443,10000"'
+has 'the policy admits Syncthing' '"smortress:22000"'
+has 'the policy keeps the owner in one group' '"group:owner"[[:space:]]*=[[:space:]]*\[var\.email\]'
+has 'the policy carries tests' 'tests[[:space:]]*=[[:space:]]*\['
+has 'a test proves an admitted laptop reaches sshd' 'accept[[:space:]]*=[[:space:]]*\["smortress:22"\]'
+has 'a test proves a non-owner device reaches nothing' 'deny[[:space:]]*=[[:space:]]*\["smortress:22"'
+has 'the tailscale provider is declared' 'provider "tailscale" \{\}'
+has 'the tailscale provider is pinned to the 0.29 line' 'version[[:space:]]*=[[:space:]]*"~> 0\.29'
+if grep -qE 'oauth_client_(id|secret)[[:space:]]*=[[:space:]]*"[^"]' "$work/code.tf"; then
+  bad "no OAuth client is authored in the config" "credentials come from the environment"
+else
+  ok "no OAuth client is authored in the config"
+fi
+# The provider's attributes are environment-only, so an authored credential is
+# one assignment away from being committed: assert the whole config has none.
+if grep -qE '^(api_key|oauth_client_id|oauth_client_secret|identity_token)[[:space:]]*=[[:space:]]*"[^"]' "$work/code.tf"; then
+  bad "no Tailscale credential is authored in the config"
+else
+  ok "no Tailscale credential is authored in the config"
+fi
+# The same assertion over every file the client could leak into: a credential in
+# a tfvars, a README or a lock file is committed just the same.
+leaked=$(git ls-files 'tofu/*' | while IFS= read -r f; do
+  grep -qE '^(oauth_client_id|oauth_client_secret|api_key|identity_token)[[:space:]]*=[[:space:]]*"[^"]' "$f" && echo "$f"
+done)
+if [[ -n $leaked ]]; then
+  bad "no Tailscale OAuth client is authored under tofu/" "$leaked"
+else
+  ok "no Tailscale OAuth client is authored under tofu/"
+fi
+if [[ -f tofu/.terraform.lock.hcl ]]; then
+  for provider in registry.opentofu.org/cloudflare/cloudflare registry.opentofu.org/tailscale/tailscale; do
+    if grep -qF "provider \"$provider\"" tofu/.terraform.lock.hcl; then
+      ok "$provider is locked"
+    else
+      bad "$provider is locked"
+    fi
+  done
+else
+  bad "the provider lock file is committed"
 fi
 
 echo "== provider pin and workflows"
