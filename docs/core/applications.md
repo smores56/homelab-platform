@@ -26,12 +26,20 @@ this: Immich, Valkey, OPDShelf and Syncthing publish no cosign signature, and
 adding `insecureAcceptAnything` for them would delete the boundary to make a pull
 succeed.
 
-`scripts/app-images.sh` is the single pin table. `scripts/mirror-app-images.sh`
-copies each upstream image into our namespace by digest (`skopeo copy --all
---preserve-digests`), proves the digest survived, signs it, and proves the legacy
-`.sig` lookaside tag exists — that tag, not the OCI 1.1 referrer bundle, is what
+`scripts/app-images.sh` is the single pin table. Two kinds of row live in it.
+
+A row whose reference is an upstream image is copied by
+`scripts/mirror-app-images.sh` into our namespace by digest (`skopeo copy --all
+--preserve-digests`), proved to have kept the digest, signed, and proved to have
+legacy `.sig` lookaside tag — that tag, not the OCI 1.1 referrer bundle, is what
 `containers/image` reads. CI runs it as
 `.github/workflows/publish-app-images.yml` on a pin change and on dispatch.
+
+A row whose reference is `built:<Containerfile>` is an image this repository
+builds and signs itself; there is no upstream digest to preserve because the
+bytes are ours. `.github/workflows/publish-agent-webui.yml` builds it, signs it
+and proves a policy-checked anonymous pull, then prints the row to commit with
+the digest that run produced.
 
 | Quadlet | Pinned image | Upstream |
 | --- | --- | --- |
@@ -43,6 +51,10 @@ copies each upstream image into our namespace by digest (`skopeo copy --all
 | `syncthing` | `…/syncthing@sha256:2b71da7c…` | `docker.io/syncthing/syncthing:2.1.7` |
 | `agent-model` | `…/agent-model@sha256:ae96e52f…` | `ghcr.io/ggml-org/llama.cpp:server-cuda` |
 | `agent-runtime` | `…/agent-runtime@sha256:276d4468…` | `docker.io/nousresearch/hermes-agent:v0.23.1` |
+
+A built row appears here once a publish run has produced its digest. It is the
+same trust story with one difference: the digest is the last build's, so the row
+and the run that printed it are the record of what is deployed.
 
 `agent-runtime` is drawn by five Quadlets: the two gateways, the hosted proxy and
 the two source facades. The proxy and the facades are Python programs in this
@@ -57,8 +69,9 @@ legacy deployment ran; it has no database, so a version change is a reader
 change.
 
 `tests/core/app-quadlets.sh` fails if any Quadlet names a reference the pin table
-does not produce, if a pin already points at our namespace, or if an upstream
-registry appears in the policy.
+does not produce, if a pin already points at our namespace, if an upstream
+registry appears in the policy, or if a built row names a Containerfile that is
+not in the tree.
 
 ## Where the Quadlets come from
 

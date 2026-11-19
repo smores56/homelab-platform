@@ -3034,6 +3034,35 @@ digest selects one platform, and an index-only signature is rejected with
 `A signature was required, but no signature exists`. The run ends with a
 policy-checked pull of every image to prove exactly that.
 
+#### The pre-baked web UI image
+
+Hermes' browser UI is the one application image this repository builds rather
+than mirrors. Upstream's entrypoint installs the Python dependencies from PyPI at
+container start, which a sealed deployment can never do, so
+`images/agent-webui/Containerfile` moves that install to build time: uv is
+baked in, the finished virtual environment ships inside the image under
+`/apptoo`, and the entrypoint's first-start install finds its marker and does
+nothing with its network access removed.
+
+```sh
+gh workflow run publish-agent-webui.yml --repo smores56/homelab-platform
+gh run watch --repo smores56/homelab-platform
+```
+
+The run builds, signs, verifies and policy-pulls the image, and prints the pin
+row in its step summary:
+
+```
+agent-webui|built:images/agent-webui/Containerfile|sha256:...
+```
+
+Copy that row into the `app_images` table of `scripts/app-images.sh` and merge
+it. The Quadlets take their reference from that table, so the digest the host
+pulls is the digest the run signed; a typo is a rejected pull at boot instead of
+a merge error. A rebuild produces a new digest and therefore a new row: the
+image that runs is always one that was signed and proved, never a tag that moved
+under a running host.
+
 ### 40.2 Deploy the image that ships the Quadlets
 
 The running deployment tracks a pinned derived digest, so `bootc upgrade` has

@@ -1,0 +1,33 @@
+# Every Python dependency the baked venv holds, at the version the build
+# resolved on 2026-11-19. The image is the only artifact that ships these, so
+# the list is exact: a rebuild from these pins is what makes the published
+# digest mean the same thing twice.
+#
+# Upstream's requirements.txt is a floor (pyyaml>=6.0, cryptography>=42.0) and
+# its entrypoint installs `hindsight-client>=0.4.22` outside the
+# .deps_installed guard on every start. Both are resolved here instead.
+aiohappyeyeballs==2.7.1
+aiohttp==3.14.5
+aiohttp-retry==2.9.1
+aiosignal==1.4.0
+annotated-types==0.8.0
+attrs==26.1.0
+cffi==2.1.1
+cryptography==50.0.2
+frozenlist==1.8.0
+hindsight-client==1.2.3
+idna==3.20
+multidict==7.2.1
+pip==26.3
+propcache==0.5.4
+pycparser==3.12
+pydantic==2.14.4
+pydantic-core==2.50.5
+python-dateutil==4.0.0
+pyyaml==6.0.3
+setuptools==84.2.1
+typing-extensions==4.16.0
+typing-inspection==0.4.5
+tzdata==2026.6
+urllib3==2.8.0
+yarl==1.25.1

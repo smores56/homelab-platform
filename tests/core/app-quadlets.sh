@@ -84,6 +84,23 @@ for name in $app_names; do
     bad "$name pin is a digest" "$digest"
   fi
   upstream=$(app_image_upstream "$name")
+  # A built row names the Containerfile this repository builds and signs itself
+  # (publish-agent-webui.yml). The bytes are ours, so there is no upstream digest
+  # to preserve and nothing for the mirror to copy -- only the Containerfile has
+  # to exist, and the digest has to be the one that run printed.
+  if built=$(app_image_built "$name"); then
+    if [[ -f $built ]]; then
+      ok "$name builds from $built"
+    else
+      bad "$name builds from an existing Containerfile" "$built"
+    fi
+    if [[ $(app_image_source "$name" 2>/dev/null) == "" ]]; then
+      ok "$name built row has no copyable source"
+    else
+      bad "$name built row has no copyable source" "$(app_image_source "$name" 2>&1)"
+    fi
+    continue
+  fi
   if [[ $upstream == *@sha256:* ]]; then
     eq "${upstream##*@}" "$digest" "$name upstream digest equals the pin"
   fi
@@ -99,8 +116,12 @@ done
 # 1b. The reference handed to skopeo is the upstream repository at the pinned
 #     digest and carries no tag: skopeo refuses a name with both ("Docker
 #     references with both a tag and digest are currently not supported"), which
-#     is how the first publish run failed after merge.
+#     is how the first publish run failed after merge. Built rows are skipped:
+#     their workflow pushes them by digest and nothing copies them.
 for name in $app_names; do
+  if app_image_built "$name" >/dev/null; then
+    continue
+  fi
   digest=$(app_image_digest "$name")
   upstream=$(app_image_upstream "$name")
   # Independent of app_image_source: strip the digest and then the tag with sed.
@@ -108,6 +129,24 @@ for name in $app_names; do
   eq "$(app_image_source "$name")" "docker://$want_repo@$digest" \
     "$name skopeo source is repo@digest"
 done
+
+# 1b'. The refusal is what protects a built row from the mirror: with a
+#      `built:` upstream there is no repository to copy, so a source that
+#      silently stripped the prefix would hand skopeo a name that cannot resolve.
+probe=("probe|built:images/agent-webui/Containerfile|sha256:$(printf 'a%.0s' {1..64})")
+if ( app_images=("${probe[@]}"); app_image_source probe >/dev/null 2>&1 ); then
+  bad "a built row has no copyable source" "app_image_source accepted built:"
+else
+  ok "a built row has no copyable source"
+fi
+# shellcheck disable=SC2034  # the sourced helpers read this table
+built_containerfile=$(app_images=("${probe[@]}"); app_image_built probe)
+eq "$built_containerfile" "images/agent-webui/Containerfile" \
+  "a built row names its Containerfile"
+# shellcheck disable=SC2034  # the sourced helpers read this table
+built_ref=$(app_images=("${probe[@]}"); app_image_ref probe)
+eq "$built_ref" "ghcr.io/smores56/homelab-platform/probe@sha256:$(printf 'a%.0s' {1..64})" \
+  "a built row is referenced by our namespace at the pinned digest"
 
 # 1c. containers/image verifies the platform manifest it copies, not the index
 #     digest, so the mirror has to sign every pullable manifest of an index and

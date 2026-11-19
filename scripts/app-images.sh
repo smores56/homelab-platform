@@ -12,6 +12,13 @@
 #
 # name|upstream reference|digest
 #
+# An `upstream reference` is either an upstream image reference, which
+# `mirror-app-images.sh` copies by digest, or `built:<Containerfile>`, which
+# names an image this repository builds and signs itself
+# (.github/workflows/publish-agent-webui.yml). A built row has no upstream
+# digest to preserve because the bytes are ours; the digest is the last build's,
+# and the row is written from the digest that run printed.
+#
 # Immich stays on v3.0.3 until the cutover restore has passed: the database in
 # the legacy backup was written by that version, and a major upgrade belongs in
 # its own maintenance window, not inside a data migration.
@@ -85,12 +92,26 @@ app_image_digest() {
 app_image_source() {
   local name=$1 upstream body
   upstream=$(app_image_upstream "$name") || return 1
+  if [[ $upstream == built:* ]]; then
+    echo "app-images: $name is built from ${upstream#built:}, not copied from an upstream image" >&2
+    return 1
+  fi
   body=${upstream%@*}
   # Only the last path segment may hold a tag: a registry port is not one.
   case ${body##*/} in
     *:*) body=${body%:*} ;;
   esac
   printf 'docker://%s@%s\n' "$body" "$(app_image_digest "$name")"
+}
+
+# app_image_built NAME -> the Containerfile a built row names. Succeeds only for
+# a built image, whose bytes are ours: there is no upstream digest for the mirror
+# to preserve, and mirror-app-images.sh must not try to copy it.
+app_image_built() {
+  local name=$1 upstream
+  upstream=$(app_image_upstream "$name") || return 1
+  [[ $upstream == built:* ]] || return 1
+  printf '%s\n' "${upstream#built:}"
 }
 
 # app_image_names -> every name, one per line, in table order.
