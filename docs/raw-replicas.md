@@ -156,6 +156,26 @@ body -- and the adapter inherits its contract from the deployment's own source
 table, so pointing a facade at a directory cannot widen what it may reach
 (`docs/agent-facade.md`).
 
+## Running one
+
+`python3 -m data_plane.collectors.raw --root DIR [--dry-run] <source> ...`
+(`PYTHONPATH=libs` on this host) is what a unit runs and what a human runs
+against a fixture directory. It prints one JSON report and exits `0` on publish,
+`3` on any refusal, with the reason on stderr.
+
+```sh
+python3 -m data_plane.collectors.raw --root /var/lib/agent/local/replica/mail \
+  mail --maildir /var/lib/agent/local/quarantine/mail --uidvalidity INBOX=7
+python3 -m data_plane.collectors.raw --root /var/lib/agent/local/replica/finance \
+  finance --accountset /run/collector/accountset.json \
+  --accountset-url "$(cat /run/secrets/simplefin-url)" --include-pending
+```
+
+`--dry-run` enumerates and validates, then discards the staging generation: the
+first run against a real provider can be read before anything is published. The
+generation id defaults to `gen-<UTC timestamp>`, which sorts chronologically and
+is what makes "the latest earlier generation" well defined.
+
 ## What a collector does not do
 
 - It does not commit. The caller publishes with `commit_next(complete=True)` once
