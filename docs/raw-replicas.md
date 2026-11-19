@@ -171,6 +171,10 @@ python3 -m data_plane.collectors.raw --root /var/lib/agent/local/replica/finance
   --accountset-url "$(cat /run/secrets/simplefin-url)" --include-pending
 ```
 
+On the host the same command runs from `smortress-agent-collect-finance.service`,
+on `agent-collect.network`, with the access URL as a Podman secret
+(`docs/core/applications.md`, "Collectors").
+
 `--dry-run` enumerates and validates, then discards the staging generation: the
 first run against a real provider can be read before anything is published. The
 generation id defaults to `gen-<UTC timestamp>`, which sorts chronologically and

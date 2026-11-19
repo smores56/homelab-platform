@@ -251,6 +251,25 @@ host-side DNAT *toward* a container, so it adds nothing to what that container c
 dial: the personal side still has no route off the host, which is why the sealed
 profile is a network property and not a firewall exception.
 
+### Collectors
+
+The four raw collectors (`docs/raw-replicas.md`) are not part of a deployment.
+A collector is the one process that talks to a provider, and the deployment that
+consumes the result must not: the personal side has no route off the host.
+
+| Unit | Network | Writes | Credential |
+| --- | --- | --- | --- |
+| `smortress-agent-collect-finance.timer` → `.service` | `agent-collect.network`, a plain bridge of its own | `state/agent-local/replica/finance` | Podman secret `simplefin-access-url`, uid 1000 mode 0400 |
+
+The network is deliberately not `agent-general.network` even though both have
+egress: the general side carries the hosted provider key, and a bank collector has
+no business on that segment. The unit runs the pinned `agent-runtime` digest with
+`--read-only --cap-drop=all --user 1000:1000`, mounting the booted image's own
+code at `/usr/lib/agent-facade`, so the program that reads an account is the one
+this deployment ships. A refusal exits 3 and publishes no generation; the timer is
+`Persistent=true`, so a missed run is closed on the next boot instead of leaving a
+hole in the replica.
+
 The model server (`agent-model`) is llama.cpp pinned at
 `ghcr.io/ggml-org/llama.cpp:server-cuda`, started with `-c 65536`. That number is a
 floor the runtime imposes -- Hermes refuses a model under 64,000 tokens -- and

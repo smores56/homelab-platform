@@ -1,0 +1,14 @@
+# The collectors' network. A plain bridge, because a collector is the one process
+# that must talk to a provider -- SimpleFIN is a cloud API -- while the deployment
+# that consumes the result must not.
+#
+# This network is deliberately separate from agent-general.network even though
+# both have egress: the general deployment holds hosted-model authority, and a
+# finance collector has no business being on the same segment as the proxy that
+# carries the provider key. The collector reaches the internet and nothing else;
+# it has no route to either deployment's network, and neither deployment can
+# dial it.
+[Unit]
+Description=Smortress agent collector network
+
+[Network]

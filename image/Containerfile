@@ -58,6 +58,7 @@ COPY units/quadlet/immich.network units/quadlet/immich-postgres.container \
      units/quadlet/agent-facade-general.container \
      units/quadlet/agent-webui-personal.container \
      units/quadlet/agent-webui-general.container \
+     units/quadlet/agent-collect.network \
      /usr/share/containers/systemd/
 COPY secrets/server/ /etc/smortress/secrets/
 COPY image/cosign.pub /etc/pki/containers/smortress.pub
@@ -170,6 +171,7 @@ RUN set -eux; \
       smortress-tailscale-serve.service \
       smortress-cloudflared.service \
       smortress-immich-dump.timer \
+      smortress-agent-collect-finance.timer \
       var-lib-restic-ssd.mount \
       var-lib-restic-hdd.mount \
       smortress-restic-init.service \
