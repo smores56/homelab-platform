@@ -116,8 +116,9 @@ signature is looked for.
 
 Ignition also writes the same policy, registries.d file and public key, so the
 second auto-rebase stage (the signed reference) sees them even though it runs
-before bootc takes over. `bootc switch` and `bootc upgrade` use
-`--enforce-container-sigpolicy`; a digest without a valid signature is refused.
+before bootc takes over. `bootc switch` takes `--enforce-container-sigpolicy`;
+`bootc upgrade` has no such flag and honors the container policy regardless, so
+a reference without a valid signature is refused by either command.
 
 Ignition likewise delivers `/var/lib/homelab/.ssh/authorized_keys`, inlining the
 committed `ignition/smortress-authorized-keys`, because bootc does not reconcile
@@ -167,7 +168,7 @@ Only then does bootc own the system:
 ```sh
 sudo bootc status
 sudo bootc switch --enforce-container-sigpolicy <derived digest>
-sudo bootc upgrade --enforce-container-sigpolicy
+sudo bootc upgrade
 sudo bootc rollback
 ```
 
@@ -187,7 +188,7 @@ command:
 ```sh
 sudo bootc switch --enforce-container-sigpolicy \
   ghcr.io/smores56/homelab-platform/server:latest
-sudo bootc upgrade --enforce-container-sigpolicy   # every later update
+sudo bootc upgrade   # every later update
 ```
 
 Signature policy applies to the tag unchanged: `signedIdentity: matchRepository`
@@ -201,6 +202,11 @@ nothing on the host makes that comparison for a hand-run upgrade. Moving
 `:latest` backwards therefore deploys an older build, which is why only `main`
 runs may move the tag and why the receiver stays the authoritative path. A
 tag-following host is the operator's convenience, not the deployment policy.
+
+`bootc rollback` is not sticky on a tag-following host: it boots the previous
+deployment but leaves the reference alone, so the next `bootc upgrade` re-stages
+the build that was just escaped. After a rollback, switch back to the digest you
+trust instead of leaving the host on the tag.
 
 The install path keeps a digest (`ignition/operator/derived-image`): a fresh host
 must come up on the build that was verified, not on whatever `:latest` names.

@@ -2456,7 +2456,7 @@ scratch install.
      -u ucore-signed-autorebase.service --no-pager
    sudo bootc status
    sudo bootc switch --enforce-container-sigpolicy "$(cat ignition/operator/derived-image)"
-   sudo bootc upgrade --enforce-container-sigpolicy
+   sudo bootc upgrade
    sudo bootc rollback
    ```
 
@@ -2607,12 +2607,15 @@ scratch install.
     sudo bootc switch --enforce-container-sigpolicy \
       ghcr.io/smores56/homelab-platform/server:latest
     sudo systemctl reboot
-    sudo bootc upgrade --enforce-container-sigpolicy   # from then on
+    sudo bootc upgrade   # from then on
     ```
 
     Signature policy still applies to the tag. What it gives up is the deploy
     receiver's descendancy check, so a tag moved backwards would deploy an older
-    build; the receiver stays the authoritative path. Confirm the booted
+    build; the receiver stays the authoritative path. `bootc rollback` is not
+    sticky here: it boots the previous deployment and leaves the reference
+    alone, so the next `bootc upgrade` re-stages the build you just left — after
+    a rollback, switch back to the digest you trust. Confirm the booted
     deployment with `rpm-ostree status`; `bootc rollback` undoes the OS
     deployment only, not `/var`, ZFS changes or database migrations.
 
@@ -2659,7 +2662,7 @@ or reformats them.
    ```
 
    Replace both values and save. Publish and deploy per section 37 step 2
-   (`sudo bootc upgrade --enforce-container-sigpolicy`) so `/run` carries the
+   (`sudo bootc upgrade`) so `/run` carries the
    new key; a token rotated without a deployment leaves the old key in use
    until the next boot. Do not create a second credentials file, and do not
    touch the legacy migration bucket.
@@ -2686,7 +2689,7 @@ or reformats them.
    ```
 
    Publish the image with section 37 step 2 and deploy it with
-   `sudo bootc upgrade --enforce-container-sigpolicy`. The URL is a capability:
+   `sudo bootc upgrade`. The URL is a capability:
    never commit it plaintext, and treat a leaked URL as a rotated check.
 
 4. Prove decryption, then initialise. `restic-init` never re-initialises an
@@ -3120,7 +3123,7 @@ containers so they pick up the new Podman secret:
 sops secrets/server/immich-db-password.yaml
 git commit -am 'chore(core): rotate the Immich database password'
 git push
-sudo bootc upgrade --enforce-container-sigpolicy && sudo systemctl reboot
+sudo bootc upgrade && sudo systemctl reboot
 ```
 
 `sudo systemctl restart immich-postgres.service immich-server.service
@@ -3394,7 +3397,7 @@ in `tofu/access.tf`, so nothing there changes.
 
 4. Merge. `tofu-apply.yml` writes the CNAME and the ingress, and
    `publish-server-image.yml` builds the image that carries the unit; section 37
-   step 2 (`sudo bootc upgrade --enforce-container-sigpolicy`) deploys it.
+   step 2 (`sudo bootc upgrade`) deploys it.
 
 5. Prove it. The unit must be active and the connector registered:
 
@@ -3520,7 +3523,7 @@ steps 1–3 are the ones that make login possible at all.
    place:
 
    ```sh
-   sudo bootc upgrade --enforce-container-sigpolicy
+   sudo bootc upgrade
    sudo systemctl reboot
    ```
 
@@ -3607,7 +3610,7 @@ on the tailnet address is reachable at all.
 2. Deploy the image (section 37 step 2) and reboot:
 
    ```sh
-   sudo bootc upgrade --enforce-container-sigpolicy
+   sudo bootc upgrade
    sudo systemctl reboot
    ```
 
