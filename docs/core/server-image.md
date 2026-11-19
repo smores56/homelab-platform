@@ -24,7 +24,7 @@ rollback path. Operator-only actions are in `docs/manual-steps.md` section 37.
 | `/etc/firewalld/zones/tailscale.xml` | Binds `tailscale0`, permits SSH and Syncthing's 22000/tcp+udp; the default zone is `drop`. |
 | `/etc/ssh/sshd_config.d/05-deny-loopback-passwords.conf` | The only route into sshd: loopback listeners in both families, `AuthorizedKeysFile` under `/var/lib/homelab/.ssh`, no forwarding, and the `Match Address 127.0.0.1,::1` block that stops uCore's `90-enable-localhost-passwords.conf` from re-enabling password auth. It sorts at `05-` because sshd keeps the first value it obtains in the second config pass. `PubkeyAuthOptions` is deliberately unset, so the per-key `no-touch-required` on each `authorized_keys` line is the whole sk policy. |
 | `/usr/lib/systemd/system/smortress-tailscale-ssh-off.service` | Re-asserts `tailscale set --ssh=false` at every boot; tailscaled persists the preference, so removing the flag from the enrollment unit is not enough. Tailscale SSH is retired. |
-| `/etc/pam.d/sudo` and `/etc/sudoers.d/10-human-gate` | The sudo PIN gate: `pam_faillock` preauth, then `pam_userdb` against the literal path `/etc/security/sudopin.db` with `crypt=crypt`, so the stored value is a sha512crypt hash and not the PIN; then `pam_unix` re-verifying the same string the prompt already cached. A 30-minute ticket per TTY and `log_subcmds`. The database is a host file built from `docs/manual-steps.md` section 45 and never enters the image. |
+| `/etc/pam.d/sudo` and `/etc/sudoers.d/10-human-gate` | The sudo gate: the account password plus an eight-digit YubiKey TOTP. `pam_faillock` preauth, `pam_unix` (a wrong password jumps past the next two rows into `authfail`, so no code prompt appears), a `pam_succeed_if tty =~ /dev/tty*` break-glass that needs the password alone at the physical console, `pam_oath` against `/var/lib/homelab/sudo/users.oath` with `digits=8 window=1` and no `no_usersfile_okay`, so a missing usersfile fails closed, then `authfail` and `authsucc`. A 30-minute ticket per TTY and `log_subcmds`. The usersfile is host-local root-only state written by `scripts/enroll-yubikey-totp.sh` and never enters the image; `docs/manual-steps.md` section 45 enrolls, proves and repairs it. |
 | `/usr/share/smortress/quadlet/pattern.container` | Quadlet base pattern; not enabled, no `[Install]`. |
 | `/usr/share/containers/systemd/*.container` | The application Quadlets (T5). A quadlet is a generated unit, so `[Install]` is what starts it; the image never runs `systemctl enable` for one. |
 | `/usr/lib/systemd/system/smortress-app-secrets.service` | Turns the decrypted application secrets into Podman secrets before any container that declares one starts. |
@@ -66,6 +66,13 @@ firewalld, Tailscale, clevis with the sss/tang/tpm2 dracut pins, and the
 `podman-system-generator` symlink. It does not ship `sops`, `age`, `restic` or `cloudflared`;
 the Containerfile adds the hash-pinned release binaries instead of layering
 distribution packages.
+
+The one package the image does layer is `pam_oath`, the module sudo's second
+factor loads: it links liboath, whose ABI has to match the base, so a copied
+`.so` would be a version mismatch waiting for a boot. The image therefore
+carries exactly one `dnf install` layer, with weak dependencies off and the
+caches removed in the same layer, and the build fails if either the module file
+or the package it belongs to is missing.
 
 ## Build, push and sign
 

@@ -25,6 +25,17 @@ LABEL org.opencontainers.image.title="smortress server image" \
       org.opencontainers.image.base.name="${BASE_IMAGE}" \
       org.opencontainers.image.vendor="smores56"
 
+# The image's only package layer. sudo's second factor is a YubiKey TOTP and
+# uCore carries no OATH PAM module, so the module is installed rather than
+# shipped as a file: it links liboath, whose ABI has to match the base. Weak
+# dependencies are off because nothing here needs a network-manager helper or a
+# documentation split, and the caches are removed in the same layer so the
+# image does not carry a package database's worth of junk.
+RUN set -eux; \
+    dnf5 -y --setopt=install_weak_deps=False install pam_oath; \
+    dnf5 clean all; \
+    rm -rf /var/cache/dnf /var/cache/libdnf5
+
 # Runtime helpers, units and ciphertext. The public cosign key is the only
 # signature-related material in the image; the policy references it by path.
 COPY image/rootfs/ /
@@ -199,5 +210,5 @@ RUN set -eux; \
     command -v python3 >/dev/null || { echo "the image has no python3 for the plan verifier" >&2; exit 1; }; \
     jq -e '.default[0].type == "reject"' /etc/containers/policy.json >/dev/null; \
     jq -e '.transports.docker["ghcr.io/smores56/homelab-platform"][0].keyPath == "/etc/pki/containers/smortress.pub"' /etc/containers/policy.json >/dev/null; \
-    test -f /usr/lib64/security/pam_userdb.so || { echo "pam_userdb.so is missing: it is the sudo PIN gate (design #748)" >&2; exit 1; }; \
-    command -v gdbmtool >/dev/null || { echo "gdbmtool is missing: the sudo PIN database (docs/manual-steps.md section 45) cannot be built with it" >&2; exit 1; }
+    test -f /usr/lib64/security/pam_oath.so || { echo "pam_oath.so is missing: it is the sudo TOTP gate (design #767)" >&2; exit 1; }; \
+    rpm -q pam_oath >/dev/null || { echo "the pam_oath package is missing: the image's only dnf layer installs it (design #767)" >&2; exit 1; }

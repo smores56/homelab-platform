@@ -4279,133 +4279,218 @@ a `tofu apply`; no workflow and no repository file holds the secret.
    The `service token expiry` notification policy emails before the one-year
    lifetime lapses, which is the reminder to do this.
 
-## 45. Build the sudo PIN database on smortress
+## 45. sudo on smortress: the account password plus a YubiKey TOTP
 
-The image ships the PAM stack (`image/rootfs/etc/pam.d/sudo`), the sudoers gate
-(`image/rootfs/etc/sudoers.d/10-human-gate`) and a tmpfiles entry that declares
-`/etc/security/sudopin.db` as `0600 root:root`. **Nothing else may be committed.**
-The PIN, its hash and the database stay on the host: an eight-digit space is
-10^8 candidates, so a hash the agent account can read is a PIN an agent
-recovers in seconds. "Consistent" across hosts comes from typing the same PIN
-into each host's database, not from a shared file.
+sudo on smortress requires two things an agent running as `smores` does not
+hold: the account password and an eight-digit TOTP that a YubiKey releases only
+on a touch. Either one alone is refused. An agent that spawns its own pty gets a
+`/dev/pts/*` terminal, which is never the break-glass, so it faces both factors
+on every invocation outside the 30-minute sudoers ticket.
 
-The stack was proven on Fedora 45 (pam 1.7.2) with `pamtester` and real `sudo`,
-and three details decide whether it works at all:
+What the image carries, and nothing else:
 
-- the path is `/etc/security/sudopin.db` exactly. `db=` is opened literally:
-  Linux-PAM never appends `.db`, so a database called `sudopin` is one PAM never
-  opens;
-- the stored value is a **hash**, because the stack passes `crypt=crypt`. Without
-  it pam_userdb compares the typed PIN as plaintext against whatever is stored;
-- `gdbmtool` is the tool, not `db_load`: Fedora's `pam_userdb.so` links
-  `libgdbm`, so a libdb file is a file PAM cannot open.
+- `image/rootfs/etc/pam.d/sudo` — the stack: `pam_faillock` preauth, `pam_unix`,
+  a console-only `pam_succeed_if`, `pam_oath`, then `authfail` and `authsucc`;
+- `image/rootfs/etc/sudoers.d/10-human-gate` — `timestamp_timeout=30`,
+  `timestamp_type=tty` and `log_subcmds`;
+- `image/rootfs/etc/tmpfiles.d/smortress.conf` — declares
+  `/var/lib/homelab/sudo` as `0700 root:root` and never creates the usersfile;
+- `image/Containerfile` — the image's only package layer, `dnf install pam_oath`.
 
-`pam_userdb` looks the hash up by the **PAM username**, so the key must be the
-account that runs sudo. That account is `smores` — the only login
-`ignition/smortress.bu` creates and the only name sshd's `AllowUsers` permits.
-The `store` below uses that key. One database can carry several keys with the
-same hash if that ever changes.
+The only state that is not in the repository is
+`/var/lib/homelab/sudo/users.oath`: one liboath line, `HOTP/T30/8 smores -
+<hex secret>`, mode 0600 root in a root-owned directory. It is host-local
+because the alternative is a decryptable copy of the second factor in SOPS, and
+bootc never reconciles `/var`, so it survives `bootc upgrade` and reboots
+untouched.
 
-Use a PIN that is **not** the FIDO2 PIN: a lost or leaked sudo PIN must not be a
-token secret.
+The behaviour of each module here was read out of upstream sources rather than
+assumed, and four details decide whether the stack works at all:
 
-1. Deploy the image (section 37 step 2), then open a root shell. The long
-   account password works until the database exists, and everything below stays
-   inside this shell so neither the PIN nor its hash reaches an argv or an
-   environment a non-root process can read:
+- `pam_succeed_if`'s `=~` is a **glob**, not a regular expression
+  (`pam_succeed_if(8)`), so `tty =~ /dev/tty*` matches the physical consoles and
+  never `/dev/pts/*`;
+- `no_usersfile_okay` is **not** set: pam_oath documents that flag as acting as
+  if the user is not present when the file is missing, which is a bypass.
+  Without it a missing usersfile is a module failure, and the stack's
+  `default=ignore` sends that to `authfail`;
+- `digits=8` is mandatory: with no `digits=` option pam_oath's default is `-1`,
+  which makes every input look too short and rejects it; with it, an input
+  *longer* than eight digits is split into a password plus a code, which the
+  usersfile's `-` password column then refuses. The prompt takes exactly the
+  eight digits;
+- the usersfile key field is **hex**: liboath parses it with `oath_hex2bin`, so
+  base32 there would fail every code.
+
+1. Deploy the image (section 37 step 2) and reboot:
+
+   ```sh
+   sudo bootc upgrade
+   sudo systemctl reboot
+   ```
+
+   Until step 3 runs there is no usersfile, so sudo over ssh fails closed and
+   the physical console is the only way in. That is the designed state, not a
+   fault, and it is why a first enrollment cannot take the direct path: sudo
+   over ssh would have nothing to authenticate against. Enrolling before this
+   deploy is no way around it either, because the old stack asks for a PIN
+   rather than for the code.
+
+2. Open a root shell at the physical console and hold a fifo for the line.
+   `sudo -i` there needs the account password alone, because the terminal is
+   `/dev/tty*` and the break-glass row skips the code:
 
    ```sh
    sudo -i
+   mkfifo -m 0600 /run/smortress-enroll
+   chown smores /run/smortress-enroll
+   install -m 0600 /dev/stdin /var/lib/homelab/sudo/users.oath \
+     < /run/smortress-enroll     # blocks until step 3 writes the fifo
    ```
 
-2. Build the database. `openssl passwd -6 -stdin` reads the PIN from stdin and
-   returns a freshly salted sha512crypt hash; `read -rsp` keeps the PIN off the
-   screen and out of the shell history. The two entries have to match and the PIN
-   has to be eight digits, because a typo here is only discovered at the next
-   `sudo`, where the stack silently falls through to the account password:
+3. Enroll both YubiKeys from the laptop, with both 5C Nanos attached. The script
+   generates twenty random bytes in memory, programs both keys with the same
+   eight-digit touch-protected TOTP and streams the same secret into the fifo,
+   which the blocked `install` drains into the usersfile:
 
    ```sh
-   read -rsp 'new sudo PIN (8 digits, not the FIDO2 PIN): ' PIN; echo
-   read -rsp 'again: ' PIN2; echo
-   [[ $PIN =~ ^[0-9]{8}$ && $PIN == "$PIN2" ]] \
-     || { echo 'not eight digits, or the two entries differ' >&2; exit 1; }
-   hash=$(printf '%s\n' "$PIN" | openssl passwd -6 -stdin)
-   printf 'store smores %s\n' "$hash" | gdbmtool /etc/security/sudopin.db
-   unset PIN PIN2 hash
-   chmod 0600 /etc/security/sudopin.db
-   ls -l /etc/security/sudopin.db    # expect: -rw------- root root
-   gdbmtool /etc/security/sudopin.db list | cut -d' ' -f1 | grep -x smores
-   # expect: smores   (the hash itself is not printed)
+   scripts/enroll-yubikey-totp.sh --fifo /run/smortress-enroll smortress
    ```
 
-   A database with the wrong key authenticates nobody through pam_userdb, and the
-   stack falls through to the account password at the same prompt (step 4). A
-   database at the wrong path is never opened at all: the PIN then simply never
-   matches.
+   It refuses to run with anything but two keys. Nothing is written to the
+   laptop's disk, nothing appears in argv and nothing is printed; the secret
+   exists in that process's memory, in the fifo for the length of the handoff,
+   and then in one root-only file. The fifo holds nothing once it has been read.
 
-3. Prove the gate, in the root shell's parent session as `smores`:
+   Every later run is the direct path, `scripts/enroll-yubikey-totp.sh
+   smortress`, and it works because the usersfile now exists: sudo over ssh
+   prompts for the account password and for one code, and because the session
+   has no terminal of its own `sudo -S` reads both from the same stdin stream
+   the usersfile travels on. That is rotation (step 7), not bootstrap.
+
+4. Prove the gate from the laptop. Each command opens its own ssh session, and
+   `sudo -k` clears the per-TTY ticket the previous attempt left behind:
 
    ```sh
-   sudo -k; sudo true      # expect: one prompt; the PIN is accepted
-   sudo true               # expect: no prompt, same TTY, inside 30 minutes
+   ssh -t smortress 'sudo -k; sudo true'
+   # expect: the password prompt, then "One-time password (OATH) for `smores'",
+   # touch the key, type the code: success
    ```
 
-   In a second terminal, `sudo true` prompts again — the ticket is per TTY.
-   An agent's own pty is a fresh context and gets nothing:
+   The password alone is refused, and a code in hand cannot rescue a wrong
+   password:
 
    ```sh
-   script -qec 'sudo -n true' /dev/null
-   # expect: sudo: a password is required
+   ssh -t smortress 'sudo -k; sudo true'   # correct password, no code
+   # expect: refused
+   ssh -t smortress 'sudo -k; sudo true'   # wrong password, code in hand
+   # expect: one password prompt and no code prompt, refused
    ```
 
-4. Prove the fallback at **one** prompt, not two. The account password typed
-   where the PIN belongs authenticates, because pam_userdb caches the string the
-   user typed and pam_unix re-verifies that same value with `try_first_pass`. A
-   forgotten PIN is therefore not a lockout:
+   That second half is the jump arithmetic: a wrong password skips the console
+   test and `pam_oath` and lands on `authfail`, so a code an agent has stolen
+   never gets a prompt to be typed into.
+
+   A replayed code is refused. pam_oath writes the accepted code and its time
+   step back into the usersfile, so a second use of the same code fails:
 
    ```sh
-   sudo -k; sudo true      # type the account password, not the PIN
-   # expect: success, no second prompt
+   ssh -t smortress 'sudo -k; sudo true'   # password, then the current code
+   ssh -t smortress 'sudo -k; sudo true'   # password, then the SAME code
+   # expect: the first succeeds, the second is refused as a replayed code
    ```
 
-5. Prove the lockout. faillock writes one row per PAM transaction and sudo makes
-   three per invocation, so **five wrong prompts** — not five invocations — is
-   what costs 300 seconds. As `smores`, in a fresh TTY:
+   The key binding that inserts a code (`alt+o` in the dotfiles' fish setup)
+   keeps the second attempt inside the same step; the dotfiles' `ykman oath
+   accounts code -s smortress` prints the same digits.
+
+5. Prove the break-glass is the console only. At the physical console, log in as
+   `smores` and run sudo: the password is enough and no code prompt appears.
 
    ```sh
-   sudo -k
-   for _ in 1 2 3 4 5; do printf 'wrong-pin\n' | sudo -S true; done
+   tty            # expect: /dev/tty1 (or /dev/ttyS0 on a serial console)
+   sudo -k; sudo true     # expect: password only, success
    ```
 
-   Read the tally from the root shell of step 1, because sudo is locked and that
-   shell needs no prompt:
+   Over ssh the terminal is `/dev/pts/*`, so the break-glass row cannot match
+   and the code is required:
 
    ```sh
-   faillock --user smores          # expect: five INVALID rows
-   faillock --user smores --reset  # the manual clear, from this shell
-   faillock --user smores          # expect: no rows
+   ssh -t smortress 'tty; sudo -k; sudo true'
+   # expect: /dev/pts/N, then a code prompt
    ```
 
-   And back as `smores`, prove that nothing authenticates while the tally
-   stands — not the PIN and not the account password:
+6. Prove the lockout. faillock records one row per PAM transaction and sudo makes
+   several per invocation, so a handful of failed attempts fills `deny=5`:
 
    ```sh
-   sudo true      # expect: refused, the correct PIN included
+   for _ in 1 2 3 4 5; do ssh -t smortress 'sudo -k; sudo -S true < /dev/null'; done
+   ssh -t smortress 'sudo -k; sudo true'   # the correct password and code
+   # expect: refused before either prompt, 300 seconds after the fifth row
    ```
 
-   That blanket refusal is the design, not a bug: `pam_faillock preauth` denies
-   before any comparison runs, so a locked account fails before pam_userdb or
-   pam_unix ever looks at what was typed. `authsucc` carries the same `deny` so
-   the first successful login after the window clears the tally. Recovery
-   *before* the window ends is a session that is already authenticated — the
-   `sudo -i` shell from step 1, or a console getty you have already logged into.
-
-   SSH over the tunnel is unaffected throughout: key auth never runs the `auth`
-   stack, so a faillock lockout costs sudo, not the host.
-
-6. An agent sharing your TTY inherits the ticket for up to 30 minutes. That is
-   the design's accepted residual; `log_subcmds` records what ran:
+   That blanket refusal is the design, not a bug: `pam_faillock preauth` is the
+   first row on every path, so a locked account fails before pam_unix or pam_oath
+   looks at anything — the console included. Read the tally from a root shell you
+   already hold (open `sudo -i` at the console *before* locking, or keep the
+   ticket from an earlier sudo on the same tty); a fresh console `sudo -i` is
+   refused until the window ends:
 
    ```sh
-   sudo journalctl -g 'COMMAND=' -n 20 --no-pager
+   faillock --user smores            # the tally, row by row
+   faillock --user smores --reset    # the manual clear
    ```
+
+   Console *login* is unaffected while the tally stands, because login is its own
+   PAM stack: the break-glass still gets you a shell, it just cannot sudo until
+   the five minutes are up.
+
+7. Rotation is the direct path, step 3's script without `--fifo`, because the
+   usersfile exists and both factors can be answered over ssh: both keys get a
+   fresh secret and the install replaces the usersfile, so the previous secret
+   stops working the moment the file lands. Revoke a lost YubiKey by deleting
+   the account from it (`ykman oath accounts delete smortress`) or resetting its
+   OATH application; the surviving key and the usersfile keep working.
+
+   A lost or deleted usersfile is not a lockout, because the console needs the
+   password alone. The repair moves a freshly generated secret from the laptop
+   into root's hands over a fifo, so it never sits in a file:
+
+   ```sh
+   # at the physical console, as smores, password only:
+   sudo -i
+   # in that root shell:
+   mkfifo -m 0600 /run/smortress-enroll
+   chown smores /run/smortress-enroll
+   install -m 0600 /dev/stdin /var/lib/homelab/sudo/users.oath \
+     < /run/smortress-enroll
+   # on the laptop, with both keys attached:
+   scripts/enroll-yubikey-totp.sh --fifo /run/smortress-enroll smortress
+   ```
+
+   The script prints exactly these steps before it attempts the direct install,
+   and again when that install fails: it cannot look for the usersfile itself,
+   because `/var/lib/homelab/sudo` is 0700 root. Do not stage the secret in a
+   temporary file instead: anything `smores` can read during that window is a
+   second factor an agent holds.
+
+8. Residuals the design accepts:
+
+   - a code is valid for its own 30-second step, and `window=1` also accepts one
+     step either side for clock skew, so a leaked code is usable for up to about
+     90 seconds — once, because the usersfile records the code it accepted;
+   - a process running as `smores` can start a sudo attempt and wait for the key
+     to blink. A stray touch then hands it one code, usable once in that window;
+   - an agent sharing your tty inherits the sudoers ticket for up to 30 minutes.
+     `log_subcmds` records what ran:
+
+     ```sh
+     sudo journalctl -g 'COMMAND=' -n 20 --no-pager
+     ```
+
+   - a root compromise reads the usersfile and therefore the secret. TOTP cannot
+     prevent that; the response is the rotation in step 7;
+   - pam_oath rewrites the usersfile as root on every success, so its SELinux
+     label and the directory's must let `sudo_t` write them. If a correct code
+     still fails, or the usersfile keeps its old mtime after a success, check
+     `ausearch -m avc -ts recent` before looking anywhere else.

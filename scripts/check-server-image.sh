@@ -191,15 +191,17 @@ else
   ok "the preference unit only ever disables Tailscale SSH"
 fi
 
-# sudo PIN gate (design #748, T6). Asserted line by line because order and jump
-# counts are the meaning: a matching PIN skips pam_unix and the authfail row, a
-# mistyped one falls to pam_unix with the same string cached, and only then does
-# the failure reach faillock. The last three auth rows carry `deny=5` for the
-# same tally; a bare `authsucc` stops clearing it at three rows.
+# sudo gate (design #767, T2): the account password plus a YubiKey TOTP.
+# Asserted line by line because the order and the jump counts are the meaning: a
+# correct password continues into the console test, a wrong one jumps over the
+# console test and pam_oath straight into authfail, a /dev/tty* login skips the
+# code and authfail, and an accepted code skips authfail. Nothing reaches
+# authsucc without pam_unix having succeeded.
 pam_sudo=image/rootfs/etc/pam.d/sudo
 expected_pam='auth required pam_faillock.so preauth deny=5 unlock_time=300
-auth [success=2 default=ignore] pam_userdb.so crypt=crypt db=/etc/security/sudopin.db
-auth [success=1 default=ignore] pam_unix.so try_first_pass
+auth [success=ok default=2] pam_unix.so try_first_pass
+auth [success=2 default=ignore] pam_succeed_if.so tty =~ /dev/tty*
+auth [success=1 default=ignore] pam_oath.so usersfile=/var/lib/homelab/sudo/users.oath digits=8 window=1
 auth [default=die] pam_faillock.so authfail deny=5 unlock_time=300
 auth sufficient pam_faillock.so authsucc deny=5 unlock_time=300
 account include system-auth
@@ -209,24 +211,36 @@ session required pam_limits.so
 session include system-auth'
 actual_pam=$(sed -E 's/[[:space:]]+/ /g; s/ $//' "$pam_sudo" | grep -Ev '^(#|$)' || true)
 if [[ $actual_pam == "$expected_pam" ]]; then
-  ok "the sudo stack is the reviewed ten rows in order"
+  ok "the sudo stack is the reviewed eleven rows in order"
 else
-  bad "the sudo stack is the reviewed ten rows in order: $(printf '%s' "$actual_pam" | tr '\n' ';')"
+  bad "the sudo stack is the reviewed eleven rows in order: $(printf '%s' "$actual_pam" | tr '\n' ';')"
 fi
-# `db=` is opened literally: Linux-PAM never appends `.db`, so `/etc/security/sudopin`
-# would make pam_userdb open a file that does not exist and fail every time.
-check "pam_userdb opens the .db path literally" \
-  has 'db=/etc/security/sudopin.db' "$pam_sudo"
-# Without crypt=crypt the stored value is compared as plaintext, so the database
-# would have to hold the PIN itself.
-check "the stored PIN is compared as a crypt hash" has 'crypt=crypt' "$pam_sudo"
+# The usersfile is host-local root-only state, so its path is the contract
+# between this stack, tmpfiles and the enrollment script.
+check "the code is checked against the host-local usersfile" \
+  has 'usersfile=/var/lib/homelab/sudo/users.oath' "$pam_sudo"
+# pam_oath rejects every input unless digits= is set, and window=1 is the clock
+# skew the 30-second step needs; without digits=8 the key's codes never match.
+check "the code is eight digits with a one-step window" has 'digits=8 window=1' "$pam_sudo"
+# `no_usersfile_okay` turns a missing usersfile into "the user is not present",
+# which is a bypass; without it pam_oath fails the module and the default=ignore
+# above sends that to authfail. Asked of the rows rather than the file, because
+# the stack's own comment names the flag to say why it is absent.
+if [[ $actual_pam == *no_usersfile_okay* ]]; then
+  bad "a missing usersfile fails closed"
+else
+  ok "a missing usersfile fails closed"
+fi
+# pam_succeed_if parses `=~` as a glob, so this matches the physical consoles and
+# no ssh pty: the break-glass is local by construction.
+check "the console break-glass matches /dev/tty only" grep -qF 'tty =~ /dev/tty*' "$pam_sudo"
+check "the PIN database is gone from the stack" lacks 'pam_userdb' "$pam_sudo"
 check "the account phase is still declared" grep -qE '^account[[:space:]]+include[[:space:]]+system-auth$' "$pam_sudo"
 check "the password phase is still declared" grep -qE '^password[[:space:]]+include[[:space:]]+system-auth$' "$pam_sudo"
 check "the session phase is still declared" grep -qE '^session[[:space:]]+include[[:space:]]+system-auth$' "$pam_sudo"
-# pam_userdb matches the PAM username, not a fixed key, so the account that runs
-# sudo is the key the operator must put in the database.
+# pam_oath picks the usersfile line by the PAM username, so the account that runs
+# sudo is the key the enrollment script must write.
 check "the only login account is smores" grep -qE '^[[:space:]]*- name: smores$' ignition/smortress.bu
-check "the stack documents that account as the pam_userdb key" grep -qF 'That account is smores' "$pam_sudo"
 
 sudoers_dropin=image/rootfs/etc/sudoers.d/10-human-gate
 expected_sudoers='Defaults timestamp_timeout=30
@@ -244,18 +258,52 @@ check "the sudoers drop-in is parsed at build time" has 'visudo -cf /etc/sudoers
 # parse would cost a console recovery; the build parses the shipped config
 # instead of leaving the host to find out at boot.
 check "the sshd configuration is parsed at build time" has 'sshd -t -o HostKey=' image/Containerfile
-check "the build fails if pam_userdb is missing" has 'test -f /usr/lib64/security/pam_userdb.so' image/Containerfile
-# The PIN database is built by hand on the host (docs/manual-steps.md section
-# 45), so the tool has to be in the image the same way pam_userdb does.
-check "the build fails if gdbmtool is missing" has 'command -v gdbmtool >/dev/null' image/Containerfile
-check "tmpfiles declares the PIN database owner and mode" \
-  has 'f /etc/security/sudopin.db 0600 root root -' image/rootfs/etc/tmpfiles.d/smortress.conf
-# Neither the PIN, its hash nor its database may enter the repository: anything
-# the agent account can read is a PIN an agent recovers in seconds.
-if git ls-files | grep -qE 'sudopin|\.db$'; then
-  bad "no PIN database is tracked"
+# The module comes from the image's only package layer, so both the file the PAM
+# stack loads and the package it belongs to are asserted: a stray file would
+# satisfy the path while leaving the layer that provides its library gone.
+check "the image installs pam_oath in its only package layer" \
+  has 'dnf5 -y --setopt=install_weak_deps=False install pam_oath' image/Containerfile
+check "the build fails if pam_oath is missing" has 'test -f /usr/lib64/security/pam_oath.so' image/Containerfile
+check "the build fails if the pam_oath package is missing" has 'rpm -q pam_oath >/dev/null' image/Containerfile
+check "no pam_userdb assert remains" lacks 'pam_userdb' image/Containerfile
+check "no gdbmtool assert remains" lacks 'gdbmtool' image/Containerfile
+check "tmpfiles creates the usersfile directory root-only" \
+  has 'd /var/lib/homelab/sudo 0700 root root -' image/rootfs/etc/tmpfiles.d/smortress.conf
+# bootc never reconciles /var, and the secret is host-local: a tmpfiles line for
+# the file would create an empty usersfile that looks enrolled.
+check "tmpfiles never creates the usersfile" lacks 'users.oath' image/rootfs/etc/tmpfiles.d/smortress.conf
+
+enroll=scripts/enroll-yubikey-totp.sh
+check "the enrollment script installs the usersfile from stdin" has 'install -m 0600 /dev/stdin' "$enroll"
+check "the enrollment script refuses anything but two YubiKeys" \
+  has 'expected exactly two YubiKeys attached' "$enroll"
+# Both keys get the same credential, and the touch is the physical-presence half:
+# without it the key mints codes for anything that can talk to it.
+check "both keys get a touch-protected eight-digit TOTP" has '--oath-type TOTP --digits 8 --touch' "$enroll"
+# liboath parses the usersfile key with oath_hex2bin, so this line is hex, and it
+# names the account that runs sudo.
+check "the usersfile line is a liboath TOTP entry for smores" has 'HOTP/T30/8 smores - ' "$enroll"
+# The secret may only travel through pipes. `tee` would put it on a disk while
+# looking harmless, and a redirect into a path would do the same. Comments are
+# stripped first, and only a target that starts like a path, a `$` expansion or
+# `.` is a redirect at all: stderr is a bare `>` (as in `>&2`), and `/dev/null`
+# is the one path allowed.
+check "the enrollment script never tees the secret" lacks 'tee' "$enroll"
+secret_redirects=$(grep -vE '^[[:space:]]*#' "$enroll" |
+  grep -oE '>>?[[:space:]]*[^&[:space:];|)]*' |
+  grep -E '^>>?[[:space:]]*(/|\.|\$)' |
+  grep -vE '^>>?[[:space:]]*/dev/null$' || true)
+if [[ -z $secret_redirects ]]; then
+  ok "the enrollment script never redirects the secret into a file"
 else
-  ok "no PIN database is tracked"
+  bad "the enrollment script never redirects the secret into a file" "$secret_redirects"
+fi
+# Neither the secret nor the old PIN database may enter the repository: anything
+# the agent account can read is a second factor an agent holds.
+if git ls-files | grep -qE 'sudopin|users\.oath|\.db$'; then
+  bad "no PIN database or usersfile is tracked"
+else
+  ok "no PIN database or usersfile is tracked"
 fi
 if grep -rIlE "\$6\$[./A-Za-z0-9]{8,}\$" image ignition units secrets 2>/dev/null | grep -q .; then
   bad "no sha512crypt hash is tracked in the image or ignition tree"

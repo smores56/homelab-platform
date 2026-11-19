@@ -1,44 +1,72 @@
-# sudo on smortress (design #748, T6).
+# sudo on smortress (design #767, T2).
 #
-# The PIN is the gate an agent does not hold. An agent that spawns its own pty
-# gets a fresh, ticketless context and faces this stack.
+# Two things an agent running as smores does not hold: the account password and
+# a YubiKey touch that releases an eight-digit TOTP. An agent's own pty is
+# /dev/pts/*, so it never matches the console row and faces both factors. The
+# physical console is the break-glass and needs the password alone.
 #
-# pam_userdb looks the hash up by the *PAM username*, not by a fixed key, so the
-# database must hold the PIN hash under the account that actually runs sudo.
-# That account is smores: it is the only login this image creates
-# (ignition/smortress.bu `passwd.users`, and sshd's `AllowUsers smores`).
+# The jump arithmetic is the security property, so it is spelled out. Linux-PAM
+# reads `N` as "jump over the next N modules in the stack" and `ok` as "record
+# the success and continue with the next module" (pam.conf(5), the actionN
+# list). Row by row:
 #
-# Two details decide whether this stack works at all, both verified on Fedora 45
-# (pam 1.7.2) with pamtester and real sudo:
-#   - `db=` is opened literally; Linux-PAM never appends `.db`, so the path must
-#     be exactly /etc/security/sudopin.db.
-#   - `crypt=crypt` is what makes the stored value a hash. Without it pam_userdb
-#     compares the typed PIN as plaintext against the stored string.
-# The database is a sha512crypt hash built on the host with gdbmtool (Fedora's
-# pam_userdb.so links libgdbm, not libdb), mode 0600 root:root, per
-# docs/manual-steps.md section 45. It is never in this image, never in SOPS and
-# never in the repository: those are all readable by the account the agents run
-# as, and an eight-digit space is 10^8 candidates, so a readable hash is a PIN an
-# agent recovers in seconds.
+#   2 pam_unix success (ok)          -> row 3, the console test: a correct
+#                                       password still faces the second factor
+#                                       anywhere but the console.
+#   2 pam_unix failure (default=2)   -> skips rows 3 and 4, so the next module
+#                                       evaluated is row 5, authfail, which
+#                                       dies. A wrong password never reaches
+#                                       the code prompt.
+#   3 console match (success=2)      -> skips rows 4 and 5 to authsucc: the
+#                                       break-glass needs the password only.
+#   3 no match (default=ignore)      -> row 4, the code prompt.
+#   4 code accepted (success=1)      -> skips row 5 to authsucc.
+#   4 code rejected (default=ignore) -> row 5, authfail, which dies.
 #
-# The fallback keeps the long account password at the *same* prompt, not a second
-# one: pam_userdb caches the value the user typed, and pam_unix re-verifies that
-# same string with try_first_pass.
+# Every path either lands on authsucc after passing both factors or dies on
+# authfail: no row grants a session on one factor, and there is no fallback
+# module behind pam_oath.
 #
-# `authsucc` carries the same `deny` as the two rows above it. A bare `authsucc`
-# still marks a success but silently stops clearing the tally once three rows are
-# recorded, so the counter outlives the login that should have wiped it.
+# pam_succeed_if's `=~` is a glob, not a regular expression (pam_succeed_if(8)):
+# /dev/tty* matches the physical consoles and never /dev/pts/*. A session with
+# no tty at all has an empty tty field, which matches nothing, so it is treated
+# like ssh and needs the code.
+#
+# pam_oath reads /var/lib/homelab/sudo/users.oath: host-local, root-owned 0600
+# state written by scripts/enroll-yubikey-totp.sh, never in an image, in SOPS or
+# in the repository. `no_usersfile_okay` is deliberately absent: the module
+# documents that flag as "act as if the user is not present" when the file does
+# not exist, which is a bypass; without it a missing usersfile is a module
+# failure, and the default=ignore above sends that to authfail. So an
+# unenrolled host fails closed and the console is the way in.
+#
+# pam_oath records the accepted code and its time step back into that same file
+# on every success, which is what rejects a replay; the record lives in the file
+# and survives a reboot and a bootc upgrade. `window=1` accepts the current
+# 30-second step and one step either side for clock skew (liboath's TOTP
+# validation searches the window symmetrically). `digits=8` is required: with no
+# digits= option pam_oath's default is -1, which makes every input look too short
+# and rejects it; with it, an input longer than eight digits is split into a
+# password plus a code, which the `-` in the usersfile's password column then
+# refuses. The prompt takes exactly the eight digits.
 
 # Deny before the prompt, and before any comparison, when the account is locked.
 auth  required      pam_faillock.so preauth deny=5 unlock_time=300
-# The PIN. success=2 skips pam_unix and the authfail row when it matches.
-auth  [success=2 default=ignore] pam_userdb.so crypt=crypt db=/etc/security/sudopin.db
-# The account password, re-verifying the string the user already typed.
-auth  [success=1 default=ignore] pam_unix.so try_first_pass
+# The account password. ok continues to the console test; default=2 jumps over
+# the console test and pam_oath onto authfail.
+auth  [success=ok default=2] pam_unix.so try_first_pass
+# The break-glass: /dev/tty* skips both the code prompt and authfail.
+auth  [success=2 default=ignore] pam_succeed_if.so tty =~ /dev/tty*
+# The YubiKey TOTP: success skips authfail.
+auth  [success=1 default=ignore] pam_oath.so usersfile=/var/lib/homelab/sudo/users.oath digits=8 window=1
 # Count the failure. faillock records one row per PAM transaction and sudo makes
-# three per invocation, so five wrong prompts, not five invocations, cost 300s.
+# several per invocation, so a handful of wrong prompts — not invocations — is
+# what reaches deny=5 and costs 300 seconds.
 auth  [default=die] pam_faillock.so authfail deny=5 unlock_time=300
-# Clear the tally on success, with the deny the tally was counted against.
+# Clear the tally on success, with the deny the tally was counted against. A
+# bare `authsucc` still marks a success but silently stops clearing the tally
+# once three rows are recorded, so the counter outlives the login that should
+# have wiped it.
 auth  sufficient    pam_faillock.so authsucc deny=5 unlock_time=300
 # Fedora's stock sudo phases, unchanged. Dropping them would take the SELinux
 # session context, the limits and the account phase with them.
