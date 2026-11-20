@@ -84,6 +84,8 @@ while ((i < ${#args[@]})); do
 done
 case $cmd in
   backup)
+    # A slow upload is the only way to prove which deadline a run was given.
+    [[ -n ${STUB_BACKUP_SLEEP:-} ]] && sleep "$STUB_BACKUP_SLEEP"
     [[ -n ${STUB_BACKUP_ID:-} ]] &&
       printf '{"message_type":"summary","snapshot_id":"%s","tree_id":"%s"}\n' \
         "$STUB_BACKUP_ID" "${STUB_BACKUP_TREE:-tree1}"
@@ -181,7 +183,7 @@ reset_state() {
   rm -rf "$state"
   install -d -m 0700 "$state"
   : >"$log/restic"; : >"$log/zfs"; : >"$log/curl-urls"; : >"$log/ready"
-  unset STUB_BACKUP_EXIT STUB_BACKUP_ID STUB_TAG_EXIT STUB_ZFS_LIST_EXIT \
+  unset STUB_BACKUP_EXIT STUB_BACKUP_ID STUB_BACKUP_SLEEP STUB_TAG_EXIT STUB_ZFS_LIST_EXIT \
     STUB_SNAPSHOTS_JSON STUB_SNAPSHOTS_EXIT STUB_READY_EXIT STUB_CAT_EXIT \
     STUB_MAINT_EXIT STUB_INIT_EXIT STUB_CURL_EXIT RESTIC_HEALTHCHECK_URL
   for key in "${dataset_order[@]}"; do
@@ -402,6 +404,41 @@ jq '.last_attempt.n = 2 | .last_attempt.result = "running" | .last_attempt.start
 run scripts/smortress-restic-verify.sh --no-ping
 if ((rc != 0)); then ok "a run that died without completing expires"; else bad "a run that died without completing expires"; fi
 
+# A unit that has never succeeded is uploading its first snapshot, which is
+# bounded by the first-upload deadline; judging that run by the routine window
+# would call a legitimate first upload dead and expire it.
+first_running() { # <backend> <unit> <seconds ago>
+  local start
+  start=$(date -u -d "@$(($(date -u +%s) - $3))" +%Y-%m-%dT%H:%M:%SZ)
+  jq --arg start "$start" '.last_success = null | .final = null
+      | .last_attempt = {n: 2, start: $start, end: null, exit: null,
+                         result: "running", reason: "", snapshot: null}' \
+    "$state/state/$1-$2.json" >"$state/state/$1-$2.json.tmp" &&
+    mv "$state/state/$1-$2.json.tmp" "$state/state/$1-$2.json"
+  jq -cn '{schema: 2, attempt: 1, result: "failure", snapshot: null}' \
+    >"$state/journal/$1-$2.jsonl"
+}
+
+reset_state
+seed_all_healthy
+first_running ssd photos 6000
+run scripts/smortress-restic-verify.sh --no-ping
+if grep -q 'never completed' <<<"$out"; then
+  bad "a first upload inside its own window is not called dead" "$out"
+else
+  ok "a first upload inside its own window is not called dead"
+fi
+
+reset_state
+seed_all_healthy
+first_running ssd photos 20000
+run scripts/smortress-restic-verify.sh --no-ping
+if grep -q 'never completed' <<<"$out"; then
+  ok "a first upload past its own window still expires"
+else
+  bad "a first upload past its own window still expires" "$out"
+fi
+
 reset_state
 seed_all_healthy
 rm -f "$state/state/r2-files.json"
@@ -541,6 +578,58 @@ if grep -q -- '--keep-daily 14 --keep-weekly 8 --keep-monthly 12' scripts/smortr
 else
   bad "retention keeps 14 daily, 8 weekly, 12 monthly"
 fi
+
+# --- 9. first-upload sizing ---------------------------------------------
+# A unit's first upload has nothing deduplicated yet, so it is read, chunked and
+# written in full: it gets its own deadline and a single attempt. A unit with a
+# success already recorded against the repository it writes keeps the routine
+# bound and its retries. The state file itself says which of the two it is.
+reset_state
+export STUB_BACKUP_EXIT=1 STUB_BACKUP_ID=""
+run RESTIC_ATTEMPTS=2 RESTIC_ATTEMPTS_FIRST=1 \
+  scripts/smortress-restic-backup.sh ssd --unit photos --no-maintenance
+eq "$(grep -c ' backup --host' "$log/restic")" 1 \
+  "a unit with no recorded success gets one first attempt"
+eq "$(state_json ssd-photos '.last_attempt.result')" failure \
+  "the single first attempt still records its failure"
+
+reset_state
+export STUB_BACKUP_EXIT=0 STUB_BACKUP_ID="first1" STUB_VERIFIED_ID="first1v"
+run scripts/smortress-restic-backup.sh ssd --unit photos --no-maintenance
+eq "$(state_json ssd-photos '.last_attempt.result')" success "the first upload can succeed"
+: >"$log/restic"
+export STUB_BACKUP_EXIT=1 STUB_BACKUP_ID=""
+run RESTIC_ATTEMPTS=2 RESTIC_ATTEMPTS_FIRST=1 \
+  scripts/smortress-restic-backup.sh ssd --unit photos --no-maintenance
+eq "$(grep -c ' backup --host' "$log/restic")" 2 \
+  "a unit with a recorded success keeps the routine retries"
+
+# Same state, different repository: the recorded success proves nothing about
+# the repository this run writes, so it is a first upload again.
+: >"$log/restic"
+jq '.repository = "s3:https://elsewhere.invalid/other"' \
+  "$state/state/ssd-photos.json" >"$state/state/ssd-photos.json.tmp" &&
+  mv "$state/state/ssd-photos.json.tmp" "$state/state/ssd-photos.json"
+run RESTIC_ATTEMPTS=2 RESTIC_ATTEMPTS_FIRST=1 \
+  scripts/smortress-restic-backup.sh ssd --unit photos --no-maintenance
+eq "$(grep -c ' backup --host' "$log/restic")" 1 \
+  "a success against another repository does not count as a success"
+
+# The deadline varies per unit, which is what the run is actually given: the
+# slow first upload outlives the routine deadline, the same slowness afterwards
+# does not.
+reset_state
+export STUB_BACKUP_EXIT=0 STUB_BACKUP_ID="slow1" STUB_VERIFIED_ID="slow1v" STUB_BACKUP_SLEEP=3
+run RESTIC_DEADLINE_LOCAL=2 RESTIC_DEADLINE_FIRST_LOCAL=15 \
+  scripts/smortress-restic-backup.sh ssd --unit photos --no-maintenance
+eq "$rc" 0 "a slow first upload is not killed by the routine deadline"
+eq "$(state_json ssd-photos '.last_attempt.result')" success \
+  "a slow first upload is not recorded as timeout"
+: >"$log/restic"
+run RESTIC_DEADLINE_LOCAL=2 scripts/smortress-restic-backup.sh ssd --unit photos --no-maintenance
+eq "$(state_json ssd-photos '.last_attempt.reason')" timeout \
+  "a slow routine run keeps the tighter deadline"
+unset STUB_BACKUP_SLEEP
 
 printf '\n%d checks, %d failed\n' "$pass" "$fail"
 ((fail == 0))

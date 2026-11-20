@@ -120,9 +120,12 @@ check_unit() {
 
   # A run that is still in flight is fine only inside its retry/deadline
   # window; a run that died without recording completion (SIGKILL, power loss)
-  # leaves `running` behind and expires here.
+  # leaves `running` behind and expires here. A unit with no success yet is in
+  # its first upload, which is bounded by the first-upload deadline and its
+  # single attempt: the routine window would expire a run that is still legal.
   if [[ $result == running ]]; then
     age=$(age_seconds "$start")
+    if [[ -z $succ_end ]]; then expiry=$(run_expiry_first_for "$backend"); fi
     if ((age > expiry)); then
       fail "$backend/$unit: run started ${start:-unknown} never completed (${age}s, window ${expiry}s)"
     fi

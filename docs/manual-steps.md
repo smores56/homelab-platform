@@ -2779,15 +2779,28 @@ or reformats them.
    s3:https://.../homelab-restic/smortress`. A second run must print "already
    initialised" for each and change nothing.
 
-5. First backup per destination, then freshness. The first R2 upload can exceed
-   the 4-hour per-attempt deadline; run that one by hand with a day-long bound
-   and let the daily timer take over afterwards.
+5. First backup per destination, then freshness. The first upload of a
+   destination is sized for reading everything once (9 h per attempt for R2, one
+   attempt) and needs no override; an interrupted first run records its failure
+   and the next scheduled run resumes from the objects restic already uploaded.
 
    ```sh
    sudo /usr/libexec/smortress-restic-backup ssd
    sudo /usr/libexec/smortress-restic-backup hdd
-   sudo env RESTIC_DEADLINE_R2=86400 /usr/libexec/smortress-restic-backup r2
+   sudo /usr/libexec/smortress-restic-backup r2
    sudo /usr/libexec/smortress-restic-verify
+   ```
+
+   A `/etc/systemd/system/smortress-restic-backup@.service.d/` drop-in on an
+   older host that raised `RESTIC_DEADLINE_LOCAL` / `RESTIC_DEADLINE_R2` must be
+   removed: it overrode judgement that is now baked into the script, and its
+   local bound (39600 s) outlived `max_age_local` (8400 s) while its R2 bound
+   times `attempts` outlived `TimeoutStartSec`, so systemd killed a long run and
+   left `result=running` with a stale staging snapshot behind.
+
+   ```sh
+   sudo rm -rf /etc/systemd/system/smortress-restic-backup@.service.d
+   sudo systemctl daemon-reload
    ```
 
    Each snapshot must carry `group:<name>`, `host:smortress` and `verified`:

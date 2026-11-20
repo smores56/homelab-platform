@@ -53,6 +53,24 @@ retry_sleep_r2=${RESTIC_RETRY_SLEEP_R2:-600}
 lock_wait=${RESTIC_LOCK_WAIT:-300}
 kill_after=${RESTIC_KILL_AFTER:-60}
 
+# A unit's first upload is not a routine increment: nothing is deduplicated yet,
+# so every byte is read, chunked and written, which takes orders of magnitude
+# longer than a routine increment. Sizing it with the incremental deadline
+# records a real first upload as a timeout and retries work that was never going
+# to fit. First attempts therefore get their own bound and a single try: a
+# first attempt that used its whole window has already spent the day's budget,
+# and restic resumes from what it wrote, so the next scheduled run continues
+# instead of restarting.
+#
+# Invariant: attempts_first * deadline_first_r2 must stay strictly below the
+# backup unit's TimeoutStartSec (50400), which is only a safety net — a run
+# that dies inside it is recorded as a failure, a run killed by it is not. The
+# first-upload deadlines are not capped by max_age_*: those count from a first
+# success, which by definition does not exist yet.
+deadline_first_local=${RESTIC_DEADLINE_FIRST_LOCAL:-14400}
+deadline_first_r2=${RESTIC_DEADLINE_FIRST_R2:-32400}
+attempts_first=${RESTIC_ATTEMPTS_FIRST:-1}
+
 # Freshness budget: schedule + every bounded retry + grace. A snapshot older
 # than this cannot be a current recovery point. keep-in-sync with
 # docs/core/restic-plane.md and the numbers asserted by
@@ -175,9 +193,20 @@ with_deadline() {
 }
 
 job_deadline() { if [[ $1 == r2 ]]; then printf '%s\n' "$deadline_r2"; else printf '%s\n' "$deadline_local"; fi; }
+job_deadline_first() { if [[ $1 == r2 ]]; then printf '%s\n' "$deadline_first_r2"; else printf '%s\n' "$deadline_first_local"; fi; }
 job_retry_sleep() { if [[ $1 == r2 ]]; then printf '%s\n' "$retry_sleep_r2"; else printf '%s\n' "$retry_sleep_local"; fi; }
 max_age_for() { if [[ $1 == r2 ]]; then printf '%s\n' "$max_age_r2"; else printf '%s\n' "$max_age_local"; fi; }
 run_expiry_for() { if [[ $1 == r2 ]]; then printf '%s\n' "$run_expiry_r2"; else printf '%s\n' "$run_expiry_local"; fi; }
+
+# Same shape as run_expiry_for, sized with the first-upload bound, so a unit that
+# has never succeeded is not called dead while its first attempt is still legal.
+run_expiry_first_for() {
+  local grace=600 deadline sleep_time
+  if [[ $1 == r2 ]]; then grace=1800; fi
+  deadline=$(job_deadline_first "$1")
+  sleep_time=$(job_retry_sleep "$1")
+  printf '%s\n' "$((attempts_first * (deadline + sleep_time) + grace))"
+}
 
 # Fail-closed state writes. jq writes a sibling, the file is fsynced, then
 # renamed; a caller that cannot persist the result treats the run as failed.
