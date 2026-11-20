@@ -129,5 +129,15 @@ for spec in personal:local general:general; do
   install -d -o 1000 -g 1000 -m 0750 "$home/memory" \
     "$home/replica" "$home/webui" "$home/webui/state" "$home/webui/workspace"
 
-  echo "agent-config-seed: $state is seeded (config, .env, webui.env, memory and UI roots)"
+  # The mail half exists only on the personal side: every raw collector is
+  # personal, and the general deployment has no source to collect.
+  if [[ $state == local ]]; then
+    install -d -o 1000 -g 1000 -m 0750 "$home/quarantine"
+    # The bridge's own volume: the Tuta session, the GPG key that unseals it and
+    # the TLS certificate mbsync verifies. 0700 because a copy of it is a copy of
+    # the login; the sync container mounts only cert.pem out of it, as one file.
+    install -d -o 1000 -g 1000 -m 0700 "$home/quarantine/tmail"
+  fi
+
+  echo "agent-config-seed: $state is seeded (config, .env, webui.env, memory, UI roots)"
 done

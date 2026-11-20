@@ -655,9 +655,14 @@ done
 check "quadlets live where the generator scans" has '/usr/share/containers/systemd/' image/Containerfile
 check "the placeholder is not installed as a runnable quadlet" \
   lacks 'units/quadlet/pattern.container /usr/share/containers/systemd' image/Containerfile
-for unit in smortress-app-secrets.service smortress-tailscale-serve.service \
-  smortress-immich-dump.timer; do
+for unit in smortress-app-secrets.service smortress-tailscale-serve.service; do
   check "image enables $unit" has "$unit" image/Containerfile
+done
+# Every timer this image ships must be enabled here, or it silently never fires.
+for timer in units/systemd/*.timer; do
+  unit=${timer#units/systemd/}
+  pattern="^[[:space:]]*${unit//./\\.}([[:space:]]|;)"
+  check "image enables $unit" grep -qE "$pattern" image/Containerfile
 done
 
 # Serve topology (review finding G1 of design #748). The wallpaper library is the
@@ -682,8 +687,16 @@ check "the Serve unit is ordered after the wallpapers dataset is ready" \
 
 # shellcheck source=app-images.sh disable=SC1091
 source scripts/app-images.sh
+# A table entry is used either as a Quadlet's Image= or as an argument of a
+# hand-written unit that runs podman itself (the collectors), and both must name
+# the signed mirror at the pinned digest rather than a tag.
 for name in $(app_image_names); do
-  if grep -qF -- "Image=$(app_image_ref "$name")" units/quadlet/*.container; then
+  ref=$(app_image_ref "$name")
+  # A hand-written unit names the image on its own continuation line, so the
+  # match is anchored: a comment that mentions the reference is not a run.
+  pattern="^[[:space:]]+$(printf '%s' "$ref" | sed 's/\\./\\\\./g')[[:space:]]+\\\\$"
+  if grep -qF -- "Image=$ref" units/quadlet/*.container ||
+     grep -qE "$pattern" units/systemd/*.service; then
     ok "$name runs the signed mirror at its pinned digest"
   else
     bad "$name runs the signed mirror at its pinned digest"
