@@ -747,6 +747,13 @@ for unit in smortress-nvidia-cdi.service smortress-agent-config.service; do
 done
 # shellcheck disable=SC2016  # the matched text is a line of the seed script
 probe "agent config seeding is idempotent" grep -qF 'cp -n "$template" "$config"' scripts/agent-config-seed.sh
+# The hledger projection's account mapping is seeded from the image the same way,
+# so the template is what an operator's copy starts from and must ship with it.
+check "image rootfs carries the hledger account mapping" \
+  test -s image/rootfs/etc/smortress/agent/hledger-accounts.json
+# shellcheck disable=SC2016  # the matched text is a line of the seed script
+probe "the hledger mapping is seeded once and never overwritten" \
+  grep -qF 'cp -n "$template_dir/hledger-accounts.json"' scripts/agent-config-seed.sh
 # The seed work moved from an ExecStart one-liner into the script, because splicing
 # a token into a YAML file from a unit line would put it in the process table.
 check "the image installs the seed script" has 'scripts/agent-config-seed.sh' image/Containerfile

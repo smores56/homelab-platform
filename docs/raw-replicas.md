@@ -223,6 +223,60 @@ The hledger projection is not here. It is derived from these objects and rebuilt
 whenever the accounting format changes; storing it in the replica would make a
 projection look like evidence.
 
+### The hledger projection
+
+`render_journal(replica, accounts)` in `libs/data_plane/derived/hledger.py` is a
+pure function of one published generation: every
+`finance::txn::<account>::<txn>` becomes one journal transaction, `account`
+directives are emitted for every name used, and the objects are ordered by
+`(date, account id, transaction id)` so the same generation always renders the
+same bytes. `write_journal` replaces the file in one rename and only when the
+bytes differ, so a two-hourly rerun over an unchanged generation leaves the
+journal's mtime alone. `smortress-agent-collect-finance.service` runs it as its
+third stage, after the collector, because a projection needs a generation that
+exists and is published.
+
+- **Sign.** SimpleFIN's `amount` is the provider's own, and it is written
+  through unchanged onto the mapped asset account; the counter-account gets the
+  exact negation. A debit therefore appears with whatever sign the provider sent,
+  and a credit with the other one. This is a refusal to guess, not an oversight:
+  the convention differs between institutions, SimpleFIN normalizes nothing, and
+  a projection that flipped a sign on a hunch would agree with itself and
+  disagree with the bank. Which side is "out" is the operator's mapping, not this
+  code. The counter-account is `expenses:unknown` for every transaction for the
+  same reason: calling a row income rather than expense is the same guess in
+  another place.
+- **Accounts.** The mapping is `state/agent-local/index/hledger/accounts.json`,
+  `{"<simplefin account id>": "<hledger account name>"}`, seeded as `{}` with
+  `cp -n` and edited by the operator (`docs/manual-steps.md` section 40.14). A
+  name is trimmed and refused if it is empty or would start a directive, a
+  comment or a second line; a file that is not a JSON object of string to string
+  is a refusal. An account the file does not name still renders, as
+  `assets:unknown:<sanitized id>`: an unmapped account is visible in the ledger
+  instead of being dropped from it.
+- **Pending and undated.** A pending record carries hledger's `!`, a cleared one
+  `*`. The date is the provider's `posted` epoch seconds as a UTC date; a record
+  with none falls back to its own `transacted_at`, then its own `posted` (an
+  epoch of `0` counts as no date -- it is what the provider writes for a row it
+  never dated), and a record with neither is skipped and counted in the report
+  rather than dated "today".
+- **Money.** The commodity comes from the account object, else from the
+  transaction. A transaction that names neither is a refusal: a commodity-less
+  posting beside a commodity'd one is a journal that does not balance.
+
+To run it by hand over a generation already on disk:
+
+```sh
+PYTHONPATH=libs python3 -m data_plane.derived.hledger \
+  --replica /var/lib/agent/local/replica/finance \
+  --accounts /var/lib/agent/local/index/hledger/accounts.json \
+  --out /var/lib/agent/local/index/hledger/finance.journal
+```
+
+It prints one JSON line (`objects`, `skipped`, `accounts`, `path`), exits `0` on
+success and `3` on any refusal -- a bad mapping, an unreadable replica, an
+unwritable journal. `--dry-run` renders and reports without writing.
+
 Fidelity limits: statement PDFs, institution history SimpleFIN never exposes, and
 deletion.
 

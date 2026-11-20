@@ -21,11 +21,12 @@
 #
 # It also creates `<dataset>/memory` for each facade and `<dataset>/webui` with its
 # `state` and `workspace` children for the web UI, plus `index` on the personal
-# side for the facade's derived source index. Each container bind-mounts a
-# subdirectory rather than the dataset root (the gateway's sessions, skills and
-# .env are one level up), and a bind source podman has to create would land as
-# root:root 0755 inside a dataset owned by uid 1000 at 0750 -- so the container's
-# first write would fail on a directory it is supposed to own. Running
+# side for the facade's derived source index and the hledger projection's account
+# mapping, seeded once from the image and never rewritten. Each container
+# bind-mounts a subdirectory rather than the dataset root (the gateway's sessions,
+# skills and .env are one level up), and a bind source podman has to create would
+# land as root:root 0755 inside a dataset owned by uid 1000 at 0750 -- so the
+# container's first write would fail on a directory it is supposed to own. Running
 # `install -d` here every boot also re-applies the owner and mode to a directory a
 # Restic restore left root-owned.
 #
@@ -135,7 +136,13 @@ for spec in personal:local general:general; do
   # collect or index.
   if [[ $state == local ]]; then
     install -d -o 1000 -g 1000 -m 0750 "$home/quarantine"
-    install -d -o 1000 -g 1000 -m 0750 "$home/index"
+    install -d -o 1000 -g 1000 -m 0750 "$home/index" "$home/index/hledger"
+    # The projection's account mapping belongs to the operator, so it is seeded
+    # once and never rewritten: `cp -n` leaves an edited copy alone at every boot,
+    # and `{}` means every account renders as `assets:unknown:<id>` until someone
+    # maps it. The unit always has a file to read, which is the point.
+    cp -n "$template_dir/hledger-accounts.json" "$home/index/hledger/accounts.json"
+    chown 1000:1000 "$home/index/hledger/accounts.json"
     # The bridge's own volume: the Tuta session, the GPG key that unseals it and
     # the TLS certificate a client verifies. 0700 because a copy of it is a copy
     # of the login; a client mounts only cert.pem out of it, as one file.
@@ -146,5 +153,6 @@ for spec in personal:local general:general; do
     install -d -o 1000 -g 1000 -m 0750 "$home/quarantine/calendar"
   fi
 
-  echo "agent-config-seed: $state is seeded (config, .env, webui.env, memory, UI roots)"
+  echo "agent-config-seed: $state is seeded" \
+    "(config, .env, webui.env, memory, index, UI roots)"
 done

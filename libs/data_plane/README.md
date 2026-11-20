@@ -21,6 +21,7 @@ provider SDK. The same code runs in the local and external planes.
 | `collectors.relay` | Authenticated, schema-validated, rate-limited, idempotent ingest |
 | `collectors.staging` | Staging generation, atomic publish, cursors, tombstones, fidelity limits |
 | `collectors.raw` | Raw mail, calendar, finance and Brave replicas; the absence ledger (`docs/raw-replicas.md`) |
+| `derived.hledger` | The finance replica as one hledger journal: the operator's mapping, the provider's own sign, an atomic no-churn write (`docs/raw-replicas.md`) |
 | `memory.file_memory` | Portable per-profile file memory with provenance and tombstones |
 | `migration` | Ordered migration phases and the plan-driven backup gate |
 | `github.backup` | Safe argv for mirror/bundle capture and a verifiable manifest |
@@ -73,6 +74,8 @@ tests/data-plane/check.sh
 PYTHONPATH=libs python3 -m data_plane validate-catalog catalog.json
 PYTHONPATH=libs python3 -m data_plane render-confirmation operation.json
 PYTHONPATH=libs python3 -m data_plane backup-freshness --plan /etc/homelab/backup.json --host "$(hostname)" --json
+PYTHONPATH=libs python3 -m data_plane.derived.hledger --replica REPLICA/finance \
+  --accounts INDEX/hledger/accounts.json --out INDEX/hledger/finance.journal
 PYTHONPATH=libs python3 -m data_plane.migration inventory --out /tmp/inventory.json
 PYTHONPATH=libs python3 -m data_plane.migration preflight --plan /etc/homelab/backup.json --json
 ```
