@@ -4309,7 +4309,7 @@ a `tofu apply`; no workflow and no repository file holds the secret.
 ## 45. sudo on smortress: a touch on a forwarded agent, password fallback
 
 sudo on smortress answers one tap. `ssh -A smortress` forwards the client's
-agent, and the agent holds only a **touch-required** `sk-ssh-ed25519` resident
+agent, and the agent holds a **touch-required** `sk-ssh-ed25519` resident
 credential, so `/etc/pam.d/sudo` asks the key in the laptop for a signature and
 the tap happens there. The account password sits directly behind it as the
 fallback, so an absent, unplugged or unmapped key costs typing rather than
@@ -4340,19 +4340,19 @@ script, the fifo procedure and the usersfile are gone, and nothing in this stack
 has to be enrolled before sudo works. The directory and its usersfile under
 `/var/lib/homelab/sudo` are dead weight on an upgraded host and can be deleted.
 
-### Two credentials per YubiKey
+### One credential per YubiKey, and it is the sudo one
 
-The touch option is fixed when a credential is minted, so each key carries two:
+The login key is not a token credential. `/etc/ssh/authorized_keys.d/smores`
+ships one plain `ssh-ed25519` key from dotfiles' sops (`SMORTRESS_SSH_KEY`), so
+`ssh smortress` is touch-free with no resident credential at all, and the image
+check refuses an `sk-` handle in that file. The only thing on a YubiKey is the
+**sudo** credential: minted with the default touch option and resident, its
+public half committed to `/etc/ssh/sudo_authorized_keys`.
 
-- the **login** credential, minted `-O no-touch-required`, whose public half is
-  the sole line of `/etc/ssh/authorized_keys.d/smores` — `ssh smortress` stays
-  touch-free;
-- the **sudo** credential, minted with the default (a touch per signature),
-  whose public half is committed to `/etc/ssh/sudo_authorized_keys`.
-
-A key that has only the login credential can still log in and cannot sudo; the
-reverse is also true, and both refusals are checks in step 4. Every 5C Nano must
-carry both before it can stand in for another, so the spare is enrolled twice.
+That is why the two files cannot satisfy each other: the login key is a
+different key type in a different file, and `libpam_rssh` reads only the sudo
+one. A key carrying no sudo credential still logs in and cannot sudo, so the
+spare must be enrolled too.
 
 1. Mint the sudo credential on each key, one key attached at a time. The private
    half never leaves the token: the `-f` file is a handle, and nothing is
@@ -4364,6 +4364,11 @@ carry both before it can stand in for another, so the spare is enrolled twice.
      -f ~/.ssh/id_smortress_sudo
    # touch the key when it blinks
    ```
+
+   Give each key a distinct `-C` (`smores-sudo-1-`, `-2-`, `-3-`) and write the
+   serial that `ykman info` prints next to the physical label. The comment is
+   what makes the committed public line identifiable later, and the serial is
+   what makes "which key is this" answerable once three of them are in a drawer.
 
    `-O resident` is what lets the credential live on the key rather than in the
    handle file, so a replacement laptop fetches it back rather than minting a
@@ -4438,13 +4443,14 @@ carry both before it can stand in for another, so the spare is enrolled twice.
    # prompt
    ```
 
-   The two credentials are not interchangeable. The login credential is refused
-   for sudo and the sudo credential is refused for ssh, which is what the
+   The login key and the sudo credential are not interchangeable. The login key
+   is not in `sudo_authorized_keys`, and the sudo credential is not an
+   `ssh-ed25519` line in `authorized_keys.d/smores`, which is what the
    separation of the two files buys:
 
    ```sh
-   ssh -A -t smortress 'sudo -k; sudo true'      # agent forwarded, key present
-   # expect: the touch credential signs; the login credential alone falls through
+   ssh -A -t smortress 'sudo -k; sudo true'      # agent forwarded, sudo credential loaded
+   # expect: the touch credential signs
    ssh -o IdentitiesOnly=yes -i ~/.ssh/id_smortress_sudo smortress true
    # expect: refused, no matching key in authorized_keys.d/smores
    ```
