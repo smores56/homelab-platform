@@ -98,12 +98,13 @@ Two PAM stacks read one mapping file, `/etc/u2f_mappings`:
   FIDO2 PIN, then a touch.
 - `/etc/pam.d/sudo` runs
   `pam_u2f.so authfile=/etc/u2f_mappings cue userpresence=1 pinverification=0`
-  between `pam_unix` and faillock: the account password, then a touch, and no
-  PIN. The FIDO2 PIN is the same one the disk keyslot uses, and eight wrong PINs
-  block the token and wipe every credential on it, so a sudo prompt that any
-  process running as `smores` can trigger must never be able to spend that
-  budget. That is the one place the two stacks differ; the lock screen is
-  unchanged.
+  ahead of `pam_unix`: a tap alone escalates, and the account password sits
+  behind it as the fallback, so no key, no credential for `smores` or a refused
+  touch costs typing rather than access. No PIN in either case: the FIDO2 PIN is
+  the same one the disk keyslot uses, and eight wrong PINs block the token and
+  wipe every credential on it, so a sudo prompt that any process running as
+  `smores` can trigger must never be able to spend that budget. That is the one
+  place the two stacks differ; the lock screen is unchanged.
 
 The mapping is public credential data — a key handle and a public key per token,
 no secret — so it is committed at `image/rootfs/etc/u2f_mappings` and shipped to
@@ -166,32 +167,45 @@ enrolled. A replaced key is a rotation of the mapping above.
 
 ## 3. Prove the sudo gate
 
-sudo asks for two things and has no version of itself that asks for one. Type
-the account password, then touch the key when `cue` prints its reminder. With
-the key unplugged, or the key left untouched, sudo fails: the password alone is
-not a second factor.
+sudo asks for one gesture. With a key in the port it prints the `cue` reminder
+and waits for a tap; nothing is typed, and the tap alone opens the gate.
 
 ```sh
-sudo -k; sudo true      # password, then touch
+sudo -k; sudo true      # touch
 sudo true               # no prompt: the same TTY, inside 30 minutes
 ```
+
+The account password is the fallback, and it is a full one: no key in the port,
+a key holding no credential for `smores`, or a tap refused (`pam_u2f` reports
+each of these as a failed authentication) all fall through to the password
+prompt, which works.
+
+```sh
+sudo -k; sudo true      # key unplugged: password prompt, then in
+sudo -k; sudo true      # key in, tap refused: password prompt, then in
+```
+
+Neither prompt ever asks for the FIDO2 PIN: `pinverification=0` keeps the disk
+keyslot's PIN budget out of sudo's reach.
 
 - The ticket lasts 30 minutes and only on the TTY that earned it
   (`timestamp_timeout=30`, `timestamp_type=tty` in
   `/etc/sudoers.d/10-human-gate`). A different TTY prompts again, and a process
   without a TTY gets no ticket at all.
-- A wrong password is never followed by a touch prompt: `pam_unix`'s jump sends
-  it straight to faillock, so a bad password cannot be probed with the key in
-  hand.
+- A tap and a password both clear the tally: each row's `success=N` lands on
+  `authsucc` rather than terminating the stack, so a success after earlier typos
+  resets the count.
+- A wrong password and a refused tap both land on `authfail`, which dies, so
+  neither can be probed indefinitely.
 - faillock counts one row per PAM transaction and sudo makes three per
   invocation, so **five wrong prompts**, not five invocations, are what cost
-  five minutes. A success clears the tally. While the lock stands the correct
-  password is refused too, because `preauth` denies the transaction before
-  anything compares a value. Clear it manually from a root shell reached
-  without sudo: `faillock --user smores --reset`.
+  five minutes. While the lock stands the correct password is refused too,
+  because `preauth` denies the transaction before anything compares a value.
+  Clear it manually from a root shell reached without sudo:
+  `faillock --user smores --reset`.
 - Every sudo command raises its subcommands in the journal (`log_subcmds`).
 
 Before relying on the gate, make sure a way to root exists that is not sudo:
-`su -` on root's password if one is set, or a rescue boot. This gate has no
-lost-key path — an unplugged token is a refused sudo, by design — so the
-console is what covers a missing or broken key.
+`su -` on root's password if one is set, or a rescue boot. The password is the
+break-glass everywhere — a missing or broken key costs typing, not access — and
+the console is what covers a forgotten password.

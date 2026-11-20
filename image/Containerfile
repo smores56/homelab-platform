@@ -41,10 +41,11 @@ LABEL org.opencontainers.image.title="smorespro image" \
 # already in the pinned base; listing and enabling it here keeps a future base
 # refresh from silently taking the backend away.
 #
-# pam-u2f is the second factor for both stacks: /etc/pam.d/login calls it with
-# pinverification=1 (the lock screen wants the key, its FIDO2 PIN and a touch),
-# and /etc/pam.d/sudo calls it with pinverification=0 userpresence=1 (the
-# escalation gate wants the account password and a touch, never the PIN).
+# pam-u2f serves both stacks: /etc/pam.d/login calls it with pinverification=1
+# (the lock screen wants the key, its FIDO2 PIN and a touch), and
+# /etc/pam.d/sudo calls it with pinverification=0 userpresence=1 ahead of
+# pam_unix (the escalation gate opens on a touch, the account password is the
+# fallback behind it, and neither ever asks for the PIN).
 # pamu2fcfg is the separate package that produced the shipped
 # /etc/u2f_mappings. Both are Fedora packages; nothing is compiled here.
 #
@@ -112,11 +113,11 @@ RUN set -eux; \
 COPY image/rootfs/ /
 COPY image/cosign.pub /etc/pki/containers/smorespro.pub
 
-# The escalation stack in /etc/pam.d/sudo is the account password plus a touch on
-# a key listed in the shipped /etc/u2f_mappings. git stores only 0644 and 0755
-# and sudo refuses a drop-in that is not root-owned 0440, so the mode is set
-# here; visudo then proves the shipped stack parses instead of leaving it to the
-# first sudo after a boot.
+# The escalation stack in /etc/pam.d/sudo is a touch on a key listed in the
+# shipped /etc/u2f_mappings, with the account password behind it. git stores
+# only 0644 and 0755 and sudo refuses a drop-in that is not root-owned 0440, so
+# the mode is set here; visudo then proves the shipped stack parses instead of
+# leaving it to the first sudo after a boot.
 RUN set -eux; \
     chown root:root /etc/sudoers.d/10-human-gate /etc/sudoers.d/20-sops-env; \
     chmod 0440 /etc/sudoers.d/10-human-gate /etc/sudoers.d/20-sops-env; \
@@ -155,9 +156,9 @@ RUN set -eux; \
 # The unlock path and the escalation gate are both pam_u2f, and the lock screen
 # also dlopens libfido2 through systemd-cryptenroll, so a base refresh that
 # dropped pam_u2f.so or libfido2 would fail at the lock screen rather than at
-# boot. A missing pam_u2f.so would not silently weaken sudo: a correct password
-# jumps over the missing line into authfail, which dies, so sudo fails closed and
-# every privileged action needs the console. Fail the build instead.
+# boot. A missing pam_u2f.so would not fail sudo at all: pam_unix is the
+# fallback row and reaches authsucc on its own, so escalation would quietly stop
+# offering the tap while the password kept working. Fail the build instead.
 RUN set -eux; \
     test -f /usr/lib64/security/pam_u2f.so; \
     command -v pamu2fcfg systemd-cryptenroll cryptsetup >/dev/null

@@ -112,7 +112,7 @@ Then, in the session:
 | Audio | `wpctl status`; volume keys work |
 | Brightness | brightness keys work |
 | Fingerprint | `fprintd-enroll` then lock and unlock |
-| sudo gate | `sudo -k; sudo true` asks for the account password and then a touch; with the key unplugged sudo refuses |
+| sudo gate | `sudo -k; sudo true` opens on a touch alone; with the key unplugged it asks for the account password instead |
 | Suspend/resume | close the lid, reopen |
 | External display | plug in a monitor |
 | Flatpak | launch a flatpak app (Brave and Dolphin are image packages, not flatpaks); check its file chooser |

@@ -316,33 +316,42 @@ fi
 
 # --- escalation (sudo: password + touch) ------------------------------------
 
-# smortress gates sudo with a different second factor (a YubiKey TOTP, in another
-# repository), so this laptop's file is compared byte for byte with the design
-# rather than by keyword: a dropped module or a jump index one line off is
-# escalation an agent can reach, and the failure is silent.
+# smortress gates sudo with a touch on a forwarded ssh agent (pam_rssh, in
+# another repository), so this laptop's file is compared byte for byte with the
+# design rather than by keyword: a dropped module or a jump index one line off
+# is escalation an agent can reach, and the failure is silent.
 sudo_pam=image/rootfs/etc/pam.d/sudo
 expected=$(cat <<'EOT'
-# Escalation asks for two things: the account password (pam_unix) and a touch on
-# a key listed in /etc/u2f_mappings (pam_u2f). /etc/pam.d/login keeps its own
+# Escalation is a tap on a key listed in /etc/u2f_mappings (pam_u2f), and the
+# account password (pam_unix) behind it is the fallback: an absent, unplugged or
+# unmapped key costs typing rather than access. /etc/pam.d/login keeps its own
 # stack for the lock screen and a TTY, and that one still asks for the token's
 # FIDO2 PIN; this file must not.
+#
+# The fallback is a property of return codes, not of jump arithmetic we maintain:
+# pam_u2f answers PAM_AUTH_ERR when no key is present, when the key holds no
+# matching credential, and when the touch is refused (util.c,
+# do_authentication), so default=ignore on its row lands all three on pam_unix.
 #
 # pinverification=0 is the point. The FIDO2 PIN is shared with the disk keyslot,
 # and eight wrong PINs block the token and wipe every credential on it, so a
 # sudo prompt that any process running as smores can trigger must never be able
 # to spend that budget.
 #
-# userpresence=1 makes the touch mandatory. No nouserok: a missing mapping, or a
-# key holding no credential for smores, has to fail this stack closed.
+# userpresence=1 makes the tap mandatory. No nouserok: a key holding no
+# credential for smores has to be reported as a failed touch and fall through to
+# the password, not skipped silently.
 #
-# faillock: pam_unix's default=1 jumps over pam_u2f to authfail, so a wrong
-# password is never followed by a touch prompt; pam_u2f's success=1 jumps over
-# authfail to authsucc, so a full success is what clears the tally.
-auth  required      pam_faillock.so preauth deny=5 unlock_time=300
-auth  [success=ok default=1] pam_unix.so try_first_pass
-auth  [success=1 default=ignore] pam_u2f.so authfile=/etc/u2f_mappings cue userpresence=1 pinverification=0
-auth  [default=die] pam_faillock.so authfail deny=5 unlock_time=300
-auth  sufficient    pam_faillock.so authsucc deny=5 unlock_time=300
+# faillock: a bare sufficient on the touch row would be wrong. Success
+# terminates dispatch (pam_dispatch.c), so authsucc would never run and the tally
+# would never clear. success=2 skips pam_unix and authfail into authsucc, and
+# pam_unix's success=1 skips authfail the same way, so either factor clears the
+# tally; a wrong password and a refused touch both land on authfail and die.
+auth required                   pam_faillock.so preauth deny=5 unlock_time=300
+auth [success=2 default=ignore] pam_u2f.so authfile=/etc/u2f_mappings cue userpresence=1 pinverification=0
+auth [success=1 default=ignore] pam_unix.so try_first_pass
+auth [default=die]              pam_faillock.so authfail deny=5 unlock_time=300
+auth sufficient                 pam_faillock.so authsucc deny=5 unlock_time=300
 account    include system-auth
 password   include system-auth
 session    optional pam_keyinit.so revoke
@@ -351,53 +360,56 @@ session    include system-auth
 EOT
 )
 if [[ $(cat "$sudo_pam" 2>/dev/null) == "$expected" ]] \
-    && [[ $(wc -l <"$sudo_pam" 2>/dev/null) -eq 26 ]]; then
+    && [[ $(wc -l <"$sudo_pam" 2>/dev/null) -eq 35 ]]; then
   ok "the shipped sudo PAM stack is the design's file, byte for byte"
 else
   bad "the shipped sudo PAM stack is the design's file, byte for byte" \
     "$(diff <(printf '%s\n' "$expected") "$sudo_pam" 2>&1)"
 fi
 
-# Both factors, in the order a human types them, with the tally controls
-# wrapping them: a wrong password must reach authfail without spending a touch,
-# and only both together may reach authsucc.
+# The tap first, in the order a human meets it, with the tally controls wrapping
+# the fallback: a refused or absent tap must reach pam_unix, a wrong password
+# must reach authfail, and only a factor that succeeds may reach authsucc.
 preauth=$(grep -n 'pam_faillock\.so preauth' "$sudo_pam" 2>/dev/null | cut -d: -f1)
-unix_line=$(grep -n 'pam_unix\.so' "$sudo_pam" 2>/dev/null | cut -d: -f1)
 u2f_line=$(grep -n 'pam_u2f\.so' "$sudo_pam" 2>/dev/null | cut -d: -f1)
+unix_line=$(grep -n 'pam_unix\.so' "$sudo_pam" 2>/dev/null | cut -d: -f1)
 authfail=$(grep -n 'pam_faillock\.so authfail' "$sudo_pam" 2>/dev/null | cut -d: -f1)
 authsucc=$(grep -n 'pam_faillock\.so authsucc' "$sudo_pam" 2>/dev/null | cut -d: -f1)
 if [[ -n $preauth && -n $unix_line && -n $u2f_line && -n $authfail && -n $authsucc ]] \
-    && ((preauth < unix_line && unix_line < u2f_line && u2f_line < authfail && authfail < authsucc)); then
-  ok "preauth, password, touch, authfail and authsucc run in that order"
+    && ((preauth < u2f_line && u2f_line < unix_line && unix_line < authfail && authfail < authsucc)); then
+  ok "preauth, touch, password, authfail and authsucc run in that order"
 else
-  bad "preauth, password, touch, authfail and authsucc run in that order" \
-    "preauth=${preauth:-none} password=${unix_line:-none} u2f=${u2f_line:-none} authfail=${authfail:-none} authsucc=${authsucc:-none}"
+  bad "preauth, touch, password, authfail and authsucc run in that order" \
+    "preauth=${preauth:-none} u2f=${u2f_line:-none} password=${unix_line:-none} authfail=${authfail:-none} authsucc=${authsucc:-none}"
 fi
 
-# default=1 jumps over pam_u2f to authfail, so a wrong password never prompts for
-# a touch and still records a faillock row. success=ok has to be spelled out:
-# under a bare default=1 a correct password would jump to authfail as well.
-if grep -qx 'auth  \[success=ok default=1\] pam_unix\.so try_first_pass' "$sudo_pam" 2>/dev/null; then
-  ok "a wrong password skips the touch and lands on authfail"
-else
-  bad "a wrong password skips the touch and lands on authfail" \
-    "success=ok is what keeps a good password out of the default=1 jump"
-fi
-
-# success=1 jumps over authfail to authsucc, which is the only line that clears
-# the tally; default=ignore routes a missing, refused or absent touch to it.
-if grep -qx 'auth  \[success=1 default=ignore\] pam_u2f\.so authfile=/etc/u2f_mappings cue userpresence=1 pinverification=0' \
+# success=2 jumps over pam_unix and authfail to authsucc, and default=ignore is
+# what routes an absent key, a key with no matching credential and a refused
+# touch (all PAM_AUTH_ERR) to the password rather than to authfail.
+if grep -qx 'auth \[success=2 default=ignore\] pam_u2f\.so authfile=/etc/u2f_mappings cue userpresence=1 pinverification=0' \
     "$sudo_pam" 2>/dev/null; then
-  ok "the touch is pam_u2f with no PIN, and a success clears the tally"
+  ok "a tap alone reaches authsucc, and a failed tap falls through to the password"
 else
-  bad "the touch is pam_u2f with no PIN, and a success clears the tally"
+  bad "a tap alone reaches authsucc, and a failed tap falls through to the password" \
+    "a bare sufficient here would terminate dispatch and authsucc would never clear the tally"
+fi
+
+# pam_unix is the fallback and only the fallback: success=1 skips authfail into
+# authsucc, so a password after earlier typos clears the tally too, and a failure
+# falls into authfail, which dies. try_first_pass costs nothing here: pam_u2f sets
+# no authtok, so pam_unix still prompts.
+if grep -qx 'auth \[success=1 default=ignore\] pam_unix\.so try_first_pass' "$sudo_pam" 2>/dev/null; then
+  ok "a correct password reaches authsucc and a wrong one lands on authfail"
+else
+  bad "a correct password reaches authsucc and a wrong one lands on authfail" \
+    "success=1 is what keeps a good password out of authfail's default=die"
 fi
 
 # pinverification=0 is the reason this file is not /etc/pam.d/login: the FIDO2
 # PIN is shared with the disk keyslot, and eight wrong PINs wipe every
 # credential on the token. Any process running as smores can make sudo prompt,
 # so that budget is not one sudo may spend. userpresence=1 is what makes the
-# second factor a touch instead of nothing.
+# factor a tap rather than possession of a docked key.
 if grep -q 'pinverification=0' "$sudo_pam" 2>/dev/null \
     && grep -q 'userpresence=1' "$sudo_pam" \
     && ! grep -q 'pinverification=1' "$sudo_pam"; then
@@ -407,19 +419,20 @@ else
     "pinverification=0 keeps the disk keyslot's PIN budget out of sudo's reach"
 fi
 
-# Without nouserok a missing authfile, or a key with no credential for smores,
-# fails the module; with it those cases return PAM_IGNORE and the touch quietly
-# stops being a factor. Comments mention the word, so only the rule lines count.
+# Without nouserok pam_u2f reports a user missing from the authfile as a failed
+# touch; with it the module returns PAM_IGNORE and never asks for the key at all,
+# which reads as a deliberate skip rather than a fallback. Comments mention the
+# word, so only the rule lines count.
 if ! grep -vE '^[[:space:]]*#' "$sudo_pam" 2>/dev/null | grep -q 'nouserok'; then
-  ok "a missing mapping fails the stack closed"
+  ok "a key with no credential falls through to the password instead of skipping"
 else
-  bad "a missing mapping fails the stack closed" \
-    "nouserok turns a missing authfile or credential into PAM_IGNORE"
+  bad "a key with no credential falls through to the password instead of skipping" \
+    "nouserok turns a missing credential into PAM_IGNORE instead of a reported failure"
 fi
 
 # A bare authsucc stops clearing the tally at three rows, and interspersed typos
 # then lock out an account whose every invocation succeeded.
-if grep -qx 'auth  sufficient    pam_faillock\.so authsucc deny=5 unlock_time=300' \
+if grep -qx 'auth sufficient                 pam_faillock\.so authsucc deny=5 unlock_time=300' \
     "$sudo_pam" 2>/dev/null; then
   ok "authsucc carries the same deny and unlock_time as preauth and authfail"
 else
@@ -441,9 +454,9 @@ fi
 # back in this file would put escalation within reach of whatever the session
 # already holds.
 if ! grep -qE 'pam_permit|pam_userdb|sudopin|pam_oath' "$sudo_pam" 2>/dev/null; then
-  ok "the sudo stack asks for a password and a touch, nothing else"
+  ok "the sudo stack asks for a touch or a password, nothing else"
 else
-  bad "the sudo stack asks for a password and a touch, nothing else"
+  bad "the sudo stack asks for a touch or a password, nothing else"
 fi
 
 expected=$(cat <<'EOT'
@@ -541,9 +554,9 @@ fi
 if grep -q 'sudo -k; sudo true' docs/manual-steps.md \
     && grep -q 'faillock --user smores --reset' docs/manual-steps.md \
     && grep -q 'unplugged' docs/manual-steps.md; then
-  ok "manual-steps.md proves the password + touch gate and its recovery"
+  ok "manual-steps.md proves the tap-or-password gate and its recovery"
 else
-  bad "manual-steps.md proves the password + touch gate and its recovery"
+  bad "manual-steps.md proves the tap-or-password gate and its recovery"
 fi
 
 # --- shell ------------------------------------------------------------------

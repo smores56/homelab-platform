@@ -1,24 +1,33 @@
-# Escalation asks for two things: the account password (pam_unix) and a touch on
-# a key listed in /etc/u2f_mappings (pam_u2f). /etc/pam.d/login keeps its own
+# Escalation is a tap on a key listed in /etc/u2f_mappings (pam_u2f), and the
+# account password (pam_unix) behind it is the fallback: an absent, unplugged or
+# unmapped key costs typing rather than access. /etc/pam.d/login keeps its own
 # stack for the lock screen and a TTY, and that one still asks for the token's
 # FIDO2 PIN; this file must not.
+#
+# The fallback is a property of return codes, not of jump arithmetic we maintain:
+# pam_u2f answers PAM_AUTH_ERR when no key is present, when the key holds no
+# matching credential, and when the touch is refused (util.c,
+# do_authentication), so default=ignore on its row lands all three on pam_unix.
 #
 # pinverification=0 is the point. The FIDO2 PIN is shared with the disk keyslot,
 # and eight wrong PINs block the token and wipe every credential on it, so a
 # sudo prompt that any process running as smores can trigger must never be able
 # to spend that budget.
 #
-# userpresence=1 makes the touch mandatory. No nouserok: a missing mapping, or a
-# key holding no credential for smores, has to fail this stack closed.
+# userpresence=1 makes the tap mandatory. No nouserok: a key holding no
+# credential for smores has to be reported as a failed touch and fall through to
+# the password, not skipped silently.
 #
-# faillock: pam_unix's default=1 jumps over pam_u2f to authfail, so a wrong
-# password is never followed by a touch prompt; pam_u2f's success=1 jumps over
-# authfail to authsucc, so a full success is what clears the tally.
-auth  required      pam_faillock.so preauth deny=5 unlock_time=300
-auth  [success=ok default=1] pam_unix.so try_first_pass
-auth  [success=1 default=ignore] pam_u2f.so authfile=/etc/u2f_mappings cue userpresence=1 pinverification=0
-auth  [default=die] pam_faillock.so authfail deny=5 unlock_time=300
-auth  sufficient    pam_faillock.so authsucc deny=5 unlock_time=300
+# faillock: a bare sufficient on the touch row would be wrong. Success
+# terminates dispatch (pam_dispatch.c), so authsucc would never run and the tally
+# would never clear. success=2 skips pam_unix and authfail into authsucc, and
+# pam_unix's success=1 skips authfail the same way, so either factor clears the
+# tally; a wrong password and a refused touch both land on authfail and die.
+auth required                   pam_faillock.so preauth deny=5 unlock_time=300
+auth [success=2 default=ignore] pam_u2f.so authfile=/etc/u2f_mappings cue userpresence=1 pinverification=0
+auth [success=1 default=ignore] pam_unix.so try_first_pass
+auth [default=die]              pam_faillock.so authfail deny=5 unlock_time=300
+auth sufficient                 pam_faillock.so authsucc deny=5 unlock_time=300
 account    include system-auth
 password   include system-auth
 session    optional pam_keyinit.so revoke
