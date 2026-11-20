@@ -502,6 +502,13 @@ else
   bad "the build sets the drop-in's mode and proves it parses"
 fi
 
+if grep -q 'chmod 0440 /etc/sudoers.d/10-human-gate /etc/sudoers.d/20-sops-env' image/Containerfile \
+    && grep -q '^Defaults env_delete += ' image/rootfs/etc/sudoers.d/20-sops-env; then
+  ok "the sops env drop-in is installed and drops every identity source"
+else
+  bad "the sops env drop-in is installed and drops every identity source"
+fi
+
 if ! grep -rqF 'NOPASSWD' image docs README.md scripts 2>/dev/null; then
   ok "nothing in the tree grants NOPASSWD"
 else

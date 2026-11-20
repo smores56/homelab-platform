@@ -118,8 +118,8 @@ COPY image/cosign.pub /etc/pki/containers/smorespro.pub
 # here; visudo then proves the shipped stack parses instead of leaving it to the
 # first sudo after a boot.
 RUN set -eux; \
-    chown root:root /etc/sudoers.d/10-human-gate; \
-    chmod 0440 /etc/sudoers.d/10-human-gate; \
+    chown root:root /etc/sudoers.d/10-human-gate /etc/sudoers.d/20-sops-env; \
+    chmod 0440 /etc/sudoers.d/10-human-gate /etc/sudoers.d/20-sops-env; \
     visudo -c
 
 # bootc images enable units at build time; the generator picks the rest up
