@@ -47,7 +47,7 @@ done
 eq "$(dataset_owner_for raw/files)" 1000:1000 'core datasets belong to uid 1000'
 eq "$(dataset_mode_for raw/files)" 0750 'core datasets are unreadable by the tenant'
 eq "${dataset_acl_mode:-}" passthrough 'a chmod cannot discard an operator ACL'
-eq "$(dataset_owner_for raw/apps)" 1001:1001 'the tenant dataset belongs to the tenant uid'
+eq "$(dataset_owner_for raw/apps)" apps:apps 'the tenant dataset belongs to the tenant account by name'
 eq "$(dataset_mode_for raw/apps)" 0700 'the tenant dataset is private to the tenant'
 owner_orphan=0
 for key in "${!dataset_root_owner[@]}" "${!dataset_root_mode[@]}"; do
@@ -56,6 +56,17 @@ done
 eq "$owner_orphan" 0 'every ownership override names a known dataset'
 eq "$quota_orphan" 0 'every dataset quota is on a known dataset and well formed'
 eq "${dataset_quota[raw/apps]:-}" 200G 'the tenant dataset carries its own quota'
+
+# The table names the tenant account rather than an id, so init-zpool resolves
+# it when it chowns. That only works if the account exists by then, and the pool
+# unit sets DefaultDependencies=no, so the ordering has to be explicit.
+if grep -q '^After=.*systemd-sysusers.service' units/systemd/smortress-zpool.service &&
+  grep -q '^Wants=.*systemd-sysusers.service' units/systemd/smortress-zpool.service; then
+  ok 'the pool unit is ordered after the account owner exists'
+else
+  bad 'the pool unit is ordered after the account owner exists' \
+    "$(cat units/systemd/smortress-zpool.service)"
+fi
 
 foreign=0
 for key in "${dataset_order[@]}"; do

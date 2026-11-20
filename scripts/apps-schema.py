@@ -26,10 +26,17 @@ Quadlets are user units for the unprivileged ``apps`` user: they publish on
 loopback only, receive pasta networking for ``egress = "internet"`` and the
 tenant's internal (routeless) network otherwise, mount exactly their own data
 directory read-write,
-drop every capability, run a read-only root with no-new-privileges, and carry
-a per-app SELinux MCS level. ``plan.json`` is what the deploy, the Serve
-wiring and the quota applier read: the loopback port, the base path, the data
-path, the ZFS project id and the quota.
+drop every capability, run a read-only root with no-new-privileges, carry
+a per-app SELinux MCS level, and carry their own memory, CPU and task limits
+rather than inheriting them from a ``user-<uid>.slice`` drop-in that stops
+applying when sysusers allocates a different id. The tenant's prerequisites are
+not dependencies of these units: a user unit cannot resolve a system unit, so a
+``Requires=smortress-apps-user.service`` here fails the unit outright
+("Unit ... not found"). What gates the tenant is the prerequisites' own
+``Before=systemd-logind.service``, which is what orders them ahead of the
+lingering user manager that starts these. ``plan.json`` is what the deploy, the
+Serve wiring and the quota applier read: the loopback port, the base path, the
+data path, the ZFS project id and the quota.
 
 Stdlib only, python 3.11 or later: the image ships one python3 and no
 third-party packages.
@@ -111,6 +118,12 @@ LOOPBACK_SPAN = 10000
 MARKER = "# Rendered from apps/"
 INTERNAL_NETWORK = "smortress-apps"
 APPS_POLICY = "/usr/share/smortress/apps-policy.json"
+#: Resource limits are properties of each rendered app unit. They used to live in
+#: a drop-in on `user-<uid>.slice`, which stopped applying the moment sysusers
+#: allocated a different id; per app they cannot. MemoryHigh is the ceiling the
+#: kernel reclaims against and MemoryMax the hard one, so the tenant's total is
+#: bounded by what it runs rather than by a slice nobody could name.
+MEMORY_HIGH = "768M"
 MEMORY_MAX = "1G"
 TASKS_MAX = 256
 CPU_QUOTA = "200%"
@@ -402,6 +415,7 @@ def render_unit(name: str, data: dict[str, Any], loopback: int, level: tuple[int
         "[Service]",
         "Restart=on-failure",
         f"TimeoutStartSec={TIMEOUT_START}",
+        f"MemoryHigh={MEMORY_HIGH}",
         f"MemoryMax={MEMORY_MAX}",
         f"TasksMax={TASKS_MAX}",
         f"CPUQuota={CPU_QUOTA}",

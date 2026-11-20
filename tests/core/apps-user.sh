@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # Offline checks for the apps tenant user (SDLC #726, T7 of #701).
 #
-# The tenant is one unprivileged account. This proves the account shape that
-# the rest of the tenant depends on: the account the egress rule names, a
-# login-less shell, a private home with linger, the subuid/subgid allocation
-# Podman needs, a per-user policy that admits digest-pinned images, and a
-# refusal to continue when a rootless dependency is missing.
+# The tenant is one unprivileged account whose id nobody names. This proves the
+# account shape that the rest of the tenant depends on: the id systemd-sysusers
+# allocates rather than one we demand, the account the egress rule and the
+# dataset owner name, a login-less shell, a private home with linger, the
+# subuid/subgid allocation Podman needs, a per-user policy that admits
+# digest-pinned images, and a refusal to continue when a rootless dependency is
+# missing.
 #
 #   tests/core/apps-user.sh
 set -uo pipefail
@@ -38,10 +40,18 @@ done
 
 # --- account shape -----------------------------------------------------------
 
-if grep -qE '^u apps 1001:1001 "apps tenant" /var/home/apps /usr/sbin/nologin$' "$sysusers"; then
-  ok 'the tenant user has the fixed uid and no login shell'
+# sysusers allocates the id: a demand for a number allocates a different one
+# silently when it is taken, and every numeric consumer then points at nobody.
+if grep -qx 'u apps - "apps tenant" /var/home/apps /usr/sbin/nologin' "$sysusers" &&
+  grep -qx 'g apps -' "$sysusers"; then
+  ok 'sysusers allocates the tenant id and keeps its group'
 else
-  bad 'the tenant user has the fixed uid and no login shell' "$(cat "$sysusers")"
+  bad 'sysusers allocates the tenant id and keeps its group' "$(cat "$sysusers")"
+fi
+if grep -qE '^[ug] apps [0-9]' "$sysusers"; then
+  bad 'sysusers demands no tenant id' "$(grep -E '^[ug] apps' "$sysusers")"
+else
+  ok 'sysusers demands no tenant id'
 fi
 # The egress rule must follow this account wherever sysusers puts it: it
 # allocates the next free uid silently when 1001 is taken, so a numeric rule
@@ -63,18 +73,21 @@ if grep -qE '^f /var/lib/systemd/linger/apps ' "$tmpfiles"; then
 else
   bad 'the tenant user manager starts without a login'
 fi
-dropin=units/systemd/user@1001.service.d/50-smortress-apps.conf
-if [[ -f $dropin ]] && grep -q '^Requires=.*smortress-apps-user.service' "$dropin" \
-  && grep -q 'smortress-apps-egress.service' "$dropin" \
-  && grep -q 'smortress-apps-quota.service' "$dropin"; then
-  ok 'the tenant user manager requires every prerequisite'
+# Nothing may name the tenant's user manager by number: a drop-in or an enable
+# for user@<uid> silently stops applying the moment sysusers allocates another
+# id, which is how the gate and the slice limits used to disappear unnoticed.
+numeric_user_units=$(grep -rlE 'user@[0-9]+|user-[0-9]+\.slice' units image/Containerfile 2>/dev/null |
+  sort | paste -sd' ')
+if [[ -z $numeric_user_units ]]; then
+  ok 'no unit or image line names the tenant user manager by number'
 else
-  bad 'the tenant user manager requires every prerequisite'
+  bad 'no unit or image line names the tenant user manager by number' "$numeric_user_units"
 fi
-if grep -q 'user@1001.service.d' image/Containerfile; then
-  ok 'the image ships the user manager drop-in'
+if compgen -G 'units/systemd/user@*.service.d/*' >/dev/null ||
+  compgen -G 'units/systemd/user-*.slice.d/*' >/dev/null; then
+  bad 'the tenant has no per-uid manager drop-in' "$(find units/systemd -name 'user*' -maxdepth 1)"
 else
-  bad 'the image ships the user manager drop-in'
+  ok 'the tenant has no per-uid manager drop-in'
 fi
 if grep -q '/usr/libexec/apps-schema' image/Containerfile; then
   ok 'the image ships the plan verifier'
@@ -86,11 +99,19 @@ if grep -q 'smortress-apps-user.service' image/Containerfile; then
 else
   bad 'the image enables the provisioning unit'
 fi
-if grep -q '^Before=.*systemd-logind.service' "$unit"; then
-  ok 'provisioning finishes before a user manager can start'
-else
-  bad 'provisioning finishes before a user manager can start' "$(cat "$unit")"
-fi
+# The gate is what orders the prerequisites ahead of the tenant's manager: a
+# lingering user manager starts from systemd-logind, so each prerequisite
+# finishing first is what keeps an unprovisioned or unfiltered tenant from
+# starting. A user unit cannot carry this as Requires= — a user manager cannot
+# resolve a system unit and fails the unit outright.
+for unit in smortress-apps-user.service smortress-apps-egress.service \
+  smortress-apps-quota.service; do
+  if grep -q '^Before=.*systemd-logind.service' "units/systemd/$unit"; then
+    ok "$unit finishes before a user manager can start"
+  else
+    bad "$unit finishes before a user manager can start" "$(cat "units/systemd/$unit")"
+  fi
+done
 
 # --- behaviour with a fake account and fake files ----------------------------
 
@@ -102,8 +123,8 @@ cat >"$work/bin/id" <<'EOF'
 #!/bin/sh
 [ "${FAKE_MISSING_USER:-}" = 1 ] && exit 1
 case $1 in
-    -u) echo 1001 ;;
-    -g) echo 1000 ;;
+    -u) echo 1513 ;;
+    -g) echo 1513 ;;
 esac
 exit 0
 exit 0

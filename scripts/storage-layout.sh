@@ -71,11 +71,12 @@ declare -A dataset_quota=(
 #: is 0750, so the unprivileged tenant user cannot read application data; the
 #: tenant's own dataset belongs to the tenant and is private to it.
 declare -A dataset_root_owner=(
-  # Numeric on purpose: init-zpool runs before systemd-sysusers has created the
-  # account, and a name it cannot resolve would abort dataset creation. This is
-  # the reason the tenant id stays fixed in sysusers; the egress rules name the
-  # account instead, since nft resolves a name at load time.
-  [raw/apps]=1001:1001
+  # The tenant account by name, never by id: systemd-sysusers allocates the id,
+  # so a number here would hand /srv/apps to whoever holds it after the account
+  # is recreated. init-zpool resolves the name when it chowns, and the pool unit
+  # is ordered After=systemd-sysusers.service for exactly that reason — it sets
+  # DefaultDependencies=no, so nothing would otherwise order it there.
+  [raw/apps]=apps:apps
 )
 declare -A dataset_root_mode=(
   [raw/apps]=0700

@@ -782,6 +782,20 @@ check "Syncthing's sync port is permitted on the tailscale zone" \
 check "Syncthing's QUIC port is permitted on the tailscale zone" \
   has '<port port="22000" protocol="udp"/>' image/rootfs/etc/firewalld/zones/tailscale.xml
 
+# The apps tenant (#726) is named everywhere and numbered nowhere. sysusers
+# allocates its id, so anything that named 1001 — the dataset owner, the user
+# manager drop-ins — went stale the moment the id moved, silently.
+check "the tenant id is allocated, not demanded" \
+  grep -qx 'u apps - "apps tenant" /var/home/apps /usr/sbin/nologin' \
+  image/rootfs/etc/sysusers.d/smortress-apps.conf
+check "the tenant dataset owner is the account name" test "$(dataset_owner_for raw/apps)" = apps:apps
+check "the image ships no per-uid manager drop-in" lacks 'user@1001.service.d' image/Containerfile
+check "the image ships no per-uid slice drop-in" lacks 'user-1001.slice.d' image/Containerfile
+for gate in smortress-apps-user smortress-apps-egress smortress-apps-quota; do
+  check "$gate finishes before a user manager can start" \
+    grep -q '^Before=.*systemd-logind.service' "units/systemd/$gate.service"
+done
+
 # Repository-wide CI rules that new files must not evade.
 probe "workflow actions are SHA-pinned" scripts/check-action-pins.sh
 probe "PR workflows hold no secrets" scripts/check-pr-secret-boundary.sh

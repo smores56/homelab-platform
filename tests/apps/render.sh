@@ -96,9 +96,23 @@ contains "$alpha" 'PodmanArgs=--signature-policy=/usr/share/smortress/apps-polic
 lacks "$alpha" '0.0.0.0' 'nothing binds every address'
 lacks "$alpha" 'Network=host' 'nothing uses the host network'
 
+# The tenant's limits are properties of each app unit, not of a numeric
+# user-<uid>.slice drop-in that stops applying when sysusers reallocates the id.
+# MemoryHigh is the soft ceiling systemd reclaims against; MemoryMax is the hard
+# one. Both per app, so the tenant's total is the sum of what it runs.
+for limit in 'MemoryHigh=' 'MemoryMax=' 'CPUQuota=' 'TasksMax='; do
+  contains "$alpha" "$limit" "the app unit carries $limit"
+done
 beta=$out/beta.container
 contains "$beta" 'Network=pasta' 'egress internet renders pasta'
 lacks "$beta" 'Secret=' 'an app with no secrets gets none'
+# Nothing in a rendered unit may name the tenant by number: a uid here would be
+# the fixed id the account no longer has.
+if grep -qE '=(1001|1001:1001)$|user@[0-9]+' "$alpha" "$beta"; then
+  bad 'no rendered unit names the tenant by id' "$(grep -nE '1001|user@[0-9]+' "$alpha" "$beta")"
+else
+  ok 'no rendered unit names the tenant by id'
+fi
 
 alpha_port=$(sed -n 's/^PublishPort=127\.0\.0\.1:\([0-9]*\):.*/\1/p' "$alpha")
 beta_port=$(sed -n 's/^PublishPort=127\.0\.0\.1:\([0-9]*\):.*/\1/p' "$beta")
@@ -302,6 +316,15 @@ if [[ -x /usr/libexec/podman/quadlet ]]; then
     else
       bad 'the host generator accepts the rendered unit' "$(grep -E 'security-opt|env|publish' "$gen/units" | head -5)"
     fi
+    # The limits have to survive into the generated service, which is the unit
+    # the user manager actually starts.
+    for limit in MemoryHigh MemoryMax CPUQuota TasksMax; do
+      if grep -q "^$limit=" "$gen/units"; then
+        ok "the generated service carries $limit"
+      else
+        bad "the generated service carries $limit" "$(grep -cE '^Memory|^CPU|^Tasks' "$gen/units")"
+      fi
+    done
   else
     bad 'the host generator accepts the rendered unit' "$(cat "$gen/err")"
   fi
