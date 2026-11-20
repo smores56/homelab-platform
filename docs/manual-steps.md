@@ -4299,264 +4299,198 @@ a `tofu apply`; no workflow and no repository file holds the secret.
    The `service token expiry` notification policy emails before the one-year
    lifetime lapses, which is the reminder to do this.
 
-## 45. sudo on smortress: the account password plus a YubiKey TOTP
+## 45. sudo on smortress: a touch on a forwarded agent, password fallback
 
-sudo on smortress requires two things an agent running as `smores` does not
-hold: the account password and an eight-digit TOTP that a YubiKey releases only
-on a touch. Either one alone is refused. An agent that spawns its own pty gets a
-`/dev/pts/*` terminal, which is never the break-glass, so it faces both factors
-on every invocation outside the 30-minute sudoers ticket.
+sudo on smortress answers one tap. `ssh -A smortress` forwards the client's
+agent, and the agent holds only a **touch-required** `sk-ssh-ed25519` resident
+credential, so `/etc/pam.d/sudo` asks the key in the laptop for a signature and
+the tap happens there. The account password sits directly behind it as the
+fallback, so an absent, unplugged or unmapped key costs typing rather than
+access. The token is convenience by construction, not a gate: an agent running
+as `smores` does not hold the account password, and that is the whole of what
+the split buys (design #767, T8).
 
 What the image carries, and nothing else:
 
-- `image/rootfs/etc/pam.d/sudo` — the stack: `pam_faillock` preauth, `pam_unix`,
-  a console-only `pam_succeed_if`, `pam_oath`, then `authfail` and `authsucc`;
+- `image/rootfs/etc/pam.d/sudo` — `pam_faillock` preauth, `libpam_rssh.so`
+  against `/etc/ssh/sudo_authorized_keys` with `cue`, `pam_unix` as the
+  fallback, then `authfail` and `authsucc`;
+- `image/rootfs/etc/ssh/sudo_authorized_keys` — the sudo credentials' public
+  halves, root `0600`, separate from the login key file;
+- `image/Containerfile` — the `sudo-build` stage that builds `pam_rssh` at the
+  tag and commit pinned in `image/pins.env` and compiles the local SELinux
+  module; no distribution package is layered;
+- `image/selinux/smortress_sudo_rssh.te` — the local policy module, and
+  `smortress-selinux-sudo-rssh.service`, which loads it with `semodule -i` when
+  its digest changes;
 - `image/rootfs/etc/sudoers.d/10-human-gate` — `timestamp_timeout=30`,
-  `timestamp_type=tty` and `log_subcmds`;
-- `image/rootfs/etc/tmpfiles.d/smortress.conf` — declares
-  `/var/lib/homelab/sudo` as `0700 root:root` and never creates the usersfile;
-- `image/Containerfile` — the image's only package layer, `dnf install pam_oath`.
+  `timestamp_type=tty` and `log_subcmds`.
 
-The only state that is not in the repository is
-`/var/lib/homelab/sudo/users.oath`: one liboath line, `HOTP/T30/8 smores -
-<hex secret>`, mode 0600 root in a root-owned directory. It is host-local
-because the alternative is a decryptable copy of the second factor in SOPS, and
-bootc never reconciles `/var`, so it survives `bootc upgrade` and reboots
-untouched.
+There is no host-local secret any more. The retired TOTP stack needed a
+root-owned usersfile under `/var/lib/homelab/sudo`, written by
+`scripts/enroll-yubikey-totp.sh` over a fifo held by a console root shell; that
+script, the fifo procedure and the usersfile are gone, and nothing in this stack
+has to be enrolled before sudo works. The directory and its usersfile under
+`/var/lib/homelab/sudo` are dead weight on an upgraded host and can be deleted.
 
-The behaviour of each module here was read out of upstream sources rather than
-assumed, and four details decide whether the stack works at all:
+### Two credentials per YubiKey
 
-- `pam_succeed_if`'s `=~` is a **glob**, not a regular expression
-  (`pam_succeed_if(8)`), so `tty =~ /dev/tty*` matches the physical consoles and
-  never `/dev/pts/*`;
-- `no_usersfile_okay` is **not** set: pam_oath documents that flag as acting as
-  if the user is not present when the file is missing, which is a bypass.
-  Without it a missing usersfile is a module failure, and the stack's
-  `default=ignore` sends that to `authfail`;
-- `digits=8` is mandatory: with no `digits=` option pam_oath's default is `-1`,
-  which makes every input look too short and rejects it; with it, an input
-  *longer* than eight digits is split into a password plus a code, which the
-  usersfile's `-` password column then refuses. The prompt takes exactly the
-  eight digits;
-- the usersfile key field is **hex**: liboath parses it with `oath_hex2bin`, so
-  base32 there would fail every code.
+The touch option is fixed when a credential is minted, so each key carries two:
 
-1. Deploy the image (section 37 step 2) and reboot:
+- the **login** credential, minted `-O no-touch-required`, whose public half is
+  the sole line of `/etc/ssh/authorized_keys.d/smores` — `ssh smortress` stays
+  touch-free;
+- the **sudo** credential, minted with the default (a touch per signature),
+  whose public half is committed to `/etc/ssh/sudo_authorized_keys`.
+
+A key that has only the login credential can still log in and cannot sudo; the
+reverse is also true, and both refusals are checks in step 4. Every 5C Nano must
+carry both before it can stand in for another, so the spare is enrolled twice.
+
+1. Mint the sudo credential on each key, one key attached at a time. The private
+   half never leaves the token: the `-f` file is a handle, and nothing is
+   written to the laptop's disk that matters. The comment is what makes the
+   public line identifiable in step 2.
+
+   ```sh
+   ssh-keygen -t ed25519-sk -O resident -C "smores-sudo-$(date +%F)" \
+     -f ~/.ssh/id_smortress_sudo
+   # touch the key when it blinks
+   ```
+
+   `-O resident` is what lets the credential live on the key rather than in the
+   handle file, so a replacement laptop only needs `ssh-keygen -K` to fetch it
+   back into its agent. Do **not** add `-O no-touch-required`: that option is
+   the whole difference between the two credentials.
+
+2. Commit the public halves, one `sk-ssh-ed25519` line per key, and
+   nothing else. The file is empty in the repository until the first enrollment,
+   and an empty file is a `PAM_AUTH_ERR` — the password is the way in until the
+   lines land.
+
+   ```sh
+   cat ~/.ssh/id_smortress_sudo.pub >>      image/rootfs/etc/ssh/sudo_authorized_keys
+   scripts/check-server-image.sh     # refuses anything but sk lines, no no-touch-required
+   ```
+
+   This is the only edit in this procedure that is a commit: the credentials'
+   public halves are declarative, so a spare key is admitted by `bootc upgrade`
+   and revoked by deleting its line.
+
+3. Deploy the image (section 37 step 2) and reboot:
 
    ```sh
    sudo bootc upgrade
    sudo systemctl reboot
    ```
 
-   Until step 3 runs there is no usersfile, so sudo over ssh fails closed and
-   the physical console is the only way in. That is the designed state, not a
-   fault, and it is why a first enrollment cannot take the direct path: sudo
-   over ssh would have nothing to authenticate against. Enrolling before this
-   deploy is no way around it either, because the old stack asks for a PIN
-   rather than for the code.
+   The loader unit runs at boot; a module already at the shipped digest is left
+   alone, so the second boot after an image that changed the `.te` is the one
+   that reloads it.
 
-   A host upgraded from the PIN image (design #748) still carries
-   `/etc/security/sudopin.db`: `bootc` never removes anything from `/etc`, and
-   nothing reads that file once this stack is live. It is a hash of the old
-   eight-digit PIN, so delete it from the root shell of step 2 with
-   `rm -f /etc/security/sudopin.db`.
-
-2. Open a root shell at the physical console and hold a fifo for the line.
-   `sudo -i` there needs the account password alone, because the terminal is
-   `/dev/tty*` and the break-glass row skips the code.
-
-   **The reader must be running and blocked before step 3 starts.** Three
-   details decide whether the handoff ever completes, and each one looks like a
-   hang instead of an error:
-
-   - a fifo's reader blocks in `open(2)` until a writer appears, so a reader
-     started *after* the script cannot pair with it;
-   - `install /dev/stdin` re-opens the path it is given. On a fifo that is a
-     second `open`, which blocks again once the writer has already closed. `cat`
-     reads the inherited descriptor and cannot;
-   - a fifo left over from an earlier attempt is a different inode from the one
-     the script will write, so the two ends silently miss each other. Always
-     start from a fresh fifo.
+4. Prove the tap, then prove the fallback. `sudo -k` clears the per-TTY ticket
+   the previous attempt left behind, and `-A` is what forwards the agent:
 
    ```sh
-   sudo -i
-   rm -f /run/smortress-enroll
-   mkfifo -m 0600 /run/smortress-enroll
-   chown smores /run/smortress-enroll
-   cat > /var/lib/homelab/sudo/users.oath < /run/smortress-enroll   # blocks here
-   ```
-
-   That command must not return until after step 3. Then fix the mode (`cat`
-   creates the file through the root shell's umask) and check the shape — for
-   this account the line is 61 bytes:
-
-   ```sh
-   chmod 0600 /var/lib/homelab/sudo/users.oath
-   ls -l /var/lib/homelab/sudo/users.oath
-   cut -d' ' -f1,2,3 /var/lib/homelab/sudo/users.oath   # HOTP/T30/8 smores -
-   ```
-
-   Symptom to recognise: the script hanging after its `enrolled YubiKey …`
-   lines with no `dd` process on the host means nothing was reading the fifo
-   (a reader that never started, or one started without the redirect and now
-   waiting on the terminal). A reader that never returns while the script
-   reports success means one of the two was attached to a stale inode.
-
-3. Enroll every YubiKey from the laptop, with all three 5C Nanos attached (one
-   per laptop, one spare). The script generates twenty random bytes in memory,
-   programs every attached key with the same eight-digit touch-protected TOTP
-   and streams the same secret into the fifo, which the blocked `cat` drains
-   into the usersfile:
-
-   ```sh
-   scripts/enroll-yubikey-totp.sh --fifo /run/smortress-enroll smortress
-   ```
-
-   It refuses to run with fewer than two keys, and it programmes every key it
-   finds, so a key left in a drawer must be attached before this runs. Nothing is
-   written to the laptop's disk, nothing appears in argv and nothing is printed;
-   the secret exists in that process's memory, in the fifo for the length of the
-   handoff, and then in one root-only file. The fifo holds nothing once it has
-   been read.
-
-   Every later run is the direct path, `scripts/enroll-yubikey-totp.sh
-   smortress`, and it works because the usersfile now exists: sudo over ssh
-   prompts for the account password and for one code, and because the session
-   has no terminal of its own `sudo -S` reads both from the same stdin stream
-   the usersfile travels on. That is rotation (step 7), not bootstrap.
-
-   After step 3, confirm the usersfile is the one this run wrote: the mtime must
-   be new and the file still 61 bytes. A file from an earlier enrollment plus
-   keys programmed by this one is the quiet failure — every code is rejected and
-   nothing on the host says why.
-
-4. Prove the gate from the laptop. Each command opens its own ssh session, and
-   `sudo -k` clears the per-TTY ticket the previous attempt left behind:
-
-   ```sh
+   ssh -A -t smortress 'sudo -k; sudo true'
+   # expect: "Please touch the device.", one tap, no password
    ssh -t smortress 'sudo -k; sudo true'
-   # expect: the password prompt, then "One-time password (OATH) for `smores'",
-   # touch the key, type the code: success
+   # expect: no tap, the account password, success
+   ssh -A -t smortress 'sudo -k; sudo true'   # with the key unplugged
+   # expect: no tap, the account password, success
    ```
 
-   The password alone is refused, and a code in hand cannot rescue a wrong
-   password:
+   The second and third commands are the fallback, and it is a property of the
+   return codes rather than of arithmetic kept by hand: `pam_rssh` returns
+   `PAM_AUTHINFO_UNAVAIL` with no `SSH_AUTH_SOCK` and `PAM_AUTH_ERR` for a dead
+   socket, a key the agent does not hold or a refused touch, and never
+   `PAM_IGNORE`, so every non-success is ignored onto `pam_unix`.
+
+   The two credentials are not interchangeable. The login credential is refused
+   for sudo and the sudo credential is refused for ssh, which is what the
+   separation of the two files buys:
 
    ```sh
-   ssh -t smortress 'sudo -k; sudo true'   # correct password, no code
-   # expect: refused
-   ssh -t smortress 'sudo -k; sudo true'   # wrong password, code in hand
-   # expect: one password prompt and no code prompt, refused
+   ssh -t smortress 'sudo -k; sudo true'      # agent forwarded, key present
+   # expect: the touch credential signs; the login credential alone falls through
+   ssh -i ~/.ssh/id_smortress_sudo smortress true
+   # expect: refused, no matching key in authorized_keys.d/smores
    ```
 
-   That second half is the jump arithmetic: a wrong password skips the console
-   test and `pam_oath` and lands on `authfail`, so a code an agent has stolen
-   never gets a prompt to be typed into.
-
-   A replayed code is refused. pam_oath writes the accepted code and its time
-   step back into the usersfile, so a second use of the same code fails:
-
-   ```sh
-   ssh -t smortress 'sudo -k; sudo true'   # password, then the current code
-   ssh -t smortress 'sudo -k; sudo true'   # password, then the SAME code
-   # expect: the first succeeds, the second is refused as a replayed code
-   ```
-
-   The key binding that inserts a code (`alt+o` in the dotfiles' fish setup)
-   keeps the second attempt inside the same step; the dotfiles' `ykman oath
-   accounts code -s smortress` prints the same digits.
-
-5. Prove the break-glass is the console only. At the physical console, log in as
-   `smores` and run sudo: the password is enough and no code prompt appears.
+5. Prove the 30-minute per-TTY ticket and the tally. A second sudo in the same
+   TTY inside the window is silent; a new ssh session is a new TTY and prompts
+   again. A tap clears the faillock tally, and five refusals lock the account for
+   300 seconds — the password included, because `pam_faillock preauth` is the
+   first row on every path:
 
    ```sh
-   tty            # expect: /dev/tty1 (or /dev/ttyS0 on a serial console)
-   sudo -k; sudo true     # expect: password only, success
-   ```
-
-   Over ssh the terminal is `/dev/pts/*`, so the break-glass row cannot match
-   and the code is required:
-
-   ```sh
-   ssh -t smortress 'tty; sudo -k; sudo true'
-   # expect: /dev/pts/N, then a code prompt
-   ```
-
-6. Prove the lockout. faillock records one row per PAM transaction and sudo makes
-   several per invocation, so a handful of failed attempts fills `deny=5`:
-
-   ```sh
+   ssh -A -t smortress 'sudo -k; sudo true; sudo true'   # one tap, one prompt
+   ssh -A -t smortress 'sudo -k; sudo true'              # new tty, prompts again
    for _ in 1 2 3 4 5; do ssh -t smortress 'sudo -k; sudo -S true < /dev/null'; done
-   ssh -t smortress 'sudo -k; sudo true'   # the correct password and code
-   # expect: refused before either prompt, 300 seconds after the fifth row
+   ssh -A -t smortress 'sudo -k; sudo true'
+   # expect: refused before any prompt for 300 seconds, then a tap works again
    ```
 
-   That blanket refusal is the design, not a bug: `pam_faillock preauth` is the
-   first row on every path, so a locked account fails before pam_unix or pam_oath
-   looks at anything — the console included. Read the tally from a root shell you
-   already hold (open `sudo -i` at the console *before* locking, or keep the
-   ticket from an earlier sudo on the same tty); a fresh console `sudo -i` is
-   refused until the window ends:
+   Read the tally from a root shell opened before the lockout, or wait it out:
 
    ```sh
-   faillock --user smores            # the tally, row by row
-   faillock --user smores --reset    # the manual clear
+   faillock --user smores
+   faillock --user smores --reset
    ```
 
    Console *login* is unaffected while the tally stands, because login is its own
-   PAM stack: the break-glass still gets you a shell, it just cannot sudo until
-   the five minutes are up.
+   PAM stack. That matters more now than it did: there is no console break-glass
+   row in this stack — the password fallback is the break-glass everywhere — so a
+   locked tally at the physical console is a five-minute wait, not a way in.
 
-7. Rotation is the direct path, step 3's script without `--fifo`, because the
-   usersfile exists and both factors can be answered over ssh: every key gets a
-   fresh secret and the install replaces the usersfile, so the previous secret
-   stops working the moment the file lands. Revoke a lost YubiKey by deleting
-   the account from it (`ykman oath accounts delete smortress`) or resetting its
-   OATH application; the surviving key and the usersfile keep working.
-
-   A lost or deleted usersfile is not a lockout, because the console needs the
-   password alone. The repair moves a freshly generated secret from the laptop
-   into root's hands over a fifo, so it never sits in a file:
+6. Run the AVC drill after every image change that touches this stack. The one
+   thing the design could not prove from sources is the SELinux permission set:
+   the targeted policy grants `sudo_t` no `unix_stream_socket connect` to
+   `ssh_home_t`, where OpenSSH >= 10.1 puts the forwarded socket
+   (`~/.ssh/agent`), and `image/selinux/smortress_sudo_rssh.te` is the local
+   module that closes that gap.
 
    ```sh
-   # at the physical console, as smores, password only:
-   sudo -i
-   # in that root shell:
-   mkfifo -m 0600 /run/smortress-enroll
-   chown smores /run/smortress-enroll
-   install -m 0600 /dev/stdin /var/lib/homelab/sudo/users.oath \
-     < /run/smortress-enroll
-   # on the laptop, with every key attached:
-   scripts/enroll-yubikey-totp.sh --fifo /run/smortress-enroll smortress
+   ssh -A -t smortress 'echo "$SSH_AUTH_SOCK"; ls -ld ~/.ssh/agent'
+   ssh -A -t smortress 'sudo -k; sudo true'      # tap
+   sudo ausearch -m avc -c sudo                  # from a console root shell
    ```
 
-   The script prints exactly these steps before it attempts the direct install,
-   and again when that install fails: it cannot look for the usersfile itself,
-   because `/var/lib/homelab/sudo` is 0700 root. Do not stage the secret in a
-   temporary file instead: anything `smores` can read during that window is a
-   second factor an agent holds.
+   An empty `ausearch` after a successful tap means the module's permission set
+   is complete. A `denied { connect }` for `ssh_home_t` means it is not loaded
+   (check `systemctl status smortress-selinux-sudo-rssh`,
+   `semodule -l | grep smortress`); a denial for another permission or class
+   means an edit to the `.te`, which is one line, then a rebuild and a reboot.
+   Log the socket path the drill prints: a change of path across an OpenSSH
+   upgrade is the other half of this risk, and it shows up as the same fallback.
+
+7. Rotation and revocation are edits to the public half, not to a host secret.
+   A lost key is removed by deleting its line from
+   `image/rootfs/etc/ssh/sudo_authorized_keys` and deploying; sudo then falls back
+   to the password for that key's owner, and the other keys keep working. Re-mint
+   a credential with step 1, which leaves the old one on the token until it is
+   deleted there (`ykman fido credentials list`, then `delete`).
 
 8. Residuals the design accepts:
 
-   - a code is valid for its own 30-second step, and `window=1` also accepts one
-     step either side for clock skew, so a leaked code is usable for up to about
-     90 seconds — once, because the usersfile records the code it accepted;
-   - a process running as `smores` can start a sudo attempt and wait for the key
-     to blink. A stray touch then hands it one code, usable once in that window;
-   - an agent sharing your tty inherits the sudoers ticket for up to 30 minutes.
-     `log_subcmds` records what ran:
+- the forwarded socket is owned by `smores` and usable by any process running as
+  `smores` on the server, and by root. A same-uid process can hold a signature
+  request open and wait for the blink; `ForwardAgent` scoped to `Host smortress`
+  and destination-constrained keys reduce that surface without closing it;
+- an agent sharing your TTY inherits the sudoers ticket for up to 30 minutes.
+  `log_subcmds` records what ran:
 
-     ```sh
-     sudo journalctl -g 'COMMAND=' -n 20 --no-pager
-     ```
+  ```sh
+  sudo journalctl -g 'COMMAND=' -n 20 --no-pager
+  ```
 
-   - a root compromise reads the usersfile and therefore the secret. TOTP cannot
-     prevent that; the response is the rotation in step 7;
-   - pam_oath rewrites the usersfile as root on every success, so its SELinux
-     label and the directory's must let `sudo_t` write them. If a correct code
-     still fails, or the usersfile keeps its old mtime after a success, check
-     `ausearch -m avc -ts recent` before looking anywhere else.
+- a wrong local policy fails closed — sudo prompts for the password — but logs
+  an AVC on every escalation, which is what step 6 exists to catch;
+- `pam_rssh` has no upstream SIGINT handling, so cancelling a touch wait with
+  Ctrl-C needs the private patch carried over from the #748 exploration. It
+  affects the client's agent, not the server;
+- Apple's ssh and its launchd agent cannot hold `sk-` keys, so the work Mac uses
+  the password fallback until T11.
 
 ## 46. Tailnet policy and enrollment key (design #767, T1)
 

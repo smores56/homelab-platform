@@ -7,6 +7,44 @@
 # enters the image.
 
 ARG BASE_IMAGE
+
+# The stage for the two things Fedora does not package in a usable form: the PAM
+# module sudo loads (pam_rssh, design #767 T8) and the local SELinux module that
+# lets sudo_t reach the forwarded agent socket. Both leave as files, so the stage
+# is discarded and the image keeps no toolchain from it.
+#
+# pam_rssh is a Rust cdylib linked against openssl and libpam, so a `.so` copied
+# from anywhere else would be an ABI mismatch found at the first sudo prompt
+# rather than here. `--locked` makes the committed Cargo.lock the dependency set,
+# and `--recurse-submodules` is required: pam_rssh vendors its agent protocol in
+# dep/ssh-agent.rs, and the clone fails at compile time without it.
+FROM ${BASE_IMAGE} AS sudo-build
+
+ARG BASE_IMAGE
+ARG PAM_RSSH_VERSION
+ARG PAM_RSSH_COMMIT
+
+RUN set -eux; \
+    dnf5 -y --setopt=install_weak_deps=False install \
+      cargo rustc gcc make git pkgconf-pkg-config \
+      openssl-devel pam-devel selinux-policy-devel; \
+    dnf5 clean all; \
+    rm -rf /var/cache/dnf /var/cache/libdnf5
+
+# The tag is what the build asks for and the commit is what it must land on: a
+# release retagged upstream fails here instead of shipping unreviewed code.
+RUN set -eux; \
+    git clone --depth 1 --branch "${PAM_RSSH_VERSION}" --recurse-submodules \
+      https://github.com/z4yx/pam_rssh /src/pam_rssh; \
+    test "$(git -C /src/pam_rssh rev-parse HEAD^{commit})" = "${PAM_RSSH_COMMIT}" \
+      || { echo "pam_rssh ${PAM_RSSH_VERSION} is not commit ${PAM_RSSH_COMMIT}; a retagged release invalidates this pin" >&2; exit 1; }; \
+    cargo build --release --locked --manifest-path /src/pam_rssh/Cargo.toml
+
+# The local policy module, compiled here because the host has no policy toolchain
+# (image/selinux/smortress_sudo_rssh.te carries the reasoning).
+COPY image/selinux/ /src/selinux/
+RUN make -C /src/selinux -f /usr/share/selinux/devel/Makefile smortress_sudo_rssh.pp
+
 FROM ${BASE_IMAGE}
 
 ARG BASE_IMAGE
@@ -25,20 +63,19 @@ LABEL org.opencontainers.image.title="smortress server image" \
       org.opencontainers.image.base.name="${BASE_IMAGE}" \
       org.opencontainers.image.vendor="smores56"
 
-# The image's only package layer. sudo's second factor is a YubiKey TOTP and
-# uCore carries no OATH PAM module, so the module is installed rather than
-# shipped as a file: it links liboath, whose ABI has to match the base. Weak
-# dependencies are off because nothing here needs a network-manager helper or a
-# documentation split, and the caches are removed in the same layer so the
-# image does not carry a package database's worth of junk.
-RUN set -eux; \
-    dnf5 -y --setopt=install_weak_deps=False install pam_oath; \
-    dnf5 clean all; \
-    rm -rf /var/cache/dnf /var/cache/libdnf5
+# No package layer. sudo's touch factor is pam_rssh, which Fedora does not
+# package, and the SELinux module is local: both are built in the sudo-build
+# stage above and arrive as files, which is why this image neither installs nor
+# removes a distribution package.
 
 # Runtime helpers, units and ciphertext. The public cosign key is the only
 # signature-related material in the image; the policy references it by path.
 COPY image/rootfs/ /
+# The build-stage artifacts: the PAM module the sudo stack loads, and the compiled
+# local policy module that smortress-selinux-sudo-rssh.service installs with
+# semodule on every upgrade that changes it.
+COPY --from=sudo-build /src/pam_rssh/target/release/libpam_rssh.so /usr/lib64/security/libpam_rssh.so
+COPY --from=sudo-build /src/selinux/smortress_sudo_rssh.pp /usr/share/smortress/selinux/smortress_sudo_rssh.pp
 COPY units/systemd/ /usr/lib/systemd/system/
 COPY units/quadlet/pattern.container /usr/share/smortress/quadlet/pattern.container
 # /usr/local is a symlink to /var on bootc, so helpers go under /usr/libexec
@@ -52,6 +89,7 @@ COPY scripts/storage-layout.sh scripts/zfs-ready.sh scripts/sops-decrypt.sh scri
      scripts/app-secrets.sh scripts/immich-dump.sh scripts/tailscale-serve.sh \
      scripts/apps-quota.sh scripts/apps-user.sh scripts/agent-config-seed.sh \
      scripts/smortress-password.sh \
+     scripts/selinux-sudo-rssh-load.sh \
      /usr/libexec/smortress-src/
 # Application Quadlets. The generator scans /usr/share/containers/systemd at
 # boot, and a quadlet is a generated unit, so nothing here is enabled with
@@ -100,6 +138,8 @@ RUN set -eux; \
     chmod 0644 /etc/pki/containers/smortress.pub /etc/smortress/secrets.manifest; \
     chmod 0600 /etc/smortress/secrets/*.yaml; \
     chmod 0644 /etc/pam.d/sudo; \
+    chmod 0600 /etc/ssh/sudo_authorized_keys; \
+    chmod 0644 /usr/share/smortress/selinux/smortress_sudo_rssh.pp; \
     chmod 0440 /etc/sudoers.d/10-human-gate /etc/sudoers.d/20-sops-env; \
     visudo -cf /etc/sudoers.d/10-human-gate; \
     visudo -cf /etc/sudoers.d/20-sops-env
@@ -162,6 +202,7 @@ RUN set -eux; \
       smortress-tailscale-ssh-off.service \
       sops-decrypt.service \
       smortress-password.service \
+      smortress-selinux-sudo-rssh.service \
       tailscaled.service \
       zfs-ready@raw-files.service \
       zfs-ready@raw-photos.service \
@@ -216,5 +257,7 @@ RUN set -eux; \
     jq -e '.transports.docker["ghcr.io/smores56/homelab-platform"][0].keyPath == "/etc/pki/containers/smortress.pub"' /etc/containers/policy.json >/dev/null; \
     test -s /etc/ssh/authorized_keys.d/smores || { echo "the shipped ssh key file is missing or empty: it is the only key sshd reads (design #767)" >&2; exit 1; }; \
     ! grep -q 'sk-ssh-ed25519' /etc/ssh/authorized_keys.d/smores || { echo "the shipped key file carries a FIDO handle; the image ships a plain ed25519 key (design #767)" >&2; exit 1; }; \
-    test -f /usr/lib64/security/pam_oath.so || { echo "pam_oath.so is missing: it is the sudo TOTP gate (design #767)" >&2; exit 1; }; \
-    rpm -q pam_oath >/dev/null || { echo "the pam_oath package is missing: the image's only dnf layer installs it (design #767)" >&2; exit 1; }
+    test -f /usr/lib64/security/libpam_rssh.so || { echo "libpam_rssh.so is missing: it is sudo's touch factor (design #767)" >&2; exit 1; }; \
+    test -e /etc/ssh/sudo_authorized_keys || { echo "the sudo key file is missing: libpam_rssh.so reads it on every prompt (design #767)" >&2; exit 1; }; \
+    ! test -f /usr/lib64/security/pam_oath.so || { echo "pam_oath.so is still in the image: sudo's TOTP is retired (design #767)" >&2; exit 1; }; \
+    command -v semodule >/dev/null || { echo "the image has no semodule: smortress-selinux-sudo-rssh.service loads the local module with it (design #767)" >&2; exit 1; }

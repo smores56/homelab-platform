@@ -1,73 +1,69 @@
-# sudo on smortress (design #767, T2).
+# sudo on smortress (design #767, T8).
 #
-# Two things an agent running as smores does not hold: the account password and
-# a YubiKey touch that releases an eight-digit TOTP. An agent's own pty is
-# /dev/pts/*, so it never matches the console row and faces both factors. The
-# physical console is the break-glass and needs the password alone.
+# One gesture: a touch on the YubiKey that is already in the client. sshd
+# forwards the agent, libpam_rssh asks it for a signature, and the agent holds
+# only a touch-required sk-ssh-ed25519 credential, so the tap happens at the
+# laptop. The account password stays behind it as the fallback, so an absent,
+# unplugged or unmapped key costs typing rather than access. The token is
+# convenience by construction, not a gate: an agent running as smores does not
+# hold the account password, and that is the whole of what the split buys.
 #
 # The jump arithmetic is the security property, so it is spelled out. Linux-PAM
-# reads `N` as "jump over the next N modules in the stack" and `ok` as "record
-# the success and continue with the next module" (pam.conf(5), the actionN
+# reads `N` in `success=N` as "skip the next N modules in the stack", and `ignore`
+# in `default=` as "record the failure and continue" (pam.conf(5), the actionN
 # list). Row by row:
 #
-#   2 pam_unix success (ok)          -> row 3, the console test: a correct
-#                                       password still faces the second factor
-#                                       anywhere but the console.
-#   2 pam_unix failure (default=2)   -> skips rows 3 and 4, so the next module
-#                                       evaluated is row 5, authfail, which
-#                                       dies. A wrong password never reaches
-#                                       the code prompt.
-#   3 console match (success=2)      -> skips rows 4 and 5 to authsucc: the
-#                                       break-glass needs the password only.
-#   3 no match (default=ignore)      -> row 4, the code prompt.
-#   4 code accepted (success=1)      -> skips row 5 to authsucc.
-#   4 code rejected (default=ignore) -> row 5, authfail, which dies.
+#   1 pam_rssh success (success=2)    -> skips rows 2 and 3 and lands on row 4,
+#                                        authsucc: the tally is cleared and the
+#                                        stack succeeds.
+#   1 anything else (default=ignore)  -> row 2, the password. Every non-success
+#                                        from pam_rssh lands here, which is the
+#                                        fallback.
+#   2 pam_unix success (success=1)    -> skips row 3 and lands on row 4, authsucc.
+#   2 pam_unix failure (default=ignore) -> row 3, authfail, which dies.
+#   3 authfail (default=die)          -> the tally is incremented, sudo refused.
 #
-# Every path either lands on authsucc after passing both factors or dies on
-# authfail: no row grants a session on one factor, and there is no fallback
-# module behind pam_oath.
+# A bare `sufficient` on the touch row would be wrong: a sufficient success
+# terminates dispatch (`pam_dispatch.c`, `goto decision_made`), so authsucc would
+# never run and the tally would never clear -- five refusals over any period
+# would lock the account out of every later sudo. `success=2` reaches authsucc,
+# and so does the password row's `success=1`, so a tap and the password both
+# clear the tally.
 #
-# pam_succeed_if's `=~` is a glob, not a regular expression (pam_succeed_if(8)):
-# /dev/tty* matches the physical consoles and never /dev/pts/*. A session with
-# no tty at all has an empty tty field, which matches nothing, so it is treated
-# like ssh and needs the code.
+# The fallback is a property of pam_rssh's return codes, not of arithmetic kept
+# by hand: no SSH_AUTH_SOCK is PAM_AUTHINFO_UNAVAIL, and a dead socket, a key the
+# agent does not hold or a refused touch is PAM_AUTH_ERR (src/lib.rs). The module
+# never returns PAM_IGNORE, so `default=ignore` on its row is what sends every
+# one of those to pam_unix -- an unplugged key is a password prompt.
 #
-# pam_oath reads /var/lib/homelab/sudo/users.oath: host-local, root-owned 0600
-# state written by scripts/enroll-yubikey-totp.sh, never in an image, in SOPS or
-# in the repository. `no_usersfile_okay` is deliberately absent: the module
-# documents that flag as "act as if the user is not present" when the file does
-# not exist, which is a bypass; without it a missing usersfile is a module
-# failure, and the default=ignore above sends that to authfail. So an
-# unenrolled host fails closed and the console is the way in.
+# pam_rssh reads the socket path from the process environment
+# (getenv("SSH_AUTH_SOCK"), src/lib.rs), and sudo does not scrub its own environ
+# before pam_authenticate (plugins/sudoers/auth/pam.c), so no env_keep is needed.
+# None is added: a sudoed command has no business holding the agent.
 #
-# pam_oath records the accepted code and its time step back into that same file
-# on every success, which is what rejects a replay; the record lives in the file
-# and survives a reboot and a bootc upgrade. `window=1` accepts the current
-# 30-second step and one step either side for clock skew (liboath's TOTP
-# validation searches the window symmetrically). `digits=8` is required: with no
-# digits= option pam_oath's default is -1, which makes every input look too short
-# and rejects it; with it, an input longer than eight digits is split into a
-# password plus a code, which the `-` in the usersfile's password column then
-# refuses. The prompt takes exactly the eight digits.
+# There is no console break-glass row any more. The password fallback is the
+# break-glass everywhere, which is what it is for; a /dev/tty* login takes the
+# same two rows as an ssh session.
 
 # Deny before the prompt, and before any comparison, when the account is locked.
-auth  required      pam_faillock.so preauth deny=5 unlock_time=300
-# The account password. ok continues to the console test; default=2 jumps over
-# the console test and pam_oath onto authfail.
-auth  [success=ok default=2] pam_unix.so try_first_pass
-# The break-glass: /dev/tty* skips both the code prompt and authfail.
-auth  [success=2 default=ignore] pam_succeed_if.so tty =~ /dev/tty*
-# The YubiKey TOTP: success skips authfail.
-auth  [success=1 default=ignore] pam_oath.so usersfile=/var/lib/homelab/sudo/users.oath digits=8 window=1
+auth  required                   pam_faillock.so preauth deny=5 unlock_time=300
+# The touch. auth_key_file is the image-shipped list of the sudo credentials'
+# public halves -- root-owned 0600 at /etc/ssh/sudo_authorized_keys, deliberately
+# not AuthorizedKeysFile: the login credential is minted no-touch-required and
+# must never satisfy sudo. The file is empty until the owner enrolls the keys, and
+# an empty list is a PAM_AUTH_ERR, so the password is the way in until then.
+# `cue` prints the one line that asks for the tap; the tap itself is in the
+# client's agent.
+auth  [success=2 default=ignore] libpam_rssh.so auth_key_file=/etc/ssh/sudo_authorized_keys cue
+# The fallback. try_first_pass reuses a password the touch prompt already took.
+auth  [success=1 default=ignore] pam_unix.so try_first_pass
 # Count the failure. faillock records one row per PAM transaction and sudo makes
-# several per invocation, so a handful of wrong prompts — not invocations — is
+# several per invocation, so a handful of wrong prompts -- not invocations -- is
 # what reaches deny=5 and costs 300 seconds.
-auth  [default=die] pam_faillock.so authfail deny=5 unlock_time=300
-# Clear the tally on success, with the deny the tally was counted against. A
-# bare `authsucc` still marks a success but silently stops clearing the tally
-# once three rows are recorded, so the counter outlives the login that should
-# have wiped it.
-auth  sufficient    pam_faillock.so authsucc deny=5 unlock_time=300
+auth  [default=die]              pam_faillock.so authfail deny=5 unlock_time=300
+# Clear the tally on success, with the deny the tally was counted against. The
+# success=N rows above land here for exactly this reason.
+auth  sufficient                 pam_faillock.so authsucc deny=5 unlock_time=300
 # Fedora's stock sudo phases, unchanged. Dropping them would take the SELinux
 # session context, the limits and the account phase with them.
 account    include system-auth

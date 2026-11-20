@@ -167,11 +167,15 @@ check "the state directory keeps its traversal mode" \
   has 'd /var/lib/homelab 0711 root root -' image/rootfs/etc/tmpfiles.d/smortress.conf
 check "the enrollment unit creates the state directory at the same mode" \
   has 'install -d -m 0711 /var/lib/homelab' units/systemd/smortress-tailscale-up.service
-# git grep reads the index, so the exclusion is only the check's own pattern.
-if git grep -qF -- 'sk-ssh-ed25519@openssh.com' -- . ':(exclude)scripts/check-server-image.sh'; then
-  bad "no sk- handle is committed anywhere"
+# git grep reads the index, so the exclusion is only the check's own pattern and
+# the sudo key file: the sudo credentials' public halves are committed there by
+# design, and the sk-only rule above is what keeps them touch-required.
+if git grep -qF -- 'sk-ssh-ed25519@openssh.com' -- . \
+    ':(exclude)scripts/check-server-image.sh' \
+    ':(exclude)image/rootfs/etc/ssh/sudo_authorized_keys'; then
+  bad "no sk- handle is committed anywhere but the sudo key file"
 else
-  ok "no sk- handle is committed anywhere"
+  ok "no sk- handle is committed anywhere but the sudo key file"
 fi
 # Tailscale SSH stays off (design #748). Removing the flag from the enrollment
 # unit only fixes the first boot; the preference lives in tailscaled's state and
@@ -199,17 +203,17 @@ else
   ok "the preference unit only ever disables Tailscale SSH"
 fi
 
-# sudo gate (design #767, T2): the account password plus a YubiKey TOTP.
-# Asserted line by line because the order and the jump counts are the meaning: a
-# correct password continues into the console test, a wrong one jumps over the
-# console test and pam_oath straight into authfail, a /dev/tty* login skips the
-# code and authfail, and an accepted code skips authfail. Nothing reaches
-# authsucc without pam_unix having succeeded.
+# sudo gate (design #767, T8): a touch on the agent sshd forwards, with the
+# account password behind it. Asserted line by line because the order and the
+# jump counts are the meaning: a successful touch skips the password and the
+# failure counter and lands on authsucc, a failed touch falls through to
+# pam_unix, and only a failed password reaches authfail. A bare `sufficient` on
+# the touch row would terminate dispatch before authsucc ran and leave the
+# faillock tally uncleared forever, so the counts are not cosmetic.
 pam_sudo=image/rootfs/etc/pam.d/sudo
 expected_pam='auth required pam_faillock.so preauth deny=5 unlock_time=300
-auth [success=ok default=2] pam_unix.so try_first_pass
-auth [success=2 default=ignore] pam_succeed_if.so tty =~ /dev/tty*
-auth [success=1 default=ignore] pam_oath.so usersfile=/var/lib/homelab/sudo/users.oath digits=8 window=1
+auth [success=2 default=ignore] libpam_rssh.so auth_key_file=/etc/ssh/sudo_authorized_keys cue
+auth [success=1 default=ignore] pam_unix.so try_first_pass
 auth [default=die] pam_faillock.so authfail deny=5 unlock_time=300
 auth sufficient pam_faillock.so authsucc deny=5 unlock_time=300
 account include system-auth
@@ -219,35 +223,35 @@ session required pam_limits.so
 session include system-auth'
 actual_pam=$(sed -E 's/[[:space:]]+/ /g; s/ $//' "$pam_sudo" | grep -Ev '^(#|$)' || true)
 if [[ $actual_pam == "$expected_pam" ]]; then
-  ok "the sudo stack is the reviewed eleven rows in order"
+  ok "the sudo stack is the reviewed ten rows in order"
 else
-  bad "the sudo stack is the reviewed eleven rows in order: $(printf '%s' "$actual_pam" | tr '\n' ';')"
+  bad "the sudo stack is the reviewed ten rows in order: $(printf '%s' "$actual_pam" | tr '\n' ';')"
 fi
-# The usersfile is host-local root-only state, so its path is the contract
-# between this stack, tmpfiles and the enrollment script.
-check "the code is checked against the host-local usersfile" \
-  has 'usersfile=/var/lib/homelab/sudo/users.oath' "$pam_sudo"
-# pam_oath rejects every input unless digits= is set, and window=1 is the clock
-# skew the 30-second step needs; without digits=8 the key's codes never match.
-check "the code is eight digits with a one-step window" has 'digits=8 window=1' "$pam_sudo"
-# `no_usersfile_okay` turns a missing usersfile into "the user is not present",
-# which is a bypass; without it pam_oath fails the module and the default=ignore
-# above sends that to authfail. Asked of the rows rather than the file, because
-# the stack's own comment names the flag to say why it is absent.
-if [[ $actual_pam == *no_usersfile_okay* ]]; then
-  bad "a missing usersfile fails closed"
-else
-  ok "a missing usersfile fails closed"
-fi
-# pam_succeed_if parses `=~` as a glob, so this matches the physical consoles and
-# no ssh pty: the break-glass is local by construction.
-check "the console break-glass matches /dev/tty only" grep -qF 'tty =~ /dev/tty*' "$pam_sudo"
+# The touch row reads its own file, not AuthorizedKeysFile: the login credential
+# is minted no-touch-required and must never satisfy sudo.
+check "the touch is checked against the sudo key file" \
+  has 'auth_key_file=/etc/ssh/sudo_authorized_keys' "$pam_sudo"
+# success=2 is what reaches authsucc past pam_unix and the failure counter; a
+# `sufficient` here would succeed the stack without ever clearing the tally.
+check "the touch row jumps to authsucc instead of terminating" \
+  grep -qE '^auth[[:space:]]+\[success=2 default=ignore\][[:space:]]+libpam_rssh\.so' "$pam_sudo"
+# success=1 on the password reaches the same authsucc: either factor clears the
+# tally, which is why both rows carry the count rather than a bare sufficient.
+check "the password row jumps to authsucc too" \
+  grep -qE '^auth[[:space:]]+\[success=1 default=ignore\][[:space:]]+pam_unix\.so' "$pam_sudo"
+# The password fallback is the break-glass everywhere now, so there is no console
+# row to match against.
+check "no console break-glass row remains" lacks 'pam_succeed_if' "$pam_sudo"
+# pam_rssh reads SSH_AUTH_SOCK with getenv() and sudo does not scrub its environ
+# before pam_authenticate, so no env_keep is needed; adding one would hand the
+# agent to the command sudo runs.
+check "the agent socket is not kept across the sudo boundary" lacks 'SSH_AUTH_SOCK' image/rootfs/etc/sudoers.d/
 check "the PIN database is gone from the stack" lacks 'pam_userdb' "$pam_sudo"
 check "the account phase is still declared" grep -qE '^account[[:space:]]+include[[:space:]]+system-auth$' "$pam_sudo"
 check "the password phase is still declared" grep -qE '^password[[:space:]]+include[[:space:]]+system-auth$' "$pam_sudo"
 check "the session phase is still declared" grep -qE '^session[[:space:]]+include[[:space:]]+system-auth$' "$pam_sudo"
-# pam_oath picks the usersfile line by the PAM username, so the account that runs
-# sudo is the key the enrollment script must write.
+# pam_unix authenticates the PAM username, so the account that runs sudo is the
+# account whose password the fallback takes.
 check "the only login account is smores" grep -qE '^[[:space:]]*- name: smores$' ignition/smortress.bu
 
 sudoers_dropin=image/rootfs/etc/sudoers.d/10-human-gate
@@ -269,48 +273,84 @@ check "the sops env drop-in drops every identity source" grep -q '^Defaults env_
 # parse would cost a console recovery; the build parses the shipped config
 # instead of leaving the host to find out at boot.
 check "the sshd configuration is parsed at build time" has 'sshd -t -o HostKey=' image/Containerfile
-# The module comes from the image's only package layer, so both the file the PAM
-# stack loads and the package it belongs to are asserted: a stray file would
-# satisfy the path while leaving the layer that provides its library gone.
-check "the image installs pam_oath in its only package layer" \
-  has 'dnf5 -y --setopt=install_weak_deps=False install pam_oath' image/Containerfile
-check "the build fails if pam_oath is missing" has 'test -f /usr/lib64/security/pam_oath.so' image/Containerfile
-check "the build fails if the pam_oath package is missing" has 'rpm -q pam_oath >/dev/null' image/Containerfile
+
+# pam_rssh is not packaged for Fedora, so the image builds it: the tag it clones
+# and the commit it must land on are both pinned, the agent submodule is required
+# (the crate vendors its protocol there) and the cdylib lands where PAM looks.
+check "the image builds pam_rssh in a build stage" has 'AS sudo-build' image/Containerfile
+check "the build pins a pam_rssh tag" has 'PAM_RSSH_VERSION' image/pins.env
+if [[ ${PAM_RSSH_COMMIT:-} =~ ^[0-9a-f]{40}$ ]]; then ok "PAM_RSSH_COMMIT format"; else bad "PAM_RSSH_COMMIT format"; fi
+check "the build refuses a retagged release" has 'rev-parse HEAD^{commit}' image/Containerfile
+check "the build takes the agent submodule" has '--recurse-submodules' image/Containerfile
+check "the build uses the committed lockfile" has 'cargo build --release --locked' image/Containerfile
+check "the build installs the build dependencies" has 'openssl-devel pam-devel' image/Containerfile
+check "the module lands where PAM loads it" has '/usr/lib64/security/libpam_rssh.so' image/Containerfile
+check "the build fails if libpam_rssh is missing" has 'test -f /usr/lib64/security/libpam_rssh.so' image/Containerfile
+# The retired TOTP module must not come back through a stale package layer.
+check "no package installs pam_oath" lacks 'install pam_oath' image/Containerfile
+check "the build fails if the OATH module is present" has 'test -f /usr/lib64/security/pam_oath.so' image/Containerfile
 check "no pam_userdb assert remains" lacks 'pam_userdb' image/Containerfile
 check "no gdbmtool assert remains" lacks 'gdbmtool' image/Containerfile
-check "tmpfiles creates the usersfile directory root-only" \
-  has 'd /var/lib/homelab/sudo 0700 root root -' image/rootfs/etc/tmpfiles.d/smortress.conf
-# bootc never reconciles /var, and the secret is host-local: a tmpfiles line for
-# the file would create an empty usersfile that looks enrolled.
-check "tmpfiles never creates the usersfile" lacks 'users.oath' image/rootfs/etc/tmpfiles.d/smortress.conf
+check "tmpfiles no longer creates a sudo usersfile directory" \
+  lacks '/var/lib/homelab/sudo' image/rootfs/etc/tmpfiles.d/smortress.conf
 
-enroll=scripts/enroll-yubikey-totp.sh
-check "the enrollment script installs the usersfile from stdin" has 'install -m 0600 /dev/stdin' "$enroll"
-check "the enrollment script refuses anything but two YubiKeys" \
-  has 'expected at least two YubiKeys attached' "$enroll"
-# Both keys get the same credential, and the touch is the physical-presence half:
-# without it the key mints codes for anything that can talk to it.
-check "both keys get a touch-protected eight-digit TOTP" has '--oath-type TOTP --digits 8 --touch' "$enroll"
-# liboath parses the usersfile key with oath_hex2bin, so this line is hex, and it
-# names the account that runs sudo.
-check "the usersfile line is a liboath TOTP entry for smores" has 'HOTP/T30/8 smores - ' "$enroll"
-# The secret may only travel through pipes. `tee` would put it on a disk while
-# looking harmless, and a redirect into a path would do the same. Comments are
-# stripped first, and only a target that starts like a path, a `$` expansion or
-# `.` is a redirect at all: stderr is a bare `>` (as in `>&2`), and `/dev/null`
-# is the one path allowed.
-check "the enrollment script never tees the secret" lacks 'tee' "$enroll"
-secret_redirects=$(grep -vE '^[[:space:]]*#' "$enroll" |
-  grep -oE '>>?[[:space:]]*[^&[:space:];|)]*' |
-  grep -E '^>>?[[:space:]]*(/|\.|\$)' |
-  grep -vE '^>>?[[:space:]]*/dev/null$' || true)
-if [[ -z $secret_redirects ]]; then
-  ok "the enrollment script never redirects the secret into a file"
+# The sudo key file is the image's second authorised-keys list, and the two may
+# never mix: the touch option is fixed at enrollment, so the login credential is
+# no-touch-required and the sudo credential asks for the tap. A plain
+# ssh-ed25519 line here would let sudo accept a key that never asks for a touch,
+# and `no-touch-required` would do the same per key. An empty file is allowed and
+# expected until the owner enrolls the keys (docs/manual-steps.md section 45):
+# pam_rssh finds no matching key, returns PAM_AUTH_ERR, and the password is the
+# way in until the public halves are committed.
+sudo_keys=image/rootfs/etc/ssh/sudo_authorized_keys
+check "the image ships the sudo key file" test -e "$sudo_keys"
+if grep -qvE '^sk-ssh-ed25519@openssh\.com [A-Za-z0-9+/]+[=]{0,2}([[:space:]].*)?$' "$sudo_keys"; then
+  bad "the sudo key file carries only touch-required sk lines"
 else
-  bad "the enrollment script never redirects the secret into a file" "$secret_redirects"
+  ok "the sudo key file carries only touch-required sk lines"
 fi
-# Neither the secret nor the old PIN database may enter the repository: anything
-# the agent account can read is a second factor an agent holds.
+if grep -q 'no-touch-required' "$sudo_keys"; then
+  bad "no sudo credential is minted touch-free"
+else
+  ok "no sudo credential is minted touch-free"
+fi
+# The build refuses the missing file, and the mode is the build's business:
+# /etc/ssh is world-readable, and the sudo list names credentials that unlock
+# root.
+check "the build refuses a missing sudo key file" has 'test -e /etc/ssh/sudo_authorized_keys' image/Containerfile
+check "the sudo key file is installed 0600" has 'chmod 0600 /etc/ssh/sudo_authorized_keys' image/Containerfile
+
+# The SELinux half. The targeted policy grants sudo_t no access to the forwarded
+# agent socket, so the image ships a local module and a unit that loads it; the
+# permission set is unproven until the host drill (`ausearch -m avc -c sudo`),
+# which is why the module is a file to edit rather than a script to renumber.
+selinux_te=image/selinux/smortress_sudo_rssh.te
+check "the local module grants the agent socket" \
+  has 'allow sudo_t ssh_home_t:unix_stream_socket connect;' "$selinux_te"
+check "the module is compiled in the build stage" has 'selinux-policy-devel' image/Containerfile
+check "the compiled module ships in the image" \
+  has '/usr/share/smortress/selinux/smortress_sudo_rssh.pp' image/Containerfile
+check "the image enables the module loader" has 'smortress-selinux-sudo-rssh.service' image/Containerfile
+check "the loader runs semodule -i" has 'semodule -i' scripts/selinux-sudo-rssh-load.sh
+check "the loader is keyed on the module digest" has 'sha256sum' scripts/selinux-sudo-rssh-load.sh
+check "the loader skips a host without SELinux" \
+  has 'ConditionSecurity=selinux' units/systemd/smortress-selinux-sudo-rssh.service
+check "the loader unit runs the installed script" \
+  has 'ExecStart=/usr/libexec/selinux-sudo-rssh-load' units/systemd/smortress-selinux-sudo-rssh.service
+check "the image installs the loader script" has 'scripts/selinux-sudo-rssh-load.sh' image/Containerfile
+
+# The retired TOTP stack may not leave a trace: the skill moved to a touch, and a
+# leftover usersfile, enrollment script or package reference would be state
+# nothing reads and the runbooks would still describe.
+check "the enrollment script is gone" test ! -e scripts/enroll-yubikey-totp.sh
+if git grep -qF -e 'pam_oath' -e 'users.oath' -e 'HOTP/T30' -- . \
+    ':(exclude)scripts/check-server-image.sh' ':(exclude)image/Containerfile'; then
+  bad "no TOTP artifact is left anywhere"
+else
+  ok "no TOTP artifact is left anywhere"
+fi
+# Neither the old PIN database nor a usersfile may enter the repository: anything
+# the agent account can read is a factor an agent holds.
 if git ls-files | grep -qE 'sudopin|users\.oath|\.db$'; then
   bad "no PIN database or usersfile is tracked"
 else

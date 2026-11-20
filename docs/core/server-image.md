@@ -27,7 +27,11 @@ rollback path. Operator-only actions are in `docs/manual-steps.md` section 37.
 | `/etc/ssh/sshd_config.d/05-tailnet-ssh.conf` | The one sshd drop-in (design #767). No `ListenAddress` at all, so sshd listens on every local address and the firewall decides who reaches it: the default zone is `drop` and only `tailscale0` accepts `ssh`. No forwarding, `AllowUsers smores`, key-only auth, and the `Match Address 127.0.0.1,::1` block that stops uCore's `90-enable-localhost-passwords.conf` from re-enabling password auth on the loopback route Cockpit and the tunnel's connector still use during the cutover. It sorts at `05-` because sshd keeps the first value it obtains in the second config pass. `PubkeyAuthOptions` is deliberately unset, so a per-key option on an `authorized_keys` line stays the whole sk policy. |
 | `/etc/ssh/authorized_keys.d/smores` | The one login key: a single `ssh-ed25519` line for `smores@smortress`, root-owned `0644` under `etc_t`, so sshd opens it as root and a key change arrives with `bootc upgrade`. It is the `AuthorizedKeysFile`; nothing reads `~/.ssh` and no Ignition step delivers a key. No FIDO handle, because a resident `sk-` credential is generated with a token and cannot be reviewed in git. |
 | `/usr/lib/systemd/system/smortress-tailscale-ssh-off.service` | Re-asserts `tailscale set --ssh=false` at every boot; tailscaled persists the preference, so removing the flag from the enrollment unit is not enough. Tailscale SSH is retired. |
-| `/etc/pam.d/sudo` and `/etc/sudoers.d/10-human-gate` | The sudo gate: the account password plus an eight-digit YubiKey TOTP. `pam_faillock` preauth, `pam_unix` (a wrong password jumps past the next two rows into `authfail`, so no code prompt appears), a `pam_succeed_if tty =~ /dev/tty*` break-glass that needs the password alone at the physical console, `pam_oath` against `/var/lib/homelab/sudo/users.oath` with `digits=8 window=1` and no `no_usersfile_okay`, so a missing usersfile fails closed, then `authfail` and `authsucc`. A 30-minute ticket per TTY and `log_subcmds`. The usersfile is host-local root-only state written by `scripts/enroll-yubikey-totp.sh` and never enters the image; `docs/manual-steps.md` section 45 enrolls, proves and repairs it. |
+| `/etc/pam.d/sudo` and `/etc/sudoers.d/10-human-gate` | The sudo gate (design #767, T8): a touch on the YubiKey held by the client, with the account password behind it. `pam_faillock` preauth, `libpam_rssh.so` against `/etc/ssh/sudo_authorized_keys` with `cue` (`success=2` reaches `authsucc`; a bare `sufficient` would end dispatch there and the faillock tally would never clear), `pam_unix try_first_pass` as the fallback behind it (`success=1` reaches the same `authsucc`, so either factor clears the tally), then `authfail` and `authsucc`. Every non-success from `pam_rssh` — no `SSH_AUTH_SOCK`, a dead socket, an absent key, a refused touch, and never `PAM_IGNORE` — is ignored and lands on the password, which is the break-glass everywhere: there is no console row any more. A 30-minute ticket per TTY and `log_subcmds`. No `env_keep`: `pam_rssh` reads `SSH_AUTH_SOCK` with `getenv()` and sudo does not scrub its environ before `pam_authenticate`. `docs/manual-steps.md` section 45 enrolls the two credentials per key, proves the tap and the fallback, and carries the AVC drill. |
+| `/etc/ssh/sudo_authorized_keys` | The sudo credentials' public halves only, root-owned `0600`: `sk-ssh-ed25519` lines, never `no-touch-required`, because the touch option is fixed at enrollment. Root-owned and not `AuthorizedKeysFile`, so the login credential cannot satisfy sudo and the sudo credential cannot satisfy ssh. Empty until the owner enrolls the keys; an empty list is `PAM_AUTH_ERR`, so the password works in the meantime. |
+| `/usr/lib64/security/libpam_rssh.so` | `z4yx/pam_rssh` at the tag and commit pinned in `image/pins.env`, built in the image's `sudo-build` stage with the `dep/ssh-agent.rs` submodule and `--locked`, linking the base's openssl and libpam. Not packaged for Fedora, so a cdylib copied from anywhere else would be an ABI mismatch at the first prompt. |
+| `/usr/share/smortress/selinux/smortress_sudo_rssh.pp` | The local SELinux module (`image/selinux/smortress_sudo_rssh.te`) granting `sudo_t` `connect` on `ssh_home_t`, where OpenSSH >= 10.1 puts the forwarded agent socket under `~/.ssh/agent`. The targeted policy grants no such access and broke forwarding outright once (selinux-policy#3384), so without this the touch falls back to the password on every escalation. The exact permission set is unproven until the host drill in section 45. |
+| `/usr/lib/systemd/system/smortress-selinux-sudo-rssh.service` | Loads the module with `semodule -i` at boot when the shipped `.pp`'s digest differs from the one recorded, or when the module is absent from the policy; the policy store is in `/etc` and `/var`, which bootc never reconciles, so shipping a new `.pp` is not loading it. |
 | `/usr/share/smortress/quadlet/pattern.container` | Quadlet base pattern; not enabled, no `[Install]`. |
 | `/usr/share/containers/systemd/*.container` | The application Quadlets (T5). A quadlet is a generated unit, so `[Install]` is what starts it; the image never runs `systemctl enable` for one. |
 | `/usr/lib/systemd/system/smortress-app-secrets.service` | Turns the decrypted application secrets into Podman secrets before any container that declares one starts. |
@@ -70,12 +74,15 @@ firewalld, Tailscale, clevis with the sss/tang/tpm2 dracut pins, and the
 the Containerfile adds the hash-pinned release binaries instead of layering
 distribution packages.
 
-The one package the image does layer is `pam_oath`, the module sudo's second
-factor loads: it links liboath, whose ABI has to match the base, so a copied
-`.so` would be a version mismatch waiting for a boot. The image therefore
-carries exactly one `dnf install` layer, with weak dependencies off and the
-caches removed in the same layer, and the build fails if either the module file
-or the package it belongs to is missing.
+The image layers no distribution package. sudo's touch factor is `pam_rssh`,
+which Fedora does not package, and the SELinux module is local to this
+repository; both are built in a `sudo-build` stage from the tag and commit pinned
+in `image/pins.env` and arrive in the final image as a `.so` and a `.pp`. Neither
+can be copied from elsewhere: the module links the base's openssl and libpam, so
+a foreign build is an ABI mismatch waiting for the first sudo prompt, and the
+policy store needs the base's own type names. The build fails if
+`libpam_rssh.so` or the sudo key file is absent, if the retired OATH module is
+present, or if the image carries no `semodule` for the loader unit.
 
 ## Build, push and sign
 
