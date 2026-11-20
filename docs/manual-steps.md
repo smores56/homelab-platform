@@ -4848,19 +4848,24 @@ plan instead of reaching the tailnet. The provider reads its OAuth client from
 `TAILSCALE_OAUTH_CLIENT_ID` and `TAILSCALE_OAUTH_CLIENT_SECRET`, and no credential
 is committed.
 
-Tailnet Lock is the other half of the gate, and it lives in the admin console: it
-decides which nodes may join at all. The signing nodes are smorespro and the Linux
-laptop. smortress never signs, so it enrolls with an auth key that was pre-signed
-when it was minted.
+The policy is the only network half: Tailnet Lock is deliberately **not** used.
+The owner disabled it rather than maintain a signing-key set, so nothing decides
+which nodes may join beyond the account the auth key belongs to. What still holds
+is the ACL below (only `group:owner` reaches the listed ports), key-only sshd with
+one ed25519 key from dotfiles' sops, and firewalld's default `drop`. The residual
+is explicit: anyone who can enroll a device into the owner's Tailscale account
+reaches smortress:22 and needs the key, and only the key. Turning on **device
+approval** in the admin console is the TKA-free control against that, and it is
+compatible with everything here.
 
 Nothing here is planned while `tailnet` is empty. The provider does refuse to
 configure without credentials even then, so the zone's plan and apply need the
-OAuth client exported too (step 4) — do that before the merge that names the
+OAuth client exported too (step 3) — do that before the merge that names the
 tailnet.
 
 1. Mint the host's enrollment key. Admin console → Settings → Keys → **Generate
-   auth key**, with **Pre-signed** ticked (the tailnet is locked and smortress
-   cannot sign itself) and **Reusable** off (the node enrolls once). Encrypt it to
+   auth key**, with **Reusable** off (the node enrolls once). If device approval
+   is on, tick **Pre-approved** too. Encrypt it to
    the host identity, the only identity that reads image ciphertext:
 
    ```sh
@@ -4898,12 +4903,7 @@ tailnet.
    the two GitHub environments below, and both hold the same client: rotate one
    without the other and a plan or an apply fails at provider configuration.
 
-3. Write the Tailnet Lock disablement secrets down. `tailscale lock init
-   --gen-disablements 10` on smorespro prints them once; they belong in
-   `secrets/tailnet-lock.yaml` (admin identity only) and in the paper kit. Losing
-   all of them means the lock cannot be turned off without rebuilding the tailnet.
-
-4. Wire the client into CI. The two environment secrets are named after the
+3. Wire the client into CI. The two environment secrets are named after the
    variables the provider reads, so nothing else has to map them:
    `TAILSCALE_OAUTH_CLIENT_ID` and `TAILSCALE_OAUTH_CLIENT_SECRET`, in **both**
    the `cloudflare` environment (apply) and the `cloudflare-plan` environment
@@ -4924,10 +4924,10 @@ tailnet.
    `tofu-plan-pr.yml`: `policy_file` has no read-only scope, so what keeps the
    pre-merge plan safe is that it plans and never saves a policy.
 
-5. Name the tailnet in `tofu/terraform.tfvars` (`tailnet = "..."`, the label before
+4. Name the tailnet in `tofu/terraform.tfvars` (`tailnet = "..."`, the label before
    `.ts.net`).
 
-6. Apply. The merge that sets `tailnet` runs `tofu-apply.yml`, which plans first
+5. Apply. The merge that sets `tailnet` runs `tofu-apply.yml`, which plans first
    and stops on anything destructive. A local plan exports the same two values and
    the R2 state pair:
 
@@ -4937,7 +4937,7 @@ tailnet.
    tofu -chdir=tofu plan          # expect: tailscale_acl.this will be created
    ```
 
-7. Prove the policy, from a laptop:
+6. Prove the policy, from a laptop:
 
    ```sh
    tailscale status                          # expect: smortress listed

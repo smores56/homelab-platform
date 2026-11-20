@@ -14,9 +14,9 @@
 # OAuth client with the `policy_file` scope (secrets/tailscale.yaml locally). CI
 # supplies the same two values from the environment secrets of those names in
 # `cloudflare` and `cloudflare-plan`, and a provider configures even when
-# `tailnet` is empty, so every tofu job in CI needs them. Tailnet Lock is the
-# other half of the gate and lives in the admin console: it decides which nodes
-# may join at all, this decides what a joined node may reach.
+# `tailnet` is empty, so every tofu job in CI needs them. This policy is the
+# only network half: Tailnet Lock is deliberately not used, so what a joined
+# node may reach is exactly what these rules accept and nothing else.
 provider "tailscale" {}
 
 locals {
