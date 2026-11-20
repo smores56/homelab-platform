@@ -30,7 +30,6 @@ owner, mode and `format` named in
 | File | Read by | Rule |
 | --- | --- | --- |
 | `smores-password-hash.yaml` | `scripts/render-ignition.sh` (install) and `smortress-password.service` (every boot, `chpasswd -e`) | the `smores` account password, sha512crypt. Not in git as plaintext: only this ciphertext is, and the password itself is a recovery-kit item. `value` format, because `chpasswd -e` takes the bare hash. Rotate with `docs/manual-steps.md` section 37. |
-| `cloudflared-tunnel.yaml` | `smortress-cloudflared.service` | the SSH tunnel's connector token, `value` format, read through a systemd credential. |
 | `tailscale.yaml` | `smortress-tailscale-up.service` | the pre-signed, single-use Tailscale auth key under `authkey:`, `yaml` format (the unit greps the field). It must land with its manifest line: ciphertext without the line is never decrypted into `/run`, and a line without ciphertext fails the decrypt unit's set comparison and takes every consumer down with it. |
 
 The account hash is the reason the path exists: bootc never reconciles `/var`, so
@@ -85,7 +84,7 @@ gone. These are the holdovers, each with the task that ends it:
 | nix-config key | Host reader | Retired by |
 | --- | --- | --- |
 | `cloudflare-api-token` | `kanbei-access.nix` DNS-01, the `cloudflare-*` flake apps | flake apps: the step-14 state move; Kanbei: a DNS-scoped token of its own |
-| `cloudflared-credentials` | the host tunnel (`web-proxy.nix`) | #615, when the last host-owned route moves; SSH got its own dashboard tunnel, whose connector token is `secrets/server/cloudflared-tunnel.yaml` |
+| `cloudflared-credentials` | the host tunnel (`web-proxy.nix`) | #615, when the last host-owned route moves; the derived image ships no connector, so nothing here replaces it |
 | `restic-password`, `r2-access-key-id`, `r2-secret-access-key` | `restic-backup.nix` | #660: one repository per recovery group, then the restore drill (`docs/manual-steps.md` step 35) |
 | `memory-mcp-token` | the maki memory shim | #617's cluster route with an Access service token |
 

@@ -451,11 +451,11 @@ first cutover:
 1. Install the cluster tunnel's Cloudflare objects (T7,
    `smores56/sdlc#581`): the tunnel itself (step 15), then its DNS and Access
    objects from `tofu/` by adding the hostname to `cluster_hosts` and applying.
-   The host tunnel now serves nothing: its nix-config connector is retired,
-   SSH has its own tunnel (step 41), the Kanbei route went with nix-config, and
-   `agent`/`memory` moved to the cluster. `llm` and `chat` are retired by step
-   17. Until a hostname's cutover the wildcard record keeps it resolving to the
-   host.
+   The host tunnel now serves nothing: its nix-config connector is retired, SSH
+   is tailnet-only (design #767) and never touches the edge, the Kanbei route
+   went with nix-config, and `agent`/`memory` moved to the cluster. `llm` and
+   `chat` are retired by step 17. Until a hostname's cutover the wildcard record
+   keeps it resolving to the host.
 2. Confirm the storage contract bound:
 
    ```sh
@@ -2915,8 +2915,8 @@ read -rsp 'read-only secret: ' R2_READ_SECRET_ACCESS_KEY && export R2_READ_SECRE
 Zero Trust → Access → Service Auth → Create. Store the pair in Bitwarden. The
 `service auth` policy is account-wide, so this token also reaches `memory` and
 `agent` if it leaks; rotate it in the same place if that happens. It does **not**
-reach `ssh`: that application accepts only the token `tofu/access.tf` declares
-(section 44).
+reach ssh: there is no `ssh` application at the edge any more, because the route
+is tailnet-only (section 41).
 
 ### 39.4 Apply the Access application
 
@@ -4260,72 +4260,70 @@ sign-in below.
    A dump that exits `3` publishes nothing, so a missed version bump shows up as
    an unchanged generation count rather than as a calendar that quietly emptied.
 
-## 41. SSH tunnel (`ssh.sammohr.dev`)
+## 41. Delete the Cloudflare SSH route (design #767, T6)
 
-`ssh.sammohr.dev` gets its own Cloudflare tunnel. The host tunnel is locally
-managed — its ingress lived in nix-config — and a locally-managed tunnel cannot
-be configured through the API, so reusing it would put the rules back in a file
-on the host. The connector is part of the image
-(`smortress-cloudflared.service`); `tofu/ssh_tunnel.tf` writes the specific
-`ssh` CNAME and the ingress (`ssh://localhost:22`, then the catch-all), both
-gated on `var.ssh_tunnel_id`. The Access application is the existing `ssh` one
-in `tofu/access.tf`, so nothing there changes.
+SSH is tailnet-only, so the Cloudflare route is deleted and not replaced. The
+repository no longer carries any of it: `smortress-cloudflared.service`, the
+`CLOUDFLARED_*` pins and build steps, `secrets/server/cloudflared-tunnel.yaml`
+and its manifest line, `tofu/ssh_tunnel.tf`, and the `ssh` Access application,
+its `service_auth_ssh` policy and the dedicated service token. This section is
+the operator's removal, and it runs last — only once the tailnet route is proven
+in sections 42, 43 and 45.
 
-1. Create the tunnel. Zero Trust → Networks → Tunnels → **Create a tunnel** →
-   Cloudflared → name it `smortress-ssh`. Do not add public hostnames in the
-   dashboard: `tofu/ssh_tunnel.tf` owns them.
+`tofu/` owned the edge objects, so the apply is what deletes them:
+`cloudflare_dns_record.ssh` (the specific `ssh.sammohr.dev` CNAME),
+`cloudflare_zero_trust_tunnel_cloudflared_config.ssh` (the tunnel's ingress),
+`cloudflare_zero_trust_access_application.ssh`,
+`cloudflare_zero_trust_access_policy.service_auth_ssh` and
+`cloudflare_zero_trust_access_service_token.ssh`. Their `prevent_destroy`
+lifecycle blocks were deleted with the resources, so this is a plain destroy: no
+`tofu state rm` first, and a plan that offers to keep them is a stale checkout.
 
-2. Record its UUID in `tofu/terraform.tfvars` (`ssh_tunnel_id`). It is on the
-   tunnel's page and in its credentials JSON (`"TunnelID"`). Nothing is
-   created while it is empty, so a checkout may carry `""` until the tunnel
+1. Plan against the real state and read it:
+
+   ```sh
+   ./scripts/tofu-cloudflare.sh plan -no-color
+   # expect: 5 to destroy, 0 to add, 0 to change — the ssh record, the ssh tunnel
+   # config, the ssh application, the ssh token policy, the ssh service token.
+   # A replace or a destroy anywhere else means the state and the config
+   # disagree: stop and compare instead of applying.
+   ```
+
+2. Apply it as an owner dispatch. `tofu-apply.yml` refuses a destructive plan
+   unattended, which is why the merge alone changes nothing:
+
+   ```sh
+   gh workflow run tofu-apply.yml
+   ```
+
+   The token is revoked at the edge by the same apply, so the laptops' pair is
+   dead from then on.
+
+3. Delete the tunnel object by hand. It was created in the dashboard (Zero
+   Trust → Networks → Tunnels → `smortress-ssh`) and this repository never owned
+   it: `ssh_tunnel_id` only named its UUID, which the DNS record and the ingress
+   pointed at, so there is no state entry for the tunnel itself and nothing can
+   delete it for you. With the ingress gone it has no rules and no connector;
+   remove it in Zero Trust → Networks → Tunnels. Its connector token goes with
+   it; the host's ciphertext leaves with the next `bootc upgrade` (section 37
+   step 2), and until then it decrypts into `/run` for a unit that no longer
    exists.
 
-3. Copy its token from the same page (**Install connector**) and encrypt it to
-   the host identity. It is a capability: never commit it plaintext, and rotate
-   it from the same page if it leaks.
+4. Prove the route is gone:
 
    ```sh
-   ( umask 077
-     printf 'token: %s\n' '<token>' >/tmp/cloudflared-tunnel.yaml
-     sops --encrypt --input-type yaml --output-type yaml \
-       --filename-override secrets/server/cloudflared-tunnel.yaml \
-       /tmp/cloudflared-tunnel.yaml >secrets/server/cloudflared-tunnel.yaml
-     rm -f /tmp/cloudflared-tunnel.yaml
-   )
+   ./scripts/tofu-cloudflare.sh state list | grep ssh || echo "no ssh objects in state"
+   # expect: no ssh objects in state
    ```
 
-   Commit the ciphertext **before** the image that lists it. The manifest names
-   the file, and `scripts/sops-decrypt` fails closed on a manifest entry
-   without its ciphertext, which would leave every secret in `/run`
-   undecrypted on that boot.
+   In Zero Trust → Access → Applications the list must hold `wildcard
+   default-deny`, `memory`, `agent`, `backrest`, `kanbei` and the public set, and
+   no `ssh`. From a device **not** on the tailnet, a request to
+   `ssh.sammohr.dev` now hits the wildcard deny or the host tunnel's catch-all
+   and never an sshd.
 
-4. Merge. `tofu-apply.yml` writes the CNAME and the ingress, and
-   `publish-server-image.yml` builds the image that carries the unit; section 37
-   step 2 (`sudo bootc upgrade`) deploys it.
-
-5. Prove it. The unit must be active and the connector registered:
-
-   ```sh
-   sudo systemctl status smortress-cloudflared.service
-   journalctl -u smortress-cloudflared.service -n 20 --no-pager
-   ```
-
-   The log must report the configuration it fetched. Then from the work laptop,
-   with the tunnel client and `~/.ssh/id_smortress-access` in place:
-
-   ```sh
-   ssh -o ProxyCommand='cloudflared access ssh --hostname %h' smores@ssh.sammohr.dev
-   ```
-
-   The first connection opens the Access login in a browser (the owner email
-   policy); it is cached for the session duration. A shell, and not a
-   post-login 404, is the proof that DNS, Access, the ingress and the connector
-   agree.
-
-From #767's T1 on (section 42) the tailnet is the primary route and this tunnel is
-the rollback: sshd listens on every address, so the connector reaches it through
-loopback, and T6 deletes the connector, the Access application and the token once
-every client is proven on the tailnet.
+From #767's T1 on, the tailnet is the only route in; what this section removes
+was the rollback.
 
 ## 42. Tailnet-only sshd on smortress
 
@@ -4348,10 +4346,10 @@ that reason; a drop-in sorting after `90-` is silently ignored.
 **The order of these steps is a lockout guard.** The key and the drop-in ship in
 the same image, so the reboot in step 1 cannot strand you for want of a key line —
 but the *route* has to exist first. A laptop reaches port 22 through the tailnet
-(section 46) or, until #767's T6 deletes it, the Cloudflare tunnel (section 41).
-Firewalld admits `ssh` on `tailscale0` alone, so a LAN address never gets in, and
-a host whose tailnet policy does not admit the laptop is reachable only from the
-console or through the tunnel.
+(section 45), and only through it: the Cloudflare tunnel that used to be the
+rollback is deleted (section 41). Firewalld admits `ssh` on `tailscale0` alone, so
+a LAN address never gets in, and a host whose tailnet policy does not admit the
+laptop is reachable only from the console.
 
 1. Deploy the image (section 37 step 2) and reboot:
 
@@ -4417,7 +4415,7 @@ console or through the tunnel.
    before going further.
 
    `AllowAgentForwarding no` is the failure that costs the most, because it is
-   silent until section 45: sshd creates `~/.ssh/agent` and exports
+   silent until section 44: sshd creates `~/.ssh/agent` and exports
    `SSH_AUTH_SOCK` only for a session that forwarded an agent, so without this
    line the sudo tap degrades to the password on every escalation.
    `AllowStreamLocalForwarding no` does not cover it — agent forwarding is its
@@ -4441,12 +4439,8 @@ console or through the tunnel.
    ```
 
    `Permission denied (publickey)` means the laptop is not offering the shipped
-   key. A timeout means the tailnet policy (section 46) or the firewall is
+   key. A timeout means the tailnet policy (section 45) or the firewall is
    refusing the address; `tailscale ping smortress` says which.
-
-7. Both routes coexist until #767's T6. The tunnel still reaches this same
-   listener through loopback — firewalld accepts loopback unconditionally — so
-   section 41's wrapper keeps working while the tailnet is proven.
 
 ## 43. Retire Tailscale SSH on smortress
 
@@ -4459,10 +4453,9 @@ on. Nothing changes in firewalld: sshd listens on every address now (section 42)
 so this preference is what stops tailscaled from intercepting port 22 on the
 tailnet, and the `tailscale` zone already accepts `ssh` for OpenSSH.
 
-1. Do nothing here before section 42 is done and one route works: the tailnet
-   (section 46) or the tunnel (section 44). This section removes Tailscale SSH
-   from the picture, and a host with neither route is reachable only from the
-   console.
+1. Do nothing here before section 42 is done and the tailnet route works
+   (section 45). This section removes Tailscale SSH from the picture, and a host
+   with no other route is reachable only from the console.
 
 2. Deploy the image (section 37 step 2) and reboot:
 
@@ -4499,113 +4492,7 @@ tailnet, and the `tailscale` zone already accepts `ssh` for OpenSSH.
    sudo tailscale set --ssh=false
    ```
 
-## 44. Dedicated Access service token for `ssh.sammohr.dev`
-
-`tofu/access.tf` declares `cloudflare_zero_trust_access_service_token.ssh` (a
-one-year lifetime) and `cloudflare_zero_trust_access_policy.service_auth_ssh`,
-which admits that one token id. The `ssh` application attaches the new policy
-instead of the account-wide `service auth`, so the credential a laptop carries
-to `cloudflared access ssh` is the only one sshd admits — the account-wide token
-no longer reaches it. The scoping is one-directional: `memory`, `agent` and the
-backrest reader still attach `any_valid_service_token`, which matches every
-token in the account, so this token is admitted there too (step 3). Minting it is
-a `tofu apply`; no workflow and no repository file holds the secret.
-
-1. Apply. The token is created at the edge, and its secret appears only in
-   state:
-
-   ```sh
-   tofu -chdir=tofu plan -no-color
-   # expect: cloudflare_zero_trust_access_service_token.ssh (create),
-   # cloudflare_zero_trust_access_policy.service_auth_ssh (create),
-   # cloudflare_zero_trust_access_application.ssh (update) — nothing else
-   tofu -chdir=tofu apply -no-color
-   ```
-
-2. Deliver the pair where the wrapper reads it. The laptops reach sshd through
-   the dotfiles' `smortress-ssh` ProxyCommand, which reads
-   `~/.config/cloudflare/access.env` and refuses to run unless it is mode 600.
-   That file is derived, not authored: `scripts/secrets.sh` in the dotfiles
-   decrypts `sops.yaml` and writes it, and short-circuits on the ciphertext's
-   hash plus a marker, so a hand-edited env file survives only until the next
-   decrypt. Read the pair out of state once, into a file rather than into
-   scrollback:
-
-   ```sh
-   ( umask 077
-     tofu -chdir=tofu state show -no-color cloudflare_zero_trust_access_service_token.ssh |
-       sed -nE 's/^[[:space:]]*(client_id|client_secret)[[:space:]]*=[[:space:]]*"(.*)"$/\1=\2/p' \
-       >/tmp/cloudflare-access-ssh.env
-   )
-   ```
-
-   Copy `client_id` and `client_secret` into the password manager, set
-   `CLOUDFLARE_ACCESS_CLIENT_ID` and `CLOUDFLARE_ACCESS_CLIENT_SECRET` in the
-   dotfiles' `sops.yaml`, and let the delivery run on each laptop:
-
-   ```sh
-   sops sops.yaml          # dotfiles checkout: decrypt, paste both values, save
-   scripts/secrets.sh      # each laptop: rewrites ~/.config/cloudflare/access.env
-   rm -f /tmp/cloudflare-access-ssh.env
-   ```
-
-   They are a bearer credential: never in the repository, never in argv, never
-   in an image.
-
-3. Prove what the change does, and only that. `ssh` must admit this token; the
-   other three still attach the account-wide policy, so they admit it as well
-   and the drill has to say so:
-
-   ```sh
-   set -a
-   . ~/.config/cloudflare/access.env
-   set +a
-   probe() {
-     curl -sS -o /dev/null -w '%{http_code}\n' \
-       -H "CF-Access-Client-Id: $CLOUDFLARE_ACCESS_CLIENT_ID" \
-       -H "CF-Access-Client-Secret: $CLOUDFLARE_ACCESS_CLIENT_SECRET" \
-       "https://$1.sammohr.dev/"
-   }
-   probe ssh       # expect: never 302 to *.cloudflareaccess.com; the tunnel
-                   # forwards to sshd, whose answer is not HTTP
-   probe memory    # expect: not a 302 to *.cloudflareaccess.com — the request
-                   # passes Access and the MCP answers for itself, because
-                   # service_auth matches any valid token
-   probe agent     # expect: not a 302, same reason
-   probe recovery  # expect: not a 302 (the backrest reader), same reason
-   ```
-
-   A `302` to `*.cloudflareaccess.com` from any of these means the token is dead,
-   not that the scoping is tight. What this section buys is the other direction:
-   sshd no longer accepts the account-wide token, so a leak of *that* one buys
-   nothing on the ssh route. Scoping the remaining applications works the same
-   way, by replacing their `any_valid_service_token` include with a token-id or
-   token-tag include per application in `tofu/access.tf`.
-
-4. Rotation, when a machine leaves our control or the year is up. The resource
-   deliberately carries no `prevent_destroy`, so replacement is one command:
-
-   ```sh
-   tofu -chdir=tofu apply -no-color -replace=cloudflare_zero_trust_access_service_token.ssh
-   ```
-
-   That revokes the old secret at the edge and writes a new one into state; it
-   changes nothing in SOPS, and SOPS is what the laptops actually read, so a
-   rotation that stops here leaves each laptop presenting a revoked pair —
-   `smortress-ssh` then fails with a 403 that looks like a policy problem. So
-   rotation is the replace above **plus** step 2 again: state into the password
-   manager, then `sops.yaml`, then `scripts/secrets.sh` on every laptop. Delete
-   the old pair from the password manager afterwards.
-
-   Do not mint the replacement in Zero Trust → Access controls → Service
-   credentials → Service tokens. A dashboard token gets its own id, and
-   `service_auth_ssh` admits only the id `tofu` created, so a dashboard
-   replacement is refused at the edge while looking perfectly valid.
-
-   The `service token expiry` notification policy emails before the one-year
-   lifetime lapses, which is the reminder to do this.
-
-## 45. sudo on smortress: a touch on a forwarded agent, password fallback
+## 44. sudo on smortress: a touch on a forwarded agent, password fallback
 
 sudo on smortress answers one tap. `ssh -A smortress` forwards the client's
 agent, and the agent holds a **touch-required** `sk-ssh-ed25519` resident
@@ -4836,7 +4723,7 @@ spare must be enrolled too.
 - Apple's ssh and its launchd agent cannot hold `sk-` keys, so the work Mac uses
   the password fallback until T11.
 
-## 46. Tailnet policy and enrollment key (design #767, T1)
+## 45. Tailnet policy and enrollment key (design #767, T1)
 
 `tofu/tailscale.tf` owns the tailnet policy: one `tailscale_acl` resource, gated on
 `var.tailnet`, that admits `group:owner` — the address `var.email` already pins —

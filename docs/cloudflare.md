@@ -5,23 +5,24 @@ described. It moved here from `nix-config/tofu/` (SDLC #581) so that every
 object a diff can change is reviewed next to the manifests it fronts. `*.tf` is
 Kanbei-critical (`docs/kanbei-critical.md`): the token can repoint a route.
 
-## Ownership: three tunnels, one zone
+## Ownership: two tunnels, one zone
 
 | Tunnel | Runs where | Serves | Owner |
 | --- | --- | --- | --- |
 | Host tunnel | no connector: nix-config's `cloudflared` is retired, and the tunnel is locally managed and slated for retirement (#615) | nothing | human |
-| SSH tunnel | `cloudflared` on `smortress`, from the derived image (`units/systemd/smortress-cloudflared.service`) | `ssh.sammohr.dev` | this repository |
-| Cluster tunnel | `cloudflared` in the `ingress` namespace (`clusters/homelab/ingress/`) | the apps whose origin moved into the cluster (`immich`, `music`, `opdshelf`, later `memory`, `agent`) | this repository |
+| Cluster tunnel | `cloudflared` in the `ingress` namespace (`clusters/homelab/ingress/`) | the apps the host no longer serves (`immich`, `music`, `opdshelf`, `memory`, `agent`, `notify`, `webhook`) | this repository |
 
-`tofu/` owns DNS, Access, notifications and the ingress of the **SSH and
-cluster** tunnels; it creates neither connector. The SSH tunnel is created in
-the dashboard — which is what makes it remotely managed — and
-`tofu/ssh_tunnel.tf` writes both its specific `ssh` CNAME and its ingress. The
-cluster tunnel's DNS comes from `var.cluster_hosts` and `var.cluster_tunnel_id`
-in `tofu/dns.tf`, and its ingress from the `cluster` resource in
-`tofu/cluster.tf`. The host tunnel keeps the wildcard record in `tofu/main.tf`;
-its ingress is local to the retired nix-config connector, which is why SSH does
-not reuse it.
+SSH is not on either tunnel. It is tailnet-only (design #767): sshd answers the
+tailnet and the firewall is the filter, so there is no connector, no `ssh` DNS
+record and no `ssh` Access application to own (`docs/manual-steps.md` sections
+41-43).
+
+`tofu/` owns DNS, Access, notifications and the ingress of the **cluster**
+tunnel; it creates no connector. The cluster tunnel's DNS comes from
+`var.cluster_hosts` and `var.cluster_tunnel_id` in `tofu/dns.tf`, and its
+ingress from the `cluster` resource in `tofu/cluster.tf`. The host tunnel keeps
+the wildcard record in `tofu/main.tf`; it is the default-deny net now, since the
+names that used to resolve through it moved to the cluster or the tailnet.
 
 `kanbei.sammohr.dev` is a **public hostname behind Access** (SDLC #586):
 `tofu/kanbei.tf` creates the application and the wildcard record resolves the
@@ -37,10 +38,10 @@ happened for either owner device; a public hostname needs no client component.
 `tests/tofu/check.sh` asserts there is no private hostname route and no record
 of its own.
 
-The SSH tunnel's DNS and ingress are asserted in `tests/tofu/check.sh`: a
-specific `ssh` record points at `var.ssh_tunnel_id`, the ingress terminates on
-the host's own sshd, and the catch-all stays last. Both are gated on a non-empty
-id, so a checkout without the dashboard tunnel still plans.
+The Cloudflare SSH route was deleted in #767's T6 and `tests/tofu/check.sh`
+asserts its absence: no `ssh` DNS record, no tunnel ingress, no `ssh` Access
+application, no dedicated service token and no `ssh_tunnel_id` variable. A plan
+that offers to create any of them is a re-introduction, not a migration.
 
 ## Moved files
 
@@ -49,16 +50,13 @@ id, so a checkout without the dashboard tunnel still plans.
 | `tofu/main.tf` | `tofu/main.tf`, `tofu/dns.tf`, `tofu/access.tf`, `tofu/notifications.tf`, `tofu/rate-limit.tf` | split by object family; resource addresses unchanged |
 | `tofu/pages.tf` | `tofu/pages.tf` | verbatim |
 | `tofu/r2.tf` | `tofu/r2.tf` | verbatim |
-| `tofu/variables.tf` | `tofu/variables.tf` | `tunnel_id` renamed `host_tunnel_id`, new cluster/SSH/ACME inputs |
+| `tofu/variables.tf` | `tofu/variables.tf` | `tunnel_id` renamed `host_tunnel_id`, new cluster/ACME inputs |
 | `tofu/versions.tf` | `tofu/versions.tf` | provider and zone lookup only |
 | `tofu/.terraform.lock.hcl` | `tofu/.terraform.lock.hcl` | re-resolved to 5.28.1 on bootstrap |
 | `tofu/.terraform/` | not copied | provider cache, never committed |
 
-`tofu/ssh_tunnel.tf` is new here, not moved: the SSH tunnel postdates the
-nix-config move.
-
 Resource addresses keep their old names (`cloudflare_dns_record.wildcard`,
-`cloudflare_zero_trust_access_application.ssh`, …) so the move is a state-file
+`cloudflare_zero_trust_access_application.memory`, …) so the move is a state-file
 copy rather than a re-import. Renaming one means `tofu state rm` plus `import`
 with the ID format in `docs/manual-steps.md`.
 
@@ -210,15 +208,13 @@ zone with no application of its own is reachable only by the owner's identity.
   needs `tofu state rm` first (same pattern as the retired hostnames below).
 
 - **Protected applications** keep the email allow policy and add a
-  `non_identity` decision where an unattended client connects. Two decisions
-  exist, and the difference matters: `service auth` accepts `any_valid_service_token`
-  in the account, while `ssh service token` names one token id.
-  `ssh` (`cloudflared access ssh`) attaches the token-scoped one, because it is
-  the endpoint a laptop presents a bearer token to and a leak must not buy
-  reachability to anything else. `memory` (the MCP wrapper's device), `agent` (a
-  blessed device's proxy) and `backrest` (the hosted recovery reader at
-  `recovery.sammohr.dev`; its Worker also refuses every write RPC and strips the
-  repository credentials, see `docs/core/backrest.md`) keep the account-wide one.
+  `non_identity` decision where an unattended client connects. One decision
+  exists: `service auth`, which accepts `any_valid_service_token` in the account.
+  `memory` (the MCP wrapper's device), `agent` (a blessed device's proxy) and
+  `backrest` (the hosted recovery reader at `recovery.sammohr.dev`; its Worker
+  also refuses every write RPC and strips the repository credentials, see
+  `docs/core/backrest.md`) attach it. There is no `ssh` application: sshd is
+  tailnet-only (design #767), so no edge object names it.
   `kanbei` keeps the email policy alone and
   adds `allow_authenticate_via_warp`, so a device that already runs the
   Cloudflare One client skips the login; a device without it gets the ordinary
@@ -229,20 +225,12 @@ zone with no application of its own is reachable only by the owner's identity.
   Settings); it is an account-wide prerequisite, not something this repository
   can declare.
 - The `service auth` policy is account-wide: any service token minted in that
-  account is accepted by `memory`, `agent` and `backrest`. `ssh` attaches
-  `service_auth_ssh` instead, so it admits
-  `cloudflare_zero_trust_access_service_token.ssh` and no longer admits the
-  account-wide decision. Scoping stops there, in one direction: because
-  `any_valid_service_token` matches every token in the account, the ssh token is
-  still admitted by `memory`, `agent` and `backrest`, whose policies are
-  unchanged. Scoping those per application means replacing that include with a
-  token-id or token-tag include per application. Both policies live in
-  `tofu/access.tf`; the ssh token's one-year lifetime is its rotation schedule
-  (docs/manual-steps.md section 44), and the expiring-service-token notification
-  emails before it lapses. Rotate a leaked token by replacing the resource
-  (`tofu apply -replace=cloudflare_zero_trust_access_service_token.ssh`, section
-  44), not in Zero Trust → Access controls → Service credentials: a dashboard
-  token has its own id, which `service_auth_ssh` does not admit.
+  account is accepted by `memory`, `agent` and `backrest`. Scoping one per
+  application means replacing that include with a token-id or token-tag include
+  in `tofu/access.tf`. The dedicated `ssh` token and its `service_auth_ssh`
+  policy are deleted with the SSH route (#767 T6); the remaining tokens are
+  minted in Zero Trust → Access controls → Service credentials and their
+  expiring-token notification is the rotation reminder.
 
 ## CAA
 
@@ -325,7 +313,7 @@ Static half — no credentials, what CI runs:
 tests/tofu/check.sh
 ```
 
-Expected: `tofu: 164 passed, 0 failed` with `tofu` on `PATH`; 162 without it, because the fmt/validate pair skips (CI runs both). The count grows with the config.
+Expected: `tofu: 183 passed, 0 failed` with `tofu` on `PATH`; 181 without it, because the fmt/validate pair skips (CI runs both). The count grows with the config.
 
 Runtime half — needs a token that can read Access:
 

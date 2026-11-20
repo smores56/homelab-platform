@@ -144,8 +144,8 @@ and the cluster; this table names locations, not secrets.
 | Restic password | sops `restic-password` → `/run/secrets/restic-password` | kept until the legacy repositories are retired; the three new repositories share a new password (T3) |
 | R2 access key pair | sops `r2-access-key-id` / `r2-secret-access-key` → `/run/secrets/restic-r2.env` | kept for legacy reads; T3 creates a new write token, T4 a read-only recovery token |
 | Cloudflare API token | sops `cloudflare-api-token` (tofu) | rotated for the T4 objects; scope narrowed to R2, Access and DNS |
-| cloudflared tunnel credentials | sops `cloudflared-credentials` | retired with the host tunnel; T2 adds a dedicated SSH tunnel (`smortress-cloudflared.service`, step 41), whose token is `secrets/server/cloudflared-tunnel.yaml` |
-| `cloudflare-access-ssh-token` | sops, the `ssh.sammohr.dev` path | superseded by #748: Access *is* the route now, and the token is minted by `tofu` as `cloudflare_zero_trust_access_service_token.ssh` rather than hand-made in SOPS, so this account-wide token is retired (docs/manual-steps.md section 44) |
+| cloudflared tunnel credentials | sops `cloudflared-credentials` | retired with the host tunnel; the derived image ships no connector, since SSH is tailnet-only (design #767) |
+| `cloudflare-access-ssh-token` | sops, the `ssh.sammohr.dev` path | retired: `ssh.sammohr.dev` has no Cloudflare route at all (design #767), so no token of any kind reaches sshd |
 | k3s cluster token | sops `k3s-cluster-token` | retired with the guest |
 | ntfy reader token | sops `ntfy-reader-token` | retired: Healthchecks + Pushover replace it |
 | OpenAI API key | sops `openai-api-key` | not used by the core; belongs to the later agent feature |

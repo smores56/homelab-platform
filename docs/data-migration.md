@@ -275,7 +275,9 @@ Two tunnels, two tokens, no shared state:
   `memory` is duplicated during its cutover (host route plus the cluster route
   added by SDLC #617) and the host copy is deleted only after the cluster route
   answers 200 through Access. `llm` and `chat` are retired
-  (`docs/manual-steps.md` step 17).
+  (`docs/manual-steps.md` step 17). The nix-config connector itself is gone, and
+  SSH left the edge entirely: it is tailnet-only since design #767, so neither
+  tunnel is an entry point for it.
 - **Cluster tunnel** (`clusters/homelab/ingress/`): `cloudflared` in the
   `ingress` namespace, token mode, two replicas, `--protocol http2` because the
   host's tap firewall only forwards 80/443/DNS/NTP out of the guest. Its token

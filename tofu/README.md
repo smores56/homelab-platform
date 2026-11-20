@@ -3,7 +3,9 @@
 This directory is the whole Cloudflare account's edge config: DNS records, the
 cluster tunnel's ingress rules, Access applications and policies, and the
 recovery pages project. `docs/cloudflare.md` explains the shape; this file only
-says how a change travels.
+says how a change travels. SSH is deliberately absent: it is tailnet-only
+(design #767), so no record, no tunnel ingress, no Access application and no
+service token names it.
 
 `tailscale.tf` is the other half of the edge from design #767 on: the tailnet
 policy that admits the owner's devices to `smortress:22`, to Serve's HTTPS ports
@@ -13,7 +15,7 @@ file, so treat a change to it as the tailnet's entire access model — and read 
 policy whose tests fail. The resource is gated on `tailnet` in
 `terraform.tfvars`, and its provider authenticates with
 `TAILSCALE_OAUTH_CLIENT_ID` / `TAILSCALE_OAUTH_CLIENT_SECRET`: an OAuth client
-with the `policy_file` scope only, minted per `docs/manual-steps.md` section 46.
+with the `policy_file` scope only, minted per `docs/manual-steps.md` section 45.
 Both providers take their credentials from the environment; nothing here holds
 one.
 
