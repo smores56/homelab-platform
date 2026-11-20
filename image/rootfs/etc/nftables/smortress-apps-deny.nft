@@ -1,0 +1,31 @@
+# Fail-closed gate for the apps tenant (SDLC #726, T7 of #701).
+#
+# This is the placeholder table, not the policy: the same name as the egress
+# allow-list, one rule that drops the tenant account and nothing that opens a
+# destination. smortress-apps-egress.service replaces it in a single `nft -f`
+# transaction when its ruleset loads, so a healthy boot ends with the allow-list
+# in force. If that load never happens — the unit fails, the file is unreadable,
+# the ruleset does not parse — no table would exist at all and the tenant would
+# run unfiltered. This file is what remains instead, so the tenant is dropped.
+#
+# The rule matches the tenant by account name for the reason the allow-list
+# gives: nft resolves the name when it loads the file, so the gate follows
+# whatever uid systemd-sysusers allocated. A numeric uid would match nobody
+# after a reinstall re-allocated 1001, and a gate that matches nobody reports
+# success while the tenant runs with no table in force.
+#
+# `destroy` before the definition, as in the allow-list: a restart of the unit
+# then reloads instead of aborting on a table that already exists.
+destroy table inet smortress_apps_egress
+
+table inet smortress_apps_egress {
+    chain output {
+        type filter hook output priority filter; policy accept;
+
+        # The whole tenant, every family, every destination. Nothing here is a
+        # destination exception: only the allow-list opens anything, so the chain
+        # keeps its permissive policy for the host's own traffic and gates the
+        # tenant alone.
+        meta skuid apps drop
+    }
+}

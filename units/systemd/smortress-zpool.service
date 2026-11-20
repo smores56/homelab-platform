@@ -8,6 +8,12 @@ Description=Create or import the tank ZFS pool on the encrypted data device
 DefaultDependencies=no
 After=systemd-cryptsetup@data.service cryptsetup.target zfs-import-scan.service
 Requires=systemd-cryptsetup@data.service
+# init-zpool chowns each dataset root to an account *name* — the tenant's, for
+# /srv/apps — so systemd-sysusers has to have allocated it before the pool is
+# created. DefaultDependencies=no would otherwise leave the two unordered, and a
+# name that does not resolve aborts dataset creation.
+Wants=systemd-sysusers.service
+After=systemd-sysusers.service
 Before=zfs-mount.service
 Wants=zfs-mount.service
 Before=basic.target

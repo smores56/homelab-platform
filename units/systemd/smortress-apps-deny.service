@@ -1,0 +1,30 @@
+[Unit]
+# The tenant's fail-closed gate. It loads a table that carries the allow-list's
+# name and drops the whole apps account, before anything tenant-side can start;
+# smortress-apps-egress.service then replaces that table in one transaction. A
+# boot where the replacement loads ends with the allow-list in force, and a boot
+# where it does not ends with this gate, so the tenant is dropped rather than
+# left with no ruleset at all.
+Description=Drop apps-tenant traffic until the egress allow-list replaces the table
+DefaultDependencies=no
+# The rule names the apps account and nft resolves that name at load time, so
+# systemd-sysusers must have created it or the load aborts and the gate is
+# absent — which is the failure this unit exists to prevent.
+Wants=systemd-sysusers.service
+After=systemd-sysusers.service
+Conflicts=shutdown.target
+# Before logind: the gate must be in force before a lingering user manager can
+# start a tenant container. Before the allow-list: never the other order, where
+# the allow-list lands and this file overwrites it with the blanket drop.
+Before=systemd-logind.service smortress-apps-egress.service shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# The vendor path, not /etc: bootc merges the image's /etc into the host's, so
+# an /etc copy is editable into drift or deletable outright. A gate that can be
+# deleted is not a gate; /usr/etc is the image's own copy and cannot be either.
+ExecStart=/usr/bin/nft -f /usr/etc/nftables/smortress-apps-deny.nft
+
+[Install]
+WantedBy=sysinit.target
