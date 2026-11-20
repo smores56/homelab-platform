@@ -4327,7 +4327,10 @@ What the image carries, and nothing else:
   tag and commit pinned in `image/pins.env`; no distribution package is layered
   and no local SELinux policy ships;
 - `image/rootfs/etc/sudoers.d/10-human-gate` — `timestamp_timeout=30`,
-  `timestamp_type=tty` and `log_subcmds`.
+  `timestamp_type=tty`, `log_subcmds`, and `Defaults env_keep +=
+  "SSH_AUTH_SOCK"`; without the last one sudo drops the forwarded socket path
+  before the PAM stack runs, `pam_rssh` logs "SSH agent socket address not
+  configured", and every escalation falls back to the password.
 
 There is no host-local secret any more. The retired TOTP stack needed a
 root-owned usersfile under `/var/lib/homelab/sudo`, written by

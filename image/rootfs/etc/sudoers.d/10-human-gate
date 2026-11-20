@@ -7,3 +7,11 @@
 Defaults timestamp_timeout=30
 Defaults timestamp_type=tty
 Defaults log_subcmds
+
+# pam_rssh resolves the forwarded socket from the process environment, and sudo
+# drops SSH_AUTH_SOCK before the PAM stack runs unless it is kept: on smortress
+# without this line the module logs "SSH agent socket address not configured"
+# and every escalation silently falls back to the password (verified 2026-11-20).
+# It is the only variable kept here; a sudoed command inherits it too, which is
+# what lets a root command drive the agent if it ever needs to.
+Defaults env_keep += "SSH_AUTH_SOCK"

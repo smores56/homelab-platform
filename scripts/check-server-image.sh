@@ -247,10 +247,14 @@ check "the password row jumps to authsucc too" \
 # The password fallback is the break-glass everywhere now, so there is no console
 # row to match against.
 check "no console break-glass row remains" lacks 'pam_succeed_if' "$pam_sudo"
-# pam_rssh reads SSH_AUTH_SOCK with getenv() and sudo does not scrub its environ
-# before pam_authenticate, so no env_keep is needed; adding one would hand the
-# agent to the command sudo runs.
-check "the agent socket is not kept across the sudo boundary" lacks 'SSH_AUTH_SOCK' image/rootfs/etc/sudoers.d/
+# pam_rssh reads SSH_AUTH_SOCK with getenv(), and sudo drops it before the PAM
+# stack runs: without the keep the module logs "SSH agent socket address not
+# configured" and every escalation falls back to the password (verified on the
+# host 2026-11-20). It is the only variable kept, and it is deliberate.
+check "the agent socket is kept for pam_rssh" \
+  has 'Defaults env_keep += "SSH_AUTH_SOCK"' image/rootfs/etc/sudoers.d/10-human-gate
+check "no other variable is kept across the sudo boundary" \
+  test "$(grep -c '^Defaults env_keep' image/rootfs/etc/sudoers.d/10-human-gate)" = 1
 check "the PIN database is gone from the stack" lacks 'pam_userdb' "$pam_sudo"
 check "the account phase is still declared" grep -qE '^account[[:space:]]+include[[:space:]]+system-auth$' "$pam_sudo"
 check "the password phase is still declared" grep -qE '^password[[:space:]]+include[[:space:]]+system-auth$' "$pam_sudo"
@@ -262,12 +266,13 @@ check "the only login account is smores" grep -qE '^[[:space:]]*- name: smores$'
 sudoers_dropin=image/rootfs/etc/sudoers.d/10-human-gate
 expected_sudoers='Defaults timestamp_timeout=30
 Defaults timestamp_type=tty
-Defaults log_subcmds'
+Defaults log_subcmds
+Defaults env_keep += "SSH_AUTH_SOCK"'
 actual_sudoers=$(grep -E '^Defaults[[:space:]]' "$sudoers_dropin")
 if [[ $actual_sudoers == "$expected_sudoers" ]]; then
-  ok "the sudoers gate is the reviewed three defaults in order"
+  ok "the sudoers gate is the reviewed four defaults in order"
 else
-  bad "the sudoers gate is the reviewed three defaults in order" "$actual_sudoers"
+  bad "the sudoers gate is the reviewed four defaults in order" "$actual_sudoers"
 fi
 check "the sudoers drop-in is installed 0440" has 'chmod 0440 /etc/sudoers.d/10-human-gate' image/Containerfile
 check "the sudoers drop-in is parsed at build time" has 'visudo -cf /etc/sudoers.d/10-human-gate' image/Containerfile
@@ -345,6 +350,8 @@ check "no policy loader unit ships" \
 check "no policy loader script ships" \
   test ! -e scripts/selinux-sudo-rssh-load.sh
 check "the image wires no policy loader" lacks 'smortress-selinux-sudo-rssh' image/Containerfile
+check "sudo keeps the forwarded agent socket for pam_rssh" \
+  has 'Defaults env_keep += "SSH_AUTH_SOCK"' image/rootfs/etc/sudoers.d/10-human-gate
 
 # The retired TOTP stack may not leave a trace: the skill moved to a touch, and a
 # leftover usersfile, enrollment script or package reference would be state

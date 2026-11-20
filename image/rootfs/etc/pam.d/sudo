@@ -37,9 +37,11 @@
 # one of those to pam_unix -- an unplugged key is a password prompt.
 #
 # pam_rssh reads the socket path from the process environment
-# (getenv("SSH_AUTH_SOCK"), src/lib.rs), and sudo does not scrub its own environ
-# before pam_authenticate (plugins/sudoers/auth/pam.c), so no env_keep is needed.
-# None is added: a sudoed command has no business holding the agent.
+# (getenv("SSH_AUTH_SOCK"), src/lib.rs), so sudo must keep that variable:
+# sudoers.d/10-human-gate carries `Defaults env_keep += "SSH_AUTH_SOCK"`.
+# Without it the module logs "SSH agent socket address not configured" and every
+# escalation falls back to the password -- the first deployment of this stack did
+# exactly that, and the failure is invisible at the prompt.
 #
 # There is no console break-glass row any more. The password fallback is the
 # break-glass everywhere, which is what it is for; a /dev/tty* login takes the
