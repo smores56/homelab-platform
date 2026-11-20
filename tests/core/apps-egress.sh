@@ -36,12 +36,23 @@ if [[ -f $unit ]]; then ok 'the loader unit exists'; else bad 'the loader unit e
   exit 1
 }
 
-# The uid is the tenant's fixed uid, not a name: nft resolves a name at load
-# time and the rules must not depend on user ordering at boot.
-if grep -qE 'meta skuid 1001' "$rules"; then
-  ok 'the rule matches the apps uid'
+# The rule matches the tenant by account name, not by uid. nft resolves the
+# name when it loads the ruleset, so the policy keeps following the tenant after
+# systemd-sysusers silently allocates a different uid because 1001 was taken; a
+# numeric rule would then match nobody and leave the chain's `policy accept` in
+# force. Every skuid operand must be the name.
+skuid_operands=$(grep -oE 'meta skuid [^[:space:]]+' "$rules" | awk '{print $3}' | sort -u)
+if [[ $skuid_operands == apps ]]; then
+  ok 'every skuid rule names the apps account'
 else
-  bad 'the rule matches the apps uid' "$(cat "$rules")"
+  bad 'every skuid rule names the apps account' "$(printf '%s\n' "$skuid_operands")"
+fi
+# The class of bug, not the instance: no skuid rule may pin a number.
+numeric_skuid=$(grep -E 'meta skuid [0-9]' "$rules" || true)
+if [[ -z $numeric_skuid ]]; then
+  ok 'no skuid rule pins a numeric uid'
+else
+  bad 'no skuid rule pins a numeric uid' "$numeric_skuid"
 fi
 if grep -qE 'hook output' "$rules"; then ok 'the rule is on the output path' ; else bad 'the rule is on the output path'; fi
 
@@ -68,7 +79,7 @@ fi
 
 # Everything this host answers on is local, including an address that is not in
 # a private range; resolve it through fib instead of enumerating it.
-if grep -qE 'meta skuid 1001 fib daddr type local drop' "$rules"; then
+if grep -qE 'meta skuid apps fib daddr type local drop' "$rules"; then
   ok 'every local address is dropped, not just the ranges'
 else
   bad 'every local address is dropped, not just the ranges'
@@ -76,26 +87,26 @@ fi
 
 # Pasta forwards the tenant's DNS to the host resolver as the tenant uid, so
 # port 53 to a local address must stay open or no app can resolve a name.
-if grep -qE 'meta skuid 1001 udp dport 53 accept' "$rules" &&
-  grep -qE 'meta skuid 1001 tcp dport 53 accept' "$rules"; then
+if grep -qE 'meta skuid apps udp dport 53 accept' "$rules" &&
+  grep -qE 'meta skuid apps tcp dport 53 accept' "$rules"; then
   ok 'DNS is reachable wherever the resolver lives'
 else
   bad 'DNS is reachable wherever the resolver lives'
 fi
 
-if grep -qE 'meta skuid 1001 meta nfproto ipv6 drop' "$rules"; then
+if grep -qE 'meta skuid apps meta nfproto ipv6 drop' "$rules"; then
   ok 'IPv6 egress is dropped entirely'
 else
   bad 'IPv6 egress is dropped entirely'
 fi
 
-# A missing uid on any drop rule would take out traffic for every user.
+# A missing skuid on any drop rule would take out traffic for every user.
 unbound=$(grep -E '[[:space:]]drop$' "$rules" | grep -v '^[[:space:]]*}' \
-  | grep -v 'meta skuid 1001' || true)
+  | grep -vE 'meta skuid apps([[:space:]]|$)' || true)
 if [[ -z $unbound ]]; then
-  ok 'every drop rule is bound to the tenant uid'
+  ok 'every drop rule is bound to the tenant account'
 else
-  bad 'every drop rule is bound to the tenant uid' "$unbound"
+  bad 'every drop rule is bound to the tenant account' "$unbound"
 fi
 
 # The DNS accepts must precede the local-address drop or DNS dies again.
@@ -142,6 +153,13 @@ else
   bad 'the unit loads the shipped ruleset' "$(cat "$unit")"
 fi
 
+# The ruleset names the account, so the account must exist when nft loads it;
+# with DefaultDependencies=no nothing else orders this unit after sysusers.
+if grep -q '^After=.*systemd-sysusers.service' "$unit"; then
+  ok 'the account exists before the ruleset is loaded'
+else
+  bad 'the account exists before the ruleset is loaded' "$(cat "$unit")"
+fi
 # The rule set must be in force before a lingering user manager (and any
 # tenant Quadlet it starts) can run.
 if grep -q '^Before=.*systemd-logind.service' "$unit"; then

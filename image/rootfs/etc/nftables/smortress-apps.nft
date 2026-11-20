@@ -4,8 +4,11 @@
 # nothing else. Every destination that is this host's own networks, the tailnet,
 # or a cloud metadata service is dropped for the tenant uid, so a definition
 # cannot use the internet class to reach the core applications, the agent, or a
-# tailnet peer. The uid is numeric because nft resolves a user name at load
-# time; the tenant's fixed uid must match the sysusers entry.
+# tailnet peer. The rules match the tenant by account name, not by uid: nft
+# resolves the name when it loads the ruleset, so the policy follows whatever uid
+# systemd-sysusers allocated. A numeric uid would match nobody after a reinstall
+# re-allocated 1001 and the chain's `policy accept` would leave the tenant
+# unrestricted while the unit reports success.
 #
 # Loaded by smortress-apps-egress.service before any tenant container starts.
 # `destroy` instead of `delete` is what makes a reload a no-op on a host where
@@ -20,20 +23,20 @@ table inet smortress_apps_egress {
         # and link-local space it must not reach lives there; dropping the
         # whole family is stronger than enumerating prefixes that LAN peers
         # may change.
-        meta skuid 1001 meta nfproto ipv6 drop
+        meta skuid apps meta nfproto ipv6 drop
 
         # Pasta forwards the tenant's DNS as the tenant uid, and the resolver
         # may be the host stub, a tailnet MagicDNS address or a LAN router, so
         # port 53 is the one exception to the destination blocks below.
-        meta skuid 1001 udp dport 53 accept
-        meta skuid 1001 tcp dport 53 accept
+        meta skuid apps udp dport 53 accept
+        meta skuid apps tcp dport 53 accept
 
         # Any address this host answers on is local, including one outside the
         # private ranges; fib covers loopback and every configured address.
-        meta skuid 1001 fib daddr type local drop
+        meta skuid apps fib daddr type local drop
 
         # LAN, loopback, link-local and the CGNAT range Tailscale uses.
-        meta skuid 1001 ip daddr {
+        meta skuid apps ip daddr {
             10.0.0.0/8,
             172.16.0.0/12,
             192.168.0.0/16,

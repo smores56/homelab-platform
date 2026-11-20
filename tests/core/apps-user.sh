@@ -2,7 +2,7 @@
 # Offline checks for the apps tenant user (SDLC #726, T7 of #701).
 #
 # The tenant is one unprivileged account. This proves the account shape that
-# the rest of the tenant depends on: the uid the nftables rule names, a
+# the rest of the tenant depends on: the account the egress rule names, a
 # login-less shell, a private home with linger, the subuid/subgid allocation
 # Podman needs, a per-user policy that admits digest-pinned images, and a
 # refusal to continue when a rootless dependency is missing.
@@ -43,10 +43,15 @@ if grep -qE '^u apps 1001:1001 "apps tenant" /var/home/apps /usr/sbin/nologin$' 
 else
   bad 'the tenant user has the fixed uid and no login shell' "$(cat "$sysusers")"
 fi
-if grep -qE 'meta skuid 1001' "$nft"; then
-  ok 'the egress rule names the same uid'
+# The egress rule must follow this account wherever sysusers puts it: it
+# allocates the next free uid silently when 1001 is taken, so a numeric rule
+# would match nobody and leave the tenant outside the policy.
+account=$(awk '$1 == "u" && $2 == "apps" { print $2 }' "$sysusers")
+if [[ $account == apps ]] && grep -qE 'meta skuid apps([[:space:]]|$)' "$nft" &&
+  ! grep -qE 'meta skuid [0-9]' "$nft"; then
+  ok 'the egress rule names the same account, not a uid'
 else
-  bad 'the egress rule names the same uid'
+  bad 'the egress rule names the same account, not a uid' "$(grep -E 'meta skuid' "$nft")"
 fi
 if grep -qE '^d /var/home/apps 0700 apps apps -$' "$tmpfiles"; then
   ok 'the tenant home is private to the tenant'

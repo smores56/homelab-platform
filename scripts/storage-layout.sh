@@ -72,7 +72,9 @@ declare -A dataset_quota=(
 #: tenant's own dataset belongs to the tenant and is private to it.
 declare -A dataset_root_owner=(
   # Numeric on purpose: init-zpool runs before systemd-sysusers has created the
-  # account, and a name it cannot resolve would abort dataset creation.
+  # account, and a name it cannot resolve would abort dataset creation. This is
+  # the reason the tenant id stays fixed in sysusers; the egress rules name the
+  # account instead, since nft resolves a name at load time.
   [raw/apps]=1001:1001
 )
 declare -A dataset_root_mode=(
