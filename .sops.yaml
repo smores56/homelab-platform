@@ -25,11 +25,6 @@ keys:
   - &yk1 age18suc3usnfah6g3fldvhhvmchyupg3tp2p5vgzfuprvcn6untva9qem4lf0
   - &yk2 age1zepedng5vqafu95hysrxl0kadreshg2yc07epfqky5fuq2nmy5fqg649lf
   - &yk3 age1xqpw0qy2mk98ptvvh5y0sxtlrxs036nng2868zd6dc4wdcrrm5mqd6pnpf
-  # The host identity from the restore kit (ssh host key -> age). It is staged
-  # root-only under /var on smortress. It stays in the server rule until the
-  # machine identity is staged and proven, then leaves the rule but stays in
-  # the kit for ciphertext outside this repository.
-  - &smortress age19k8s634eqfnptm8fngc8c3yl5cyk5t4wqgaukya4j6kjtvzm2q9sq674ru
 
 creation_rules:
   # Image-carried ciphertext (T2). The boot decrypt unit must read these files;
@@ -42,7 +37,6 @@ creation_rules:
           - *yk1
           - *yk2
           - *yk3
-          - *smortress
   - path_regex: ^secrets/.*\.yaml$
     key_groups:
       - age:
