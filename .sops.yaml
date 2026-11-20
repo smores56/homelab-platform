@@ -41,6 +41,7 @@ creation_rules:
     key_groups:
       - age:
           - *admin
+          - *machine
           - *yk1
           - *yk2
           - *yk3
