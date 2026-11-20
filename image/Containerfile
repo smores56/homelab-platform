@@ -44,7 +44,12 @@ RUN set -eux; \
 
 # The tag is what the build asks for and the commit is what it must land on: a
 # release retagged upstream fails here instead of shipping unreviewed code.
+# CARGO_HOME is set explicitly: uCore's /root is a symlink to /var/roothome, which
+# does not exist in this stage, so cargo cannot create $HOME/.cargo and dies with
+# "failed to create directory /root/.cargo: File exists" before it compiles
+# anything. A path under /src is writable and disappears with the stage.
 RUN set -eux; \
+    export CARGO_HOME=/src/cargo; \
     git clone --depth 1 --branch "${PAM_RSSH_VERSION}" --recurse-submodules \
       https://github.com/z4yx/pam_rssh /src/pam_rssh; \
     test "$(git -C /src/pam_rssh rev-parse HEAD^{commit})" = "${PAM_RSSH_COMMIT}" \
