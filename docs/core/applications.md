@@ -264,6 +264,7 @@ has no route off the host.
 | --- | --- | --- | --- |
 | `smortress-agent-collect-finance.timer` → `.service` | `agent-collect.network`, a plain bridge of its own | `state/agent-local/replica/finance` | Podman secret `simplefin-access-url`, uid 1000 mode 0400 |
 | `smortress-agent-mail-stream.service` | `agent-collect.network` | `state/agent-local/replica/mail` | Podman secret `tmail-bridge-password`, uid 1000 mode 0400 |
+| `smortress-agent-collect-calendar.timer` → `.service` | `agent-collect.network` | `state/agent-local/quarantine/calendar` (the dump) and `state/agent-local/replica/calendar` (the collection) | none: the exporter authenticates with the sealed session on `state/agent-local/quarantine/tuta-calendar`, mounted only into the dump stage |
 | `agent-tmail` (Quadlet; it serves, no timer) | `agent-collect.network` | `state/agent-local/quarantine/tmail`, its own session volume | none: its credential is the session on that volume |
 
 Tuta serves no IMAP at all, so `agent-tmail` -- TutaBridge, mirrored and pinned
@@ -274,6 +275,12 @@ volume is a copy of the login and belongs in the same Restic snapshot as the
 replica it feeds (`docs/manual-steps.md` section 40.15). It shares
 `agent-collect.network` with the finance collector: both are personal-authority
 processes writing into the personal dataset, and neither can reach a deployment.
+
+`smortress-agent-collect-calendar.service` is two stages like the finance
+collector: the pinned `tuta-calendar` image signs in with its sealed session and
+rewrites the dump, then the collector publishes a generation. The session is the
+account's access, so it is mounted read-write only into the first stage; the
+collector reads the dump read-only and never sees it.
 
 `smortress-agent-mail-stream.service` is the collector itself: it logs in to the
 bridge, publishes a full pass, then holds one IDLE connection per folder and

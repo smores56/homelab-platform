@@ -1,0 +1,58 @@
+[Unit]
+# One calendar pass: the exporter signs in with its sealed session and rewrites
+# the entity directory, then the collector publishes it as a generation. Two
+# ExecStart lines rather than two units because the second only makes sense after
+# the first exited successfully, and because a half-written entity directory must
+# never become a generation.
+#
+# The exporter talks to Tuta on the collectors' network; the collector reads the
+# dump and writes only the personal replica. Neither can reach a deployment, the
+# facades, the model or a UI.
+Description=Dump Tuta calendar entities and publish one generation
+Requires=zfs-ready@state-agent-local.service sops-decrypt.service smortress-app-secrets.service smortress-agent-config.service agent-collect-network.service
+After=zfs-ready@state-agent-local.service sops-decrypt.service smortress-app-secrets.service smortress-agent-config.service agent-collect-network.service network-online.target
+Wants=network-online.target
+# The seal only exists after an operator has signed in (docs/manual-steps.md
+# 40.16); until then the timed run is skipped rather than reported as broken.
+ConditionPathExists=/var/lib/agent/local/quarantine/tuta-calendar/session.gpg
+
+[Service]
+Type=oneshot
+UMask=0077
+# Stage 1: the exporter, which holds the account session. The store is mounted at
+# /data because that is where `init` sealed it; the entity directory is a separate
+# mount so a dump can be inspected or deleted without touching the session.
+# `--replace` clears a container a killed run left behind, and read-only root
+# leaves it only /tmp and those two mounts to write.
+ExecStart=/usr/bin/podman run --rm --replace --name smortress-agent-calendar-dump \
+  --network systemd-agent-collect \
+  --read-only --cap-drop=all --security-opt no-new-privileges \
+  --tmpfs /tmp:rw,size=64m --user 1000:1000 \
+  --volume /var/lib/agent/local/quarantine/tuta-calendar:/data:z \
+  --volume /var/lib/agent/local/quarantine/calendar:/entities:z \
+  --env HOME=/tmp \
+  ghcr.io/smores56/homelab-platform/tuta-calendar@sha256:c60a3021245e7874821daa54ede7cef7cfb35da6bf58855b5538d2037fd37e4b \
+  dump --store /data --out /entities
+# Stage 2: publish what the dump wrote. The collector derives the ICS projection
+# itself and carries a vanished event forward with an absence reason: the SDK
+# lists events and never says one was deleted, so silence is not a tombstone.
+ExecStart=/usr/bin/podman run --rm --replace --name smortress-agent-collect-calendar \
+  --network systemd-agent-collect \
+  --read-only --cap-drop=all --security-opt no-new-privileges \
+  --tmpfs /tmp:rw,size=16m --user 1000:1000 \
+  --volume /usr/lib/agent-facade:/usr/lib/agent-facade:ro \
+  --volume /var/lib/agent/local/quarantine/calendar:/entities:ro \
+  --volume /var/lib/agent/local/replica:/replica:z \
+  --env PYTHONPATH=/usr/lib/agent-facade \
+  --env PYTHONDONTWRITEBYTECODE=1 \
+  --entrypoint python3 \
+  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:276d44685c65c0cb2a25f190b63c65c8906f9dc76486fb1c05ae71b5826bda08 \
+  -m data_plane.collectors.raw --root /replica/calendar \
+  calendar --entities /entities
+# A refusal exits 3 and publishes nothing. That is a failed unit on purpose, as
+# for the other collectors: a rejected session, a version floor or a model change
+# needs a human, and the timer is the only signal that the replica stopped
+# advancing.
+Restart=no
+# A dump walks every event page through Tuta's API.
+TimeoutStartSec=900

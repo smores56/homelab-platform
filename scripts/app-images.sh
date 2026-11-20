@@ -50,6 +50,10 @@ app_images=(
   # key and pinned like every other application image. `latest` is unusable here:
   # Tuta raises the minimum client version it accepts (see manual-steps 40.15).
   'agent-tmail|docker.io/spartanz51/tutabridge:0.2.0-rc.2|sha256:044415d323d3c876c4275cc4cd0bdcbef303218bf5b1356b06aa31e0b6c92ba7'
+  # The calendar's provider half: our own Tuta client (apps/tuta_calendar), built
+  # and signed here because Tuta serves no CalDAV and no SDK of theirs ships. The
+  # digest is the publish-tuta-calendar run for the Containerfile at that path.
+  'tuta-calendar|built:images/tuta-calendar/Containerfile|sha256:c60a3021245e7874821daa54ede7cef7cfb35da6bf58855b5538d2037fd37e4b'
 )
 
 # app_image_ref NAME -> the only reference a Quadlet may contain.

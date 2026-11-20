@@ -4093,30 +4093,17 @@ repository cannot invent -- a Tuta session, created interactively with the
 account password and, on most accounts, a TOTP code -- and everything after that
 resumes it unattended.
 
-There is no unit and no `scripts/app-images.sh` row yet: the image digest does
-not exist until the publish workflow runs, and the timer is the next slice. Until
-then this is a hand-run pair of commands.
+`smortress-agent-collect-calendar.service` runs the pair every two hours: the
+exporter rewrites the entity directory, then the collector publishes it as a
+generation. The image is pinned in `scripts/app-images.sh`; the session skips the
+timed run until it exists, so the only step that cannot be automated is the
+sign-in below.
 
-1. Read the digest the publish run printed. The last step of the
-   `publish-tuta-calendar` job writes the row to the run summary; the digest is
-   the `sha256:…` after the `@`:
-
-   ```sh
-   gh run list --repo smores56/homelab-platform --workflow publish-tuta-calendar --limit 1
-   gh run view --repo smores56/homelab-platform --log \
-     "$(gh run list --repo smores56/homelab-platform \
-        --workflow publish-tuta-calendar --limit 1 --json databaseId --jq '.[0].databaseId')" \
-     | grep '^pin:'
-   image=ghcr.io/smores56/homelab-platform/tuta-calendar@sha256:<the digest that line names>
-   ```
-
-   The store is the account's access, so it lives on the quarantined volume next
-   to the bridge's (personal recovery group, never git), owned by uid 1000:
-
-   ```sh
-   sudo install -d -o 1000 -g 1000 -m 0700 /var/lib/agent/local/quarantine/tuta-calendar
-   sudo install -d -o 1000 -g 1000 -m 0755 /var/lib/agent/local/quarantine/calendar
-   ```
+1. The volumes already exist: `smortress-agent-config.service` creates
+   `/var/lib/agent/local/quarantine/tuta-calendar` (0700, the sealed session) and
+   `/var/lib/agent/local/quarantine/calendar` (0750, the dump) on the personal
+   side of the agent dataset, next to the mail bridge's. Nothing to do unless a
+   restore left them root-owned, in which case booting again re-applies the owner.
 
 2. Sign in once. `init` asks for the address, the password and -- only if the
    account answers with a challenge -- one code from the authenticator. Nothing
@@ -4125,6 +4112,7 @@ then this is a hand-run pair of commands.
    passphrase-less GPG key the run generates there.
 
    ```sh
+   image=$(bash -c 'source scripts/app-images.sh; app_image_ref tuta-calendar')
    sudo podman run --rm -it \
      -v /var/lib/agent/local/quarantine/tuta-calendar:/data:z \
      "$image" init --store /data
@@ -4207,7 +4195,21 @@ then this is a hand-run pair of commands.
    midnight-UTC test, not in the collector: the collector writes `VALUE=DATE`
    exactly when the value is ten characters long.
 
-6. Expect the version floor. Tuta raises the minimum client version it accepts,
+6. Run it through the unit, then leave the timer to it:
+
+   ```sh
+   sudo systemctl start smortress-agent-collect-calendar.service
+   sudo journalctl -u smortress-agent-collect-calendar.service -n 30 --no-pager
+   sudo systemctl list-timers smortress-agent-collect-calendar.timer
+   ```
+
+   The collector stage prints one JSON line; `objects` must equal the dump's
+   count and `deleted` must be `0`. The pass is *skipped*, not failed, while the
+   seal is missing (`ConditionPathExists=`), so a start that leaves nothing in the
+   journal means step 2 has not run. A red unit is a refusal: the journal names
+   the reason and the replica is untouched.
+
+7. Expect the version floor. Tuta raises the minimum client version it accepts,
    and everything else about this account stops working at once. Every refusal
    names the endpoint and never the token:
 

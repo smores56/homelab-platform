@@ -883,6 +883,58 @@ for collector_case in "${collector_cases[@]}"; do
   fi
 done
 
+# 8a. The calendar pair: our own exporter (session held on a volume, no secret)
+#     followed by the collector. The session is the account's access, so it is
+#     mounted read-write only into stage 1 and never into the collector.
+calendar=units/systemd/smortress-agent-collect-calendar.service
+calendar_timer=units/systemd/smortress-agent-collect-calendar.timer
+if [[ -f $calendar ]]; then
+  ok "$calendar exists"
+  eq "$(grep -cE '^ExecStart=' "$calendar")" 2 "$calendar is dump then collect"
+  eq "$(grep -cE -- '--network systemd-agent-collect' "$calendar")" \
+    "$(grep -cE -- '--network ' "$calendar")" "$calendar names the collector network"
+  if grep -qE -- '--secret ' "$calendar"; then
+    bad "the calendar pass holds no Podman secret"
+  else
+    ok "the calendar pass holds no Podman secret"
+  fi
+  if grep -qE '^ConditionPathExists=.*quarantine/tuta-calendar/session\.gpg' "$calendar"; then
+    ok "the calendar pass waits for the sealed session"
+  else
+    bad "the calendar pass waits for the sealed session"
+  fi
+  if [[ $(grep -cF -- '/var/lib/agent/local/quarantine/tuta-calendar:/data:z' "$calendar") == 1 ]]; then
+    ok "the session volume is mounted once, read-write"
+  else
+    bad "the session volume is mounted once, read-write"
+  fi
+  if grep -qE -- '/var/lib/agent/local/quarantine/calendar:/entities:ro' "$calendar"; then
+    ok "the collector reads the dump read-only"
+  else
+    bad "the collector reads the dump read-only"
+  fi
+  while IFS= read -r image; do
+    if app_image_matches "$image"; then
+      ok "the calendar pass runs a pinned image from the table"
+    else
+      bad "the calendar pass runs a pinned image from the table" "$image"
+    fi
+  done < <(grep -oE 'ghcr\.io/smores56/homelab-platform/[a-z-]+@sha256:[0-9a-f]{64}' "$calendar")
+  if [[ -f $calendar_timer ]]; then
+    eq "$(sed -n 's/^Unit=//p' "$calendar_timer")" "$(basename "$calendar")" \
+      "$calendar_timer runs the calendar pass"
+    if grep -qxF 'Persistent=true' "$calendar_timer"; then
+      ok "$calendar_timer closes a missed run on the next boot"
+    else
+      bad "$calendar_timer closes a missed run on the next boot"
+    fi
+  else
+    bad "$calendar_timer exists"
+  fi
+else
+  bad "$calendar exists"
+fi
+
 # 8b. The bridge: the provider half. It holds the Tuta session, so its volume is
 #     the account, and it sits on the collectors' network rather than a
 #     deployment's.
