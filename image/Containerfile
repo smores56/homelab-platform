@@ -24,7 +24,7 @@ ARG BASE_IMAGE
 # resolve as a type, and an unconfined domain already holds every permission the
 # forwarded agent socket needs. A module for sudo_t could not even link (verified
 # on the host), and a policy for unconfined_t would grant nothing it lacks. The
-# tripwire is the AVC drill in manual-steps section 45: if a future base confines
+# tripwire is the AVC drill in manual-steps section 44: if a future base confines
 # sudo, `denied { connectto }` names the domain to write the rule for.
 FROM ${BASE_IMAGE} AS sudo-build
 
@@ -62,8 +62,6 @@ ARG AGE_VERSION
 ARG AGE_SHA256
 ARG RESTIC_VERSION
 ARG RESTIC_SHA256
-ARG CLOUDFLARED_VERSION
-ARG CLOUDFLARED_SHA256
 
 LABEL org.opencontainers.image.title="smortress server image" \
       org.opencontainers.image.description="Derived uCore bootc image for the smortress core" \
@@ -182,11 +180,7 @@ RUN set -eux; \
     echo "${RESTIC_SHA256}  /tmp/restic.bz2" | sha256sum -c -; \
     bzip2 -dc /tmp/restic.bz2 > /usr/bin/restic; \
     chmod 0755 /usr/bin/restic; \
-    curl -fsSLo /tmp/cloudflared \
-      "https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-amd64"; \
-    echo "${CLOUDFLARED_SHA256}  /tmp/cloudflared" | sha256sum -c -; \
-    install -m 0755 /tmp/cloudflared /usr/bin/cloudflared; \
-    rm -rf /tmp/sops /tmp/age /tmp/age.tar.gz /tmp/restic.bz2 /tmp/cloudflared
+    rm -rf /tmp/sops /tmp/age /tmp/age.tar.gz /tmp/restic.bz2
 
 # bootc images enable units with systemctl at build time. rpm-ostree and zincati
 # automatic updates are masked: a deployment change lands in a maintenance
@@ -230,7 +224,6 @@ RUN set -eux; \
       smortress-apps-deny.service \
       smortress-apps-egress.service \
       smortress-tailscale-serve.service \
-      smortress-cloudflared.service \
       smortress-immich-dump.timer \
       smortress-agent-collect-finance.timer \
       smortress-agent-collect-calendar.timer \

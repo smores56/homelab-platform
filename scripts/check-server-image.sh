@@ -31,7 +31,7 @@ probe() { local name=$1; shift; if "$@" >/dev/null 2>&1; then ok "$name"; else b
 
 if [[ $UCORE_IMAGE =~ @sha256:[0-9a-f]{64}$ ]]; then ok "base image is digest-pinned"; else bad "base image is digest-pinned"; fi
 if [[ -n ${IMAGE_REPO:-} ]]; then ok "image repository is set"; else bad "image repository is set"; fi
-for pin in SOPS_SHA256 AGE_SHA256 RESTIC_SHA256 CLOUDFLARED_SHA256 BUTANE_SHA256 COSIGN_SHA256; do
+for pin in SOPS_SHA256 AGE_SHA256 RESTIC_SHA256 BUTANE_SHA256 COSIGN_SHA256; do
   if [[ ${!pin} =~ ^[0-9a-f]{64}$ ]]; then ok "$pin format"; else bad "$pin format"; fi
 done
 
@@ -42,20 +42,21 @@ check "Containerfile masks Podman auto-update" has 'podman-auto-update.timer' im
 check "Containerfile masks bootc auto-update" has 'bootc-fetch-apply-updates.timer' image/Containerfile
 check "Containerfile sets the default firewall zone to drop" has '--set-default-zone=drop' image/Containerfile
 
-# The SSH tunnel connector. Its token is image ciphertext, so it must never
-# reach argv, and the unit must not start before the decrypt unit has written
-# that ciphertext.
-check "image pins the cloudflared release" has 'CLOUDFLARED_SHA256' image/Containerfile
-check "image ships the connector unit" has 'smortress-cloudflared.service' image/Containerfile
-check "the connector reads the token from a credential file" has 'LoadCredential=tunnel:/run/smortress/secrets/cloudflared-tunnel.yaml' units/systemd/smortress-cloudflared.service
-if grep -qE -- '--token([= ]|$)' units/systemd/smortress-cloudflared.service; then
-  bad "the connector keeps the token off argv"
-else
-  ok "the connector keeps the token off argv"
-fi
-check "the connector requires the decrypt unit" grep -qE '^Requires=.*sops-decrypt\.service' units/systemd/smortress-cloudflared.service
-check "the connector is skipped without its ciphertext" has 'ConditionPathExists=/run/smortress/secrets/cloudflared-tunnel.yaml' units/systemd/smortress-cloudflared.service
-check "the tunnel token is in the decrypt manifest" grep -qE '^cloudflared-tunnel\.yaml[[:space:]]' image/rootfs/etc/smortress/secrets.manifest
+# No Cloudflare SSH route (design #767 T6). SSH is tailnet-only, so the connector
+# unit, its release pin, its build step, its token and the tofu objects that
+# fronted it must not come back: each assertion here fails on a re-introduction.
+check "no tunnel connector unit ships" test ! -e units/systemd/smortress-cloudflared.service
+check "the image enables no tunnel connector" lacks 'smortress-cloudflared' image/Containerfile
+check "no release pin installs a tunnel connector" lacks 'CLOUDFLARED' image/pins.env
+check "the build fetches no tunnel connector" lacks 'cloudflared' image/Containerfile
+check "the build script passes no tunnel connector pin" lacks 'CLOUDFLARED' scripts/build-image.sh
+check "no tunnel ciphertext ships" test ! -e secrets/server/cloudflared-tunnel.yaml
+check "the decrypt manifest lists no tunnel ciphertext" \
+  test -z "$(grep -E '^cloudflared-tunnel\.yaml[[:space:]]' image/rootfs/etc/smortress/secrets.manifest)"
+check "no tofu object plans an ssh tunnel" lacks 'ssh_tunnel' tofu
+check "no tofu object routes an ssh hostname" \
+  test -z "$(grep -rE 'uri[[:space:]]*=[[:space:]]*"ssh\.\$\{var\.domain\}"' tofu)"
+check "no ssh service token is authored" lacks '"cloudflare_zero_trust_access_service_token" "ssh"' tofu
 
 # sshd (design #767). The tailnet is the only route in and the firewall is the
 # filter, so the drop-in carries no ListenAddress at all: sshd listens on every
@@ -279,7 +280,7 @@ check "the sudoers drop-in is parsed at build time" has 'visudo -cf /etc/sudoers
 check "the sops env drop-in is installed 0440" has 'chmod 0440 /etc/sudoers.d/10-human-gate /etc/sudoers.d/20-sops-env' image/Containerfile
 check "the sops env drop-in is parsed at build time" has 'visudo -cf /etc/sudoers.d/20-sops-env' image/Containerfile
 check "the sops env drop-in drops every identity source" grep -q '^Defaults env_delete += ' image/rootfs/etc/sudoers.d/20-sops-env
-# Access through the tunnel is the only route in, so a drop-in sshd refuses to
+# The tailnet is the only route in, so a drop-in sshd refuses to
 # parse would cost a console recovery; the build parses the shipped config
 # instead of leaving the host to find out at boot.
 check "the sshd configuration is parsed at build time" has 'sshd -t -o HostKey=' image/Containerfile
@@ -309,7 +310,7 @@ check "tmpfiles no longer creates a sudo usersfile directory" \
 # no-touch-required and the sudo credential asks for the tap. A plain
 # ssh-ed25519 line here would let sudo accept a key that never asks for a touch,
 # and `no-touch-required` would do the same per key. An empty file is allowed and
-# expected until the owner enrolls the keys (docs/manual-steps.md section 45):
+# expected until the owner enrolls the keys (docs/manual-steps.md section 44):
 # pam_rssh finds no matching key, returns PAM_AUTH_ERR, and the password is the
 # way in until the public halves are committed.
 sudo_keys=image/rootfs/etc/ssh/sudo_authorized_keys
@@ -341,7 +342,7 @@ check "the sudo key file is installed 0600" has 'chmod 0600 /etc/ssh/sudo_author
 # No local SELinux policy ships: sudo runs unconfined on this base (sudo_exec_t,
 # process stays unconfined_t), so `sudo_t` does not resolve and an unconfined
 # domain already holds the permission the agent socket needs. A module here would
-# be dead code that fails to link; the drill in manual-steps section 45 is the
+# be dead code that fails to link; the drill in manual-steps section 44 is the
 # tripwire if a future base confines sudo.
 check "no local sudo policy module ships" \
   test ! -e image/rootfs/usr/share/smortress/selinux/smortress_sudo_rssh.cil

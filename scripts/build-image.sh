@@ -28,7 +28,7 @@ if ! grep -q 'BEGIN PUBLIC KEY' "$repo/image/cosign.pub"; then
   exit 1
 fi
 for var in SOPS_VERSION SOPS_SHA256 AGE_VERSION AGE_SHA256 RESTIC_VERSION RESTIC_SHA256 \
-  CLOUDFLARED_VERSION CLOUDFLARED_SHA256 PAM_RSSH_VERSION PAM_RSSH_COMMIT; do
+  PAM_RSSH_VERSION PAM_RSSH_COMMIT; do
   [[ -n ${!var:-} ]] || { echo "build-image: $var is unset in image/pins.env" >&2; exit 1; }
 done
 
@@ -43,8 +43,6 @@ image="${IMAGE_REPO}:${tag}"
   --build-arg "AGE_SHA256=$AGE_SHA256" \
   --build-arg "RESTIC_VERSION=$RESTIC_VERSION" \
   --build-arg "RESTIC_SHA256=$RESTIC_SHA256" \
-  --build-arg "CLOUDFLARED_VERSION=$CLOUDFLARED_VERSION" \
-  --build-arg "CLOUDFLARED_SHA256=$CLOUDFLARED_SHA256" \
   --build-arg "PAM_RSSH_VERSION=$PAM_RSSH_VERSION" \
   --build-arg "PAM_RSSH_COMMIT=$PAM_RSSH_COMMIT" \
   --label "org.opencontainers.image.revision=$(git -C "$repo" rev-parse HEAD)" \
