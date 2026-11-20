@@ -106,7 +106,12 @@ check "root never logs in over ssh" has 'PermitRootLogin no' "$sshd_dropin"
 check "one account may log in" has 'AllowUsers smores' "$sshd_dropin"
 check "no TCP forwarding" has 'AllowTcpForwarding no' "$sshd_dropin"
 check "no stream-local forwarding" has 'AllowStreamLocalForwarding no' "$sshd_dropin"
-check "no agent forwarding" has 'AllowAgentForwarding no' "$sshd_dropin"
+# Agent forwarding is the one channel that is on, and it is load-bearing: sshd
+# creates ~/.ssh/agent and exports SSH_AUTH_SOCK only for a session that
+# forwarded an agent, and pam_rssh reads that socket, so `no` here leaves every
+# sudo prompt at PAM_AUTHINFO_UNAVAIL and the password as the only factor. It is
+# its own directive: AllowStreamLocalForwarding does not gate it either way.
+check "agent forwarding is on for the sudo tap" has 'AllowAgentForwarding yes' "$sshd_dropin"
 check "no user rc file runs at login" has 'PermitUserRC no' "$sshd_dropin"
 check "auth tries are bounded" has 'MaxAuthTries 10' "$sshd_dropin"
 check "the grace time is bounded" has 'LoginGraceTime 60' "$sshd_dropin"
@@ -324,9 +329,15 @@ check "the sudo key file is installed 0600" has 'chmod 0600 /etc/ssh/sudo_author
 # agent socket, so the image ships a local module and a unit that loads it; the
 # permission set is unproven until the host drill (`ausearch -m avc -c sudo`),
 # which is why the module is a file to edit rather than a script to renumber.
+# The permission is connectto, not connect: an AF_UNIX stream connect is checked
+# as CONNECTTO on the peer socket's label, and `connect` only against the
+# caller's own socket, which sudodomain already allows -- a module asking for
+# connect grants nothing and is indistinguishable from a missing one at the tap.
 selinux_te=image/selinux/smortress_sudo_rssh.te
 check "the local module grants the agent socket" \
-  has 'allow sudo_t ssh_home_t:unix_stream_socket connect;' "$selinux_te"
+  has 'allow sudo_t ssh_home_t:unix_stream_socket connectto;' "$selinux_te"
+check "the module asks for no permission that grants nothing" \
+  lacks 'unix_stream_socket connect;' "$selinux_te"
 check "the module is compiled in the build stage" has 'selinux-policy-devel' image/Containerfile
 check "the compiled module ships in the image" \
   has '/usr/share/smortress/selinux/smortress_sudo_rssh.pp' image/Containerfile

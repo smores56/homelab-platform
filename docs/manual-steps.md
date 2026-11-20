@@ -4111,11 +4111,18 @@ console or through the tunnel.
    | `LoginGraceTime` | `60` |
    | `AllowTcpForwarding` | `no` |
    | `AllowStreamLocalForwarding` | `no` |
-   | `AllowAgentForwarding` | `no` |
+   | `AllowAgentForwarding` | `yes` |
 
    `PasswordAuthentication yes` in the loopback query means the drop-in is sorting
    after `90-` or was not shipped; check `ls /etc/ssh/sshd_config.d/` on the host
    before going further.
+
+   `AllowAgentForwarding no` is the failure that costs the most, because it is
+   silent until section 45: sshd creates `~/.ssh/agent` and exports
+   `SSH_AUTH_SOCK` only for a session that forwarded an agent, so without this
+   line the sudo tap degrades to the password on every escalation.
+   `AllowStreamLocalForwarding no` does not cover it — agent forwarding is its
+   own directive.
 
 5. Prove the key file. Root-owned, world-readable, labelled `etc_t`: sshd opens it
    as root, so nothing about ownership or SELinux has to be fixed by hand — which
@@ -4359,9 +4366,18 @@ carry both before it can stand in for another, so the spare is enrolled twice.
    ```
 
    `-O resident` is what lets the credential live on the key rather than in the
-   handle file, so a replacement laptop only needs `ssh-keygen -K` to fetch it
-   back into its agent. Do **not** add `-O no-touch-required`: that option is
-   the whole difference between the two credentials.
+   handle file, so a replacement laptop fetches it back rather than minting a
+   second one:
+
+   ```sh
+   cd ~/.ssh && ssh-keygen -K && ssh-add id_ed25519_sk*
+   ```
+
+   `-K` does not load the agent. It downloads the resident credential as
+   `id_ed25519_sk*` handle files into the working directory, and `ssh-add` is the
+   step that puts them in the agent; skip it and sudo has nothing to ask for a
+   signature. Do **not** add `-O no-touch-required`: that option is the whole
+   difference between the two credentials.
 
 2. Commit the public halves, one `sk-ssh-ed25519` line per key, and
    nothing else. The file is empty in the repository until the first enrollment,
@@ -4385,8 +4401,9 @@ carry both before it can stand in for another, so the spare is enrolled twice.
    ```
 
    The loader unit runs at boot; a module already at the shipped digest is left
-   alone, so the second boot after an image that changed the `.te` is the one
-   that reloads it.
+   alone, so the **first** boot after an image that changed the `.pp` is the one
+   that reloads it. The digest is compared against the stamp file in `/var`,
+   which bootc never reconciles, and that is exactly the case this covers.
 
 4. Prove the tap, then prove the fallback. `sudo -k` clears the per-TTY ticket
    the previous attempt left behind, and `-A` is what forwards the agent:
@@ -4402,20 +4419,39 @@ carry both before it can stand in for another, so the spare is enrolled twice.
 
    The second and third commands are the fallback, and it is a property of the
    return codes rather than of arithmetic kept by hand: `pam_rssh` returns
-   `PAM_AUTHINFO_UNAVAIL` with no `SSH_AUTH_SOCK` and `PAM_AUTH_ERR` for a dead
-   socket, a key the agent does not hold or a refused touch, and never
-   `PAM_IGNORE`, so every non-success is ignored onto `pam_unix`.
+   `PAM_AUTHINFO_UNAVAIL` with no `SSH_AUTH_SOCK`, `PAM_CRED_INSUFFICIENT` for a
+   key file that is missing or unreadable, and `PAM_AUTH_ERR` for a dead socket,
+   a key the agent does not hold, a refused touch, or an *empty* key file (which
+   parses to no entries, so no key matches), and never `PAM_IGNORE`, so every
+   non-success is ignored onto `pam_unix`.
+
+   `default=ignore` is what swallows all of them by design, so a stack mistake
+   here never fails loudly: it degrades to the password. The evidence is in the
+   module's syslog output, logged under `sudo`'s own name (the module never sets
+   its ident) and only at warn and above, which is why a config error is visible
+   only here:
+
+   ```sh
+   sudo journalctl -t sudo -g 'SSH agent|authorized_keys|keys passed' -n 20 --no-pager
+   # expect: no output after a working tap — success is logged at info, below the
+   # module's default warn level; anything printed here explains the password
+   # prompt
+   ```
 
    The two credentials are not interchangeable. The login credential is refused
    for sudo and the sudo credential is refused for ssh, which is what the
    separation of the two files buys:
 
    ```sh
-   ssh -t smortress 'sudo -k; sudo true'      # agent forwarded, key present
+   ssh -A -t smortress 'sudo -k; sudo true'      # agent forwarded, key present
    # expect: the touch credential signs; the login credential alone falls through
-   ssh -i ~/.ssh/id_smortress_sudo smortress true
+   ssh -o IdentitiesOnly=yes -i ~/.ssh/id_smortress_sudo smortress true
    # expect: refused, no matching key in authorized_keys.d/smores
    ```
+
+   `IdentitiesOnly=yes` is not decoration: without it the agent also offers the
+   login credential, sshd accepts that one, and the "expect refused" line passes
+   with the sudo credential never consulted.
 
 5. Prove the 30-minute per-TTY ticket and the tally. A second sudo in the same
    TTY inside the window is silent; a new ssh session is a new TTY and prompts
@@ -4445,10 +4481,10 @@ carry both before it can stand in for another, so the spare is enrolled twice.
 
 6. Run the AVC drill after every image change that touches this stack. The one
    thing the design could not prove from sources is the SELinux permission set:
-   the targeted policy grants `sudo_t` no `unix_stream_socket connect` to
-   `ssh_home_t`, where OpenSSH >= 10.1 puts the forwarded socket
-   (`~/.ssh/agent`), and `image/selinux/smortress_sudo_rssh.te` is the local
-   module that closes that gap.
+   the targeted policy grants `sudo_t` no `connectto` on `ssh_home_t`, where
+   OpenSSH >= 10.1 puts the forwarded socket (`~/.ssh/agent`), and
+   `image/selinux/smortress_sudo_rssh.te` is the local module that closes that
+   gap.
 
    ```sh
    ssh -A -t smortress 'echo "$SSH_AUTH_SOCK"; ls -ld ~/.ssh/agent'
@@ -4457,10 +4493,15 @@ carry both before it can stand in for another, so the spare is enrolled twice.
    ```
 
    An empty `ausearch` after a successful tap means the module's permission set
-   is complete. A `denied { connect }` for `ssh_home_t` means it is not loaded
-   (check `systemctl status smortress-selinux-sudo-rssh`,
-   `semodule -l | grep smortress`); a denial for another permission or class
-   means an edit to the `.te`, which is one line, then a rebuild and a reboot.
+   is complete. A live `denied { connectto }` for `ssh_home_t` means the module
+   is missing or stale — not loaded at all, or loaded from an older `.pp` that
+   asked for `connect` and so granted nothing (`systemctl status
+   smortress-selinux-sudo-rssh`; `semodule -l | grep smortress`;
+   `semodule -lfull | grep smortress` for the version, then compare against
+   `sha256sum /usr/share/smortress/selinux/smortress_sudo_rssh.pp` and
+   `/var/lib/smortress/selinux/smortress_sudo_rssh.sha256`); a denial for
+   another permission or class means an edit to the `.te`, which is one line,
+   then a rebuild and a reboot.
    Log the socket path the drill prints: a change of path across an OpenSSH
    upgrade is the other half of this risk, and it shows up as the same fallback.
 
@@ -4486,9 +4527,10 @@ carry both before it can stand in for another, so the spare is enrolled twice.
 
 - a wrong local policy fails closed — sudo prompts for the password — but logs
   an AVC on every escalation, which is what step 6 exists to catch;
-- `pam_rssh` has no upstream SIGINT handling, so cancelling a touch wait with
-  Ctrl-C needs the private patch carried over from the #748 exploration. It
-  affects the client's agent, not the server;
+- `pam_rssh` has no upstream SIGINT handling, and the `sudo-build` stage compiles
+  it unpatched: Ctrl-C during a touch wait leaves the signature request pending
+  on the client until it times out, rather than withdrawing it. It affects the
+  client's agent, not the server;
 - Apple's ssh and its launchd agent cannot hold `sk-` keys, so the work Mac uses
   the password fallback until T11.
 

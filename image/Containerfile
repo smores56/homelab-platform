@@ -18,6 +18,15 @@ ARG BASE_IMAGE
 # rather than here. `--locked` makes the committed Cargo.lock the dependency set,
 # and `--recurse-submodules` is required: pam_rssh vendors its agent protocol in
 # dep/ssh-agent.rs, and the clone fails at compile time without it.
+#
+# selinux-policy-devel is installed at the base's own NVR, not at whatever the
+# repos serve: it `Requires: selinux-policy` at its own version, so an unpinned
+# install both drags in a newer policy than the digest-pinned base runs and
+# compiles the module against that newer one. The module then references
+# interfaces the base's policy does not carry, and the failure lands on the host
+# at `semodule -i` -- or silently, as a module that grants the wrong thing. The
+# pin can only fail when the repos do not carry a devel build for this base,
+# which is a rebuild-and-bump signal, not something to paper over.
 FROM ${BASE_IMAGE} AS sudo-build
 
 ARG BASE_IMAGE
@@ -25,9 +34,11 @@ ARG PAM_RSSH_VERSION
 ARG PAM_RSSH_COMMIT
 
 RUN set -eux; \
+    policy_nvr=$(rpm -q --qf '%{VERSION}-%{RELEASE}' selinux-policy); \
     dnf5 -y --setopt=install_weak_deps=False install \
       cargo rustc gcc make git pkgconf-pkg-config \
-      openssl-devel pam-devel selinux-policy-devel; \
+      openssl-devel pam-devel "selinux-policy-devel-${policy_nvr}" \
+      || { echo "selinux-policy-devel-${policy_nvr} is not available: the repos carry no devel build for this base's policy, and a build at another version compiles the module against a policy this image does not ship" >&2; exit 1; }; \
     dnf5 clean all; \
     rm -rf /var/cache/dnf /var/cache/libdnf5
 
