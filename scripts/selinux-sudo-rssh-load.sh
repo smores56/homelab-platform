@@ -30,7 +30,7 @@ if [[ -f $stamp ]]; then
   read -r recorded <"$stamp" || true
 fi
 
-if [[ $recorded == "$digest" ]] && semodule -l | grep -qx "$module_name"; then
+if [[ $recorded == "$digest" ]] && semodule -l | cut -f1 | grep -qx "$module_name"; then
   echo "selinux-sudo-rssh: $module_name is loaded at $digest"
   exit 0
 fi
