@@ -4084,6 +4084,148 @@ If the volume is genuinely lost, move the replica aside as well and let the
 bridge resync from Tuta: the old generations stay as the history they are, and the
 new ones start from a consistent epoch.
 
+### 40.16 Sign in to the Tuta calendar exporter and run the dumper
+
+Tuta serves no CalDAV, so the calendar's provider half is our own client:
+`apps/tuta_calendar/`, shipped in `images/tuta-calendar/` and published by
+`.github/workflows/publish-tuta-calendar.yml`. It needs one thing this
+repository cannot invent -- a Tuta session, created interactively with the
+account password and, on most accounts, a TOTP code -- and everything after that
+resumes it unattended.
+
+There is no unit and no `scripts/app-images.sh` row yet: the image digest does
+not exist until the publish workflow runs, and the timer is the next slice. Until
+then this is a hand-run pair of commands.
+
+1. Read the digest the publish run printed. The last step of the
+   `publish-tuta-calendar` job writes the row to the run summary; the digest is
+   the `sha256:…` after the `@`:
+
+   ```sh
+   gh run list --repo smores56/homelab-platform --workflow publish-tuta-calendar --limit 1
+   gh run view --repo smores56/homelab-platform --log \
+     "$(gh run list --repo smores56/homelab-platform \
+        --workflow publish-tuta-calendar --limit 1 --json databaseId --jq '.[0].databaseId')" \
+     | grep '^pin:'
+   image=ghcr.io/smores56/homelab-platform/tuta-calendar@sha256:<the digest that line names>
+   ```
+
+   The store is the account's access, so it lives on the quarantined volume next
+   to the bridge's (personal recovery group, never git), owned by uid 1000:
+
+   ```sh
+   sudo install -d -o 1000 -g 1000 -m 0700 /var/lib/agent/local/quarantine/tuta-calendar
+   sudo install -d -o 1000 -g 1000 -m 0755 /var/lib/agent/local/quarantine/calendar
+   ```
+
+2. Sign in once. `init` asks for the address, the password and -- only if the
+   account answers with a challenge -- one code from the authenticator. Nothing
+   is echoed, no secret is accepted on the command line, and the password is
+   never written: the session that lands on the volume is sealed with a
+   passphrase-less GPG key the run generates there.
+
+   ```sh
+   sudo podman run --rm -it \
+     -v /var/lib/agent/local/quarantine/tuta-calendar:/data:z \
+     "$image" init --store /data
+   ```
+
+   It prints one line, `session for <address> sealed at /data/session.gpg`, and
+   nothing else. Prove that what it wrote is a sealed session rather than a
+   token in a file:
+
+   ```sh
+   sudo find /var/lib/agent/local/quarantine/tuta-calendar -maxdepth 1 \
+     -printf '%u:%g %m %p\n'
+   sudo grep -c accessToken /var/lib/agent/local/quarantine/tuta-calendar/session.gpg
+   ```
+
+   The seal must be `1000:1000 600`, the keyring directory `700`, and the grep
+   must find nothing (a `grep: …: binary file matches` here means the seal is
+   not encrypted; stop and treat the store as compromised). A refusal instead of
+   a session -- `the session seal … could not be opened`, `the account's second
+   factor is U2F or WebAuthn only`, `the verifier for this password was not
+   accepted` -- is the run refusing to store something it could not prove, and
+   re-running `init` is the whole remedy.
+
+3. Dump the calendar into the directory the collector reads:
+
+   ```sh
+   sudo podman run --rm \
+     -v /var/lib/agent/local/quarantine/tuta-calendar:/data:z \
+     -v /var/lib/agent/local/quarantine/calendar:/out:z \
+     "$image" dump --store /data --out /out
+   ```
+
+   It prints one JSON line -- `{"command": "dump", "objects": N, "removed": 0,
+   "out": "/out"}` -- and exits `0`, or exits `3` with the reason on stderr and
+   writes nothing. `objects` is the number of events; `removed` counts files left
+   over from a previous run that this one did not rewrite, which is how an event
+   deleted in the web UI stops being present.
+
+4. Run the collector over it. The replica root is the same one the finance
+   collector uses, on the same volume:
+
+   ```sh
+   cd ~/src/homelab-platform
+   sudo PYTHONPATH=libs python3 -m data_plane.collectors.raw \
+     --root /var/lib/agent/local/replica/calendar calendar \
+     --entities /var/lib/agent/local/quarantine/calendar
+   ```
+
+   The report's `objects` must equal the dump's count and `deleted` must be `0`:
+   this source has no tombstone, so a missing event is carried forward as
+   absent-unknown instead. Confirm one generation was published per run and that
+   it is owned by uid 1000:
+
+   ```sh
+   sudo ls -1 /var/lib/agent/local/replica/calendar/published | wc -l
+   sudo find /var/lib/agent/local/replica/calendar/published -maxdepth 1 \
+     -user 1000 -printf '%u:%g %p\n'
+   ```
+
+   A second run must add exactly one generation, and only if something changed
+   in `published`: a staging directory left behind means a run was interrupted
+   mid-enumeration and is safe to remove, because nothing publishes from there.
+
+5. Spot-check three events against the Tuta web calendar -- the point is the
+   three shapes that map differently, not the count:
+
+   ```sh
+   # a plain timed event: an ISO instant on both ends
+   sudo grep -l '"rrule": null' /var/lib/agent/local/quarantine/calendar/*.json | head -n 1
+   # an all-day event: date-only values, which is what makes the ICS VALUE=DATE
+   sudo grep -lE '"start": "[0-9]{4}-[0-9]{2}-[0-9]{2}"' \
+     /var/lib/agent/local/quarantine/calendar/*.json | head -n 1
+   # a series: an RRULE built from the repeat rule, and the raw rule beside it
+   sudo grep -l '"rrule": "FREQ=' /var/lib/agent/local/quarantine/calendar/*.json | head -n 1
+   ```
+
+   Open each of those three files (`sudo cat`) and compare `summary`, `start`,
+   `end` and, for the series, `rrule` and `recurrence` against the event in the
+   web UI. An all-day event whose `start` carries a time is a bug in the
+   midnight-UTC test, not in the collector: the collector writes `VALUE=DATE`
+   exactly when the value is ten characters long.
+
+6. Expect the version floor. Tuta raises the minimum client version it accepts,
+   and everything else about this account stops working at once. Every refusal
+   names the endpoint and never the token:
+
+   - `HTTP 474 InvalidSoftwareVersionError` -- `CLIENT_VERSION` in
+     `apps/tuta_calendar/api.py` is below the server's minimum. Read the current
+     version from `https://app.tuta.com/index.js` (`versionNumber`), raise the
+     constant, and run `publish-tuta-calendar` via `workflow_dispatch`; the new
+     digest is what step 1 then names.
+   - `HTTP 412` -- the model version moved. Raise `SYS_MODEL_VERSION` or
+     `TUTANOTA_MODEL_VERSION` in the same file, rebuild the same way, and expect
+     the field numbers in `apps/tuta_calendar/dump.py` to be the next thing to
+     move.
+   - `HTTP 401` or `403` -- the stored session was revoked or expired. Run step 2
+     again; the replica is untouched.
+
+   A dump that exits `3` publishes nothing, so a missed version bump shows up as
+   an unchanged generation count rather than as a calendar that quietly emptied.
+
 ## 41. SSH tunnel (`ssh.sammohr.dev`)
 
 `ssh.sammohr.dev` gets its own Cloudflare tunnel. The host tunnel is locally

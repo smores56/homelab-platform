@@ -104,6 +104,30 @@ jobs:
       - name: run data-plane unit tests
         run: tests/data-plane/check.sh
 
+  tuta-calendar:
+    name: tuta-calendar unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      # Not stdlib only, unlike the other Python suites: the dumper holds Tuta's
+      # crypto, so this job installs the pins the image ships
+      # (images/tuta-calendar/requirements.lock) into a throwaway venv and the
+      # seal's own runtime, gpg. Both are in the image, so a test that passes here
+      # is a test of what ships. No network in the tests themselves: the API
+      # transport is injected, and every entity is encrypted in-process.
+      - name: install the image's pinned dependencies
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --disable-pip-version-check \
+            -r images/tuta-calendar/requirements.lock
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gnupg
+      - name: run tests
+        run: PATH="$RUNNER_TEMP/venv/bin:$PATH" tests/tuta-calendar/check.sh
+
   kubeconform:
     name: kubeconform
     runs-on: ubuntu-latest
@@ -204,6 +228,7 @@ jobs:
           shellcheck scripts/*.sh tests/policies/*.sh tests/tofu/*.sh \
             tests/access/*.sh tests/backup/*.sh tests/digest/*.sh \
             tests/observability/*.sh tests/agent-control/*.sh \
+            tests/tuta-calendar/*.sh \
             clusters/homelab/flux-system/bootstrap.sh \
             clusters/homelab/platform/backup/*.sh provision/*/*.sh tests/provision/*.sh \
             scripts/core/*.sh tests/core/*.sh \
