@@ -7,3 +7,6 @@
 Defaults timestamp_timeout=30
 Defaults timestamp_type=tty
 Defaults log_subcmds
+# The SOPS identity wrapper is user-writable, and sops reads these sources
+# independently of it; drop them all at the sudo boundary.
+Defaults env_delete += "SOPS_AGE_KEY SOPS_AGE_KEY_FILE SOPS_AGE_KEY_CMD SOPS_AGE_RECIPIENT SOPS_AGE_SSH_PRIVATE_KEY_CMD SOPS_AGE_SSH_PRIVATE_KEY_FILE"
