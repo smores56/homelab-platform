@@ -668,6 +668,20 @@ for q in units/quadlet/agent-facade-personal.container units/quadlet/agent-facad
     bad "$q mounts the tree its PYTHONPATH names"
   fi
 done
+# The collectors run the same package through a plain podman unit, where the
+# environment is a podman argument rather than Quadlet's Environment=. The rule
+# above covered only the Quadlet, so both collectors shipped a PYTHONPATH one
+# directory too high and could not import data_plane at all — the image puts the
+# package under /usr/lib/agent-facade/libs.
+collector_pythonpath=0
+for u in units/systemd/smortress-agent-collect-finance.service \
+  units/systemd/smortress-agent-mail-stream.service; do
+  if ! grep -qF -- '--env PYTHONPATH=/usr/lib/agent-facade/libs:/usr/lib/agent-facade' "$u"; then
+    bad "$u names the package root in PYTHONPATH" "$(grep -F -- '--env PYTHONPATH=' "$u")"
+    collector_pythonpath=1
+  fi
+done
+((collector_pythonpath)) || ok 'the collector units name the package root in PYTHONPATH'
 
 # 13. The two source facades (T2b). They complete the deployment split: each
 #     gateway reads its sources and its memory through one facade process of its
