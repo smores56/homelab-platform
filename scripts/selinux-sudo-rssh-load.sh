@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 # Load the local SELinux module that lets sudo_t reach the forwarded agent socket
-# (design #767, T8; image/selinux/smortress_sudo_rssh.te carries the reasoning).
+# (design #767, T8; image/rootfs/usr/share/smortress/selinux/smortress_sudo_rssh.cil carries the reasoning).
 #
-# bootc reconciles /usr, so a rebuilt image ships a new .pp and nothing runs
+# bootc reconciles /usr, so a rebuilt image ships a new .cil and nothing runs
 # semodule: the module in the kernel's policy stays whatever the last boot
 # loaded. This unit is that step, and it has to be idempotent in both directions:
 # `semodule -i` on an unchanged module is harmless but rewrites the policy store
 # and its mtime on every boot, and a stamp alone would call a hand-removed module
-# loaded. So it loads when the shipped .pp's digest differs from the one recorded
+# loaded. So it loads when the shipped .cil's digest differs from the one recorded
 # with the last successful load, or when the module is absent from the policy.
 set -euo pipefail
 
-module=/usr/share/smortress/selinux/smortress_sudo_rssh.pp
+module=/usr/share/smortress/selinux/smortress_sudo_rssh.cil
 module_name=smortress_sudo_rssh
 stamp=/var/lib/smortress/selinux/$module_name.sha256
 
@@ -35,7 +35,7 @@ if [[ $recorded == "$digest" ]] && semodule -l | cut -f1 | grep -qx "$module_nam
   exit 0
 fi
 
-# -i replaces a module of the same name, so an upgraded .pp lands as an edit of
+# -i replaces a module of the same name, so an upgraded .cil lands as an edit of
 # the previous policy rather than as a second copy.
 semodule -i "$module"
 install -d -m 0755 "$(dirname "$stamp")"

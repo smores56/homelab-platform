@@ -1,0 +1,30 @@
+;; Let sudo's PAM stack reach the ssh-agent socket sshd forwards (design #767, T8).
+;;
+;; pam_rssh authenticates by asking the agent named in SSH_AUTH_SOCK for a
+;; signature. That socket is the one sshd created for the session, and from
+;; OpenSSH 10.1 it lives under ~/.ssh/agent, which the targeted policy labels
+;; ssh_home_t (session.c, misc-agent.c). sudo.te grants no access to it, so
+;; connect() is denied, pam_rssh returns PAM_AUTH_ERR and sudo falls back to the
+;; password -- correct by the design's fallback, but not the tap the design is
+;; for.
+;;
+;; This is CIL, not a .te compiled by selinux-policy-devel, on purpose: semodule
+;; compiles CIL against the policy the host actually runs, so a policy update
+;; cannot leave the module referring to interfaces this base does not carry. The
+;; first cut shipped a binary .pp built against the devel package and the host
+;; refused it at load time ("Failed to resolve typeattributeset statement").
+;;
+;; connectto, not connect: an AF_UNIX stream connect is checked on the peer
+;; socket's label, while connect is checked only against the caller's own
+;; socket, which sudodomain already allows.
+;;
+;; dir search is the traversal to the socket: ~/.ssh and ~/.ssh/agent both carry
+;; ssh_home_t, and userdom_search_user_home_content covers user_home_t, not it.
+;;
+;; The exact permission set is unproven until the host drill: after a tap,
+;; `ausearch -m avc -c sudo` is empty if this is complete. Adding a permission
+;; is a one-line change here, a rebuild, and the loader unit picks up the new
+;; digest.
+(block smortress_sudo_rssh
+    (allow sudo_t ssh_home_t (unix_stream_socket (connectto)))
+    (allow sudo_t ssh_home_t (dir (search))))

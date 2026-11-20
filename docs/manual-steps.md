@@ -4406,7 +4406,7 @@ spare must be enrolled too.
    ```
 
    The loader unit runs at boot; a module already at the shipped digest is left
-   alone, so the **first** boot after an image that changed the `.pp` is the one
+   alone, so the **first** boot after an image that changed the `.cil` is the one
    that reloads it. The digest is compared against the stamp file in `/var`,
    which bootc never reconciles, and that is exactly the case this covers.
 
@@ -4500,11 +4500,11 @@ spare must be enrolled too.
 
    An empty `ausearch` after a successful tap means the module's permission set
    is complete. A live `denied { connectto }` for `ssh_home_t` means the module
-   is missing or stale — not loaded at all, or loaded from an older `.pp` that
+   is missing or stale — not loaded at all, or loaded from an older `.cil` that
    asked for `connect` and so granted nothing (`systemctl status
    smortress-selinux-sudo-rssh`; `semodule -l | grep smortress`;
    `semodule -lfull | grep smortress` for the version, then compare against
-   `sha256sum /usr/share/smortress/selinux/smortress_sudo_rssh.pp` and
+   `sha256sum /usr/share/smortress/selinux/smortress_sudo_rssh.cil` and
    `/var/lib/smortress/selinux/smortress_sudo_rssh.sha256`); a denial for
    another permission or class means an edit to the `.te`, which is one line,
    then a rebuild and a reboot.

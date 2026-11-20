@@ -19,14 +19,11 @@ ARG BASE_IMAGE
 # and `--recurse-submodules` is required: pam_rssh vendors its agent protocol in
 # dep/ssh-agent.rs, and the clone fails at compile time without it.
 #
-# selinux-policy-devel is installed at the base's own NVR, not at whatever the
-# repos serve: it `Requires: selinux-policy` at its own version, so an unpinned
-# install both drags in a newer policy than the digest-pinned base runs and
-# compiles the module against that newer one. The module then references
-# interfaces the base's policy does not carry, and the failure lands on the host
-# at `semodule -i` -- or silently, as a module that grants the wrong thing. The
-# pin can only fail when the repos do not carry a devel build for this base,
-# which is a rebuild-and-bump signal, not something to paper over.
+# The local SELinux module is not built here: it ships as CIL under
+# image/rootfs/usr/share/smortress/selinux, because semodule compiles CIL against
+# the policy the host actually runs. A binary .pp built from the policy devel
+# headers is version-coupled to those headers and was rejected on the host at load
+# time.
 FROM ${BASE_IMAGE} AS sudo-build
 
 ARG BASE_IMAGE
@@ -34,11 +31,9 @@ ARG PAM_RSSH_VERSION
 ARG PAM_RSSH_COMMIT
 
 RUN set -eux; \
-    policy_nvr=$(rpm -q --qf '%{VERSION}-%{RELEASE}' selinux-policy); \
     dnf5 -y --setopt=install_weak_deps=False install \
       cargo rustc gcc make git pkgconf-pkg-config \
-      openssl-devel pam-devel "selinux-policy-devel-${policy_nvr}" \
-      || { echo "selinux-policy-devel-${policy_nvr} is not available: the repos carry no devel build for this base's policy, and a build at another version compiles the module against a policy this image does not ship" >&2; exit 1; }; \
+      openssl-devel pam-devel; \
     dnf5 clean all; \
     rm -rf /var/cache/dnf /var/cache/libdnf5
 
@@ -55,11 +50,6 @@ RUN set -eux; \
     test "$(git -C /src/pam_rssh rev-parse HEAD^{commit})" = "${PAM_RSSH_COMMIT}" \
       || { echo "pam_rssh ${PAM_RSSH_VERSION} is not commit ${PAM_RSSH_COMMIT}; a retagged release invalidates this pin" >&2; exit 1; }; \
     cargo build --release --locked --manifest-path /src/pam_rssh/Cargo.toml
-
-# The local policy module, compiled here because the host has no policy toolchain
-# (image/selinux/smortress_sudo_rssh.te carries the reasoning).
-COPY image/selinux/ /src/selinux/
-RUN make -C /src/selinux -f /usr/share/selinux/devel/Makefile smortress_sudo_rssh.pp
 
 FROM ${BASE_IMAGE}
 
@@ -87,11 +77,8 @@ LABEL org.opencontainers.image.title="smortress server image" \
 # Runtime helpers, units and ciphertext. The public cosign key is the only
 # signature-related material in the image; the policy references it by path.
 COPY image/rootfs/ /
-# The build-stage artifacts: the PAM module the sudo stack loads, and the compiled
-# local policy module that smortress-selinux-sudo-rssh.service installs with
-# semodule on every upgrade that changes it.
+# The build-stage artifact: the PAM module the sudo stack loads.
 COPY --from=sudo-build /src/pam_rssh/target/release/libpam_rssh.so /usr/lib64/security/libpam_rssh.so
-COPY --from=sudo-build /src/selinux/smortress_sudo_rssh.pp /usr/share/smortress/selinux/smortress_sudo_rssh.pp
 COPY units/systemd/ /usr/lib/systemd/system/
 COPY units/quadlet/pattern.container /usr/share/smortress/quadlet/pattern.container
 # /usr/local is a symlink to /var on bootc, so helpers go under /usr/libexec
@@ -155,7 +142,6 @@ RUN set -eux; \
     chmod 0600 /etc/smortress/secrets/*.yaml; \
     chmod 0644 /etc/pam.d/sudo; \
     chmod 0600 /etc/ssh/sudo_authorized_keys; \
-    chmod 0644 /usr/share/smortress/selinux/smortress_sudo_rssh.pp; \
     chmod 0440 /etc/sudoers.d/10-human-gate /etc/sudoers.d/20-sops-env; \
     visudo -cf /etc/sudoers.d/10-human-gate; \
     visudo -cf /etc/sudoers.d/20-sops-env

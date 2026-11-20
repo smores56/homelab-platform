@@ -333,14 +333,19 @@ check "the sudo key file is installed 0600" has 'chmod 0600 /etc/ssh/sudo_author
 # as CONNECTTO on the peer socket's label, and `connect` only against the
 # caller's own socket, which sudodomain already allows -- a module asking for
 # connect grants nothing and is indistinguishable from a missing one at the tap.
-selinux_te=image/selinux/smortress_sudo_rssh.te
+# The module ships as CIL and semodule compiles it against the running policy. A
+# .pp built with selinux-policy-devel is version-coupled to that package and the
+# first cut was rejected on the host ("Failed to resolve typeattributeset
+# statement"), so the image must not carry one.
+selinux_cil=image/rootfs/usr/share/smortress/selinux/smortress_sudo_rssh.cil
 check "the local module grants the agent socket" \
-  has 'allow sudo_t ssh_home_t:unix_stream_socket connectto;' "$selinux_te"
+  has '(allow sudo_t ssh_home_t (unix_stream_socket (connectto)))' "$selinux_cil"
 check "the module asks for no permission that grants nothing" \
-  lacks 'unix_stream_socket connect;' "$selinux_te"
-check "the module is compiled in the build stage" has 'selinux-policy-devel' image/Containerfile
-check "the compiled module ships in the image" \
-  has '/usr/share/smortress/selinux/smortress_sudo_rssh.pp' image/Containerfile
+  lacks '(unix_stream_socket (connect))' "$selinux_cil"
+check "the module is not built with the devel policy toolchain" \
+  lacks 'selinux-policy-devel' image/Containerfile
+check "the loader reads the shipped CIL" \
+  has '/usr/share/smortress/selinux/smortress_sudo_rssh.cil' scripts/selinux-sudo-rssh-load.sh
 check "the image enables the module loader" has 'smortress-selinux-sudo-rssh.service' image/Containerfile
 check "the loader runs semodule -i" has 'semodule -i' scripts/selinux-sudo-rssh-load.sh
 check "the loader is keyed on the module digest" has 'sha256sum' scripts/selinux-sudo-rssh-load.sh
