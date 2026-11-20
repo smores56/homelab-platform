@@ -142,6 +142,12 @@ EOF
 line="HOTP/T30/8 smores - $secret_hex"
 
 if [ -n "$fifo" ]; then
+  # The reader is the operator's job and must already be blocked: a fifo's
+  # reader blocks in open(2) until a writer appears, so starting it after this
+  # run leaves both ends waiting. The hint is printed before the write because
+  # when it is missing, the script simply appears to hang here.
+  printf 'writing into %s on %s; the console reader must already be blocked\n' \
+    "$fifo" "$host" >&2
   # dd, not a shell redirect: the usersfile line may only ever travel through a
   # pipe, so no edit of this path can grow into a temporary file.
   printf '%s\n' "$line" | ssh "$host" "dd of=$fifo status=none"

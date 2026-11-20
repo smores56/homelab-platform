@@ -4356,22 +4356,57 @@ assumed, and four details decide whether the stack works at all:
    deploy is no way around it either, because the old stack asks for a PIN
    rather than for the code.
 
+   A host upgraded from the PIN image (design #748) still carries
+   `/etc/security/sudopin.db`: `bootc` never removes anything from `/etc`, and
+   nothing reads that file once this stack is live. It is a hash of the old
+   eight-digit PIN, so delete it from the root shell of step 2 with
+   `rm -f /etc/security/sudopin.db`.
+
 2. Open a root shell at the physical console and hold a fifo for the line.
    `sudo -i` there needs the account password alone, because the terminal is
-   `/dev/tty*` and the break-glass row skips the code:
+   `/dev/tty*` and the break-glass row skips the code.
+
+   **The reader must be running and blocked before step 3 starts.** Three
+   details decide whether the handoff ever completes, and each one looks like a
+   hang instead of an error:
+
+   - a fifo's reader blocks in `open(2)` until a writer appears, so a reader
+     started *after* the script cannot pair with it;
+   - `install /dev/stdin` re-opens the path it is given. On a fifo that is a
+     second `open`, which blocks again once the writer has already closed. `cat`
+     reads the inherited descriptor and cannot;
+   - a fifo left over from an earlier attempt is a different inode from the one
+     the script will write, so the two ends silently miss each other. Always
+     start from a fresh fifo.
 
    ```sh
    sudo -i
+   rm -f /run/smortress-enroll
    mkfifo -m 0600 /run/smortress-enroll
    chown smores /run/smortress-enroll
-   install -m 0600 /dev/stdin /var/lib/homelab/sudo/users.oath \
-     < /run/smortress-enroll     # blocks until step 3 writes the fifo
+   cat > /var/lib/homelab/sudo/users.oath < /run/smortress-enroll   # blocks here
    ```
+
+   That command must not return until after step 3. Then fix the mode (`cat`
+   creates the file through the root shell's umask) and check the shape — for
+   this account the line is 61 bytes:
+
+   ```sh
+   chmod 0600 /var/lib/homelab/sudo/users.oath
+   ls -l /var/lib/homelab/sudo/users.oath
+   cut -d' ' -f1,2,3 /var/lib/homelab/sudo/users.oath   # HOTP/T30/8 smores -
+   ```
+
+   Symptom to recognise: the script hanging after its `enrolled YubiKey …`
+   lines with no `dd` process on the host means nothing was reading the fifo
+   (a reader that never started, or one started without the redirect and now
+   waiting on the terminal). A reader that never returns while the script
+   reports success means one of the two was attached to a stale inode.
 
 3. Enroll every YubiKey from the laptop, with all three 5C Nanos attached (one
    per laptop, one spare). The script generates twenty random bytes in memory,
    programs every attached key with the same eight-digit touch-protected TOTP
-   and streams the same secret into the fifo, which the blocked `install` drains
+   and streams the same secret into the fifo, which the blocked `cat` drains
    into the usersfile:
 
    ```sh
@@ -4390,6 +4425,11 @@ assumed, and four details decide whether the stack works at all:
    prompts for the account password and for one code, and because the session
    has no terminal of its own `sudo -S` reads both from the same stdin stream
    the usersfile travels on. That is rotation (step 7), not bootstrap.
+
+   After step 3, confirm the usersfile is the one this run wrote: the mtime must
+   be new and the file still 61 bytes. A file from an earlier enrollment plus
+   keys programmed by this one is the quiet failure — every code is rejected and
+   nothing on the host says why.
 
 4. Prove the gate from the laptop. Each command opens its own ssh session, and
    `sudo -k` clears the per-TTY ticket the previous attempt left behind:
