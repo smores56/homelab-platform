@@ -4324,11 +4324,8 @@ What the image carries, and nothing else:
 - `image/rootfs/etc/ssh/sudo_authorized_keys` — the sudo credentials' public
   halves, root `0600`, separate from the login key file;
 - `image/Containerfile` — the `sudo-build` stage that builds `pam_rssh` at the
-  tag and commit pinned in `image/pins.env` and compiles the local SELinux
-  module; no distribution package is layered;
-- `image/selinux/smortress_sudo_rssh.te` — the local policy module, and
-  `smortress-selinux-sudo-rssh.service`, which loads it with `semodule -i` when
-  its digest changes;
+  tag and commit pinned in `image/pins.env`; no distribution package is layered
+  and no local SELinux policy ships;
 - `image/rootfs/etc/sudoers.d/10-human-gate` — `timestamp_timeout=30`,
   `timestamp_type=tty` and `log_subcmds`.
 
@@ -4484,31 +4481,28 @@ spare must be enrolled too.
    row in this stack — the password fallback is the break-glass everywhere — so a
    locked tally at the physical console is a five-minute wait, not a way in.
 
-6. Run the AVC drill after every image change that touches this stack. The one
-   thing the design could not prove from sources is the SELinux permission set:
-   the targeted policy grants `sudo_t` no `connectto` on `ssh_home_t`, where
-   OpenSSH >= 10.1 puts the forwarded socket (`~/.ssh/agent`), and
-   `image/selinux/smortress_sudo_rssh.te` is the local module that closes that
-   gap.
+6. Run the AVC drill after every image change that touches this stack, and log
+   the socket path it prints.
+
+   On this base **sudo runs unconfined**: `/usr/bin/sudo` carries `sudo_exec_t`,
+   but the process stays `unconfined_t` (`ps -eo label,comm | grep sudo`), there
+   is no `sudo_t` type to write a rule for (`semodule -i` rejects it), and an
+   unconfined domain already holds every permission the forwarded socket needs.
+   So no local policy ships, and the earlier `smortress_sudo_rssh` module is
+   gone: it could not have loaded, and it failed at every boot.
 
    ```sh
    ssh -A -t smortress 'echo "$SSH_AUTH_SOCK"; ls -ld ~/.ssh/agent'
    ssh -A -t smortress 'sudo -k; sudo true'      # tap
-   sudo ausearch -m avc -c sudo                  # from a console root shell
+   sudo ausearch -m avc -c sudo                  # from a root shell, right after
    ```
 
-   An empty `ausearch` after a successful tap means the module's permission set
-   is complete. A live `denied { connectto }` for `ssh_home_t` means the module
-   is missing or stale — not loaded at all, or loaded from an older `.cil` that
-   asked for `connect` and so granted nothing (`systemctl status
-   smortress-selinux-sudo-rssh`; `semodule -l | grep smortress`;
-   `semodule -lfull | grep smortress` for the version, then compare against
-   `sha256sum /usr/share/smortress/selinux/smortress_sudo_rssh.cil` and
-   `/var/lib/smortress/selinux/smortress_sudo_rssh.sha256`); a denial for
-   another permission or class means an edit to the `.te`, which is one line,
-   then a rebuild and a reboot.
-   Log the socket path the drill prints: a change of path across an OpenSSH
-   upgrade is the other half of this risk, and it shows up as the same fallback.
+   An empty `ausearch` after a working tap means nothing is denied. A live
+   `denied { connectto }` for `ssh_home_t` means a future base confines sudo: the
+   denial's `scontext` names the domain to write the rule for — it will not be
+   `sudo_t` unless the exec transition returns — and the rule is one CIL line
+   shipped under `image/rootfs/`, plus a loader unit, because the policy store in
+   `/etc` and `/var` is not reconciled by bootc.
 
 7. Rotation and revocation are edits to the public half, not to a host secret.
    A lost key is removed by deleting its line from

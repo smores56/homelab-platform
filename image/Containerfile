@@ -19,11 +19,13 @@ ARG BASE_IMAGE
 # and `--recurse-submodules` is required: pam_rssh vendors its agent protocol in
 # dep/ssh-agent.rs, and the clone fails at compile time without it.
 #
-# The local SELinux module is not built here: it ships as CIL under
-# image/rootfs/usr/share/smortress/selinux, because semodule compiles CIL against
-# the policy the host actually runs. A binary .pp built from the policy devel
-# headers is version-coupled to those headers and was rejected on the host at load
-# time.
+# No local SELinux policy ships. On this base sudo runs unconfined: /usr/bin/sudo
+# is labelled sudo_exec_t but the process stays unconfined_t, `sudo_t` does not
+# resolve as a type, and an unconfined domain already holds every permission the
+# forwarded agent socket needs. A module for sudo_t could not even link (verified
+# on the host), and a policy for unconfined_t would grant nothing it lacks. The
+# tripwire is the AVC drill in manual-steps section 45: if a future base confines
+# sudo, `denied { connectto }` names the domain to write the rule for.
 FROM ${BASE_IMAGE} AS sudo-build
 
 ARG BASE_IMAGE
@@ -92,7 +94,6 @@ COPY scripts/storage-layout.sh scripts/zfs-ready.sh scripts/sops-decrypt.sh scri
      scripts/app-secrets.sh scripts/immich-dump.sh scripts/tailscale-serve.sh \
      scripts/apps-quota.sh scripts/apps-user.sh scripts/agent-config-seed.sh \
      scripts/smortress-password.sh \
-     scripts/selinux-sudo-rssh-load.sh \
      /usr/libexec/smortress-src/
 # Application Quadlets. The generator scans /usr/share/containers/systemd at
 # boot, and a quadlet is a generated unit, so nothing here is enabled with
@@ -204,7 +205,6 @@ RUN set -eux; \
       smortress-tailscale-ssh-off.service \
       sops-decrypt.service \
       smortress-password.service \
-      smortress-selinux-sudo-rssh.service \
       tailscaled.service \
       zfs-ready@raw-files.service \
       zfs-ready@raw-photos.service \
@@ -262,4 +262,3 @@ RUN set -eux; \
     test -f /usr/lib64/security/libpam_rssh.so || { echo "libpam_rssh.so is missing: it is sudo's touch factor (design #767)" >&2; exit 1; }; \
     test -e /etc/ssh/sudo_authorized_keys || { echo "the sudo key file is missing: libpam_rssh.so reads it on every prompt (design #767)" >&2; exit 1; }; \
     ! test -f /usr/lib64/security/pam_oath.so || { echo "pam_oath.so is still in the image: sudo's TOTP is retired (design #767)" >&2; exit 1; }; \
-    command -v semodule >/dev/null || { echo "the image has no semodule: smortress-selinux-sudo-rssh.service loads the local module with it (design #767)" >&2; exit 1; }
