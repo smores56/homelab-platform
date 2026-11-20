@@ -4348,19 +4348,22 @@ assumed, and four details decide whether the stack works at all:
      < /run/smortress-enroll     # blocks until step 3 writes the fifo
    ```
 
-3. Enroll both YubiKeys from the laptop, with both 5C Nanos attached. The script
-   generates twenty random bytes in memory, programs both keys with the same
-   eight-digit touch-protected TOTP and streams the same secret into the fifo,
-   which the blocked `install` drains into the usersfile:
+3. Enroll every YubiKey from the laptop, with all three 5C Nanos attached (one
+   per laptop, one spare). The script generates twenty random bytes in memory,
+   programs every attached key with the same eight-digit touch-protected TOTP
+   and streams the same secret into the fifo, which the blocked `install` drains
+   into the usersfile:
 
    ```sh
    scripts/enroll-yubikey-totp.sh --fifo /run/smortress-enroll smortress
    ```
 
-   It refuses to run with anything but two keys. Nothing is written to the
-   laptop's disk, nothing appears in argv and nothing is printed; the secret
-   exists in that process's memory, in the fifo for the length of the handoff,
-   and then in one root-only file. The fifo holds nothing once it has been read.
+   It refuses to run with fewer than two keys, and it programmes every key it
+   finds, so a key left in a drawer must be attached before this runs. Nothing is
+   written to the laptop's disk, nothing appears in argv and nothing is printed;
+   the secret exists in that process's memory, in the fifo for the length of the
+   handoff, and then in one root-only file. The fifo holds nothing once it has
+   been read.
 
    Every later run is the direct path, `scripts/enroll-yubikey-totp.sh
    smortress`, and it works because the usersfile now exists: sudo over ssh
@@ -4446,7 +4449,7 @@ assumed, and four details decide whether the stack works at all:
    the five minutes are up.
 
 7. Rotation is the direct path, step 3's script without `--fifo`, because the
-   usersfile exists and both factors can be answered over ssh: both keys get a
+   usersfile exists and both factors can be answered over ssh: every key gets a
    fresh secret and the install replaces the usersfile, so the previous secret
    stops working the moment the file lands. Revoke a lost YubiKey by deleting
    the account from it (`ykman oath accounts delete smortress`) or resetting its
@@ -4464,7 +4467,7 @@ assumed, and four details decide whether the stack works at all:
    chown smores /run/smortress-enroll
    install -m 0600 /dev/stdin /var/lib/homelab/sudo/users.oath \
      < /run/smortress-enroll
-   # on the laptop, with both keys attached:
+   # on the laptop, with every key attached:
    scripts/enroll-yubikey-totp.sh --fifo /run/smortress-enroll smortress
    ```
 

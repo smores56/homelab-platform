@@ -276,7 +276,7 @@ check "tmpfiles never creates the usersfile" lacks 'users.oath' image/rootfs/etc
 enroll=scripts/enroll-yubikey-totp.sh
 check "the enrollment script installs the usersfile from stdin" has 'install -m 0600 /dev/stdin' "$enroll"
 check "the enrollment script refuses anything but two YubiKeys" \
-  has 'expected exactly two YubiKeys attached' "$enroll"
+  has 'expected at least two YubiKeys attached' "$enroll"
 # Both keys get the same credential, and the touch is the physical-presence half:
 # without it the key mints codes for anything that can talk to it.
 check "both keys get a touch-protected eight-digit TOTP" has '--oath-type TOTP --digits 8 --touch' "$enroll"

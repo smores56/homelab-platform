@@ -1,5 +1,5 @@
 #!/bin/sh
-# Enroll both YubiKeys with smortress's sudo TOTP secret and install
+# Enroll every attached YubiKey with smortress's sudo TOTP secret and install
 # /var/lib/homelab/sudo/users.oath there (image/rootfs/etc/pam.d/sudo).
 #
 # The secret is twenty random bytes that exist in this process's memory and,
@@ -93,8 +93,8 @@ command -v ssh >/dev/null 2>&1 || die "ssh is not installed"
 
 serials=$(ykman list --serials)
 keys=$(printf '%s\n' "$serials" | grep -c . || true)
-[ "$keys" -eq 2 ] ||
-  die "expected exactly two YubiKeys attached, found $keys: both 5C Nanos carry the same credential, so a partial enrollment is not a gate"
+[ "$keys" -ge 2 ] ||
+  die "expected at least two YubiKeys attached, found $keys: every key that can sudo must carry the same credential, and a key left out is a key that cannot"
 
 # Twenty bytes is RFC 4226's recommended secret length. awk converts them so
 # the script needs nothing but od, and the conversion happens inside one
@@ -182,6 +182,6 @@ fi
 unset line secret_hex
 
 cat >&2 <<EOF
-Enrolled both YubiKeys and installed $usersfile on $host.
+Enrolled every attached YubiKey ($keys) and installed $usersfile on $host.
 Prove it: sudo -k; sudo true   (password, then touch for the code)
 EOF
