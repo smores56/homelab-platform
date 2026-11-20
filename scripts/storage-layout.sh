@@ -81,6 +81,12 @@ declare -A dataset_root_mode=(
 : "${dataset_root_owner_default:=1000:1000}"
 : "${dataset_root_mode_default:=0750}"
 
+#: POSIX ACLs must survive the chmod below. ZFS deletes every non-trivial ACE on
+#: chmod by default (aclmode=discard), and init-zpool re-runs that chmod on each
+#: dataset root at every boot, so an ACL granting the operator access to a
+#: container-owned tree would silently vanish on the next reboot.
+dataset_acl_mode=passthrough
+
 dataset_owner_for() { printf '%s\n' "${dataset_root_owner[$1]:-$dataset_root_owner_default}"; }
 dataset_mode_for() { printf '%s\n' "${dataset_root_mode[$1]:-$dataset_root_mode_default}"; }
 

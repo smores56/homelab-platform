@@ -44,11 +44,15 @@ if ! zpool list -H -o name "$pool" >/dev/null 2>&1; then
     zpool create -o cachefile=none -o ashift=12 \
       -O mountpoint=none -O canmount=off \
       -O compression=zstd -O atime=off -O xattr=sa -O acltype=posixacl \
+      -O aclmode="$dataset_acl_mode" \
       "$pool" "$device"
   fi
 fi
 
 zpool set cachefile=none "$pool"
+# Both paths converge here: a freshly created pool inherits it from the create
+# above, a pool imported from disk does not. Children inherit either way.
+zfs set "aclmode=$dataset_acl_mode" "$pool"
 
 # Parents of state datasets are plain directories: a cache or a version history
 # is rebuilt, not restored, so it gets no dataset and no snapshot.
