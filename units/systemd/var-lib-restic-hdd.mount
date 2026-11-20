@@ -1,7 +1,7 @@
 [Unit]
 # The 5 TB HDD: ext4, LABEL=restic-hdd, one Restic repository.
 #
-# nofail is a contract, not an option: nothing Requires this mount, so an
+# nofail is the contract: nothing Requires this mount, so an
 # absent or unpowered disk costs at most JobTimeoutSec during boot, the HDD
 # jobs record failures, and the hourly freshness verifier turns that into an
 # alert. It must never block boot (see docs/core/server-image.md).
@@ -11,7 +11,7 @@ JobTimeoutSec=45
 What=/dev/disk/by-uuid/973b7492-bb88-43c7-bac3-772384e45220
 Where=/var/lib/restic/hdd
 Type=ext4
-Options=rw,noatime,nodev,nosuid,noexec
+Options=rw,noatime,nodev,nosuid,noexec,nofail
 TimeoutSec=30
 
 [Install]
