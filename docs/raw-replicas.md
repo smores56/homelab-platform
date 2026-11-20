@@ -215,6 +215,14 @@ body -- and the adapter inherits its contract from the deployment's own source
 table, so pointing a facade at a directory cannot widen what it may reach
 (`docs/agent-facade.md`).
 
+Search over a replica is served by a derived full-text index
+(`apps/agent_facade/source_index.py`): one SQLite FTS5 file under the facade's
+index root, per source and per generation, built from those projections. It is
+derived and never authoritative -- the generation is the record of what was
+collected, the index is a cache of reading it, and deleting the index costs one
+rebuild and no data. A generation publishes a new file, a short-word query falls
+back to the scan, and nothing outside the facade reads the file.
+
 ## Running one
 
 `python3 -m data_plane.collectors.raw --root DIR [--dry-run] <source> ...`

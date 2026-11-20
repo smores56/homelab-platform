@@ -20,7 +20,8 @@
 #      and has no `_FILE` variant either.
 #
 # It also creates `<dataset>/memory` for each facade and `<dataset>/webui` with its
-# `state` and `workspace` children for the web UI. Each container bind-mounts a
+# `state` and `workspace` children for the web UI, plus `index` on the personal
+# side for the facade's derived source index. Each container bind-mounts a
 # subdirectory rather than the dataset root (the gateway's sessions, skills and
 # .env are one level up), and a bind source podman has to create would land as
 # root:root 0755 inside a dataset owned by uid 1000 at 0750 -- so the container's
@@ -129,13 +130,15 @@ for spec in personal:local general:general; do
   install -d -o 1000 -g 1000 -m 0750 "$home/memory" \
     "$home/replica" "$home/webui" "$home/webui/state" "$home/webui/workspace"
 
-  # The mail half exists only on the personal side: every raw collector is
-  # personal, and the general deployment has no source to collect.
+  # The mail half and the derived index exist only on the personal side: every
+  # raw collector is personal, and the general deployment has no source to
+  # collect or index.
   if [[ $state == local ]]; then
     install -d -o 1000 -g 1000 -m 0750 "$home/quarantine"
+    install -d -o 1000 -g 1000 -m 0750 "$home/index"
     # The bridge's own volume: the Tuta session, the GPG key that unseals it and
-    # the TLS certificate mbsync verifies. 0700 because a copy of it is a copy of
-    # the login; the sync container mounts only cert.pem out of it, as one file.
+    # the TLS certificate a client verifies. 0700 because a copy of it is a copy
+    # of the login; a client mounts only cert.pem out of it, as one file.
     install -d -o 1000 -g 1000 -m 0700 "$home/quarantine/tmail"
   fi
 

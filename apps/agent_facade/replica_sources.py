@@ -18,6 +18,12 @@ Two rules keep the substitution honest:
 Provenance is exactly the three fields a memory record may cite: the source id
 with the record, the record's revision (the sha256 of the object that produced
 it) and the capture time the collector stamped.
+
+Search is answered by a substring scan over the projections, or -- when the
+adapter has an index root -- by the derived FTS5 index in ``source_index``. The
+index is trigram-tokenized, so it can only stand in for queries whose every word
+is at least three characters; a shorter word scans. That boundary is the price
+of parity, and parity is the requirement.
 """
 
 from __future__ import annotations
@@ -34,11 +40,14 @@ from typing import Any, Callable, Mapping
 from data_plane.collectors.raw import RawReplica
 from data_plane.errors import ContractError, ValidationError
 
-from . import contracts, sources
+from . import contracts, source_index, sources
 
 #: A projected record body is capped: the facade already caps what it returns,
 #: and a 30 MB attachment must not become a search haystack in memory.
 MAX_PROJECTED_CHARS = 4000
+#: The index is trigram-tokenized, so it cannot match a word shorter than this:
+#: such a query is answered by the scan, which finds exactly what it finds today.
+MIN_INDEXED_WORD = source_index.MIN_WORD_CHARS
 #: The derived objects that are not records: epoch maps, ICS projections,
 #: summaries and the database dump itself.
 _NOT_RECORDS = (
@@ -166,9 +175,14 @@ class ReplicaAdapter:
     Records are projected on first use and kept, because a published generation
     is immutable: the directory is a specific generation id, and a new collection
     publishes a new one.
+
+    ``index_root`` adds the derived full-text index (``source_index``): searches
+    over words a trigram can match use it, and everything else keeps scanning.
     """
 
-    def __init__(self, contract, replica: RawReplica) -> None:
+    def __init__(
+        self, contract, replica: RawReplica, index_root: str | Path | None = None
+    ) -> None:
         contract.validate()
         if contract.source_id not in _PROJECTORS and contract.source_id not in ROW_PROJECTORS:
             raise ContractError(
@@ -177,7 +191,10 @@ class ReplicaAdapter:
             )
         self.contract = contract
         self.replica = replica
+        self.index_root = None if index_root is None else Path(index_root)
         self._records: dict[str, sources.SourceRecord] | None = None
+        self._index: source_index.SourceIndex | None = None
+        self._index_attempted = False
 
     @property
     def name(self) -> str:
@@ -197,6 +214,22 @@ class ReplicaAdapter:
         words = contracts.query_words(query)
         if not words:
             raise ValidationError("query must contain at least one word")
+        # A short word is not an error and must not narrow the result: it is the
+        # reason to scan. Parity with the scan is what makes the index optional.
+        indexable = all(len(word) >= MIN_INDEXED_WORD for word in words)
+        index = self._source_index() if indexable else None
+        if index is not None:
+            try:
+                ids = index.search(words, limit)
+            except source_index.SourceIndexUnavailable:
+                return self._scan(words, limit)
+            found = (self._hit(record_id, words) for record_id in ids)
+            return tuple(hit for hit in found if hit is not None)
+        return self._scan(words, limit)
+
+    def _scan(self, words: tuple[str, ...], limit: int) -> tuple[sources.SearchHit, ...]:
+        """The whole-generation substring scan: what the adapter did before any index."""
+
         hits: list[sources.SearchHit] = []
         for record in self._built().values():
             haystack = f"{record.title}\n{record.body}"
@@ -213,6 +246,42 @@ class ReplicaAdapter:
             if len(hits) == limit:
                 break
         return tuple(hits)
+
+    def _hit(self, record_id: str, words: tuple[str, ...]) -> sources.SearchHit | None:
+        """One hit from the projection the index was built from.
+
+        The index is derived, so an id it lists that this projection no longer
+        produces is dropped rather than raised: the caller gets fewer hits, never
+        a failure.
+        """
+
+        record = self._built().get(record_id)
+        if record is None:
+            return None
+        return sources.SearchHit(
+            id=record.id,
+            title=record.title,
+            snippet=contracts.snippet(f"{record.title}\n{record.body}", words[0]),
+        )
+
+    def _source_index(self) -> source_index.SourceIndex | None:
+        """The derived index, built at most once per adapter; None if there is none."""
+
+        if self._index_attempted:
+            return self._index
+        self._index_attempted = True
+        if self.index_root is None:
+            return None
+        try:
+            index = source_index.SourceIndex(
+                self.index_root, self.name, self.replica.generation_id
+            )
+            index.build(self._built())
+        except source_index.SourceIndexUnavailable:
+            # An unwritable root, a foreign schema, a full disk: the scan answers.
+            return None
+        self._index = index
+        return index
 
     def _built(self) -> dict[str, sources.SourceRecord]:
         if self._records is None:
@@ -272,13 +341,16 @@ class ReplicaAdapter:
 
 
 def adapters_for(
-    deployment, roots: Mapping[str, str | Path]
+    deployment,
+    roots: Mapping[str, str | Path],
+    index_root: str | Path | None = None,
 ) -> Mapping[str, ReplicaAdapter]:
     """Build one adapter per ``source -> replica root``, from the table's contracts.
 
     The contract comes from the deployment's own table, so the visibility of the
     resulting adapter is not a new decision: it is the one the table already
-    made.
+    made. ``index_root`` is shared: each adapter indexes its own source and
+    generation below it, and none of them needs it to answer.
     """
 
     table = sources.SOURCES_BY_DEPLOYMENT[deployment]
@@ -290,5 +362,5 @@ def adapters_for(
                 f"source {name!r} is not reachable from the {deployment.value} "
                 f"deployment; it serves {', '.join(sorted(table))}"
             )
-        built[name] = ReplicaAdapter(base.contract, RawReplica(root))
+        built[name] = ReplicaAdapter(base.contract, RawReplica(root), index_root)
     return MappingProxyType(built)

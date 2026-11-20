@@ -133,7 +133,7 @@ COPY libs/data_plane/ /usr/lib/agent-facade/libs/data_plane/
 COPY apps/agent_facade/__init__.py apps/agent_facade/__main__.py \
      apps/agent_facade/contracts.py apps/agent_facade/memory.py \
      apps/agent_facade/server.py apps/agent_facade/sources.py \
-     apps/agent_facade/replica_sources.py \
+     apps/agent_facade/replica_sources.py apps/agent_facade/source_index.py \
      /usr/lib/agent-facade/apps/agent_facade/
 RUN set -eux; \
     for f in /usr/libexec/smortress-src/*.sh; do install -m 0755 "$f" "/usr/libexec/$(basename "${f%.sh}")"; done; \

@@ -108,7 +108,7 @@ one Restic snapshot names every dataset the unit restores.
 | OPDShelf | `raw/books` — `/srv/books`, the catalog | `state/opdshelf` — `/var/lib/opdshelf`, edits, annotations and covers | `/books`; `DATA_DIR=/state` |
 | Personal agent | none — no personal source is mounted | `state/agent-local` — `/var/lib/agent/local`, sessions, memory, skills | `/opt/data` |
 | General agent | none — no repository or book tree is mounted | `state/agent-general` — `/var/lib/agent/general`, same shape | `/opt/data` |
-| Personal facade | none — its adapters are in-process fixtures | `state/agent-local` — `/var/lib/agent/local/memory`, the `local` memory profile and its derived index; the rest of that dataset is the gateway's | `/memory` (writable) |
+| Personal facade | none — its adapters are in-process fixtures | `state/agent-local` — `/var/lib/agent/local/memory`, the `local` memory profile and its derived index, and `/var/lib/agent/local/index`, the derived full-text index over the replica sources (rebuilt from the generation, disposable); the rest of that dataset is the gateway's | `/memory` and `/index` (both writable) |
 | General facade | none | `state/agent-general` — `/var/lib/agent/general/memory`, the `external` profile | `/memory` (writable) |
 | Local model | none | none: `state/agent-model` — `/var/lib/agent/model` is the GGUF file, and it is in no backup | `/models` (read-only) |
 | Syncthing | `raw/files` — `/srv/files`, the vault | `state/syncthing-config` — `/var/lib/syncthing/config`, identity and configuration | `/srv/files`; `/var/syncthing/config` |
@@ -376,13 +376,19 @@ document, or in a command line. Because that file is seeded with `cp -n`, rotati
 a token is `sops`, then delete the seeded `config.yaml` and let the unit seed it
 again (`docs/manual-steps.md` section 40.11).
 
-Memory is the one write target each facade has: `/memory` is
+Memory is the write target both facades share: `/memory` is
 `state/agent-local/memory` and `state/agent-general/memory`, the `local` and
 `external` profiles. It is a directory inside the dataset, not the dataset root, so
 the gateway's sessions, skills and `.env` stay out of reach. A facade therefore has no
 recovery unit of its own -- its records restore with `agent-local` or
 `agent-general`, which is exactly what those units name -- and the SQLite FTS index
 beside them is derived, so a restore that loses it costs one rebuild.
+
+The personal facade also writes `/index`, `state/agent-local/index`: its full-text
+index over the replica sources, one file per source and published generation. It
+is derived from `state/agent-local/replica` and rebuilt from it on the next
+search, so it is a cache of reading a generation, never a second copy of one, and
+a restore that skips it costs one rebuild.
 
 ## Access paths
 

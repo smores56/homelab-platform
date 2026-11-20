@@ -35,6 +35,9 @@ DEFAULT_TRANSPORT = "stdio"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 18004
 DEFAULT_MEMORY_ROOT = "state/agent-facade"
+#: The derived source index lives below here, one file per source and generation;
+#: an unwritable root only means searches scan (apps/agent_facade/source_index.py).
+DEFAULT_INDEX_ROOT = "/index"
 TOKEN_ENV = "AGENT_FACADE_TOKEN"
 TRANSPORTS = ("stdio", "http")
 
@@ -101,6 +104,11 @@ def _parser() -> argparse.ArgumentParser:
         help="cap for a returned body and for a written memory value",
     )
     parser.add_argument(
+        "--index-root",
+        default=_env("AGENT_FACADE_INDEX_ROOT", DEFAULT_INDEX_ROOT),
+        help="root of the derived full-text index over replica sources",
+    )
+    parser.add_argument(
         "--replica",
         action="append",
         default=[],
@@ -160,7 +168,9 @@ def build_facade(args: argparse.Namespace) -> server.Facade:
     token = _token(args.token_file)
     if token is None:
         LOG.warning("no deployment token configured; every tool call will be refused")
-    replacements = replica_sources.adapters_for(deployment, _replicas(args.replica))
+    replacements = replica_sources.adapters_for(
+        deployment, _replicas(args.replica), args.index_root
+    )
     return server.Facade(
         deployment=deployment,
         catalog=sources.Catalog.for_deployment(deployment, replacements=replacements),
