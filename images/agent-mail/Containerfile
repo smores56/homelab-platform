@@ -1,0 +1,25 @@
+# mbsync, in an image this repository builds and signs.
+#
+# The mail collector's provider half is mbsync: pull-only, into a quarantined
+# Maildir that nothing else writes. isync has no upstream static release, and the
+# bootc image ships only release artifacts with a pinned SHA-256, so the binary
+# cannot live there without breaking that rule. It lives here instead, in an image
+# we build, sign and pin by digest -- the same trust boundary as agent-webui.
+#
+# Alpine is pinned by digest, and `apk add` resolves inside this build rather than
+# on the host: what boots from here is the digest this repository signed, and a
+# rebuild that changed bytes would not match the pin.
+FROM docker.io/library/alpine@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f
+
+# ca-certificates for IMAPS, and nothing else: no shell tooling, no package
+# manager at runtime beyond what apk leaves behind.
+RUN set -eux; \
+    apk add --no-cache isync ca-certificates; \
+    mbsync --version; \
+    rm -rf /var/cache/apk/*
+
+# The sync runs as an unprivileged numeric uid; the Maildir is a mounted volume
+# owned by uid 1000, and there is nothing else in this image to write to.
+USER 1000:1000
+
+ENTRYPOINT ["/usr/bin/mbsync"]
