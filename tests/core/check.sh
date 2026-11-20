@@ -128,6 +128,17 @@ else
   fail 'restic plane checks'
 fi
 
+# The operator's ACL grant has its own harness: it stubs getent, setfacl and
+# getfacl to prove the account is resolved, the specification names the operator
+# and uid/gid 1000 in both the access and the default entries, and --check
+# writes nothing.
+checks=$((checks + 1))
+if tests/core/operator-access.sh; then
+  pass 'operator access checks'
+else
+  fail 'operator access checks'
+fi
+
 # The application Quadlets have their own harness: it proves every image is the
 # signed mirror at the pinned digest, and that readiness, Serve routes, Podman
 # secrets and the firewall boundary line up.

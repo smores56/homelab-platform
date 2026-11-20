@@ -3353,11 +3353,44 @@ sudo chcon -R -t container_file_t "$drill"
 ```
 
 Every application runs as uid 1000 and each group root is owned by that uid (the
-pool unit sets it at dataset creation). A restored tree is root-owned and
+pool unit sets it at dataset creation). A drill tree is root-owned and
 unlabelled, because the restore runs as root and Restic does not carry
 `security.selinux`: the `chown` and `chcon` above are what make it a tree the
-application can write and Podman may mount. A real restore needs the same two
-steps before the application starts.
+application can write and Podman may mount. The drill targets — under
+`/var/lib/restic/hdd/drill` and in `/var/tmp/drill-pg` — legitimately stay
+`1000:1000`: they are scratch, nothing writes to them after the drill, and they
+are deleted with the target.
+
+**A production restore is not the same tree, and the same two steps would lose
+the operator's access.** A live two-writer dataset — one an application writes
+into and the operator also reads, today `raw/files` (the notes), `raw/photos`
+and `raw/books` — belongs to `1000:1000` and is mode `0750`, so the operator is
+neither the owner nor a member of the owning group (1001 against 1000, with no
+membership). What lets the operator read it is a POSIX ACL: `rwX` for the
+operator, `rwX` for numeric uid/gid 1000, closed for everyone else, plus the
+*default* entries that carry the same grant to content created later.
+`chown -R 1000:1000` on a live tree would re-flatten every gid the applications
+rely on, and Restic does not preserve POSIX ACLs, so every restore silently
+drops the grant: the operator can no longer open the notes they just restored,
+and a file the operator creates is `smores:smores 0644`, which the uid-1000
+writer can read but cannot rename or rewrite.
+
+Re-apply the grant after the restore writes the tree, not before: restic lays
+down the restored files over the mountpoint, so an ACL set first is only kept
+for the paths restic does not replace.
+
+```sh
+sudo /usr/libexec/operator-access --check /var/srv/files  # report only
+for mp in /var/srv/files /var/srv/photos /var/srv/books; do
+  sudo /usr/libexec/operator-access "$mp"
+done
+```
+
+The tool refuses a path that is not a mountpoint (a half-restored tree on the
+root filesystem is a bug, not a target), resolves the operator account instead
+of a hardcoded uid, applies the access and the default ACL to the whole tree,
+and prints what it changed. Run it again after any restore of those datasets;
+`--check` lists the paths that lost the grant.
 
 **Immich, logical restore.** This is the path the cutover uses and the one that
 survives a version change.

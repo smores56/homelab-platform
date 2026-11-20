@@ -90,7 +90,7 @@ COPY scripts/storage-layout.sh scripts/zfs-ready.sh scripts/sops-decrypt.sh scri
      scripts/fix-crypttab.sh \
      scripts/restic-plane-common.sh scripts/smortress-restic-backup.sh \
      scripts/smortress-restic-verify.sh scripts/smortress-restic-init.sh \
-     scripts/smortress-restic-restore-drill.sh \
+     scripts/smortress-restic-restore-drill.sh scripts/operator-access.sh \
      scripts/app-secrets.sh scripts/immich-dump.sh scripts/tailscale-serve.sh \
      scripts/apps-quota.sh scripts/apps-user.sh scripts/agent-config-seed.sh \
      scripts/smortress-password.sh \
