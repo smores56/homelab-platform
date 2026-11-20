@@ -231,6 +231,7 @@ RUN set -eux; \
       smortress-cloudflared.service \
       smortress-immich-dump.timer \
       smortress-agent-collect-finance.timer \
+      smortress-agent-collect-calendar.timer \
       smortress-agent-mail-stream.service \
       var-lib-restic-ssd.mount \
       var-lib-restic-hdd.mount \

@@ -140,6 +140,10 @@ for spec in personal:local general:general; do
     # the TLS certificate a client verifies. 0700 because a copy of it is a copy
     # of the login; a client mounts only cert.pem out of it, as one file.
     install -d -o 1000 -g 1000 -m 0700 "$home/quarantine/tmail"
+    # The calendar exporter's sealed session, and the directory it rewrites on
+    # every run: the session is the account's access, the dump is disposable.
+    install -d -o 1000 -g 1000 -m 0700 "$home/quarantine/tuta-calendar"
+    install -d -o 1000 -g 1000 -m 0750 "$home/quarantine/calendar"
   fi
 
   echo "agent-config-seed: $state is seeded (config, .env, webui.env, memory, UI roots)"

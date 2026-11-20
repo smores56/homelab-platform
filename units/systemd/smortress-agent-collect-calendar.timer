@@ -1,0 +1,14 @@
+[Unit]
+Description=Every two hours, dump and collect the Tuta calendar
+
+[Timer]
+# Two-hourly, off the mail pass on the same network: calendar edits are made by a
+# human at unpredictable times, and the pass is a page walk rather than a
+# mailbox. Persistent, because a missed run is a gap in the replica.
+OnCalendar=*-*-* 00/2:40:00
+AccuracySec=1m
+Persistent=true
+Unit=smortress-agent-collect-calendar.service
+
+[Install]
+WantedBy=timers.target
