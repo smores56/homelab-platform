@@ -1,0 +1,32 @@
+# The collector egress gate's image: the allowlist proxy and its DNS responder.
+#
+# Both are stdlib-only Python (apps/agent_egress/), so the image is the pinned
+# interpreter plus one package -- no wheel is installed and requirements.lock is
+# empty on purpose. They are the only things a collector container may reach off
+# the host, so the image must not grow a package manager, an index URL or a
+# dependency: a rebuild has to produce the same bytes as the reviewed one.
+#
+# The base is pinned by digest, not tagged. A tag would move under the next
+# build, and the digest this repository signs, pins in scripts/app-images.sh and
+# points a Quadlet at would then name different bytes than the ones that were
+# reviewed. This is the same python:3.13-slim digest apps/broker/Dockerfile and
+# apps/webhook/Dockerfile build from; bump it deliberately, in one change.
+FROM python:3.13-slim@sha256:e48f59cdba69a3cbd9ed2cf0f348d90d45a8d350d98134cf1070bc106ee9ed90
+
+# The proxy tunnels TLS and the resolver only answers A/AAAA from the host's own
+# upstream, so nothing here terminates TLS: no ca-certificates, no gpg, no curl.
+# A package installed here would be a package the proxy could be attacked through.
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app
+
+WORKDIR /app
+COPY apps/agent_egress/ /app/apps/agent_egress/
+
+# A numeric uid with no passwd entry: nothing in this image is written at runtime,
+# and the policy document is mounted read-only at start.
+USER 1000:1000
+
+# `proxy` or `resolver` is the subcommand; the image serves both halves so one
+# signed digest covers the egress gate.
+ENTRYPOINT ["python3", "-m", "apps.agent_egress"]

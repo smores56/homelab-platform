@@ -1,0 +1,7 @@
+# Empty on purpose, and it must stay that way.
+#
+# The egress proxy and its resolver are stdlib-only Python (apps/agent_egress/),
+# so the image installs nothing: the pinned python:3.13-slim digest is the whole
+# dependency set. This file is the record of that decision, and the build has no
+# `pip install` step to run it -- a requirement added here would be an unreviewed
+# package inside the only process a collector may reach off the host.
