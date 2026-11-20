@@ -480,7 +480,8 @@ for m in var-lib-restic-ssd.mount var-lib-restic-hdd.mount; do
   check "Restic mount unit $m exists" test -s "units/systemd/$m"
   check "image enables $m" has "$m" image/Containerfile
 done
-check "SSD mount is keyed by the wiped disk UUID" has 'What=/dev/disk/by-uuid/e040eab7-3df0-4b7d-96e0-71fb9a5eff93' units/systemd/var-lib-restic-ssd.mount
+check "SSD mount is keyed by the wiped disk label" has 'What=/dev/disk/by-label/restic-ssd' units/systemd/var-lib-restic-ssd.mount
+check "SSD mount cannot block boot" has 'nofail' units/systemd/var-lib-restic-ssd.mount
 check "HDD mount is keyed by its UUID" has 'What=/dev/disk/by-uuid/973b7492-bb88-43c7-bac3-772384e45220' units/systemd/var-lib-restic-hdd.mount
 check "HDD mount bounds the device wait" has 'JobTimeoutSec=45' units/systemd/var-lib-restic-hdd.mount
 check "HDD mount bounds the mount command" has 'TimeoutSec=30' units/systemd/var-lib-restic-hdd.mount
