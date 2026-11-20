@@ -68,7 +68,13 @@ mentioning.
 - Requires a UIDVALIDITY for every folder, stores the map as the object
   `mail::_uidvalidity`, and raises `EpochError` when a folder's value changes. A
   renumbering makes "this key is gone" meaningless, so it is a new source epoch,
-  not a deletion.
+  not a deletion. The value comes from the sync tool's own state
+  (`read_uidvalidity`, `--uidvalidity-from-maildir`): mbsync writes the far
+  side's UIDVALIDITY into `.mbsyncstate` beside each box, and a number a caller
+  supplied would invalidate the deletion rule the moment it drifted. The reader
+  refuses a folder it has never synced, a state with a `.journal` or `.new`
+  sibling (a crash or a save in flight), and any header key isync does not
+  define.
 - Records an expunge as a tombstone only in a folder whose epoch did not change.
 - Refuses a folder that the previous generation had and this one does not. The
   sync is pull-only with far-side create/remove/expunge disabled, so a folder
@@ -165,7 +171,7 @@ against a fixture directory. It prints one JSON report and exits `0` on publish,
 
 ```sh
 python3 -m data_plane.collectors.raw --root /var/lib/agent/local/replica/mail \
-  mail --maildir /var/lib/agent/local/quarantine/mail --uidvalidity INBOX=7
+  mail --maildir /var/lib/agent/local/quarantine/mail --uidvalidity-from-maildir
 python3 -m data_plane.collectors.raw --root /var/lib/agent/local/replica/finance \
   finance --accountset /run/collector/accountset.json \
   --accountset-url "$(cat /run/secrets/simplefin-url)" --include-pending
@@ -174,6 +180,9 @@ python3 -m data_plane.collectors.raw --root /var/lib/agent/local/replica/finance
 On the host the same command runs from `smortress-agent-collect-finance.service`,
 on `agent-collect.network`, with the access URL as a Podman secret
 (`docs/core/applications.md`, "Collectors").
+
+`--uidvalidity FOLDER=INT` remains for a fixture directory that has no sync
+state.
 
 `--dry-run` enumerates and validates, then discards the staging generation: the
 first run against a real provider can be read before anything is published. The

@@ -8,7 +8,7 @@
 # instance back to its dataset, and --print-plan has no side effects.
 #
 #   tests/core/storage-layout.sh
-# shellcheck disable=SC2154  # the table and its helpers come from storage-layout.sh
+# shellcheck disable=SC2154,SC2016  # the table and its helpers come from storage-layout.sh; source text is matched literally
 set -uo pipefail
 
 root=$(git rev-parse --show-toplevel)
@@ -46,6 +46,7 @@ for key in "${!dataset_quota[@]}"; do
 done
 eq "$(dataset_owner_for raw/files)" 1000:1000 'core datasets belong to uid 1000'
 eq "$(dataset_mode_for raw/files)" 0750 'core datasets are unreadable by the tenant'
+eq "${dataset_acl_mode:-}" passthrough 'a chmod cannot discard an operator ACL'
 eq "$(dataset_owner_for raw/apps)" 1001:1001 'the tenant dataset belongs to the tenant uid'
 eq "$(dataset_mode_for raw/apps)" 0700 'the tenant dataset is private to the tenant'
 owner_orphan=0
@@ -137,6 +138,12 @@ leftover=$(grep -rl --exclude=storage-migration.md -- '/var/tank\|tank/' \
 leftover+=$(grep -rl --exclude=storage-layout.sh -- '/var/tank\|tank/' \
   tests/core tests/apps tests/backrest tests/access tests/backup 2>/dev/null || true)
 eq "$leftover" '' 'no script, unit, image file, test or doc names /var/tank'
+
+# The declared ACL mode must reach both pool-creation paths, or it is decorative.
+eq "$(grep -cF -- '-O aclmode="$dataset_acl_mode"' scripts/init-zpool.sh)" 1 \
+  'init-zpool creates the pool with the declared ACL mode'
+eq "$(grep -cF 'zfs set "aclmode=$dataset_acl_mode" "$pool"' scripts/init-zpool.sh)" 1 \
+  'init-zpool re-asserts the ACL mode on an imported pool'
 
 # --print-plan is the plan init-zpool executes, and it must stay side-effect
 # free: stub zfs/zpool/blkid fail loudly if anything runs them.

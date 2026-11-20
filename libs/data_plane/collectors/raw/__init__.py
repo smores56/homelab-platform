@@ -11,6 +11,7 @@ from .brave import collect_brave_db
 from .calendar import collect_calendar
 from .finance import collect_simplefin
 from .mail import collect_maildir
+from .mbsync import read_uidvalidity
 from .replica import (
     ABSENCE_REASON,
     ABSENCE_NO_TOMBSTONE,
@@ -41,4 +42,5 @@ __all__ = [
     "collect_maildir",
     "collect_simplefin",
     "previous_replica",
+    "read_uidvalidity",
 ]

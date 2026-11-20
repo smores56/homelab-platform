@@ -65,7 +65,7 @@ def _key(name: str) -> str:
     return name.partition(":")[0]
 
 
-def _folders(root: Path) -> list[tuple[str, Path]]:
+def maildir_folders(root: Path) -> list[tuple[str, Path]]:
     """Every folder as ``(name, path)``, INBOX first.
 
     Maildir++ keeps subfolders as ``.Folder.Sub`` directories beside the root;
@@ -122,7 +122,7 @@ def collect_maildir(
     """
 
     root = resolve_source_dir(maildir_root, "maildir")
-    folders = _folders(root)
+    folders = maildir_folders(root)
     if not folders:
         raise PublishError(f"maildir {root} has no folder with cur/ or new/")
 
