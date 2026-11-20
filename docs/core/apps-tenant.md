@@ -63,35 +63,59 @@ a bad image reference, a non-object entry or invalid JSON changes nothing.
   forwards the tenant's DNS as the tenant uid and the resolver may be the host
   stub, MagicDNS or a LAN router, so no static set can name it. An app can
   therefore still reach a resolver on the tailnet or LAN, but nothing else. `egress = "none"` joins the internal Podman network, which has no
-  route out; Serve still reaches the loopback publish.
+  route out; Serve still reaches the loopback publish. Either class sits behind
+  the same fail-closed table: a placeholder with the allow-list's name drops the
+  whole account from earlier in boot, so a ruleset that fails to load leaves the
+  tenant dropped rather than open (see Boot order).
 - **Ingress.** Only Serve: core apps own the root paths on 443, 8443 and 10000,
   so `tailscale-serve` puts each app on `/apps/<name>` at 443 and
   removes a path the plan no longer names. Nothing is published off loopback.
 
 ## Boot order
 
-    sysusers -> smortress-apps-user -> smortress-apps-egress
+    sysusers -> smortress-apps-deny -> smortress-apps-egress
+             -> smortress-apps-user
              -> zfs-ready@raw-apps -> smortress-apps-quota
              -> systemd-logind -> user@<uid> (lingering) -> tenant units
 
-`smortress-apps-egress.service` is ordered `After=systemd-sysusers.service`
-because its ruleset names the account, which nft resolves when it loads the
-file; it carries `DefaultDependencies=no`, so nothing else would order it there.
-The pool unit carries the same ordering for the same reason: it chowns
-`/srv/apps` to the account name.
+The egress boundary is fail-closed, and what makes it so is a table, not only an
+ordering. `smortress-apps-deny.service` loads a placeholder ruleset first: the
+same table the allow-list uses, `inet smortress_apps_egress`, holding one chain
+on the `output` hook at `priority filter` with one rule, `meta skuid apps drop`.
+`smortress-apps-egress.service` then replaces it with the allow-list. A boot
+where that replacement loads ends with the allow-list in force; a boot where it
+does not — the unit fails, the vendor file is unreadable, the ruleset does not
+parse — ends with the placeholder still armed, so the tenant is dropped rather
+than left with no table at all and therefore unfiltered.
+
+The replacement is atomic in the sense that matters: `nft -f` applies a file as a
+single transaction, and the allow-list opens with
+`destroy table inet smortress_apps_egress` before it redefines that table, so the
+kernel moves from the blanket drop to the allow-list with no window in which
+neither is in force, and a file that fails to parse leaves the drop exactly as it
+was. The `destroy` is not optional for a second reason: a table block without it
+adds rules to the existing chain instead of replacing it, which would leave the
+placeholder's drop above the allow rules and deny the tenant everything.
+
+Both units are ordered `After=systemd-sysusers.service` because both rulesets
+name the account, which nft resolves when it loads the file, and the placeholder
+unit is `Before=smortress-apps-egress.service` so the allow-list can never land
+first and be overwritten by the placeholder. They carry `DefaultDependencies=no`,
+so nothing else would order them there; the pool unit carries the same sysusers
+ordering for the same reason, since it chowns `/srv/apps` to the account name.
 
 The gate is that ordering, not a drop-in on the tenant's user manager. Each
 prerequisite is `Before=systemd-logind.service`, so a lingering user manager —
-and every tenant unit it starts — cannot come up before provisioning, the egress
-ruleset and the quotas are in place. It cannot be expressed as `Requires=` on
-the tenant's units: those are user units, and a user manager cannot resolve a
-system unit, so `Requires=smortress-apps-user.service` in one fails the unit
-with "Unit … not found" instead of ordering it. The old
+and every tenant unit it starts — cannot come up before provisioning, the
+placeholder (later replaced by the allow-list) and the quotas are in place. It
+cannot be expressed as `Requires=` on the tenant's units: those are user units,
+and a user manager cannot resolve a system unit, so
+`Requires=smortress-apps-user.service` in one fails the unit with "Unit … not
+found" instead of ordering it. The old
 `user@<uid>.service.d` drop-in had the propagation (restarting a prerequisite
 stopped the tenant) but its numeric name meant it would silently stop applying
-the moment the uid moved, which is the failure this design rejects. A
-name-based equivalent needs a design delta — a system unit that gates the
-tenant's manager by account name, e.g. through `loginctl`.
+the moment the uid moved, which is the failure this design rejects; a name-based
+equivalent is a system unit that gates the tenant's manager by account name.
 
 Limits are properties of each rendered app unit, not of `user-<uid>.slice`:
 every Quadlet carries `MemoryHigh`, `MemoryMax`, `CPUQuota` and `TasksMax` in

@@ -224,6 +224,7 @@ RUN set -eux; \
       smortress-nvidia-cdi.service \
       smortress-apps-user.service \
       smortress-apps-quota.service \
+      smortress-apps-deny.service \
       smortress-apps-egress.service \
       smortress-tailscale-serve.service \
       smortress-cloudflared.service \

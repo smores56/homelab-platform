@@ -176,21 +176,172 @@ else
   bad 'the rule set is in force before a user manager can start' "$(cat "$unit")"
 fi
 
+# --- the fail-closed gate ---------------------------------------------------
+#
+# The ruleset above is the egress boundary when its loader runs. If the loader
+# never does — a failed unit, a parse error, a ruleset that cannot be read — no
+# table exists and the tenant is unfiltered. So a minimal table under the same
+# name is loaded before anything tenant-side can start: the allow-list replaces
+# it, and whatever happens to the replacement, the tenant is left dropped rather
+# than open.
+deny=image/rootfs/etc/nftables/smortress-apps-deny.nft
+deny_unit=units/systemd/smortress-apps-deny.service
+
+if [[ -f $deny ]]; then ok 'the deny ruleset exists'; else bad 'the deny ruleset exists'; fi
+if [[ -f $deny_unit ]]; then ok 'the deny unit exists'; else bad 'the deny unit exists'; fi
+[[ -f $deny && -f $deny_unit ]] || {
+  printf '\n%d passed, %d failed\n' "$pass" "$fail"
+  exit 1
+}
+
+# The deny ruleset is what the allow-list destroys, so it must define the same
+# table: a different name would be a second table evaluated beside the first,
+# and the tenant would stay dropped after the swap.
+allow_table=$(grep -oE '^table [a-z0-9]+ [a-z0-9_]+' "$rules" | awk '{print $2, $3}' | head -1)
+deny_table=$(grep -oE '^table [a-z0-9]+ [a-z0-9_]+' "$deny" | awk '{print $2, $3}' | head -1)
+if [[ -n $deny_table && $allow_table == "$deny_table" ]]; then
+  ok 'both rulesets define the same table, so the swap replaces it'
+else
+  bad 'both rulesets define the same table, so the swap replaces it' \
+    "deny=[$deny_table] allow=[$allow_table]"
+fi
+
+# The allow-list must destroy that table before redefining it. Without the
+# destroy the second load adds rules to the existing chain instead of replacing
+# it, and the deny rule survives into the allow-list.
+if [[ -n $deny_table ]] && grep -qE "^destroy table $deny_table\$" "$rules"; then
+  ok 'the allow-list destroys the deny table before rebuilding it'
+else
+  bad 'the allow-list destroys the deny table before rebuilding it' \
+    "$(grep -E '^destroy' "$rules" || true)"
+fi
+# One file is one `nft -f` transaction, and nft applies the whole file or
+# nothing. The destroy coming first inside that file is what makes the swap
+# atomic: an unparsable allow-list leaves the deny table exactly as it was, and
+# a parsed one leaves the allow-list with no deny rule behind.
+destroy_line=$(grep -nE '^destroy table' "$rules" | head -1 | cut -d: -f1)
+define_line=$(grep -nE '^table ' "$rules" | head -1 | cut -d: -f1)
+if [[ -n $destroy_line && -n $define_line ]] && ((destroy_line < define_line)); then
+  ok 'the allow-list destroys and rebuilds in one transaction, destroy first'
+else
+  bad 'the allow-list destroys and rebuilds in one transaction, destroy first' \
+    "destroy=$destroy_line table=$define_line"
+fi
+
+# The placeholder has to cover exactly the traffic the allow-list covers, or the
+# swap would change which hook and priority the tenant is filtered on.
+allow_chain=$(grep -oE 'type filter hook [a-z]+ priority [a-z]+; policy [a-z]+;' "$rules" | head -1)
+deny_chain=$(grep -oE 'type filter hook [a-z]+ priority [a-z]+; policy [a-z]+;' "$deny" | head -1)
+if [[ -n $deny_chain && $allow_chain == "$deny_chain" ]]; then
+  ok 'the deny chain sits on the same hook, priority and policy as the allow-list'
+else
+  bad 'the deny chain sits on the same hook, priority and policy as the allow-list' \
+    "deny=[$deny_chain] allow=[$allow_chain]"
+fi
+
+# The tenant is named here for the same reason as above — nft resolves the name
+# when it loads the file — and the rule is a bare drop, so nothing the
+# placeholder keeps can leak while the allow-list is missing.
+deny_skuid=$(grep -oE 'meta skuid [^[:space:];]+' "$deny" | awk '{print $3}' | sort -u)
+if [[ $deny_skuid == apps ]]; then
+  ok 'the deny ruleset names the apps account'
+else
+  bad 'the deny ruleset names the apps account' "[$deny_skuid]"
+fi
+if [[ -z $(grep -E 'meta skuid [0-9]' "$deny" || true) ]]; then
+  ok 'no deny rule pins a numeric uid'
+else
+  bad 'no deny rule pins a numeric uid' "$(grep -E 'meta skuid [0-9]' "$deny")"
+fi
+# One rule and nothing else: every tenant packet is dropped, and every packet
+# that is not the tenant's is untouched by the placeholder.
+if [[ $(grep -cE '^[[:space:]]+meta skuid' "$deny") == 1 ]] &&
+  [[ -z $(grep -E '\baccept\b' "$deny" | grep -v 'policy accept' || true) ]]; then
+  ok 'the deny ruleset drops the tenant and accepts nothing else'
+else
+  bad 'the deny ruleset drops the tenant and accepts nothing else' "$(cat "$deny")"
+fi
+
+# The unit: a oneshot that loads the vendor copy, after the account exists and
+# before the allow-list can replace it.
+if grep -q '^Type=oneshot' "$deny_unit" && grep -q '^RemainAfterExit=yes' "$deny_unit"; then
+  ok 'the deny unit stays active once its table is loaded'
+else
+  bad 'the deny unit stays active once its table is loaded' "$(cat "$deny_unit")"
+fi
+if grep -q 'nft -f /usr/etc/nftables/smortress-apps-deny.nft' "$deny_unit"; then
+  ok 'the deny unit loads the immutable vendor ruleset'
+else
+  bad 'the deny unit loads the immutable vendor ruleset' "$(cat "$deny_unit")"
+fi
+if grep -qE 'nft .*-f +/etc/' "$deny_unit"; then
+  bad 'the deny unit does not load a mergeable /etc copy' "$(cat "$deny_unit")"
+else
+  ok 'the deny unit does not load a mergeable /etc copy'
+fi
+if grep -q '^After=.*systemd-sysusers.service' "$deny_unit"; then
+  ok 'the deny rule set loads after the account exists'
+else
+  bad 'the deny rule set loads after the account exists' "$(cat "$deny_unit")"
+fi
+# Before the allow-list, so there is never a load order where the tenant runs
+# with the placeholder still armed; before logind, so it is in force before a
+# lingering manager and every tenant Quadlet it starts.
+if grep -qE '^Before=.*smortress-apps-egress\.service' "$deny_unit"; then
+  ok 'the deny rule set is in force before the allow-list replaces it'
+else
+  bad 'the deny rule set is in force before the allow-list replaces it' "$(cat "$deny_unit")"
+fi
+if grep -qE '^Before=.*systemd-logind\.service' "$deny_unit"; then
+  ok 'the deny rule set is in force before a user manager can start'
+else
+  bad 'the deny rule set is in force before a user manager can start' "$(cat "$deny_unit")"
+fi
+if grep -q 'smortress-apps-deny.service' image/Containerfile; then
+  ok 'the image enables the deny unit'
+else
+  bad 'the image enables the deny unit'
+fi
+if grep -q 'smortress-apps-egress.service' image/Containerfile; then
+  ok 'the image enables the allow-list unit'
+else
+  bad 'the image enables the allow-list unit'
+fi
+
 # A real parser is better than greps. A user + network namespace gives nft the
 # capability it needs without root, and loading twice there proves the reload
 # is a no-op; a runner without unprivileged namespaces says so instead.
 if command -v nft >/dev/null 2>&1 && unshare -rn true 2>/dev/null; then
-    if unshare -rn nft -c -f "$rules" >/dev/null 2>&1; then
-        ok 'nft parses the ruleset'
+    for file in "$rules" "$deny"; do
+        if unshare -rn nft -c -f "$file" >/dev/null 2>&1; then
+            ok "nft parses $file"
+        else
+            bad "nft parses $file" "$(unshare -rn nft -c -f "$file" 2>&1)"
+        fi
+        # shellcheck disable=SC2016  # $1 is the inner shell's argument
+        if unshare -rn sh -c 'nft -f "$1" && nft -f "$1"' sh "$file" >/dev/null 2>&1; then
+            ok "$file loads twice without error"
+        else
+            bad "$file loads twice without error" \
+                "$(unshare -rn sh -c 'nft -f "$1" && nft -f "$1"' sh "$file" 2>&1)"
+        fi
+    done
+    # The proof of the swap, rather than the claim: load the placeholder, then
+    # the allow-list, in one namespace and read back what the kernel holds. A
+    # stacked load keeps the bare drop beside the allow rules — the tenant would
+    # be denied everything after the swap — so the bare drop has to be gone.
+    # nft prints the account as the uid it resolves to, which is why the pattern
+    # matches any number: the assertion is about the rule, not the id.
+    # shellcheck disable=SC2016  # $1, $2 and the pattern are the inner shell's
+    swapped=$(unshare -rn sh -c '
+        nft -f "$1" && nft -f "$2" || exit 1
+        nft list table inet smortress_apps_egress
+    ' sh "$deny" "$rules" 2>&1)
+    if [[ $swapped == *'dport 53 accept'* ]] &&
+        ! grep -qE '^[[:space:]]*meta skuid [0-9]+ drop$' <<<"$swapped"; then
+        ok 'the allow-list replaces the deny table instead of stacking on it'
     else
-        bad 'nft parses the ruleset' "$(unshare -rn nft -c -f "$rules" 2>&1)"
-    fi
-    # shellcheck disable=SC2016  # $1 is the inner shell's argument
-    if unshare -rn sh -c 'nft -f "$1" && nft -f "$1"' sh "$rules" >/dev/null 2>&1; then
-        ok 'the ruleset loads twice without error'
-    else
-        bad 'the ruleset loads twice without error' \
-            "$(unshare -rn sh -c 'nft -f "$1" && nft -f "$1"' sh "$rules" 2>&1)"
+        bad 'the allow-list replaces the deny table instead of stacking on it' "$swapped"
     fi
 else
     printf 'skip nft parse (no unprivileged namespaces)\n'

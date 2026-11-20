@@ -12,7 +12,13 @@
 #
 # Loaded by smortress-apps-egress.service before any tenant container starts.
 # `destroy` instead of `delete` is what makes a reload a no-op on a host where
-# the table does not exist yet.
+# the table does not exist yet. It also carries the fail-closed swap: this file
+# runs as one `nft -f` transaction, so the destroy of the deny table and the
+# redefinition below cannot be seen apart — the kernel goes from the blanket
+# drop to this allow-list with no window in between, and a file that fails to
+# parse leaves the drop in force rather than nothing. Keep that order: a table
+# block without the destroy adds rules to the existing chain instead of
+# replacing it, and the deny rule would then drop every tenant packet.
 destroy table inet smortress_apps_egress
 
 table inet smortress_apps_egress {

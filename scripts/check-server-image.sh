@@ -791,7 +791,7 @@ check "the tenant id is allocated, not demanded" \
 check "the tenant dataset owner is the account name" test "$(dataset_owner_for raw/apps)" = apps:apps
 check "the image ships no per-uid manager drop-in" lacks 'user@1001.service.d' image/Containerfile
 check "the image ships no per-uid slice drop-in" lacks 'user-1001.slice.d' image/Containerfile
-for gate in smortress-apps-user smortress-apps-egress smortress-apps-quota; do
+for gate in smortress-apps-deny smortress-apps-user smortress-apps-egress smortress-apps-quota; do
   check "$gate finishes before a user manager can start" \
     grep -q '^Before=.*systemd-logind.service' "units/systemd/$gate.service"
 done
