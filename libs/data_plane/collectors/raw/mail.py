@@ -1,7 +1,8 @@
 """Raw mail: one quarantined Maildir becomes one published generation.
 
-The provider side is mbsync, pull-only, into a Maildir that nothing else writes
-while this runs. What is stored is the provider's own RFC822 bytes -- headers,
+The input is a Maildir -- a provider sync's output, or the fixture that stands
+in for one -- that nothing else writes while this runs. What is stored is the
+provider's own RFC822 bytes -- headers,
 structure, encodings and attachments untouched -- because anything derived from
 them (a body projection, a search index) is disposable and can be rebuilt, while
 a re-encoded attachment cannot.
@@ -116,9 +117,9 @@ def collect_maildir(
 ) -> CollectReport:
     """Enumerate every folder into ``generation``; never commit it.
 
-    ``uidvalidity`` is the provider's per-folder epoch, read from the sync tool's
-    state: this collector will not guess it, because a guessed epoch turns every
-    renumbering into silent deletion evidence.
+    ``uidvalidity`` is the provider's per-folder epoch, supplied by the caller
+    (``--uidvalidity FOLDER=INT``): this collector will not guess it, because a
+    guessed epoch turns every renumbering into silent deletion evidence.
     """
 
     root = resolve_source_dir(maildir_root, "maildir")

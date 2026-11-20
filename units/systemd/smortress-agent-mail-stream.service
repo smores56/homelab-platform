@@ -1,0 +1,58 @@
+[Unit]
+# The mail collector, as a service rather than a timer: TutaBridge pushes
+# EXISTS/EXPUNGE over IMAP IDLE, and a pass only makes sense after an event or
+# after a sweep interval has elapsed. A one-shot run would either poll the whole
+# mailbox or miss the event that woke it.
+#
+# The collector talks only to the bridge on the collectors' network and writes
+# only the personal replica. It cannot reach a deployment, the gateway or the
+# model: this unit's single network is agent-collect.network.
+#
+# `agent-tmail.service` is the Quadlet-generated name, not the container name:
+# `agent-tmail.container` generates that unit and it is what creates the bridge
+# this service dials.
+Description=Stream Tuta mail from the bridge into the personal replica
+Requires=zfs-ready@state-agent-local.service sops-decrypt.service smortress-app-secrets.service smortress-agent-config.service agent-collect-network.service agent-tmail.service
+After=zfs-ready@state-agent-local.service sops-decrypt.service smortress-app-secrets.service smortress-agent-config.service agent-collect-network.service agent-tmail.service network-online.target
+Wants=network-online.target
+# The bridge generates its certificate when an operator signs in, and podman
+# refuses a bind mount whose source does not exist. Until then the service is
+# skipped rather than reported as broken (docs/manual-steps.md 40.15).
+ConditionPathExists=/var/lib/agent/local/quarantine/tmail/config/tutabridge/cert.pem
+# A refusal (a changed UIDVALIDITY, a vanished folder, an unpublishable replica)
+# is not something a restart fixes: three attempts in five minutes turn it into
+# one failed unit next to real failures, instead of a restart loop.
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=simple
+UMask=0077
+# `--replace` clears a container a previous killed run left behind; without it a
+# restart fails on the name. The certificate is mounted as the one file imaplib
+# verifies, not the bridge's volume: the session, GPG key and password stay
+# unreadable here. The password is a Podman secret mounted at uid 1000 mode 0400,
+# and only this process is told its path.
+ExecStart=/usr/bin/podman run --rm --replace --name smortress-agent-mail-stream \
+  --network systemd-agent-collect \
+  --read-only --cap-drop=all --security-opt no-new-privileges \
+  --tmpfs /tmp:rw,size=16m --user 1000:1000 \
+  --secret tmail-bridge-password,type=mount,uid=1000,gid=1000,mode=0400 \
+  --volume /usr/lib/agent-facade:/usr/lib/agent-facade:ro \
+  --volume /var/lib/agent/local/quarantine/tmail/config/tutabridge/cert.pem:/bridge/cert.pem:ro \
+  --volume /var/lib/agent/local/replica:/replica:z \
+  --env PYTHONPATH=/usr/lib/agent-facade \
+  --env PYTHONDONTWRITEBYTECODE=1 \
+  --entrypoint python3 \
+  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:276d44685c65c0cb2a25f190b63c65c8906f9dc76486fb1c05ae71b5826bda08 \
+  -m data_plane.collectors.stream.imap --root /replica/mail \
+  --host smortress-agent-tmail --port 1143 --user tuta \
+  --password-file /run/secrets/tmail-bridge-password --ca-file /bridge/cert.pem
+# The process retries every socket error itself with exponential backoff, so a
+# restart here means the process died: a bug, or a refusal that exited non-zero.
+# SIGTERM is handled inside the process, which stops the IDLE connections and
+# exits cleanly; the grace covers the join and podman's teardown.
+Restart=on-failure
+RestartSec=10
+KillSignal=SIGTERM
+TimeoutStopSec=60

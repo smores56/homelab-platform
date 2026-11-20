@@ -9,6 +9,10 @@ whole contract without a provider.
 Everything here is **personal**. None of these sources exists in the general
 deployment, and no collector may run there.
 
+Mail has a second collector, `data_plane.collectors.stream.imap`, which reads the
+bridge over IMAP instead of a Maildir ("Mail over IMAP" below). It is the one the
+host runs; the Maildir collector remains the fixture-shaped contract.
+
 ## Why raw, and why a generation
 
 A derived index is a claim about somebody else's data. Re-encoding a MIME
@@ -35,7 +39,7 @@ this gone?" and there are two very different answers:
 
 | Evidence | What the collector does |
 | --- | --- |
-| Maildir expunge in a folder whose UIDVALIDITY did not change | tombstone: the provider recorded the deletion |
+| Maildir expunge, or an IMAP UID that vanished, in a folder whose UIDVALIDITY did not change | tombstone: the provider recorded the deletion |
 | Tuta entity with an explicit `deleted` flag | tombstone |
 | Everything else | carry the object forward, unchanged, with `absent_since` and `absence_reason` |
 
@@ -68,22 +72,71 @@ mentioning.
 - Requires a UIDVALIDITY for every folder, stores the map as the object
   `mail::_uidvalidity`, and raises `EpochError` when a folder's value changes. A
   renumbering makes "this key is gone" meaningless, so it is a new source epoch,
-  not a deletion. The value comes from the sync tool's own state
-  (`read_uidvalidity`, `--uidvalidity-from-maildir`): mbsync writes the far
-  side's UIDVALIDITY into `.mbsyncstate` beside each box, and a number a caller
-  supplied would invalidate the deletion rule the moment it drifted. The reader
-  refuses a folder it has never synced, a state with a `.journal` or `.new`
-  sibling (a crash or a save in flight), and any header key isync does not
-  define.
+  not a deletion. The caller supplies the value (`--uidvalidity FOLDER=INT`):
+  the epoch is the provider's, and a number the collector guessed would
+  invalidate the deletion rule the moment it drifted.
 - Records an expunge as a tombstone only in a folder whose epoch did not change.
-- Refuses a folder that the previous generation had and this one does not. The
-  sync is pull-only with far-side create/remove/expunge disabled, so a folder
-  cannot vanish because of anything this host did: it is a replaced or
-  half-mounted maildir, and tombstoning every message in it would record a mass
-  deletion that never happened.
+- Refuses a folder that the previous generation had and this one does not.
+  Nothing this host does can remove a folder from a provider, so it is a
+  replaced or half-mounted source, and tombstoning every message in it would
+  record a mass deletion that never happened.
 
 Fidelity limits: Tuta-specific metadata that IMAP does not expose, and the reason
 underlying an expunge.
+
+## Mail over IMAP
+
+`collect_mailbox(mailbox, generation, previous, captured_at=...)` in
+`data_plane.collectors.stream.imap` is the collector the host runs. The far side
+is TutaBridge (`agent-tmail`), the only process that holds a Tuta session: it
+serves the mailbox as local IMAP on the collectors' network, TLS with the
+certificate it generated, and the collector logs in with the bridge password.
+
+- The object id is `mail::<folder>::<uid>` and the body is the RFC822 bytes IMAP
+  returned (`BODY.PEEK[]`, so reading the replica never sets `\Seen` on the
+  provider's copy). The UID is the provider's key: it never changes and never
+  comes back for the life of a folder's UIDVALIDITY, which is exactly the
+  lifetime over which "this key is gone" means something.
+- The epoch comes from `SELECT`. Each folder's UIDVALIDITY is stored in
+  `mail::_uidvalidity`, and a value that differs from the previous generation
+  raises `EpochError` before a single body is fetched. A renumbering makes every
+  UID new, and publishing it as "the old ones vanished, these are new" would
+  record a mass deletion that never happened.
+- Flags come from one `UID FETCH 1:* (UID FLAGS)` per folder and are stored
+  sorted. They are the one metadata field a carried-forward object updates: its
+  bytes and its `captured_at` stay the ones that first saw the UID.
+- A UID that the previous generation held, that the folder no longer lists, and
+  that was not re-added, is an expunge -- but only in a folder whose UIDVALIDITY
+  did not change. That is the only tombstone this collector writes.
+- A folder that disappears is a refusal, not a mass tombstone: nothing this host
+  does can remove one, so the mailbox was replaced or is half written.
+- A folder name containing `/` or `::` is refused, because it has no unambiguous
+  place in an object id; guessing which folder a key meant is how a replica loses
+  one.
+- Bodies are fetched only for UIDs the previous generation lacks. Everything else
+  is carried forward from that generation's verified bytes, so a steady-state
+  pass costs one LIST, one SEARCH and one FLAGS fetch per folder, not a
+  re-download.
+
+### How the service runs
+
+`python3 -m data_plane.collectors.stream.imap` makes an initial full pass,
+publishes that generation, then opens one IDLE connection per folder (bounded at
+32; Tuta exposes a handful) and lets a publisher thread decide when to run again.
+TutaBridge pushes `EXISTS`/`EXPUNGE` only to the session that selected the folder,
+which is why there is a connection per folder: a push marks the mailbox dirty and
+the publisher runs one full incremental pass after `--events-debounce` (30 s) of
+quiet, or at least every 300 s while events keep arriving, so a busy mailbox
+cannot starve publication. An hourly reconcile pass covers a dropped notification
+and a reconnect.
+
+Every socket error is retried with exponential backoff, because the bridge
+restarts during an upgrade and the collector must outlive it. A refusal is
+different: `EpochError` and `PublishError` abort the staging generation and exit
+non-zero, because nothing can be published from a mailbox whose epoch moved and
+a human has to reconcile it. Each published generation prints one JSON line with
+`source_id`, `generation_id`, `objects`, `carried`, `deleted` and
+`details.folders`.
 
 ## Calendar
 
@@ -171,7 +224,7 @@ against a fixture directory. It prints one JSON report and exits `0` on publish,
 
 ```sh
 python3 -m data_plane.collectors.raw --root /var/lib/agent/local/replica/mail \
-  mail --maildir /var/lib/agent/local/quarantine/mail --uidvalidity-from-maildir
+  mail --maildir /path/to/maildir --uidvalidity INBOX=1
 python3 -m data_plane.collectors.raw --root /var/lib/agent/local/replica/finance \
   finance --accountset /run/collector/accountset.json \
   --accountset-url "$(cat /run/secrets/simplefin-url)" --include-pending
@@ -181,8 +234,8 @@ On the host the same command runs from `smortress-agent-collect-finance.service`
 on `agent-collect.network`, with the access URL as a Podman secret
 (`docs/core/applications.md`, "Collectors").
 
-`--uidvalidity FOLDER=INT` remains for a fixture directory that has no sync
-state.
+`--uidvalidity FOLDER=INT` is repeatable: the epoch is required for every folder
+and is never guessed.
 
 `--dry-run` enumerates and validates, then discards the staging generation: the
 first run against a real provider can be read before anything is published. The
@@ -193,7 +246,9 @@ is what makes "the latest earlier generation" well defined.
 
 - It does not commit. The caller publishes with `commit_next(complete=True)` once
   every folder, entity or table has been enumerated.
-- It does not decide deletion from silence. Only the two tombstone cases above
+- It does not decide deletion from silence. Only the tombstone cases above
   delete anything.
-- It does not talk to a provider. The sync tool, the SDK dumper and the copy timer
-  are the provider-facing half; this layer is what happens to their output.
+- The raw collectors do not talk to a provider. The sync tool, the SDK dumper
+  and the copy timer are the provider-facing half; this layer is what happens to
+  their output. The IMAP stream collector is the exception: the bridge is its
+  provider-facing half, and it reads it directly.

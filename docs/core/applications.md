@@ -255,13 +255,15 @@ profile is a network property and not a firewall exception.
 
 ### Collectors
 
-The four raw collectors (`docs/raw-replicas.md`) are not part of a deployment.
-A collector is the one process that talks to a provider, and the deployment that
-consumes the result must not: the personal side has no route off the host.
+The raw collectors and the IMAP stream collector (`docs/raw-replicas.md`) are
+not part of a deployment. A collector is the one process that talks to a
+provider, and the deployment that consumes the result must not: the personal side
+has no route off the host.
 
 | Unit | Network | Writes | Credential |
 | --- | --- | --- | --- |
 | `smortress-agent-collect-finance.timer` → `.service` | `agent-collect.network`, a plain bridge of its own | `state/agent-local/replica/finance` | Podman secret `simplefin-access-url`, uid 1000 mode 0400 |
+| `smortress-agent-mail-stream.service` | `agent-collect.network` | `state/agent-local/replica/mail` | Podman secret `tmail-bridge-password`, uid 1000 mode 0400 |
 | `agent-tmail` (Quadlet; it serves, no timer) | `agent-collect.network` | `state/agent-local/quarantine/tmail`, its own session volume | none: its credential is the session on that volume |
 
 Tuta serves no IMAP at all, so `agent-tmail` -- TutaBridge, mirrored and pinned
@@ -272,6 +274,16 @@ volume is a copy of the login and belongs in the same Restic snapshot as the
 replica it feeds (`docs/manual-steps.md` section 40.15). It shares
 `agent-collect.network` with the finance collector: both are personal-authority
 processes writing into the personal dataset, and neither can reach a deployment.
+
+`smortress-agent-mail-stream.service` is the collector itself: it logs in to the
+bridge, publishes a full pass, then holds one IDLE connection per folder and
+republishes after 30 seconds of quiet, with an hourly reconcile pass. The bridge
+pushes only to the session that selected a folder, so IDLE is per folder: latency
+is exact for an idled folder, and sweep-driven for anything the bridge does not
+push -- a folder past the 32-connection cap, or a message that arrived while the
+socket was down. A changed UIDVALIDITY or a vanished folder aborts the staging
+generation and exits non-zero instead of publishing a generation that looks like
+mass deletion.
 
 The network is deliberately not `agent-general.network` even though both have
 egress: the general side carries the hosted provider key, and a bank collector has

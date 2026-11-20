@@ -175,6 +175,28 @@ class RawReplica:
         for object_id in self.object_ids():
             yield self.object(object_id)
 
+    def carry_into(
+        self,
+        generation: StagingGeneration,
+        object_id: str,
+        metadata: Mapping[str, Any],
+    ) -> None:
+        """Put this generation's object into ``generation`` without reading it.
+
+        The previous manifest already holds the size and the digest, and this
+        generation is immutable, so a carry is a link plus a manifest entry rather
+        than a read and a hash.
+        """
+
+        entry = self._entry(object_id)
+        generation.link(
+            object_id,
+            self._path / "objects" / entry["filename"],
+            dict(metadata),
+            size=int(entry["size"]),
+            sha256=str(entry["sha256"]),
+        )
+
     def _entry(self, object_id: str) -> Mapping[str, Any]:
         if not isinstance(object_id, str):
             raise ValidationError("object id must be a string")
@@ -251,17 +273,18 @@ def carry_forward(
     if previous is None:
         return 0
     carried = 0
-    for item in previous.iter_objects():
-        if generation.has_object(item.object_id):
+    for entry in previous.entries():
+        object_id = entry["object_id"]
+        if generation.has_object(object_id):
             continue
         # A tombstone is the one thing that outranks carrying forward: the
         # provider said it was deleted, so re-adding it would resurrect it.
-        if generation.is_tombstoned(item.object_id):
+        if generation.is_tombstoned(object_id):
             continue
-        metadata = dict(item.metadata)
+        metadata = dict(entry["metadata"])
         metadata.setdefault(ABSENT_SINCE, captured_at)
         metadata[ABSENCE_REASON] = reason
-        generation.put(item.object_id, item.data, metadata)
+        previous.carry_into(generation, object_id, metadata)
         carried += 1
     return carried
 

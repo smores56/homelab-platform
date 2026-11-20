@@ -11,6 +11,7 @@ import json
 import sqlite3
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from data_plane.collectors.raw import (
@@ -123,6 +124,37 @@ class ReplicaTests(unittest.TestCase):
             metadata = RawReplica(root, "gen-0003").metadata("gone")
             self.assertEqual(metadata[ABSENT_SINCE], "2026-11-19T00:00:00+00:00")
             self.assertEqual(metadata["absence_reason"], ABSENCE_NO_TOMBSTONE)
+
+    def test_carry_forward_reads_no_object_bytes(self) -> None:
+        """A carried object costs an inode, not a read of the previous replica."""
+
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            first = StagingGeneration(root, "gen-1", source_id="tuta.mail")
+            first.put("mail::INBOX::1", b"From: a\r\n\r\nbody\r\n", {"folder": "INBOX"})
+            first.commit_next(complete=True)
+
+            second = StagingGeneration(root, "gen-2", source_id="tuta.mail")
+            def guarded(self, object_id):
+                raise AssertionError(f"carry_forward read {object_id}")
+
+            with mock.patch.object(RawReplica, "read", guarded):
+                carried = carry_forward(
+                    second,
+                    previous_replica(second),
+                    reason=ABSENCE_NO_TOMBSTONE,
+                    captured_at="2026-11-20T00:00:00+00:00",
+                )
+            self.assertEqual(carried, 1)
+
+            second.commit_next(complete=True)
+            replica = RawReplica(root, "gen-2")
+            self.assertEqual(
+                replica.read("mail::INBOX::1"), b"From: a\r\n\r\nbody\r\n"
+            )
+            self.assertIn(
+                "absent_since", replica.metadata("mail::INBOX::1")
+            )
 
     def test_carry_forward_never_resurrects_a_tombstone(self) -> None:
         with tempfile.TemporaryDirectory() as work:

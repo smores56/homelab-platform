@@ -276,6 +276,70 @@ class StagingGeneration:
             return False
         return True
 
+    def link(
+        self,
+        object_id: str,
+        source: Path,
+        metadata: dict,
+        *,
+        size: int,
+        sha256: str,
+    ) -> None:
+        """Record an object whose bytes already exist at ``source``.
+
+        Carrying a whole mailbox forward means recording a hundred thousand
+        objects whose bytes are already in the previous generation. Reading each
+        one back into Python to hash it would make every pass cost the size of the
+        mailbox, so this records the previous generation's own digest instead --
+        it was verified when that generation was published, and a reader still
+        verifies the bytes against the manifest.
+
+        The source is linked rather than copied, so the cost is one inode update.
+        """
+
+        self._require_open()
+        filename = _object_filename(object_id)
+        if not isinstance(source, Path):
+            source = Path(source)
+        if source.is_symlink() or not source.is_file():
+            raise PublishError(f"{source} is not a regular file to carry forward")
+        if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+            raise ValidationError("carried size must be a non-negative integer")
+        if (
+            not isinstance(sha256, str)
+            or len(sha256) != 64
+            or any(character not in "0123456789abcdef" for character in sha256)
+        ):
+            raise ValidationError("carried sha256 must be 64 lowercase hex digits")
+        if not isinstance(metadata, dict):
+            raise ValidationError("object metadata must be a dict")
+        try:
+            json.dumps(metadata)
+        except (TypeError, ValueError) as exc:
+            raise ValidationError("object metadata is not JSON serializable") from exc
+
+        objects = self._staging / "objects"
+        _reject_symlink(objects, "object directory")
+        objects.mkdir(parents=True, exist_ok=True)
+        destination = objects / filename
+        _reject_symlink(destination, "object path")
+        if destination.exists():
+            raise PublishError(f"object {object_id!r} is already in this generation")
+        try:
+            os.link(source, destination)
+        except OSError:
+            # A different filesystem or a refusing policy is not a corruption: the
+            # bytes are still the previous generation's, so copy them.
+            shutil.copyfile(source, destination)
+        self._objects[object_id] = {
+            "object_id": object_id,
+            "filename": filename,
+            "size": size,
+            "sha256": sha256,
+            "metadata": dict(metadata),
+        }
+        self._tombstones.discard(object_id)
+
     def delete(self, object_id: str) -> None:
         self._require_open()
         filename = _object_filename(object_id)
