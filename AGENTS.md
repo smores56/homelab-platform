@@ -37,11 +37,13 @@ tests/observability/check.sh            # vector unit tests, config drift, expor
 tests/digest/check.sh                   # digest builder fixtures, egress and reverse-path contract
 tests/data-plane/check.sh               # data-plane contracts, identity, journal, broker, backup, collectors, memory, CLI
 tests/tuta-calendar/check.sh            # calendar exporter: crypto, session seal, entity mapping, pagination
+tests/agent-egress/check.sh            # collector egress: allowlist proxy, SNI gate, DNS responder, log redaction
 nix run nixpkgs#yamllint -- .
 nix run nixpkgs#actionlint -- .              # a workflow GitHub cannot parse never runs, silently
 nix run nixpkgs#shellcheck -- scripts/*.sh tests/policies/*.sh tests/tofu/*.sh \
   tests/access/*.sh tests/backup/*.sh tests/digest/*.sh tests/observability/*.sh \
-  tests/agent-control/*.sh clusters/homelab/flux-system/bootstrap.sh \
+  tests/agent-control/*.sh tests/agent-egress/*.sh \
+  clusters/homelab/flux-system/bootstrap.sh \
   clusters/homelab/platform/backup/*.sh provision/*.sh tests/provision/*.sh
 scripts/check-action-pins.sh
 scripts/check-pr-secret-boundary.sh
