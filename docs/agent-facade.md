@@ -78,6 +78,25 @@ Derived objects are not records: the Maildir epoch map, the ICS projection, the
 AccountSet summary and the account/connection objects are skipped, and Brave
 contributes its `urls` rows only. The raw layer is `docs/raw-replicas.md`.
 
+Search does not have to scan. With `--index-root DIR` (`AGENT_FACADE_INDEX_ROOT`,
+`/index` in the personal container) each adapter keeps a derived SQLite FTS5 index
+at `DIR/<source>/<generation>.sqlite` and queries it instead of walking the
+projections. It is built lazily, once per adapter, on the first search that can
+use it, and it is disposable: a published generation is immutable, so the file is
+named after the generation, a new generation is a new file, and the source's other
+generation files are pruned after the build. The tokenizer is `trigram`, so a hit
+is a substring hit -- `orld` finds `Hello world`, which is why it is not the word
+tokenizer memory uses. Case folding is SQLite's rather than Python's
+`casefold()`, so text a word reaches only through a compatibility character (`ﬁ`
+for `fi`) is found by the scan and not by the index: the scan stays the
+definition, and the index is the fast path over it. A trigram cannot match a word
+shorter than three characters, so a query with such a word is answered by the
+scan; so is every index failure (an unwritable root, a foreign schema version, a
+damaged file). `apps/agent_facade/source_index.py` holds it, and it follows the
+same rule as the memory index: query words are quoted and AND-joined by
+`contracts.search_expression` and travel as a bound parameter, so FTS5 syntax in a
+query stays literal.
+
 The Quadlets do not pass `--replica` yet: a source only gains one when its
 collector's dataset exists on the host, which arrives with the collector units.
 Until then both deployments serve the fixtures.
@@ -156,9 +175,9 @@ Error codes: `unauthorized`, `unknown_tool`, `validation`, `unknown_source`,
 Two containers, one per deployment, both on `agent-runtime` at the pinned digest
 with `Entrypoint=python3` replacing the image's gateway dispatcher:
 
-| Quadlet | Container name | Network | Port | Memory root |
+| Quadlet | Container name | Network | Port | Writable mounts |
 | --- | --- | --- | --- | --- |
-| `agent-facade-personal` | `smortress-agent-facade-personal` | `agent-local.network` (internal, no egress) | `18004` | `/memory` = `state/agent-local/memory` |
+| `agent-facade-personal` | `smortress-agent-facade-personal` | `agent-local.network` (internal, no egress) | `18004` | `/memory` = `state/agent-local/memory`; `/index` = `state/agent-local/index` |
 | `agent-facade-general` | `smortress-agent-facade-general` | `agent-general.network` | `18005` | `/memory` = `state/agent-general/memory` |
 
 Neither publishes a port. The only client is that deployment's gateway, which
@@ -177,7 +196,9 @@ not mount is a container that cannot start.
 
 Each container runs as uid 1000 with `ReadOnly=true`, `NoNewPrivileges=true` and
 `DropCapability=ALL`, holds one token as a mounted file, and writes nowhere but
-`/memory`. The gateway's `mcp_servers` entry sends that token as
+`/memory` and, on the personal side, `/index`. Only the personal facade takes
+`--index-root`: the general deployment has no replica source, so it has nothing to
+index. The gateway's `mcp_servers` entry sends that token as
 `X-Deployment-Token`; the image's config template carries the placeholder
 `__FACADE_TOKEN__` and `smortress-agent-config.service` substitutes the decrypted
 value when it seeds the file, so the token is in no image, no document and no

@@ -39,7 +39,7 @@ ContainerName=smortress-agent-facade-personal
 Network=agent-local.network
 User=1000:1000
 Entrypoint=python3
-Exec=-m apps.agent_facade --transport http --deployment personal --token-file /run/secrets/agent-facade-personal-token --memory-root /memory --host 0.0.0.0 --port 18004
+Exec=-m apps.agent_facade --transport http --deployment personal --token-file /run/secrets/agent-facade-personal-token --memory-root /memory --index-root /index --host 0.0.0.0 --port 18004
 Secret=agent-facade-personal-token,type=mount,target=/run/secrets/agent-facade-personal-token,uid=1000,gid=1000,mode=0400
 Environment=PYTHONPATH=/usr/lib/agent-facade/libs:/usr/lib/agent-facade
 # The code tree is mounted read-only, so a bytecode cache write can only fail.
@@ -49,6 +49,11 @@ Environment=TZ=UTC
 # /usr content is already readable by the container type; only dataset mounts relabel.
 Volume=/usr/lib/agent-facade:/usr/lib/agent-facade:ro
 Volume=/var/lib/agent/local/memory:/memory:z
+# The derived source index (apps/agent_facade/source_index.py): one SQLite file per
+# replica source and generation, rebuilt when a generation publishes a new one and
+# deleted with no consequence but the cost of the next build. It is not in the
+# memory tree because it answers for the replicas, not for what the agent wrote.
+Volume=/var/lib/agent/local/index:/index:z
 ReadOnly=true
 NoNewPrivileges=true
 DropCapability=ALL

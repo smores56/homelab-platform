@@ -605,6 +605,16 @@ if grep -qF 'while IFS= read -r line' "$seed_script" &&
 else
   bad 'the facade token is read into a variable, never into argv'
 fi
+# The personal facade bind-mounts its index directory, and a bind source podman
+# has to create would land root-owned inside the dataset, so the seed unit creates
+# it at the container's uid -- on the personal side only, where the replicas are.
+# shellcheck disable=SC2016  # the matched text is the seed script's own source line
+if grep -qF 'if [[ $state == local ]]; then' "$seed_script" &&
+  grep -qF 'install -d -o 1000 -g 1000 -m 0750 "$home/index"' "$seed_script"; then
+  ok 'the seed unit creates the personal index directory at the container uid'
+else
+  bad 'the seed unit creates the personal index directory at the container uid'
+fi
 
 # 12. Code delivery. A Quadlet hands `Exec=`/`Entrypoint=` a program that has to
 #     exist inside the container's own filesystem, and the agent-runtime image is
@@ -707,6 +717,21 @@ for spec in personal:local:18004 general:general:18005; do
     ok "$q mounts only the memory subdirectory of the $state dataset"
   else
     bad "$q mounts only the memory subdirectory of the $state dataset"
+  fi
+  # The derived source index is personal: every raw collector is, so the general
+  # deployment has no replica to index and takes neither the flag nor the mount.
+  if [[ $deployment == personal ]]; then
+    if [[ " $exec_line " == *' --index-root /index '* ]] &&
+      grep -qxF 'Volume=/var/lib/agent/local/index:/index:z' "$q"; then
+      ok "$q indexes the replicas in the $state dataset's index directory"
+    else
+      bad "$q indexes the replicas in the $state dataset's index directory" "$exec_line"
+    fi
+  elif [[ " $exec_line " != *'--index-root'* ]] &&
+    ! grep -qE '^Volume=.*:/index(:z)?$' "$q"; then
+    ok "$q carries no index root"
+  else
+    bad "$q carries no index root" "$exec_line"
   fi
   # The gateway is the facade's only client, so its template must name the facade's
   # container and port, carry the placeholder rather than a token, and trust it.

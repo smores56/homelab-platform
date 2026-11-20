@@ -111,10 +111,13 @@ PYTHONPATH=libs AGENT_FACADE_TOKEN=... AGENT_FACADE_DEPLOYMENT=general \
 
 Every flag also has an `AGENT_FACADE_*` environment variable:
 `AGENT_FACADE_TRANSPORT`, `AGENT_FACADE_DEPLOYMENT`, `AGENT_FACADE_TOKEN`,
-`AGENT_FACADE_TOKEN_FILE`, `AGENT_FACADE_MEMORY_ROOT`, `AGENT_FACADE_HOST`,
-`AGENT_FACADE_PORT`, `AGENT_FACADE_MAX_BODY_BYTES`. The HTTP default bind is
-`127.0.0.1:18004`; `--transport` defaults to `stdio`, `--deployment` has no
-default and is required. Logs go to stderr, so stdout belongs to stdio alone.
+`AGENT_FACADE_TOKEN_FILE`, `AGENT_FACADE_MEMORY_ROOT`, `AGENT_FACADE_INDEX_ROOT`,
+`AGENT_FACADE_HOST`, `AGENT_FACADE_PORT`, `AGENT_FACADE_MAX_BODY_BYTES`. The HTTP
+default bind is `127.0.0.1:18004`; `--transport` defaults to `stdio`,
+`--deployment` has no default and is required. `--index-root` defaults to
+`/index`, the directory the personal Quadlet mounts; the source index below it is
+derived, so an unwritable root costs a scan and nothing else. Logs go to stderr, so
+stdout belongs to stdio alone.
 
 ## Status: offline fixtures
 
