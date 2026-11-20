@@ -528,7 +528,7 @@ fi
 
 # /etc/u2f_mappings is public credential data: a key handle and a public key per
 # token, no secret. It ships so that a fresh host needs no hand-written file, and
-# because both stacks read it. pam_u2f parses it as root and warns about one that
+# because the sudo stack names it. pam_u2f parses it as root and warns about one that
 # group or other can write without failing sudo over it: the touch then finds no
 # device and falls through to the password, so the mode is asserted here rather
 # than left to a journal line nobody reads.
@@ -556,7 +556,7 @@ if [[ -n $map_line && $(wc -l <"$mappings" 2>/dev/null) -eq 1 && $map_line == sm
   [[ $map_count -ge 2 ]] || map_ok=0
   [[ $map_line =~ \+pin ]] && map_ok=0
 fi
-[[ $(stat -c %a "$mappings" 2>/dev/null) == 644 ]] || map_ok=0
+[[ $(git ls-files -s -- "$mappings") == 100644* ]] || map_ok=0
 if [[ $map_ok -eq 1 ]]; then
   ok "the shipped mapping is smores' per-key credentials, no +pin, group/other not writable"
 else
