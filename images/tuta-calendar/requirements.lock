@@ -1,0 +1,14 @@
+# Every Python dependency the exporter holds, at the exact versions the build
+# resolves. The image is the only artifact that ships these, and the host it runs
+# on has no route off it, so nothing here may be a range: a rebuild from these
+# pins is what makes the published digest mean the same thing twice.
+#
+# argon2-cffi-bindings, cffi and pycparser are transitive; they are pinned
+# because a resolver that picks them at build time is a digest that changes
+# without the source changing.
+argon2-cffi==25.1.0
+argon2-cffi-bindings==26.2.0
+bcrypt==5.0.0
+cffi==2.1.1
+cryptography==50.0.2
+pycparser==3.12

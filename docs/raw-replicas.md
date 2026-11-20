@@ -154,6 +154,47 @@ objects per event: `calendar::<id>` (the entity, canonically encoded) and
 
 Fidelity limits: the SDK supplies no tombstone, and expansion would be lossy.
 
+### The provider half: the dumper
+
+Tuta's SDK is not something this host can run, so the entities come from
+`python3 -m apps.tuta_calendar` (`apps/tuta_calendar/`, image
+`images/tuta-calendar/`, published by `.github/workflows/publish-tuta-calendar.yml`).
+It reads the provider's own JSON API -- there is no CalDAV and no supported
+alternative -- and it does exactly two things:
+
+- `init --store DIR` signs in once. The address, the password and, only when the
+  server answers with a challenge, one TOTP code are typed at a prompt; nothing
+  secret can arrive on argv, and the password is never written. What persists is
+  the access token, the user id, the KDF-derived passphrase key and the encrypted
+  user group key, sealed into `session.gpg` with a passphrase-less GPG key in
+  `DIR/gnupg` (mode 0600 and 0700). A seal that cannot be opened is a refusal
+  naming `init`, never a partial session: the token it holds is the account.
+- `dump --store DIR --out DIR` unseals, walks the account's two event lists
+  (`calendarevent` pages of 200, by the last `_id`), and writes one
+  `<listId>-<elementId>.json` per event with sorted keys. A `*.json` in `--out`
+  that the run did not write is removed, so an event the provider stopped listing
+  cannot linger as if it were still there -- absence is the collector's
+  carry-forward case, not this layer's.
+
+The document is the entity the collector expects, and the names are its own:
+`id`, `uid`, `summary`, `description`, `location`, `dtstart`/`dtend` (UTC,
+`2026-03-01T09:00:00Z`; date-only when both ends are midnight UTC, which is how
+an all-day event is spelled), `revision`/`sequence`, `recurrence_id`, and
+`rrule`. `start`/`end`/`sequence` repeat the same three values under the
+provider-facing names, and `recurrence` holds the repeat rule's fields as the
+provider sent them (frequency, end type and value, interval, time zone, excluded
+dates) beside the single-line `rrule` the collector renders -- the raw copy is
+what makes a wrong projection repairable without another fetch. An unknown
+frequency or end type is refused rather than dropped: a series exported as one
+event is a calendar that looks complete and is wrong.
+
+Deferred, and named as deferred: recurrence is never expanded, altered instances
+are not reconciled against their series, and alarms and attendees are not read at
+all (an empty attendee list means "not decrypted", not "none"). The provider's
+version floor is the failure to expect in the field: HTTP 474 or 412 arrives as a
+refusal naming the endpoint and the constants to raise, because a client version
+below the minimum is rejected before any other answer (manual-steps 40.16).
+
 ## Finance
 
 `collect_simplefin(accountset, generation, accountset_url=..., captured_at=...,

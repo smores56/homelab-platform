@@ -1,0 +1,43 @@
+# The calendar dumper's image: Tuta's API client, its crypto and the seal.
+#
+# The exporter reads Tuta's own JSON API, so it needs three wheels
+# (cryptography, bcrypt, argon2-cffi) and gpg for the session seal. The personal
+# deployment has no route off the host, so `pip install` cannot run at container
+# start: the dependencies are installed here, at build time, from the pins in
+# requirements.lock, and the running container only imports them.
+#
+# The base is pinned by digest, not tagged. A tag would move under the next
+# build, and the digest this repository signs, pins in scripts/app-images.sh and
+# points a Quadlet at would then name different bytes than the ones that were
+# reviewed. This is the same python:3.13-slim digest apps/broker/Dockerfile and
+# apps/webhook/Dockerfile build from; bump it deliberately, in one change.
+FROM python:3.13-slim@sha256:e48f59cdba69a3cbd9ed2cf0f348d90d45a8d350d98134cf1070bc106ee9ed90
+
+# gpg is not a convenience: session.py seals the access token and the passphrase
+# key with a passphrase-less key on the store volume, and a store it cannot open
+# is a documented refusal rather than a run with no session. ca-certificates is
+# what app.tuta.com's TLS needs.
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends ca-certificates gnupg; \
+    rm -rf /var/lib/apt/lists/*
+
+COPY images/tuta-calendar/requirements.lock /tmp/requirements.lock
+RUN set -eux; \
+    python3 -m pip install --no-cache-dir --disable-pip-version-check \
+        -r /tmp/requirements.lock; \
+    rm -f /tmp/requirements.lock; \
+    python3 -c 'import argon2, bcrypt, cryptography'
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app
+
+WORKDIR /app
+COPY apps/tuta_calendar/ /app/apps/tuta_calendar/
+
+# A numeric uid with no passwd entry, because the store volume is owned by 1000
+# and there is nothing else in this image to write to.
+USER 1000:1000
+
+ENTRYPOINT ["python3", "-m", "apps.tuta_calendar"]
