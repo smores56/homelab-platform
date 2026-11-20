@@ -19,8 +19,8 @@ rollback path. Operator-only actions are in `docs/manual-steps.md` section 37.
 | `/etc/smortress/secrets/*.yaml` | SOPS ciphertext only. `image/rootfs/etc/smortress/secrets.manifest` fixes the decrypted owner, group and mode. |
 | `/usr/lib/systemd/system/zfs-ready@.service` | One readiness instance per recovery group; verifies the mount, not the directory. |
 | `/usr/lib/systemd/system/sops-decrypt.service` | Boot-ordered decrypt into `/run/smortress/secrets`. |
-| `/usr/lib/systemd/system/smortress-password.service` | Re-applies the `smores` account password hash with `usermod -p` at every boot from `/run/smortress/secrets/smores-password-hash.yaml`; bootc never reconciles `/var`, so `/etc/shadow` would otherwise be whatever the install left there. |
-| `/usr/libexec/smortress-password` | `scripts/smortress-password.sh`: the sha512crypt guard and the single `usermod -p` exec, so no hash handling lives in a unit line. |
+| `/usr/lib/systemd/system/smortress-password.service` | Re-applies the `smores` account password hash through `chpasswd -e` at every boot from `/run/smortress/secrets/smores-password-hash.yaml`; bootc never reconciles `/var`, so `/etc/shadow` would otherwise be whatever the install left there. |
+| `/usr/libexec/smortress-password` | `scripts/smortress-password.sh`: the sha512crypt guard and the single `chpasswd -e` write, the hash on stdin and never in argv, so no hash handling lives in a unit line. |
 | `/usr/lib/systemd/system/smortress-zpool.service` | Creates or imports the `smortress` pool on the encrypted data device. |
 | `/usr/lib/systemd/system/smortress-cryptsetup-hdd.service` | Opens the HDD LUKS with its keyfile; non-blocking by contract. |
 | `/etc/firewalld/zones/tailscale.xml` | Binds `tailscale0`, permits SSH and Syncthing's 22000/tcp+udp; the default zone is `drop`. |
@@ -312,14 +312,14 @@ The T2 probe is `secrets/server/canary.yaml`: ciphertext whose plaintext is
 `canary: sops-decrypt-ok`. It proves the image, age identity, unit and
 least-privilege write path without adding an application secret.
 
-`secrets/server/smortress-password-hash.yaml` is the one secret with two readers,
+`secrets/server/smores-password-hash.yaml` is the one secret with two readers,
 because `/var` and the install are not the same state. The install render
 (`scripts/render-ignition.sh`) decrypts it with the operator's identity and writes
 the hash into the Ignition `passwd.users[0].password_hash`; on the host,
 `smortress-password.service` reads the decrypted copy from `/run` and re-applies
-it with `usermod -p`, guarded so an empty or non-sha512crypt value fails the unit
+it with `chpasswd -e`, guarded so an empty or non-sha512crypt value fails the unit
 instead of writing a field nobody can log in with. The manifest marks it `value`:
-`usermod -p` takes the bare hash, not a YAML document. Reinstalling therefore
+`chpasswd -e` takes the bare hash, not a YAML document. Reinstalling therefore
 needs no operator file, and the password is changed by minting new ciphertext
 (`docs/manual-steps.md` section 37), not by touching the host.
 

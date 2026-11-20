@@ -10,11 +10,12 @@
 # sops-decrypt.service; `value` in the manifest is what makes the file the bare
 # hash.
 #
-# `usermod -p` writes the field verbatim, so a value that is empty or is not
+# `chpasswd -e` writes the field verbatim, so a value that is empty or is not
 # sha512crypt would leave the account unable to log in at all. Validate first and
 # fail the unit instead: a boot that keeps the previous password is recoverable
-# over SSH, one that writes garbage is a console trip. The hash reaches argv only
-# in that single usermod exec, which is the one place usermod requires it.
+# over SSH, one that writes garbage is a console trip. The hash goes in on stdin,
+# never in an argument: /proc/<pid>/cmdline is world-readable, and any process
+# running as smores could read factor one of the sudo gate out of it at boot.
 set -euo pipefail
 
 hash_file=${SMORTRESS_PASSWORD_HASH_FILE:-/run/smortress/secrets/smores-password-hash.yaml}
@@ -31,5 +32,5 @@ if [[ ! $hash =~ ^\$6\$[^$]{1,16}\$[./A-Za-z0-9]{86}$ ]]; then
   exit 1
 fi
 
-usermod -p "$hash" "$account"
+printf '%s:%s\n' "$account" "$hash" | chpasswd -e
 echo "smortress-password: re-applied the $account password field from ciphertext"

@@ -29,8 +29,9 @@ owner, mode and `format` named in
 
 | File | Read by | Rule |
 | --- | --- | --- |
-| `smores-password-hash.yaml` | `scripts/render-ignition.sh` (install) and `smortress-password.service` (every boot, `usermod -p`) | the `smores` account password, sha512crypt. Not in git as plaintext: only this ciphertext is, and the password itself is a recovery-kit item. `value` format, because `usermod -p` takes the bare hash. Rotate with `docs/manual-steps.md` section 37. |
+| `smores-password-hash.yaml` | `scripts/render-ignition.sh` (install) and `smortress-password.service` (every boot, `chpasswd -e`) | the `smores` account password, sha512crypt. Not in git as plaintext: only this ciphertext is, and the password itself is a recovery-kit item. `value` format, because `chpasswd -e` takes the bare hash. Rotate with `docs/manual-steps.md` section 37. |
 | `cloudflared-tunnel.yaml` | `smortress-cloudflared.service` | the SSH tunnel's connector token, `value` format, read through a systemd credential. |
+| `tailscale.yaml` | `smortress-tailscale-up.service` | the pre-signed, single-use Tailscale auth key under `authkey:`, `yaml` format (the unit greps the field). It must land with its manifest line: ciphertext without the line is never decrypted into `/run`, and a line without ciphertext fails the decrypt unit's set comparison and takes every consumer down with it. |
 
 The account hash is the reason the path exists: bootc never reconciles `/var`, so
 a password written only by Ignition at install time would be whatever the last

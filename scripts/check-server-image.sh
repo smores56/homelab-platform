@@ -573,7 +573,7 @@ done < <(awk '!/^[[:space:]]*(#|$)/ { print $1 }' image/rootfs/etc/smortress/sec
 # read at install time; bootc never reconciles /var, so the value ships as
 # ciphertext instead and is consumed twice -- by the renderer for the install and
 # by a boot unit for the reconcile. Both readers must name the same file, the
-# manifest entry must stay `value` (usermod -p takes the bare hash), and the
+# manifest entry must stay `value` (chpasswd -e takes the bare hash), and the
 # operator file must be gone from every reader: a leftover requirement would make
 # a reinstall fail where the design says it must not.
 check "the account hash is a manifest value" \
@@ -596,19 +596,21 @@ check "the password unit is ordered after the decrypt unit" \
 check "the password unit is skipped without its ciphertext" \
   has 'ConditionPathExists=/run/smortress/secrets/smores-password-hash.yaml' \
   units/systemd/smortress-password.service
-# The hash belongs in exactly one place outside /etc/shadow: the argv of the one
-# usermod exec. A value in the unit file would be readable by every local user.
+# The hash belongs in exactly one place outside /etc/shadow, and never in argv:
+# chpasswd reads it on stdin. A value in the unit file would be readable by every
+# local user, and an argument would be readable from /proc by any of them.
 check "the password unit runs the installed guard" \
   has 'ExecStart=/usr/libexec/smortress-password' units/systemd/smortress-password.service
 check "the image installs the password guard" has 'scripts/smortress-password.sh' image/Containerfile
-if grep -vE '^[[:space:]]*#' units/systemd/smortress-password.service | grep -q 'usermod'; then
+if grep -vE '^[[:space:]]*#' units/systemd/smortress-password.service | grep -qE 'usermod|chpasswd'; then
   bad "the password unit carries no usermod of its own"
 else
   ok "the password unit carries no usermod of its own"
 fi
 # shellcheck disable=SC2016  # the matched text is the guard's own line
-check "the guard applies the hash with usermod -p" \
-  has 'usermod -p "$hash" "$account"' scripts/smortress-password.sh
+check "the guard applies the hash through chpasswd" \
+  has '| chpasswd -e' scripts/smortress-password.sh
+check "the hash never reaches argv" lacks 'usermod -p' scripts/smortress-password.sh
 check "the guard changes only smores" has 'account=smores' scripts/smortress-password.sh
 check "the guard refuses a non-sha512crypt value" \
   has 'does not hold a sha512crypt hash' scripts/smortress-password.sh

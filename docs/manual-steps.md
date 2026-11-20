@@ -2428,7 +2428,7 @@ scratch install.
    `smortress-password.service` re-applies it at every boot.
 
    ```sh
-   git ls-files secrets/server/smortress-password-hash.yaml
+   git ls-files secrets/server/smores-password-hash.yaml
    ```
 
    A checkout already carries the ciphertext, so this is a check unless the
@@ -2639,11 +2639,11 @@ scratch install.
 
 ### Changing the smores account password
 
-The hash is one ciphertext file, `secrets/server/smortress-password-hash.yaml`,
+The hash is one ciphertext file, `secrets/server/smores-password-hash.yaml`,
 encrypted to the host and admin identities by `.sops.yaml`'s `secrets/server/`
 rule. Nothing reads that file on the host: `sops-decrypt.service` writes the bare
 hash into `/run/smortress/secrets/` at boot (`value` in `secrets.manifest`), and
-`smortress-password.service` re-applies it with `usermod -p`. The password itself
+`smortress-password.service` re-applies it through `chpasswd -e`. The password itself
 lives in the recovery kit only.
 
 1. Mint the new ciphertext. The password never reaches a command line: it is read
@@ -2654,11 +2654,11 @@ lives in the recovery kit only.
      read -rsp 'smores account password: ' password; echo
      printf 'hash: %s\n' \
        "$(printf '%s\n' "$password" | nix shell nixpkgs#openssl -c openssl passwd -6 -stdin)" \
-       >secrets/server/smortress-password-hash.yaml
+       >secrets/server/smores-password-hash.yaml
      unset password
    )
-   nix shell nixpkgs#sops -c sops --encrypt --in-place secrets/server/smortress-password-hash.yaml
-   head -1 secrets/server/smortress-password-hash.yaml   # must be `hash: ENC[`
+   nix shell nixpkgs#sops -c sops --encrypt --in-place secrets/server/smores-password-hash.yaml
+   head -1 secrets/server/smores-password-hash.yaml   # must be `hash: ENC[`
    ```
 
    `sops --encrypt --in-place` takes both recipients from the creation rule for
