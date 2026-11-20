@@ -62,6 +62,13 @@ extract() {
   ' "$work/code.tf"
 }
 
+# absent <type.name> <description> : the resource address must not be declared.
+# The address is a dotted pair only in `extract`'s awk split, never in the text,
+# so a regex over `tofu/*.tf` would pass whether the block is there or not.
+absent() {
+  if [[ -z $(extract "$1") ]]; then ok "$2"; else bad "$2" "$1 is still declared"; fi
+}
+
 command -v grep >/dev/null 2>&1 || {
   echo "missing grep" >&2
   exit 1
@@ -101,7 +108,7 @@ for host in photos music opds ntfy; do
 done
 
 echo "== protected applications"
-for app in ssh memory agent backrest; do
+for app in memory agent backrest; do
   block=$(extract "cloudflare_zero_trust_access_application.${app}")
   if [[ -z $block ]]; then
     bad "application ${app} exists"
@@ -118,52 +125,14 @@ for app in memory agent backrest; do
   fi
 done
 
-# ssh is the one application a laptop presents a bearer token to (design #748).
-# The account-wide decision admits every token in the account, so ssh accepts
-# only the token named by its own policy.
-ssh_app=$(extract cloudflare_zero_trust_access_application.ssh)
-if grep -q 'cloudflare_zero_trust_access_policy.service_auth_ssh.id' <<<"$ssh_app"; then
-  ok "ssh accepts its own service token"
-else
-  bad "ssh accepts its own service token"
-fi
-if grep -q 'cloudflare_zero_trust_access_policy.service_auth.id' <<<"$ssh_app"; then
-  bad "ssh does not accept the account-wide service token"
-else
-  ok "ssh does not accept the account-wide service token"
-fi
-ssh_token=$(extract cloudflare_zero_trust_access_service_token.ssh)
-if [[ -z $ssh_token ]]; then
-  bad "the dedicated ssh service token is declared"
-else
-  ok "the dedicated ssh service token is declared"
-  if grep -qF 'duration   = "8760h"' <<<"$ssh_token"; then
-    ok "the ssh token has a one-year lifetime"
-  else
-    bad "the ssh token has a one-year lifetime"
-  fi
-fi
-ssh_token_policy=$(extract cloudflare_zero_trust_access_policy.service_auth_ssh)
-if [[ -z $ssh_token_policy ]]; then
-  bad "the ssh service-token policy exists"
-else
-  ok "the ssh service-token policy exists"
-  if grep -qF 'decision   = "non_identity"' <<<"$ssh_token_policy"; then
-    ok "the ssh token policy needs no browser identity"
-  else
-    bad "the ssh token policy needs no browser identity"
-  fi
-  if grep -qF 'token_id = cloudflare_zero_trust_access_service_token.ssh.id' <<<"$ssh_token_policy"; then
-    ok "the ssh token policy names the dedicated token"
-  else
-    bad "the ssh token policy names the dedicated token"
-  fi
-  if grep -q 'any_valid_service_token' <<<"$ssh_token_policy"; then
-    bad "the ssh token policy admits no other token"
-  else
-    ok "the ssh token policy admits no other token"
-  fi
-fi
+# No Cloudflare SSH route (design #767 T6). SSH is tailnet-only, so the edge
+# objects that carried it are gone and must stay gone: an `ssh` application, a
+# dedicated token, its scoped policy, or an `ssh.<zone>` destination anywhere in
+# the config would put the route back.
+absent cloudflare_zero_trust_access_application.ssh "no ssh Access application is declared"
+absent cloudflare_zero_trust_access_service_token.ssh "no dedicated ssh service token is declared"
+absent cloudflare_zero_trust_access_policy.service_auth_ssh "no ssh service-token policy is declared"
+hasnt "no ssh destination is routed" 'uri[[:space:]]*=[[:space:]]*"ssh\.\$\{var\.domain\}"'
 if grep -qE '^[[:space:]]*(client_secret|client_id)[[:space:]]*=' "$work/code.tf"; then
   bad "no service-token credential is authored in the config"
 else
@@ -310,36 +279,18 @@ else
   bad "cluster DNS and ingress must agree"
 fi
 
-# The SSH tunnel's connector takes only a token, so its DNS and ingress live
-# here. An empty id creates neither object, which keeps a pre-mint plan green.
-echo "== ssh tunnel"
-has 'ssh tunnel CNAME comes from the ssh tunnel variable' 'ssh_tunnel_cname[[:space:]]*=[[:space:]]*"\$\{var\.ssh_tunnel_id\}\.cfargotunnel\.com"'
-has 'ssh_tunnel_id is a variable' 'variable "ssh_tunnel_id"'
-has 'an empty ssh_tunnel_id is valid' 'var\.ssh_tunnel_id == "" || can\(regex'
-ssh_dns=$(extract cloudflare_dns_record.ssh)
-if [[ -z $ssh_dns ]]; then
-  bad "ssh DNS record exists"
-else
-  ok "ssh DNS record exists"
-  if grep -qE 'count[[:space:]]*=[[:space:]]*var\.ssh_tunnel_id == "" \? 0 : 1' <<<"$ssh_dns"; then ok "ssh DNS waits for the tunnel id"; else bad "ssh DNS waits for the tunnel id"; fi
-  if grep -qE 'name[[:space:]]*=[[:space:]]*"ssh\.\$\{var\.domain\}"' <<<"$ssh_dns"; then ok "ssh DNS covers ssh.<zone>"; else bad "ssh DNS covers ssh.<zone>"; fi
-  if grep -q 'content = local.ssh_tunnel_cname' <<<"$ssh_dns"; then ok "ssh DNS points at the ssh tunnel"; else bad "ssh DNS points at the ssh tunnel"; fi
-  if grep -q 'proxied = true' <<<"$ssh_dns"; then ok "ssh DNS is proxied"; else bad "ssh DNS is proxied"; fi
-fi
-ssh_cfg=$(extract cloudflare_zero_trust_tunnel_cloudflared_config.ssh)
-if [[ -z $ssh_cfg ]]; then
-  bad "ssh tunnel config exists"
-else
-  ok "ssh tunnel config exists"
-  if grep -qE 'count[[:space:]]*=[[:space:]]*var\.ssh_tunnel_id == "" \? 0 : 1' <<<"$ssh_cfg"; then ok "ssh config waits for the tunnel id"; else bad "ssh config waits for the tunnel id"; fi
-  if grep -qF 'tunnel_id  = var.ssh_tunnel_id' <<<"$ssh_cfg"; then ok "ssh config targets the ssh tunnel"; else bad "ssh config targets the ssh tunnel"; fi
-  if grep -qF 'hostname = "ssh.${var.domain}"' <<<"$ssh_cfg"; then ok "ssh ingress publishes ssh.<zone>"; else bad "ssh ingress publishes ssh.<zone>"; fi
-  if grep -qF 'service  = "ssh://localhost:22"' <<<"$ssh_cfg"; then ok "ssh ingress terminates on the host sshd"; else bad "ssh ingress terminates on the host sshd"; fi
-  last_rule=$(grep -E 'service[[:space:]]*=' <<<"$ssh_cfg" | tail -1)
-  if [[ $last_rule == *'http_status:404'* ]]; then ok "ssh ingress ends with a 404 catch-all"; else bad "ssh ingress ends with a 404 catch-all"; fi
-fi
+# The SSH tunnel is gone (design #767 T6): no `ssh` DNS record, no tunnel ingress
+# and no `ssh_tunnel_id` to gate them on. An id that came back would plan a route
+# the tailnet already replaced, so each assertion fails on one.
+echo "== ssh tunnel is gone"
+absent cloudflare_dns_record.ssh 'no ssh DNS record is declared'
+absent cloudflare_zero_trust_tunnel_cloudflared_config.ssh 'no ssh tunnel ingress is declared'
+hasnt 'no ssh tunnel CNAME local' 'ssh_tunnel_cname'
+hasnt 'ssh_tunnel_id is not a variable' 'variable "ssh_tunnel_id"'
+hasnt 'no ingress hands an ssh service to a tunnel' 'service[[:space:]]*=[[:space:]]*"ssh://'
+hasnt 'no cfargotunnel content is built from an ssh id' '\$\{var\.ssh_tunnel_id\}\.cfargotunnel\.com'
 if [[ -f tofu/terraform.tfvars ]]; then ok "committed tfvars exists"; else bad "committed tfvars exists"; fi
-for key in account_id domain email host_tunnel_id cluster_tunnel_id ssh_tunnel_id tailnet; do
+for key in account_id domain email host_tunnel_id cluster_tunnel_id tailnet; do
   if grep -qE "^[[:space:]]*${key}[[:space:]]*=" tofu/terraform.tfvars 2>/dev/null; then
     ok "tfvars sets $key"
   else
@@ -374,9 +325,7 @@ echo "== preserved objects"
 for addr in cloudflare_pages_project.recovery cloudflare_r2_bucket_cors.restic \
   cloudflare_notification_policy.tunnel_health cloudflare_notification_policy.service_token_expiry \
   cloudflare_ruleset.dav_rate_limit cloudflare_zero_trust_access_policy.email \
-  cloudflare_zero_trust_access_policy.service_auth \
-  cloudflare_zero_trust_access_policy.service_auth_ssh \
-  cloudflare_zero_trust_access_service_token.ssh; do
+  cloudflare_zero_trust_access_policy.service_auth; do
   if [[ -n $(extract "$addr") ]]; then ok "preserved: $addr"; else bad "preserved: $addr"; fi
 done
 has 'tunnel health covers both tunnels' 'tunnel_id = compact\(\[var\.host_tunnel_id, var\.cluster_tunnel_id\]\)'

@@ -13,18 +13,19 @@ locals {
   acme_account_uri = "${trimsuffix(var.acme_directory, "/directory")}/acme/acct/${var.acme_account_id}"
 
   # Two tunnels, two owners (docs/cloudflare.md):
-  #   host    - nix-config's cloudflared on smortress; ssh and the Kanbei
-  #             private route. Human-owned.
-  #   cluster - cloudflared in the `ingress` namespace (T6); the apps whose
-  #             origin moved into the cluster.
+  #   host    - no connector; the nix-config cloudflared retired with the host's
+  #             last route. Human-owned.
+  #   cluster - cloudflared in the `ingress` namespace (T6); the apps the host no
+  #             longer serves. SSH is on neither: it is tailnet-only (design
+  #             #767).
   host_tunnel_cname    = "${var.host_tunnel_id}.cfargotunnel.com"
   cluster_tunnel_cname = "${var.cluster_tunnel_id}.cfargotunnel.com"
 }
 
-# One proxied wildcard CNAME fronts the host tunnel. Every hostname the host
-# serves today (ssh, agent, nanobot, memory) resolves through it, and the
-# wildcard Access application in access.tf is what decides whether a request
-# ever reaches the origin.
+# One proxied wildcard CNAME fronts the host tunnel. Nothing the host serves
+# resolves through it any more — SSH is tailnet-only (design #767) and the apps
+# are on the cluster tunnel — so the name is what the wildcard Access application
+# in access.tf denies: it is the default-deny net, not a route.
 #
 # Cloudflare matches one label only, so this record and that application both
 # stop at `*.sammohr.dev`; `a.b.sammohr.dev` is covered by neither. The apex is

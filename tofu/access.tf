@@ -31,8 +31,8 @@ resource "cloudflare_zero_trust_access_policy" "email" {
 # the token secret never leaves the client.
 #
 # This decision accepts *any* valid token in the account, so every application
-# that attaches it is reachable by every token. The SSH application does not
-# attach it; see `service_auth_ssh` below.
+# that attaches it is reachable by every token. SSH is no longer one of them: it
+# is tailnet-only (design #767), so it is neither an application nor a token here.
 resource "cloudflare_zero_trust_access_policy" "service_auth" {
   account_id = var.account_id
   name       = "service auth"
@@ -40,46 +40,6 @@ resource "cloudflare_zero_trust_access_policy" "service_auth" {
 
   include = [{
     any_valid_service_token = {}
-  }]
-
-  lifecycle {
-    prevent_destroy = true
-  }
-}
-
-# The token the laptops' `cloudflared access ssh` wrapper presents (design #748,
-# docs/manual-steps.md section 44). It is its own resource rather than a token
-# minted in the dashboard so that the policy below can name it, and its one-year
-# lifetime is the rotation schedule: it is replaced when a machine leaves our
-# control. `client_secret` is computed by the API, is never committed, and lives
-# in the R2 state bucket — the state therefore holds this one credential, and
-# reading the bucket or the CI identity is enough to hold it (tofu/backend.tf).
-#
-# No `prevent_destroy`: replacing the token is the intended rotation, and losing
-# it costs a route, not the last way in — the owner's email policy still admits
-# a browser login.
-resource "cloudflare_zero_trust_access_service_token" "ssh" {
-  account_id = var.account_id
-  name       = "ssh"
-  duration   = "8760h"
-}
-
-# The scoped decision for that one token. It matches by token id, so a leaked
-# `service auth` token cannot reach sshd. That is the direction this change
-# closes, and only that one: `memory`, `agent` and the backrest reader still
-# attach the account-wide `any_valid_service_token` decision, which matches every
-# token in the account, so this token is admitted by all three as well. Scoping
-# them too means replacing that include with a token-id or token-tag include per
-# application.
-resource "cloudflare_zero_trust_access_policy" "service_auth_ssh" {
-  account_id = var.account_id
-  name       = "ssh service token"
-  decision   = "non_identity"
-
-  include = [{
-    service_token = {
-      token_id = cloudflare_zero_trust_access_service_token.ssh.id
-    }
   }]
 
   lifecycle {
@@ -127,38 +87,15 @@ resource "cloudflare_zero_trust_access_application" "wildcard" {
   }
 }
 
-# Protected applications: the host's sshd, the memory MCP, and the assistant.
-# Service auth where an unattended client reaches the endpoint, because a
-# browser login is not available to `cloudflared access` or a device proxy. The
-# SSH application attaches the token-scoped decision, not the account-wide one:
-# it is the endpoint a laptop presents a bearer token to.
-resource "cloudflare_zero_trust_access_application" "ssh" {
-  account_id       = var.account_id
-  name             = "ssh"
-  type             = "self_hosted"
-  session_duration = "720h"
-
-  destinations = [{
-    type = "public"
-    uri  = "ssh.${var.domain}"
-  }]
-
-  policies = [
-    {
-      id         = cloudflare_zero_trust_access_policy.email.id
-      precedence = 1
-    },
-    {
-      id         = cloudflare_zero_trust_access_policy.service_auth_ssh.id
-      precedence = 2
-    },
-  ]
-
-  lifecycle {
-    prevent_destroy = true
-  }
-}
-
+# The `ssh` application, its `service_auth_ssh` policy and the ssh service token
+# are gone with the Cloudflare SSH route (design #767 T6): sshd answers the
+# tailnet and nothing else, so no edge object names it. Their `prevent_destroy`
+# blocks went with the resources, so the owner's apply destroys them without a
+# `tofu state rm` first.
+#
+# Protected applications: the memory MCP, the assistant and the backrest reader.
+# Service auth where an unattended client reaches the endpoint, because a browser
+# login is not available to `cloudflared access` or a device proxy.
 resource "cloudflare_zero_trust_access_application" "memory" {
   account_id       = var.account_id
   name             = "memory"
