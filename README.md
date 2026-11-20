@@ -13,7 +13,7 @@ The migration runbook is `docs/switch.md`.
 | --- | --- |
 | `image/pins.env` | every external reference; the only file a base or NymVPN refresh edits |
 | `image/Containerfile` | the derived image: one explicit package set, config copy, unit enables, `bootc container lint` |
-| `image/rootfs/` | files copied into `/`: greetd autologin, portal override, signature policy, the NymVPN unit and its polkit action, the `login` and `sudo` PAM stacks, and the FIDO2 mapping both of them read |
+| `image/rootfs/` | files copied into `/`: greetd autologin, portal override, signature policy, the NymVPN unit and its polkit action, the `login` and `sudo` PAM stacks, and the FIDO2 mapping the `sudo` stack reads |
 | `image/cosign.pub` | the public half of the signing key shared with `homelab-platform` |
 | `scripts/refresh-pins.sh` | resolves the base digest and the NymVPN release; `--check` for the watcher, `--write` to pin |
 | `scripts/build-image.sh` | local build; never pushes or signs |

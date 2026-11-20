@@ -41,11 +41,12 @@ LABEL org.opencontainers.image.title="smorespro image" \
 # already in the pinned base; listing and enabling it here keeps a future base
 # refresh from silently taking the backend away.
 #
-# pam-u2f serves both stacks: /etc/pam.d/login calls it with pinverification=1
-# (the lock screen wants the key, its FIDO2 PIN and a touch), and
-# /etc/pam.d/sudo calls it with pinverification=0 userpresence=1 ahead of
-# pam_unix (the escalation gate opens on a touch, the account password is the
-# fallback behind it, and neither ever asks for the PIN).
+# pam-u2f serves two stacks with different authfiles: /etc/pam.d/login calls it
+# with pinverification=1 and no authfile= (pam_u2f's per-user default, which this
+# image ships none of), and /etc/pam.d/sudo calls it with the shipped
+# /etc/u2f_mappings, pinverification=0 and userpresence=1 ahead of pam_unix (the
+# escalation gate opens on a touch, the account password is the fallback behind
+# it, and neither ever asks for the PIN).
 # pamu2fcfg is the separate package that produced the shipped
 # /etc/u2f_mappings. Both are Fedora packages; nothing is compiled here.
 #

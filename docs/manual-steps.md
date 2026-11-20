@@ -89,13 +89,10 @@ If either one fails, `Ctrl+Alt+F2` on a booted system is the way back in; the
 initramfs prompt is the only place a broken boot can strand you, and the
 passphrase keyslot was never touched.
 
-## 2. The key for the lock screen, TTY and sudo
+## 2. The key for sudo
 
-Two PAM stacks read one mapping file, `/etc/u2f_mappings`:
+One stack names the shipped mapping file, `/etc/u2f_mappings`:
 
-- `/etc/pam.d/login` (the lock screen and a TTY) runs
-  `pam_u2f.so pinverification=1 cue` ahead of the password stack: the token's
-  FIDO2 PIN, then a touch.
 - `/etc/pam.d/sudo` runs
   `pam_u2f.so authfile=/etc/u2f_mappings cue userpresence=1 pinverification=0`
   ahead of `pam_unix`: a tap alone escalates, and the account password sits
@@ -103,8 +100,14 @@ Two PAM stacks read one mapping file, `/etc/u2f_mappings`:
   touch costs typing rather than access. No PIN in either case: the FIDO2 PIN is
   the same one the disk keyslot uses, and eight wrong PINs block the token and
   wipe every credential on it, so a sudo prompt that any process running as
-  `smores` can trigger must never be able to spend that budget. That is the one
-  place the two stacks differ; the lock screen is unchanged.
+  `smores` can trigger must never be able to spend that budget.
+
+`/etc/pam.d/login` — the lock screen and a TTY — is unchanged and names no
+`authfile=`, so it reads pam_u2f's per-user default
+(`$XDG_CONFIG_HOME/Yubico/u2f_keys`, else `~/.config/Yubico/u2f_keys`). This
+image ships no such file, so on a stock host the lock screen opens with the
+account password, exactly as before this feature; a host that installs one gets
+the FIDO2 PIN and a touch there. The shipped mapping does not apply to it.
 
 The mapping is public credential data — a key handle and a public key per token,
 no secret — so it is committed at `image/rootfs/etc/u2f_mappings` and shipped to
@@ -113,7 +116,7 @@ no hand-written file; what it needs is a mapping that describes credentials the
 owner's keys actually hold.
 
 All three 5C Nanos are registered (one per laptop, one spare), so any of them
-opens both stacks. To rotate the mapping, or to add a replaced key, plug in one
+answers the sudo prompt. To rotate the mapping, or to add a replaced key, plug in one
 5C Nano at a time and register on the laptop itself, from the repository root.
 The first key prints the username; every further key uses `-n`, which prints
 only its credential, because a second `smores:` inside the line would be read as
@@ -143,11 +146,14 @@ Register without `-N`. It writes `+pin` into the credential, and `pam_u2f`
 turns `+pin` into a PIN request even where a stack says `pinverification=0`, so
 the sudo gate would start asking for the disk's PIN. The credential's
 `+presence` (the default) plus `userpresence=1` in the sudo line are what make
-the touch mandatory in both stacks.
+the touch mandatory.
 
-Lock the session (`Super+Alt+L`) and unlock it:
+Lock the session (`Super+Alt+L`) and unlock it. With a per-user mapping at
+`~/.config/Yubico/u2f_keys` the lock screen asks for the FIDO2 PIN and a touch;
+without one — the stock image — it asks for the account password, as it did
+before this feature:
 
-- With the key in: type the FIDO2 PIN, then touch. A touch alone fails, which is
+- With a per-user mapping and the key in: type the FIDO2 PIN, then touch. A touch alone fails, which is
   what keeps a docked token from unlocking the machine by itself.
 - The account password is the fallback, but Noctalia's lock screen supplies a
   single answer per attempt, so the password path there needs a second attempt

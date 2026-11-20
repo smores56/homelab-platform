@@ -9,9 +9,10 @@
 # pam_u2f with pinverification=1 asks for the token's FIDO2 client PIN, so a
 # docked key alone cannot unlock the machine. `sufficient`, not `required`,
 # leaves system-auth's account password behind it as the path for a lost or
-# blocked token. The mapping the module reads is /etc/u2f_mappings, which this
-# image ships: it is public credential data, and the rotation steps are in
-# docs/manual-steps.md.
+# blocked token. No authfile= is given, so the module reads its own default,
+# $XDG_CONFIG_HOME/Yubico/u2f_keys (else ~/.config/Yubico/u2f_keys); this image
+# ships no such file, so on a stock host the lock screen falls through to the
+# password. /etc/u2f_mappings is the sudo stack's, not this one's.
 auth       sufficient   pam_u2f.so pinverification=1 cue
 auth       substack     system-auth
 auth       include      postlogin
