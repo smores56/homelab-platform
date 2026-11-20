@@ -827,9 +827,18 @@ for collector_case in "${collector_cases[@]}"; do
     bad "$collector exists"
     continue
   fi
-  networks=$(grep -cE -- '--network ' "$collector")
-  eq "$(grep -cE -- '--network systemd-agent-collect' "$collector")" "$networks" \
+  # Two stages reach two different places: the collector is on the Quadlet's
+  # network, the projection reads what it published and gets `none` because it
+  # needs no socket at all. Anything else is a unit that quietly grew egress.
+  eq "$(grep -cE -- '--network systemd-agent-collect' "$collector")" 1 \
     "$name collector names the network Quadlet actually creates"
+  unexpected_network=$(grep -E -- '^[[:space:]]*--network ' "$collector" |
+    grep -vE -- '--network (systemd-agent-collect|none)([[:space:]\\]|$)')
+  if [[ -n $unexpected_network ]]; then
+    bad "$name collector reaches only its own network and none" "$unexpected_network"
+  else
+    ok "$name collector reaches only its own network and none"
+  fi
   if grep -qE '^Requires=.*agent-collect-network\.service' "$collector" &&
      grep -qE '^After=.*agent-collect-network\.service' "$collector"; then
     ok "$name collector starts the generated network unit"
@@ -882,6 +891,24 @@ for collector_case in "${collector_cases[@]}"; do
     bad "$collector_timer exists"
   fi
 done
+
+# 8.1. The finance collector's third stage: the hledger projection. It is derived
+#     state, so it reads the replica read-only and writes one directory under the
+#     personal index -- the same directory the seed unit creates at uid 1000.
+finance_unit=units/systemd/smortress-agent-collect-finance.service
+eq "$(grep -cE '^ExecStart=' "$finance_unit")" 2 "$finance_unit is collect then project"
+if grep -qF -- '--volume /var/lib/agent/local/replica:/replica:ro' "$finance_unit" &&
+  grep -qF -- '--volume /var/lib/agent/local/index:/index:z' "$finance_unit" &&
+  grep -qF -- '--out /index/hledger/finance.journal' "$finance_unit"; then
+  ok "$finance_unit projects the replica into the personal index"
+else
+  bad "$finance_unit projects the replica into the personal index"
+fi
+if [[ $(grep -cF -- '--secret ' "$finance_unit") == 1 ]]; then
+  ok "$finance_unit holds its credential in one stage only"
+else
+  bad "$finance_unit holds its credential in one stage only"
+fi
 
 # 8a. The calendar pair: our own exporter (session held on a volume, no secret)
 #     followed by the collector. The session is the account's access, so it is

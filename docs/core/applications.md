@@ -262,7 +262,7 @@ has no route off the host.
 
 | Unit | Network | Writes | Credential |
 | --- | --- | --- | --- |
-| `smortress-agent-collect-finance.timer` → `.service` | `agent-collect.network`, a plain bridge of its own | `state/agent-local/replica/finance` | Podman secret `simplefin-access-url`, uid 1000 mode 0400 |
+| `smortress-agent-collect-finance.timer` → `.service` | `agent-collect.network`, a plain bridge of its own (the projection stage has no network at all) | `state/agent-local/replica/finance`, and `state/agent-local/index/hledger` (the projection) | Podman secret `simplefin-access-url`, uid 1000 mode 0400 |
 | `smortress-agent-mail-stream.service` | `agent-collect.network` | `state/agent-local/replica/mail` | Podman secret `tmail-bridge-password`, uid 1000 mode 0400 |
 | `smortress-agent-collect-calendar.timer` → `.service` | `agent-collect.network` | `state/agent-local/quarantine/calendar` (the dump) and `state/agent-local/replica/calendar` (the collection) | none: the exporter authenticates with the sealed session on `state/agent-local/quarantine/tuta-calendar`, mounted only into the dump stage |
 | `agent-tmail` (Quadlet; it serves, no timer) | `agent-collect.network` | `state/agent-local/quarantine/tmail`, its own session volume | none: its credential is the session on that volume |
@@ -281,6 +281,19 @@ collector: the pinned `tuta-calendar` image signs in with its sealed session and
 rewrites the dump, then the collector publishes a generation. The session is the
 account's access, so it is mounted read-write only into the first stage; the
 collector reads the dump read-only and never sees it.
+
+The finance collector has a third stage that no other unit has: after the
+collection is published, the same pinned image renders the newest generation as
+an hledger journal at `state/agent-local/index/hledger/finance.journal`
+(`docs/raw-replicas.md`, "The hledger projection"). It is one `ExecStart` in the
+same oneshot for a reason: the projection reads a *published* generation, so it
+must not be able to run before one exists, and a collection that refuses exits 3
+and stops the unit there. It is given `--network none` -- the exact opposite of
+the collector's egress -- no secret, the replica read-only and the index
+read-write, because its whole input is the replica and its whole output is one
+derived file. An operator's `accounts.json` beside it is seeded once and never
+rewritten; an unmapped account renders as `assets:unknown:<id>` instead of
+vanishing.
 
 `smortress-agent-mail-stream.service` is the collector itself: it logs in to the
 bridge, publishes a full pass, then holds one IDLE connection per folder and
@@ -395,7 +408,10 @@ The personal facade also writes `/index`, `state/agent-local/index`: its full-te
 index over the replica sources, one file per source and published generation. It
 is derived from `state/agent-local/replica` and rebuilt from it on the next
 search, so it is a cache of reading a generation, never a second copy of one, and
-a restore that skips it costs one rebuild.
+a restore that skips it costs one rebuild. The finance collector writes the same
+directory (`index/hledger/finance.journal`) and reads the operator's mapping out
+of it, so the only thing in `/index` that is not rebuilt automatically is that
+mapping file.
 
 ## Access paths
 

@@ -3970,9 +3970,41 @@ publishes nothing. Claim a real one and replace it.
    sudo systemctl list-timers smortress-agent-collect-finance.timer
    ```
 
+6. Map the accounts, then read the journal. The third stage of the unit renders
+   the newest published generation as an hledger journal, and it needs one thing
+   from you: which hledger account each SimpleFIN account is. The file is seeded
+   as `{}` at the first boot and is never overwritten, so this edit is one-time
+   per account. Every entry the file does not name renders as
+   `assets:unknown:<id>`, which is how you find the ids:
+
+   ```sh
+   sudo grep -ho '"object_id": "finance::account::[^"]*"' \
+     /var/lib/agent/local/replica/finance/published/*/manifest.json | sort -u
+   sudo vi /var/lib/agent/local/index/hledger/accounts.json
+   ```
+
+   Write `{"<account id>": "assets:bank:checking"}` for each account, then rerun
+   the service so the projection picks the mapping up. A mapping that is not a
+   JSON object of string to string, or a name that is empty or starts with `-`,
+   `!` or `;`, is refused with exit 3 and the journal is left as it was:
+
+   ```sh
+   sudo systemctl start smortress-agent-collect-finance.service
+   sudo journalctl -u smortress-agent-collect-finance.service -n 20 --no-pager
+   sudo less /var/lib/agent/local/index/hledger/finance.journal
+   ```
+
+   The journal follows the provider's sign: an amount appears exactly as
+   SimpleFIN sent it, and the counter-account `expenses:unknown` carries its
+   negation. An unchanged journal is not rewritten, so the mtime only moves when
+   the generation's own bytes changed.
+
 The collector writes into `state/agent-local`, so the raw replica is in the
 personal recovery group and a Restic restore returns the transactions with the
-deployment (`docs/core/restic-plane.md`).
+deployment (`docs/core/restic-plane.md`). The journal is derived and rebuilt by
+the next run, so a restore that skips it costs one run; `accounts.json` is the
+one file under `state/agent-local/index` an operator wrote, and it restores with
+the dataset.
 
 ### 40.15 Sign in to TutaBridge and store its password
 

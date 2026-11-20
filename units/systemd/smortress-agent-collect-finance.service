@@ -1,15 +1,24 @@
 [Unit]
-# One complete SimpleFIN enumeration into the personal replica, then exit. The
-# collector runs the repository's own code (mounted read-only from the booted
-# image) inside the pinned runtime image, so the program that reads a bank
-# account is the one this deployment ships and nothing else.
+# One complete SimpleFIN enumeration into the personal replica, then one hledger
+# projection over it, then exit. Both stages run the repository's own code
+# (mounted read-only from the booted image) inside the pinned runtime image, so
+# the program that reads a bank account and the program that writes the ledger
+# are the ones this deployment ships and nothing else.
 #
-# It reads with egress and writes into the personal dataset. That pairing is the
-# design, not a leak: the personal *deployment* has no route off the host, and
-# the collector is a separate process whose only privilege is one bounded read
-# and one directory it owns. It cannot reach the gateway, the facade or the
-# model, because it is on its own network.
-Description=Collect one SimpleFIN AccountSet into the personal replica
+# The collector reads with egress and writes into the personal dataset. That
+# pairing is the design, not a leak: the personal *deployment* has no route off
+# the host, and the collector is a separate process whose only privilege is one
+# bounded read and one directory it owns. It cannot reach the gateway, the facade
+# or the model, because it is on its own network.
+#
+# The third stage is the projection: it turns the newest *published* generation
+# into `index/hledger/finance.journal`, which is a view of those objects and never
+# a second copy of them. It runs here, after the collector, and not on a timer of
+# its own because a generation has to exist and be published first: a projection
+# that ran ahead of its input would either find nothing or render yesterday's
+# bytes as if they were today's. A refused collection exits 3, systemd stops the
+# unit at that stage, and the journal keeps the last generation it could read.
+Description=Collect one SimpleFIN AccountSet into the personal replica and project it
 Requires=zfs-ready@state-agent-local.service sops-decrypt.service smortress-app-secrets.service smortress-agent-config.service agent-collect-network.service
 After=zfs-ready@state-agent-local.service sops-decrypt.service smortress-app-secrets.service smortress-agent-config.service agent-collect-network.service network-online.target
 Wants=network-online.target
@@ -40,6 +49,28 @@ ExecStart=/usr/bin/podman run --rm --name smortress-agent-collect-finance \
   ghcr.io/smores56/homelab-platform/agent-runtime@sha256:276d44685c65c0cb2a25f190b63c65c8906f9dc76486fb1c05ae71b5826bda08 \
   -m data_plane.collectors.raw --root /replica/finance \
   finance --access-url-file /run/secrets/simplefin-access-url --include-pending
+# The projection stage. It has no network (`--network none`, not the collector's),
+# no secret, and the replica read-only: its whole input is the published
+# generation, and its whole output is one file under the personal index dataset.
+# The account mapping is the operator's -- `accounts.json` is seeded once and
+# edited in place (docs/manual-steps.md section 40.14) -- and an account it does
+# not name still renders, as `assets:unknown:<id>`.
+#
+# A journal whose bytes did not change is not rewritten, so the two-hourly run
+# leaves the file's mtime alone.
+ExecStart=/usr/bin/podman run --rm --name smortress-agent-collect-finance-hledger \
+  --network none \
+  --read-only --cap-drop=all --security-opt no-new-privileges \
+  --tmpfs /tmp:rw,size=16m --user 1000:1000 \
+  --volume /usr/lib/agent-facade:/usr/lib/agent-facade:ro \
+  --volume /var/lib/agent/local/replica:/replica:ro \
+  --volume /var/lib/agent/local/index:/index:z \
+  --env PYTHONPATH=/usr/lib/agent-facade/libs:/usr/lib/agent-facade \
+  --env PYTHONDONTWRITEBYTECODE=1 \
+  --entrypoint python3 \
+  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:276d44685c65c0cb2a25f190b63c65c8906f9dc76486fb1c05ae71b5826bda08 \
+  -m data_plane.derived.hledger --replica /replica/finance \
+  --accounts /index/hledger/accounts.json --out /index/hledger/finance.journal
 # A refusal exits 3 and publishes nothing; the next run tries again. Anything
 # else is a real failure and systemd reports it.
 Restart=no
