@@ -4035,6 +4035,35 @@ collector authenticates with; the Tuta password is never stored here.
    but it is indistinguishable from "the operator has not claimed it yet", so do
    not skip the ordering.
 
+4. Prove the collector. `smortress-agent-mail-stream.service` is long-running,
+   not a timer: it publishes an initial generation, then holds one IDLE
+   connection per folder. Start it and follow its journal:
+
+   ```sh
+   sudo systemctl start smortress-agent-mail-stream.service
+   sudo journalctl -u smortress-agent-mail-stream.service -f
+   ```
+
+   Each published pass prints one JSON line. The first is the initial full pass;
+   its `details.folders` must contain `INBOX` with a non-zero count, and `objects`
+   must be at least the sum of the folder counts. The generation itself is the
+   newest directory under the replica:
+
+   ```sh
+   sudo ls -1 /var/lib/agent/local/replica/mail/published | tail -n 1
+   sudo journalctl -u smortress-agent-mail-stream.service -n 1 --no-pager
+   ```
+
+   Send a message to yourself from another account and watch the journal again: a
+   second JSON line appears within a minute. That is the `INBOX` IDLE connection
+   pushing `EXISTS`, followed by the publisher's 30-second quiet window. The
+   second line's `generation_id` sorts after the first, and `objects` has grown by
+   one; `deleted` stays `0` unless a message was expunged.
+
+   A line reporting `uidvalidity changed` or `folders disappeared` is a refusal,
+   not a collector bug: the service has exited, and the mailbox needs the restore
+   rule below or a fresh sign-in before it can publish again.
+
 #### Restoring the bridge's volume
 
 The volume holds the session, the per-folder UID counters, the GPG key and the

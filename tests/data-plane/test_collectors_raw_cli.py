@@ -84,55 +84,6 @@ class MailCommandTests(unittest.TestCase):
             self.assertIsNone(json.loads(out)["published"])
             self.assertIsNone(RawReplica.latest_generation(root / "replica"))
 
-    def test_publishes_from_the_sync_tool_state(self) -> None:
-        with tempfile.TemporaryDirectory() as work:
-            root = Path(work)
-            maildir = _maildir(root)
-            (maildir / ".mbsyncstate").write_text(
-                "FarUidValidity 7\nNearUidValidity 9\nMaxPulledUid 1\n"
-                "MaxPushedUid 0\n\n",
-                encoding="utf-8",
-            )
-            code, out, err = _run(
-                [
-                    "--root",
-                    str(root / "replica"),
-                    "--generation",
-                    "gen-0001",
-                    "--captured-at",
-                    CAPTURED,
-                    "mail",
-                    "--maildir",
-                    str(maildir),
-                    "--uidvalidity-from-maildir",
-                ]
-            )
-            self.assertEqual(code, 0, err)
-            self.assertEqual(json.loads(out)["objects"], 1)
-            replica = RawReplica(root / "replica")
-            self.assertEqual(
-                json.loads(replica.read("mail::_uidvalidity")), {"INBOX": 7}
-            )
-
-    def test_both_epoch_sources_are_refused(self) -> None:
-        with tempfile.TemporaryDirectory() as work:
-            root = Path(work)
-            maildir = _maildir(root)
-            code, _, err = _run(
-                [
-                    "--root",
-                    str(root / "replica"),
-                    "mail",
-                    "--maildir",
-                    str(maildir),
-                    "--uidvalidity",
-                    "INBOX=7",
-                    "--uidvalidity-from-maildir",
-                ]
-            )
-            self.assertEqual(code, EXIT_REFUSED)
-            self.assertIn("exactly one", err)
-
     def test_a_bad_uidvalidity_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)

@@ -898,6 +898,57 @@ else
   bad "$bridge exists"
 fi
 
+# 8c. The mail stream collector: the one process that reads the bridge. It is a
+#     long-running service, not a timer, and it must never hold the bridge's
+#     session volume -- only the certificate it verifies.
+stream=units/systemd/smortress-agent-mail-stream.service
+if [[ -f $stream ]]; then
+  ok "$stream exists"
+  eq "$(grep -cE -- '--network ' "$stream")" 1 "$stream names exactly one network"
+  if grep -qE -- '--network systemd-agent-collect' "$stream"; then
+    ok "the mail stream runs on the collectors' network"
+  else
+    bad "the mail stream runs on the collectors' network"
+  fi
+  if grep -qE '^(Requires|After)=.*agent-tmail\.service' "$stream"; then
+    ok "the mail stream requires the Quadlet-generated bridge unit"
+  else
+    bad "the mail stream requires the Quadlet-generated bridge unit"
+  fi
+  if grep -qxF 'ConditionPathExists=/var/lib/agent/local/quarantine/tmail/config/tutabridge/cert.pem' "$stream"; then
+    ok "the mail stream waits for the certificate that init creates"
+  else
+    bad "the mail stream waits for the certificate that init creates"
+  fi
+  if grep -qF -- '--secret tmail-bridge-password,type=mount,uid=1000,gid=1000,mode=0400' "$stream"; then
+    ok "the mail stream mounts only the bridge password"
+  else
+    bad "the mail stream mounts only the bridge password"
+  fi
+  if grep -qE -- '--volume [^ ]*quarantine/tmail(:|/data)' "$stream"; then
+    bad "the mail stream never mounts the bridge's session volume"
+  else
+    ok "the mail stream never mounts the bridge's session volume"
+  fi
+  if grep -qF -- 'cert.pem:/bridge/cert.pem:ro' "$stream"; then
+    ok "the mail stream verifies the bridge certificate"
+  else
+    bad "the mail stream verifies the bridge certificate"
+  fi
+  if grep -qE '^Restart=on-failure' "$stream" && grep -qE '^Type=simple' "$stream"; then
+    ok "the mail stream is a supervised long-running service"
+  else
+    bad "the mail stream is a supervised long-running service"
+  fi
+  if grep -qF 'smortress-agent-mail-stream.service' image/Containerfile; then
+    ok "the image enables the mail stream"
+  else
+    bad "the image enables the mail stream"
+  fi
+else
+  bad "$stream exists"
+fi
+
 if grep -qF 'units/quadlet/agent-collect.network' image/Containerfile; then
   ok "the collector network ships in the image"
 else
