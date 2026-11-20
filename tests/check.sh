@@ -298,6 +298,20 @@ else
   bad "the image installs pam-u2f and pamu2fcfg and proves the module is there"
 fi
 
+# A missing module is caught above; a mapping pam_u2f cannot use is the other
+# silent way sudo loses the tap, since every failure of the module falls through
+# to the password. The build has to assert what git cannot: ownership, and the
+# shape of the lines it shipped.
+if grep -q 'test -s /etc/u2f_mappings' image/Containerfile \
+    && grep -q 'stat -c %U:%G /etc/u2f_mappings' image/Containerfile \
+    && grep -q 'stat -c %a /etc/u2f_mappings' image/Containerfile \
+    && grep -qF "grep -qE '^[^#:]+:[^:]*,.*' /etc/u2f_mappings" image/Containerfile \
+    && grep -q "grep -qF '+pin' /etc/u2f_mappings" image/Containerfile; then
+  ok "the build proves the shipped mapping is root-owned 0644, populated and PIN-free"
+else
+  bad "the build proves the shipped mapping is root-owned 0644, populated and PIN-free"
+fi
+
 # FIDO2 is HID through libfido2 everywhere in this design; a smartcard stack
 # would add a daemon and a PIN cache for nothing.
 if ! grep -qE '^ +(pcsc-lite|pcscd|opensc) ' image/Containerfile; then
@@ -314,12 +328,12 @@ else
   bad "manual-steps.md carries the token enrolment commands"
 fi
 
-# --- escalation (sudo: password + touch) ------------------------------------
+# --- escalation (sudo: touch, password as fallback) --------------------------
 
-# smortress gates sudo with a touch on a forwarded ssh agent (pam_rssh, in
-# another repository), so this laptop's file is compared byte for byte with the
-# design rather than by keyword: a dropped module or a jump index one line off
-# is escalation an agent can reach, and the failure is silent.
+# Another repository gates sudo on its own stack (design #767), so this laptop's
+# file is compared byte for byte with the design rather than by keyword: a
+# dropped module or a jump index one line off is escalation an agent can reach,
+# and the failure is silent.
 sudo_pam=image/rootfs/etc/pam.d/sudo
 expected=$(cat <<'EOT'
 # Escalation is a tap on a key listed in /etc/u2f_mappings (pam_u2f), and the
@@ -329,9 +343,12 @@ expected=$(cat <<'EOT'
 # FIDO2 PIN; this file must not.
 #
 # The fallback is a property of return codes, not of jump arithmetic we maintain:
-# pam_u2f answers PAM_AUTH_ERR when no key is present, when the key holds no
-# matching credential, and when the touch is refused (util.c,
-# do_authentication), so default=ignore on its row lands all three on pam_unix.
+# default=ignore on the touch row drops every non-success pam_u2f returns,
+# whatever its code, and dispatch falls through to pam_unix. The codes differ
+# and no one of them covers the set: PAM_AUTH_ERR for a device or touch failure,
+# PAM_USER_UNKNOWN when the key holds no credential for this user (util.c:787),
+# PAM_AUTHINFO_UNAVAIL for a missing, unparsable or foreign-owned authfile
+# (util.c:683,748-756), and cfg_init can fail with PAM_SYSTEM_ERR.
 #
 # pinverification=0 is the point. The FIDO2 PIN is shared with the disk keyslot,
 # and eight wrong PINs block the token and wipe every credential on it, so a
@@ -339,14 +356,21 @@ expected=$(cat <<'EOT'
 # to spend that budget.
 #
 # userpresence=1 makes the tap mandatory. No nouserok: a key holding no
-# credential for smores has to be reported as a failed touch and fall through to
-# the password, not skipped silently.
+# credential for smores has to be reported as a failed authentication and fall
+# through to the password, not skipped silently.
 #
 # faillock: a bare sufficient on the touch row would be wrong. Success
-# terminates dispatch (pam_dispatch.c), so authsucc would never run and the tally
-# would never clear. success=2 skips pam_unix and authfail into authsucc, and
-# pam_unix's success=1 skips authfail the same way, so either factor clears the
-# tally; a wrong password and a refused touch both land on authfail and die.
+# terminates dispatch (pam_dispatch.c), so authsucc would never run and the
+# tally would never clear. success=2 skips pam_unix and authfail into authsucc,
+# and pam_unix's success=1 skips authfail the same way, so either factor clears
+# the tally. authfail therefore stays the password's row: default=ignore sends
+# a refused tap on to pam_unix, a refused tap records no faillock row at all,
+# and five refused taps lock nothing -- only five wrong passwords reach deny=5.
+#
+# try_first_pass on the pam_unix row is a no-op today: pam_u2f never sets
+# PAM_AUTHDATA, so pam_unix prompts regardless. It stays, and it is the reason
+# not to put a prompt-setting module ahead of this row: such a module would hand
+# pam_unix a stale token to reuse.
 auth required                   pam_faillock.so preauth deny=5 unlock_time=300
 auth [success=2 default=ignore] pam_u2f.so authfile=/etc/u2f_mappings cue userpresence=1 pinverification=0
 auth [success=1 default=ignore] pam_unix.so try_first_pass
@@ -360,7 +384,7 @@ session    include system-auth
 EOT
 )
 if [[ $(cat "$sudo_pam" 2>/dev/null) == "$expected" ]] \
-    && [[ $(wc -l <"$sudo_pam" 2>/dev/null) -eq 35 ]]; then
+    && [[ $(wc -l <"$sudo_pam" 2>/dev/null) -eq 45 ]]; then
   ok "the shipped sudo PAM stack is the design's file, byte for byte"
 else
   bad "the shipped sudo PAM stack is the design's file, byte for byte" \
@@ -383,9 +407,38 @@ else
     "preauth=${preauth:-none} u2f=${u2f_line:-none} password=${unix_line:-none} authfail=${authfail:-none} authsucc=${authsucc:-none}"
 fi
 
+# The order alone proves nothing: a module spliced between two rows keeps every
+# inequality above true, and the byte compare is a copy of the file, so an
+# arithmetic error edited into both would hide itself. pam's success=N skips N
+# stacked modules (pam_dispatch.c), and these rows are adjacent, so the row a
+# jump lands on is its own line + N + 1. Both factors must land exactly on
+# authsucc: short of it and a success is spent on the wrong row, past it and the
+# tally goes uncleared.
+u2f_skip=$(sed -n "${u2f_line:-0}p" "$sudo_pam" 2>/dev/null | grep -oE 'success=[0-9]+' | cut -d= -f2)
+unix_skip=$(sed -n "${unix_line:-0}p" "$sudo_pam" 2>/dev/null | grep -oE 'success=[0-9]+' | cut -d= -f2)
+if [[ -n $u2f_skip && -n $unix_skip && -n $authsucc ]] \
+    && ((u2f_line + u2f_skip + 1 == authsucc && unix_line + unix_skip + 1 == authsucc)); then
+  ok "the touch and password rows jump to authsucc, not past it or short of it"
+else
+  bad "the touch and password rows jump to authsucc, not past it or short of it" \
+    "u2f: line=${u2f_line:-none} success=${u2f_skip:-none}; password: line=${unix_line:-none} success=${unix_skip:-none}; authsucc: line=${authsucc:-none}"
+fi
+
+# A failed pam_unix falls through to the next row, whatever its jump, so a module
+# parked between the password and authfail would take that failure somewhere
+# other than the tally.
+if [[ -n $unix_line && -n $authfail ]] && ((authfail == unix_line + 1)); then
+  ok "authfail is the row immediately after pam_unix"
+else
+  bad "authfail is the row immediately after pam_unix" \
+    "password=${unix_line:-none} authfail=${authfail:-none}: a failed password must land on the tally"
+fi
+
 # success=2 jumps over pam_unix and authfail to authsucc, and default=ignore is
-# what routes an absent key, a key with no matching credential and a refused
-# touch (all PAM_AUTH_ERR) to the password rather than to authfail.
+# what routes every non-success touch to the password rather than to authfail:
+# PAM_AUTH_ERR for a device or touch failure, PAM_USER_UNKNOWN for a key holding
+# no credential for this user, PAM_AUTHINFO_UNAVAIL for an authfile pam_u2f
+# cannot use.
 if grep -qx 'auth \[success=2 default=ignore\] pam_u2f\.so authfile=/etc/u2f_mappings cue userpresence=1 pinverification=0' \
     "$sudo_pam" 2>/dev/null; then
   ok "a tap alone reaches authsucc, and a failed tap falls through to the password"
@@ -396,8 +449,9 @@ fi
 
 # pam_unix is the fallback and only the fallback: success=1 skips authfail into
 # authsucc, so a password after earlier typos clears the tally too, and a failure
-# falls into authfail, which dies. try_first_pass costs nothing here: pam_u2f sets
-# no authtok, so pam_unix still prompts.
+# falls into authfail, which dies. try_first_pass is a no-op today -- pam_u2f
+# sets no PAM_AUTHDATA, so pam_unix prompts -- and would become a stale-token
+# reuse if a prompt-setting module were ever put ahead of this row.
 if grep -qx 'auth \[success=1 default=ignore\] pam_unix\.so try_first_pass' "$sudo_pam" 2>/dev/null; then
   ok "a correct password reaches authsucc and a wrong one lands on authfail"
 else
@@ -474,8 +528,10 @@ fi
 
 # /etc/u2f_mappings is public credential data: a key handle and a public key per
 # token, no secret. It ships so that a fresh host needs no hand-written file, and
-# because both stacks read it. pam_u2f parses it as root and refuses one that
-# group or other can write, which is the mode this asserts.
+# because both stacks read it. pam_u2f parses it as root and warns about one that
+# group or other can write without failing sudo over it: the touch then finds no
+# device and falls through to the password, so the mode is asserted here rather
+# than left to a journal line nobody reads.
 # The credential must carry no +pin option: pam_u2f turns +pin into a PIN
 # request even when the stack says pinverification=0, and an enrolment run with
 # pamu2fcfg -N writes exactly that, which would put the sudo prompt back in the

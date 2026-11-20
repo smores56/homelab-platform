@@ -176,14 +176,26 @@ sudo true               # no prompt: the same TTY, inside 30 minutes
 ```
 
 The account password is the fallback, and it is a full one: no key in the port,
-a key holding no credential for `smores`, or a tap refused (`pam_u2f` reports
-each of these as a failed authentication) all fall through to the password
-prompt, which works.
+a key holding no credential for `smores`, or a tap refused all fall through to
+the password prompt, which works. `pam_u2f` does not answer one code for these:
+a device or touch failure is `PAM_AUTH_ERR`, a key with no credential for this
+user is `PAM_USER_UNKNOWN`, a missing, unparsable or foreign-owned
+`/etc/u2f_mappings` is `PAM_AUTHINFO_UNAVAIL`, and a configuration failure can
+surface as `PAM_SYSTEM_ERR`. The sudo stack ignores every non-success, whatever
+its code, so none of them can strand you.
 
 ```sh
 sudo -k; sudo true      # key unplugged: password prompt, then in
 sudo -k; sudo true      # key in, tap refused: password prompt, then in
 ```
+
+A docked key holding no credential for this user is the slow case, and the cost
+is worth knowing before you meet it: `pam_u2f` runs one `fido_dev_get_assert`
+per credential in the mapping -- three today -- behind a single `cue`, and each
+one waits out libfido2's device timeout before it gives up. `pam_u2f` has no
+timeout option to shorten that, and every retry of the password prompt pays the
+same wait again. Plug the key in when you mean to tap; a spare that lives in the
+port is not free.
 
 Neither prompt ever asks for the FIDO2 PIN: `pinverification=0` keeps the disk
 keyslot's PIN budget out of sudo's reach.
@@ -195,8 +207,10 @@ keyslot's PIN budget out of sudo's reach.
 - A tap and a password both clear the tally: each row's `success=N` lands on
   `authsucc` rather than terminating the stack, so a success after earlier typos
   resets the count.
-- A wrong password and a refused tap both land on `authfail`, which dies, so
-  neither can be probed indefinitely.
+- Only password failures reach `authfail`: a refused tap falls through to
+  `pam_unix` instead and records no faillock row, so five refused taps lock
+  nothing, while five wrong passwords do. `authfail` dies on those, so the
+  password cannot be probed indefinitely.
 - faillock counts one row per PAM transaction and sudo makes three per
   invocation, so **five wrong prompts**, not five invocations, are what cost
   five minutes. While the lock stands the correct password is refused too,

@@ -5,9 +5,12 @@
 # FIDO2 PIN; this file must not.
 #
 # The fallback is a property of return codes, not of jump arithmetic we maintain:
-# pam_u2f answers PAM_AUTH_ERR when no key is present, when the key holds no
-# matching credential, and when the touch is refused (util.c,
-# do_authentication), so default=ignore on its row lands all three on pam_unix.
+# default=ignore on the touch row drops every non-success pam_u2f returns,
+# whatever its code, and dispatch falls through to pam_unix. The codes differ
+# and no one of them covers the set: PAM_AUTH_ERR for a device or touch failure,
+# PAM_USER_UNKNOWN when the key holds no credential for this user (util.c:787),
+# PAM_AUTHINFO_UNAVAIL for a missing, unparsable or foreign-owned authfile
+# (util.c:683,748-756), and cfg_init can fail with PAM_SYSTEM_ERR.
 #
 # pinverification=0 is the point. The FIDO2 PIN is shared with the disk keyslot,
 # and eight wrong PINs block the token and wipe every credential on it, so a
@@ -15,14 +18,21 @@
 # to spend that budget.
 #
 # userpresence=1 makes the tap mandatory. No nouserok: a key holding no
-# credential for smores has to be reported as a failed touch and fall through to
-# the password, not skipped silently.
+# credential for smores has to be reported as a failed authentication and fall
+# through to the password, not skipped silently.
 #
 # faillock: a bare sufficient on the touch row would be wrong. Success
-# terminates dispatch (pam_dispatch.c), so authsucc would never run and the tally
-# would never clear. success=2 skips pam_unix and authfail into authsucc, and
-# pam_unix's success=1 skips authfail the same way, so either factor clears the
-# tally; a wrong password and a refused touch both land on authfail and die.
+# terminates dispatch (pam_dispatch.c), so authsucc would never run and the
+# tally would never clear. success=2 skips pam_unix and authfail into authsucc,
+# and pam_unix's success=1 skips authfail the same way, so either factor clears
+# the tally. authfail therefore stays the password's row: default=ignore sends
+# a refused tap on to pam_unix, a refused tap records no faillock row at all,
+# and five refused taps lock nothing -- only five wrong passwords reach deny=5.
+#
+# try_first_pass on the pam_unix row is a no-op today: pam_u2f never sets
+# PAM_AUTHDATA, so pam_unix prompts regardless. It stays, and it is the reason
+# not to put a prompt-setting module ahead of this row: such a module would hand
+# pam_unix a stale token to reuse.
 auth required                   pam_faillock.so preauth deny=5 unlock_time=300
 auth [success=2 default=ignore] pam_u2f.so authfile=/etc/u2f_mappings cue userpresence=1 pinverification=0
 auth [success=1 default=ignore] pam_unix.so try_first_pass

@@ -163,6 +163,22 @@ RUN set -eux; \
     test -f /usr/lib64/security/pam_u2f.so; \
     command -v pamu2fcfg systemd-cryptenroll cryptsetup >/dev/null
 
+# The escalation gate's other half is the shipped /etc/u2f_mappings. Every
+# pam_u2f failure falls through the sudo stack's default=ignore to the password,
+# so a mapping that is unreadable, unparsable or wrongly owned would make sudo
+# password-only with no other signal at the prompt; pam_u2f logs a warning about
+# a bad mode and nothing else. Prove the file is one it will parse as root:
+# present, non-empty, root-owned 0644, at least one credential line, and no
+# +pin. pamu2fcfg -N writes +pin, which makes pam_u2f demand the FIDO2 PIN even
+# where the stack says pinverification=0; that PIN is the disk keyslot's, and
+# keeping its budget out of sudo's reach is what the stack exists to do.
+RUN set -eux; \
+    test -s /etc/u2f_mappings; \
+    test "$(stat -c %U:%G /etc/u2f_mappings)" = root:root; \
+    test "$(stat -c %a /etc/u2f_mappings)" = 644; \
+    grep -qE '^[^#:]+:[^:]*,.*' /etc/u2f_mappings; \
+    ! grep -qF '+pin' /etc/u2f_mappings
+
 # The exact package set this image shipped, so a running host can be compared
 # with its image. Neither the base's packages nor these are version-locked, so
 # this file is the record of what a given build contained. NymVPN's binaries
