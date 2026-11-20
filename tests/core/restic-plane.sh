@@ -501,6 +501,11 @@ eq "$rc" 0 "sops-decrypt writes a value secret"
 eq "$(cat "$dec/dst/restic-password.yaml")" "hunter2" "format=value writes only the password"
 eq "$(cat "$dec/dst/canary.yaml")" "canary: sops-decrypt-ok" "format=yaml stays verbatim"
 
+mv "$dec/age" "$dec/age.missing"
+run scripts/sops-decrypt.sh
+if ((rc != 0)); then ok "a missing age identity fails closed"; else bad "a missing age identity fails closed"; fi
+mv "$dec/age.missing" "$dec/age"
+
 export STUB_SOPS_PLAINTEXT=$'first: one\nsecond: two\n'
 export STUB_SOPS_PLAINTEXT
 run scripts/sops-decrypt.sh

@@ -3,33 +3,50 @@
 # Two stores, two audiences, no overlap:
 #
 #   secrets/*.yaml            operator tooling (tofu runs, scripted applies)
-#                             encrypted to the admin identity only; no host and
-#                             no cluster identity can decrypt it
+#                             encrypted to the admin identity and the three
+#                             YubiKeys; no host and no cluster identity can
+#                             decrypt it
 #   clusters/**/*.sops.yaml   manifests Flux decrypts in-cluster
 #                             encrypted to the flux-system `sops-age` identity,
 #                             so the controller can read what it deploys
 #
-# The admin identity is the operator's passphrase-wrapped age key. It is added to
-# both rules on purpose: a cluster manifest has to stay editable by the person who
-# maintains it.
+# The admin identity is the operator's passphrase-wrapped age key, listed first
+# in every rule so a no-token decrypt prompts once. The three YubiKeys are
+# touch-only operator readers; a handle is a bearer grant once a token is
+# present. The shared machine identity is the unattended root reader for the
+# image-carried ciphertext: it is staged root-only under /var, kept in
+# Bitwarden, and removed from this rule after the host proves it.
 keys:
   - &admin age1skuwunreduvw8gtkzyf9atsyjnku388ly8c252h3qger84fg5d7q4kf6xs
+  # Shared unattended machine identity (age-keygen); the private key is a
+  # Bitwarden attachment and a pending recovery-kit row, never in this repo.
+  - &machine age1dy66kuzcvu7tgl64pxrjymdt3ndk7g2ftsqc0nx4s8fhyv8zfyyq2h0756
+  # The three `age-plugin-fido2-hmac -g` recipients (no PIN, separate identity).
+  - &yk1 age18suc3usnfah6g3fldvhhvmchyupg3tp2p5vgzfuprvcn6untva9qem4lf0
+  - &yk2 age1zepedng5vqafu95hysrxl0kadreshg2yc07epfqky5fuq2nmy5fqg649lf
+  - &yk3 age1xqpw0qy2mk98ptvvh5y0sxtlrxs036nng2868zd6dc4wdcrrm5mqd6pnpf
   # The host identity from the restore kit (ssh host key -> age). It is staged
-  # root-only under /var on smortress, so image ciphertext must be readable by
-  # it; the admin key stays in the rule so the operator can still edit it.
+  # root-only under /var on smortress. It stays in the server rule until the
+  # machine identity is staged and proven, then leaves the rule but stays in
+  # the kit for ciphertext outside this repository.
   - &smortress age19k8s634eqfnptm8fngc8c3yl5cyk5t4wqgaukya4j6kjtvzm2q9sq674ru
 
 creation_rules:
-  # Image-carried ciphertext (T2). The host stages its own identity root-only
-  # under /var from the restore kit, so the boot decrypt unit must be able to
-  # read these files; the admin key is included so the operator can edit them
-  # without the host. Ciphertext only; no key in the image.
+  # Image-carried ciphertext (T2). The boot decrypt unit must read these files;
+  # admin and the YubiKeys keep the operator able to edit them without the host.
   - path_regex: ^secrets/server/.*\.yaml$
     key_groups:
       - age:
-          - *smortress
           - *admin
+          - *machine
+          - *yk1
+          - *yk2
+          - *yk3
+          - *smortress
   - path_regex: ^secrets/.*\.yaml$
     key_groups:
       - age:
           - *admin
+          - *yk1
+          - *yk2
+          - *yk3

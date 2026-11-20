@@ -100,8 +100,9 @@ RUN set -eux; \
     chmod 0644 /etc/pki/containers/smortress.pub /etc/smortress/secrets.manifest; \
     chmod 0600 /etc/smortress/secrets/*.yaml; \
     chmod 0644 /etc/pam.d/sudo; \
-    chmod 0440 /etc/sudoers.d/10-human-gate; \
-    visudo -cf /etc/sudoers.d/10-human-gate
+    chmod 0440 /etc/sudoers.d/10-human-gate /etc/sudoers.d/20-sops-env; \
+    visudo -cf /etc/sudoers.d/10-human-gate; \
+    visudo -cf /etc/sudoers.d/20-sops-env
 
 # The tailnet is the only route in and the key shipped in this image is the only
 # credential (design #767), so an sshd that refuses to parse would take the host
