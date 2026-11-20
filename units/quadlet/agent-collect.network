@@ -8,6 +8,11 @@
 # carries the provider key. The collector reaches the internet and nothing else;
 # it has no route to either deployment's network, and neither deployment can
 # dial it.
+# Quadlet generates agent-collect-network.service from this file and creates the
+# network as `systemd-agent-collect` (the `systemd-` prefix is Quadlet's default,
+# not this file's choice). A hand-written unit that runs podman directly must
+# require that generated unit and use that name; see
+# units/systemd/smortress-agent-collect-finance.service.
 [Unit]
 Description=Smortress agent collector network
 

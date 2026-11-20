@@ -10,19 +10,25 @@
 # and one directory it owns. It cannot reach the gateway, the facade or the
 # model, because it is on its own network.
 Description=Collect one SimpleFIN AccountSet into the personal replica
-Requires=zfs-ready@state-agent-local.service sops-decrypt.service smortress-app-secrets.service smortress-agent-config.service
-After=zfs-ready@state-agent-local.service sops-decrypt.service smortress-app-secrets.service smortress-agent-config.service network-online.target
+Requires=zfs-ready@state-agent-local.service sops-decrypt.service smortress-app-secrets.service smortress-agent-config.service agent-collect-network.service
+After=zfs-ready@state-agent-local.service sops-decrypt.service smortress-app-secrets.service smortress-agent-config.service agent-collect-network.service network-online.target
 Wants=network-online.target
 
 [Service]
 Type=oneshot
 UMask=0077
+# The network is the Quadlet-generated unit, and its name is Quadlet's, not the
+# file's: `agent-collect.network` generates `agent-collect-network.service`,
+# whose ExecStart creates `systemd-agent-collect`. Naming the file here -- the
+# obvious reading -- is a network that does not exist, and that is exactly how the
+# first boot failed.
+#
 # --include-pending is explicit because SimpleFIN only returns pending items when
 # they are asked for, and a run without them is a different replica than a run
 # with them. The access URL is a Podman secret mounted at uid 1000 mode 0400; the
 # command only ever names the file.
 ExecStart=/usr/bin/podman run --rm --name smortress-agent-collect-finance \
-  --network agent-collect.network \
+  --network systemd-agent-collect \
   --read-only --cap-drop=all --security-opt no-new-privileges \
   --tmpfs /tmp:rw,size=16m --user 1000:1000 \
   --secret simplefin-access-url,type=mount,uid=1000,gid=1000,mode=0400 \

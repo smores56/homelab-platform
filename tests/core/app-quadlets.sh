@@ -785,10 +785,16 @@ else
 fi
 if [[ -f $collector ]]; then
   eq "$(grep -cE -- '--network ' "$collector")" 1 "$collector names exactly one network"
-  if grep -q -- '--network agent-collect.network' "$collector"; then
-    ok "$collector is on the collector network"
+  if grep -qF -- '--network systemd-agent-collect' "$collector"; then
+    ok "$collector names the network Quadlet actually creates"
   else
-    bad "$collector is on the collector network" "$(grep -- '--network' "$collector")"
+    bad "$collector names the network Quadlet actually creates" "$(grep -- '--network' "$collector")"
+  fi
+  if grep -qE '^Requires=.*agent-collect-network\.service' "$collector" &&
+     grep -qE '^After=.*agent-collect-network\.service' "$collector"; then
+    ok "$collector starts the generated network unit"
+  else
+    bad "$collector starts the generated network unit"
   fi
   if grep -qE -- '--network agent-(local|general)\.network' "$collector"; then
     bad "$collector is not on a deployment network"
