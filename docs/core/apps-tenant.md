@@ -45,11 +45,14 @@ a bad image reference, a non-object entry or invalid JSON changes nothing.
   with the inherit flag and a project quota no larger than 50G. `--check`
   reports drift for a deploy gate.
 - **Egress.** `egress = "internet"` renders pasta, and a tenant-wide nftables
-  rule (`smortress-apps-egress.service`) drops the tenant uid's traffic to
+  rule (`smortress-apps-egress.service`) drops the `apps` account's traffic to
   IPv4 LAN, link-local, loopback, CGNAT/Tailscale and the metadata address.
-  Any local address is matched with `fib daddr type local`, so a host address
-  outside the private ranges is covered too. IPv6 is dropped for the tenant
-  entirely. DNS (port 53) is the one exception, to any destination: pasta
+  The rule names the account, not its number: nft resolves the name at load
+  time, so the policy follows whatever uid systemd-sysusers allocated instead
+  of matching nobody after 1001 was taken. Any local address is matched with
+  `fib daddr type local`, so a host address outside the private ranges is
+  covered too. IPv6 is dropped for the tenant entirely. DNS (port 53) is the
+  one exception, to any destination: pasta
   forwards the tenant's DNS as the tenant uid and the resolver may be the host
   stub, MagicDNS or a LAN router, so no static set can name it. An app can
   therefore still reach a resolver on the tailnet or LAN, but nothing else. `egress = "none"` joins the internal Podman network, which has no
@@ -63,6 +66,10 @@ a bad image reference, a non-object entry or invalid JSON changes nothing.
     sysusers -> smortress-apps-user -> smortress-apps-egress
              -> zfs-ready@raw-apps -> smortress-apps-quota
              -> systemd-logind -> user@1001 (lingering) -> tenant units
+
+`smortress-apps-egress.service` is ordered `After=systemd-sysusers.service`
+because its ruleset names the account, which nft resolves when it loads the
+file; it carries `DefaultDependencies=no`, so nothing else would order it there.
 
 `user@1001.service.d/50-smortress-apps.conf` makes the user manager `Requires=`
 the three prerequisites, so a failed provisioning, egress rule or quota stops

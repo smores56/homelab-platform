@@ -1,10 +1,12 @@
 [Unit]
-# The tenant's egress boundary is static: it matches the apps uid and needs
-# nothing but the kernel, so it loads once and stays. It must be in force before
-# any tenant container starts, and before Serve can route to one.
+# The tenant's egress boundary is otherwise static, but the ruleset names the
+# apps account and nft resolves that name at load time, so systemd-sysusers must
+# have created the account first or nft aborts. It must be in force before any
+# tenant container starts, and before Serve can route to one.
 Description=Drop apps-tenant egress to LAN, tailnet, host and metadata destinations
 DefaultDependencies=no
-After=local-fs.target
+Wants=systemd-sysusers.service local-fs.target
+After=systemd-sysusers.service local-fs.target
 # Before logind: the rule must be in force before a lingering user manager can
 # start a tenant container.
 Conflicts=shutdown.target
