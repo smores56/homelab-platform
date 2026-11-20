@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from data_plane.collectors.fidelity import FidelityDeclaration
 from data_plane.collectors.staging import CursorStore, StagingGeneration
@@ -228,6 +230,111 @@ class FidelityDeclarationTests(unittest.TestCase):
         declaration = self.declaration(preserved_fields=("body", "body"))
         with self.assertRaises(ContractError):
             declaration.validate()
+
+
+
+class ObjectReuseTests(unittest.TestCase):
+    """A generation re-links bytes it already published instead of copying them.
+
+    Every collector re-enumerates its whole source, so a scheduled run would
+    otherwise write a second full copy of the source on every tick. Mail is the
+    case that forces it: an hourly mailbox replica cannot afford one full copy
+    per hour, and an unchanged message is exactly the same bytes under exactly
+    the same object id.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name)
+
+    def _publish(self, name: str, objects, cursor: int = 1, tombstones=()):
+        generation = StagingGeneration(self.root, name)
+        for object_id, data in objects:
+            generation.put(object_id, data, {"kind": "message"})
+        for object_id in tombstones:
+            generation.delete(object_id)
+        return generation.commit(cursor, complete=True)
+
+    def _object(self, name: str, object_id: str) -> Path:
+        return self.root / "published" / name / "objects" / object_id
+
+    def test_unchanged_bytes_are_the_same_inode(self):
+        self._publish("gen-1", [("a", b"alpha")])
+        self._publish("gen-2", [("a", b"alpha")], cursor=2)
+
+        first = self._object("gen-1", "a")
+        second = self._object("gen-2", "a")
+        self.assertEqual(first.stat().st_ino, second.stat().st_ino)
+        self.assertGreaterEqual(second.stat().st_nlink, 2)
+        self.assertEqual(second.read_bytes(), b"alpha")
+
+    def test_changed_bytes_are_written_fresh(self):
+        self._publish("gen-1", [("a", b"alpha")])
+        self._publish("gen-2", [("a", b"beta")], cursor=2)
+
+        self.assertNotEqual(
+            self._object("gen-1", "a").stat().st_ino,
+            self._object("gen-2", "a").stat().st_ino,
+        )
+        self.assertEqual(self._object("gen-1", "a").read_bytes(), b"alpha")
+        self.assertEqual(self._object("gen-2", "a").read_bytes(), b"beta")
+
+    def test_a_new_object_is_written_normally(self):
+        self._publish("gen-1", [("a", b"alpha")])
+        self._publish("gen-2", [("a", b"alpha"), ("b", b"beta")], cursor=2)
+
+        self.assertEqual(
+            self._object("gen-2", "b").stat().st_nlink, 1
+        )
+
+    def test_only_the_bytes_are_shared_and_the_metadata_is_this_generation(self):
+        self._publish("gen-1", [("a", b"alpha")])
+        generation = StagingGeneration(self.root, "gen-2")
+        generation.put("a", b"alpha", {"captured_at": "later"})
+        generation.commit(2, complete=True)
+
+        manifest = json.loads(
+            (self.root / "published" / "gen-2" / "manifest.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        entry = next(
+            item for item in manifest["objects"] if item["object_id"] == "a"
+        )
+        self.assertEqual(entry["metadata"], {"captured_at": "later"})
+        self.assertEqual(entry["sha256"], hashlib.sha256(b"alpha").hexdigest())
+
+    def test_an_object_the_previous_generation_tombstoned_is_not_reused(self):
+        self._publish("gen-1", [("a", b"alpha")])
+        self._publish("gen-2", [], cursor=2, tombstones=["a"])
+        self._publish("gen-3", [("a", b"alpha")], cursor=3)
+
+        self.assertEqual(self._object("gen-3", "a").stat().st_nlink, 1)
+
+    def test_a_failed_link_falls_back_to_writing_the_bytes(self):
+        self._publish("gen-1", [("a", b"alpha")])
+        with mock.patch(
+            "data_plane.collectors.staging.os.link", side_effect=OSError("no")
+        ):
+            self._publish("gen-2", [("a", b"alpha")], cursor=2)
+
+        self.assertEqual(self._object("gen-2", "a").read_bytes(), b"alpha")
+        self.assertEqual(self._object("gen-2", "a").stat().st_nlink, 1)
+
+    def test_the_verified_sha_is_the_shared_bytes_sha(self):
+        self._publish("gen-1", [("a", b"alpha")])
+        self._publish("gen-2", [("a", b"alpha")], cursor=2)
+
+        manifest = json.loads(
+            (self.root / "published" / "gen-2" / "manifest.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(
+            manifest["objects"][0]["sha256"],
+            hashlib.sha256(b"alpha").hexdigest(),
+        )
 
 
 if __name__ == "__main__":

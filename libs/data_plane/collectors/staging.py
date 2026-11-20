@@ -160,6 +160,7 @@ class StagingGeneration:
         self._epoch = cursor_store.epoch if cursor_store is not None else None
         self._objects: dict[str, dict[str, Any]] = {}
         self._tombstones: set[str] = set()
+        self._reusable: dict[str, tuple[Path, int, str]] | None = None
         self._closed = False
         self._published_path: Path | None = None
         _reject_symlink(self._root / STAGING_DIR, "staging root")
@@ -207,15 +208,73 @@ class StagingGeneration:
         objects.mkdir(parents=True, exist_ok=True)
         destination = objects / filename
         _reject_symlink(destination, "object path")
-        destination.write_bytes(data)
+        digest = hashlib.sha256(data).hexdigest()
+        if not self._link_previous(object_id, destination, len(data), digest):
+            destination.write_bytes(data)
         self._objects[object_id] = {
             "object_id": object_id,
             "filename": filename,
             "size": len(data),
-            "sha256": hashlib.sha256(data).hexdigest(),
+            "sha256": digest,
             "metadata": dict(metadata),
         }
         self._tombstones.discard(object_id)
+
+    def _reusable_objects(self) -> dict[str, tuple[Path, int, str]]:
+        """The previous generation's object files, for linking instead of copying.
+
+        Every collector re-enumerates its whole source, so a scheduled run would
+        otherwise write a second full copy of the source on every tick, and the
+        mail collector -- one run per hour, every message every time -- is the
+        case that makes that untenable. An object is immutable by contract, so an
+        unchanged object id with unchanged bytes can share the previous
+        generation's inode; a changed byte writes a new file.
+
+        Only the immediately previous generation is consulted. Reaching further
+        back would resurrect the bytes of an object that a later generation
+        tombstoned, which is the one thing a replica must not quietly do.
+        """
+
+        if self._reusable is not None:
+            return self._reusable
+        index: dict[str, tuple[Path, int, str]] = {}
+        previous = self._previous_manifest()
+        if previous is not None:
+            objects = (
+                self._root
+                / PUBLISHED_DIR
+                / previous["generation_id"]
+                / "objects"
+            )
+            for entry in previous["objects"]:
+                size, digest = entry.get("size"), entry.get("sha256")
+                if isinstance(size, int) and not isinstance(size, bool) and isinstance(
+                    digest, str
+                ):
+                    index[entry["object_id"]] = (objects, size, digest)
+        self._reusable = index
+        return index
+
+    def _link_previous(
+        self, object_id: str, destination: Path, size: int, digest: str
+    ) -> bool:
+        """Link the previous generation's file when it holds these exact bytes.
+
+        Returns whether the file is in place. A link that the filesystem refuses
+        is not an error: the bytes still get written below.
+        """
+
+        previous = self._reusable_objects().get(object_id)
+        if previous is None or previous[1] != size or previous[2] != digest:
+            return False
+        source = previous[0] / _object_filename(object_id)
+        if source.is_symlink() or not source.is_file():
+            return False
+        try:
+            os.link(source, destination)
+        except OSError:
+            return False
+        return True
 
     def delete(self, object_id: str) -> None:
         self._require_open()
