@@ -33,6 +33,7 @@ from .finance import SOURCE_ID as FINANCE_SOURCE
 from .finance import collect_simplefin
 from .mail import SOURCE_ID as MAIL_SOURCE
 from .mail import collect_maildir
+from .mbsync import read_uidvalidity
 from .replica import CollectReport, RawReplica
 from .simplefin import AccessUrl, fetch_accountset
 
@@ -127,6 +128,12 @@ def _parser() -> argparse.ArgumentParser:
         metavar="FOLDER=INT",
         help="per-folder UIDVALIDITY, repeatable; required for every folder",
     )
+    mail.add_argument(
+        "--uidvalidity-from-maildir",
+        action="store_true",
+        help="read every folder's UIDVALIDITY from the .mbsyncstate the sync "
+        "tool wrote beside it, instead of being told one",
+    )
 
     calendar = subparsers.add_parser("calendar", help="Tuta SDK entity JSON files")
     calendar.add_argument("--entities", required=True)
@@ -209,10 +216,20 @@ def _collect(
     args: argparse.Namespace, generation: StagingGeneration, captured_at: str
 ) -> int:
     if args.source == "mail":
+        if bool(args.uidvalidity) == bool(args.uidvalidity_from_maildir):
+            raise ValidationError(
+                "mail wants exactly one of --uidvalidity and "
+                "--uidvalidity-from-maildir"
+            )
+        uidvalidity = (
+            read_uidvalidity(args.maildir)
+            if args.uidvalidity_from_maildir
+            else _uidvalidity(args.uidvalidity)
+        )
         report = collect_maildir(
             args.maildir,
             generation,
-            uidvalidity=_uidvalidity(args.uidvalidity),
+            uidvalidity=uidvalidity,
             captured_at=captured_at,
         )
     elif args.source == "calendar":
