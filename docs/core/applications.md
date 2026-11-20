@@ -150,8 +150,10 @@ though it belongs to the `files` unit.
 | General facade token | `secrets/server/agent-facade-general-token.yaml` | `/run/smortress/secrets/agent-facade-general-token.yaml` (`value`, root 0400) | Same shape for `agent-facade-general` and the general gateway |
 | Personal UI password | `secrets/server/agent-ui-personal-password.yaml` | `/run/smortress/secrets/agent-ui-personal-password.yaml` (`value`, root 0400) | Not a Podman secret: `smortress-agent-config.service` writes it into `/var/lib/agent/local/webui.env` as `HERMES_WEBUI_PASSWORD`, which `agent-webui-personal` reads through `EnvironmentFile=`. The UI has no `_FILE` variant, and `type=env` would carry the file's trailing newline into a comparison that never matches |
 | General UI password | `secrets/server/agent-ui-general-password.yaml` | `/run/smortress/secrets/agent-ui-general-password.yaml` (`value`, root 0400) | Same shape, `/var/lib/agent/general/webui.env`. One password per deployment: the two UIs are separate authority domains, so a leak on one must not open the other |
+| SimpleFIN access URL | `secrets/server/simplefin-access-url.yaml` | `/run/smortress/secrets/simplefin-access-url.yaml` (`value`, root 0400) | Podman secret `simplefin-access-url`, mounted at uid 1000 mode 0400 in `smortress-agent-collect-finance.service` only, which reads it through `--access-url-file` |
+| TutaBridge password | `secrets/server/tmail-bridge-password.yaml` | `/run/smortress/secrets/tmail-bridge-password.yaml` (`value`, root 0400) | Podman secret `tmail-bridge-password`, mounted at uid 1000 mode 0400 in `smortress-agent-collect-mail.service` only, where isync's `PassCmd` reads it. The bridge generates this password locally; the Tuta account password is never stored in this repository |
 
-`smortress-app-secrets.service` creates all seven Podman secrets with
+`smortress-app-secrets.service` creates all nine Podman secrets with
 `--replace` on every boot, before any container that declares one. The values
 never appear in a unit file, in argv, in the image, or in this repository.
 
@@ -260,6 +262,16 @@ consumes the result must not: the personal side has no route off the host.
 | Unit | Network | Writes | Credential |
 | --- | --- | --- | --- |
 | `smortress-agent-collect-finance.timer` → `.service` | `agent-collect.network`, a plain bridge of its own | `state/agent-local/replica/finance` | Podman secret `simplefin-access-url`, uid 1000 mode 0400 |
+| `agent-tmail` (Quadlet; it serves, no timer) | `agent-collect.network` | `state/agent-local/quarantine/tmail`, its own session volume | none: its credential is the session on that volume |
+
+Tuta serves no IMAP at all, so `agent-tmail` -- TutaBridge, mirrored and pinned
+like every other application image -- is the mail provider half: it holds the
+account session, decrypts in process and presents the mailbox as local IMAP with
+`IDLE`, which pushes new-mail and expunge events to a connected client. Its
+volume is a copy of the login and belongs in the same Restic snapshot as the
+replica it feeds (`docs/manual-steps.md` section 40.15). It shares
+`agent-collect.network` with the finance collector: both are personal-authority
+processes writing into the personal dataset, and neither can reach a deployment.
 
 The network is deliberately not `agent-general.network` even though both have
 egress: the general side carries the hosted provider key, and a bank collector has

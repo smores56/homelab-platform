@@ -44,6 +44,12 @@ app_images=(
   # deployment can never do. The digest is the publish-agent-webui run for the
   # Containerfile at that path; a rebuild prints a new row.
   'agent-webui|built:images/agent-webui/Containerfile|sha256:fb50509ef43bcdbe4dc5bda35d725a839ba851a3455a74bb5135d706cf622220'
+  # The mail collector's provider half. Tuta serves no IMAP on purpose, so the far
+  # side of the sync is TutaBridge: a local TLS IMAP server in front of Tuta's API,
+  # and the only process that holds the account session. Mirrored, signed by our
+  # key and pinned like every other application image. `latest` is unusable here:
+  # Tuta raises the minimum client version it accepts (see manual-steps 40.15).
+  'agent-tmail|docker.io/spartanz51/tutabridge:0.2.0-rc.2|sha256:044415d323d3c876c4275cc4cd0bdcbef303218bf5b1356b06aa31e0b6c92ba7'
 )
 
 # app_image_ref NAME -> the only reference a Quadlet may contain.

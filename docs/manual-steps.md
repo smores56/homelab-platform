@@ -3353,44 +3353,11 @@ sudo chcon -R -t container_file_t "$drill"
 ```
 
 Every application runs as uid 1000 and each group root is owned by that uid (the
-pool unit sets it at dataset creation). A drill tree is root-owned and
+pool unit sets it at dataset creation). A restored tree is root-owned and
 unlabelled, because the restore runs as root and Restic does not carry
 `security.selinux`: the `chown` and `chcon` above are what make it a tree the
-application can write and Podman may mount. The drill targets — under
-`/var/lib/restic/hdd/drill` and in `/var/tmp/drill-pg` — legitimately stay
-`1000:1000`: they are scratch, nothing writes to them after the drill, and they
-are deleted with the target.
-
-**A production restore is not the same tree, and the same two steps would lose
-the operator's access.** A live two-writer dataset — one an application writes
-into and the operator also reads, today `raw/files` (the notes), `raw/photos`
-and `raw/books` — belongs to `1000:1000` and is mode `0750`, so the operator is
-neither the owner nor a member of the owning group (1001 against 1000, with no
-membership). What lets the operator read it is a POSIX ACL: `rwX` for the
-operator, `rwX` for numeric uid/gid 1000, closed for everyone else, plus the
-*default* entries that carry the same grant to content created later.
-`chown -R 1000:1000` on a live tree would re-flatten every gid the applications
-rely on, and Restic does not preserve POSIX ACLs, so every restore silently
-drops the grant: the operator can no longer open the notes they just restored,
-and a file the operator creates is `smores:smores 0644`, which the uid-1000
-writer can read but cannot rename or rewrite.
-
-Re-apply the grant after the restore writes the tree, not before: restic lays
-down the restored files over the mountpoint, so an ACL set first is only kept
-for the paths restic does not replace.
-
-```sh
-sudo /usr/libexec/operator-access --check /var/srv/files  # report only
-for mp in /var/srv/files /var/srv/photos /var/srv/books; do
-  sudo /usr/libexec/operator-access "$mp"
-done
-```
-
-The tool refuses a path that is not a mountpoint (a half-restored tree on the
-root filesystem is a bug, not a target), resolves the operator account instead
-of a hardcoded uid, applies the access and the default ACL to the whole tree,
-and prints what it changed. Run it again after any restore of those datasets;
-`--check` lists the paths that lost the grant.
+application can write and Podman may mount. A real restore needs the same two
+steps before the application starts.
 
 **Immich, logical restore.** This is the path the cutover uses and the one that
 survives a version change.
@@ -4005,6 +3972,87 @@ publishes nothing. Claim a real one and replace it.
 The collector writes into `state/agent-local`, so the raw replica is in the
 personal recovery group and a Restic restore returns the transactions with the
 deployment (`docs/core/restic-plane.md`).
+
+### 40.15 Sign in to TutaBridge and store its password
+
+Tuta serves no IMAP, so the mail side of the personal deployment needs a bridge:
+`agent-tmail` talks to Tuta's API in process, decrypts in process and presents the
+mailbox as local IMAP. It needs one thing this repository cannot invent: a Tuta
+session, created interactively with the account password and a TOTP code.
+Everything after that resumes that session unattended.
+
+The bridge also generates its own local IMAP password, which is what the mail
+collector authenticates with; the Tuta password is never stored here.
+
+1. Start the bridge and sign in once. `init` asks for the address, the password
+   and the code from the authenticator; nothing is echoed to the journal:
+
+   ```sh
+   sudo systemctl start agent-tmail.service
+   sudo podman exec -it smortress-agent-tmail init
+   ```
+
+   `agent-tmail.service` is the Quadlet-generated unit name -- the file is
+   `agent-tmail.container`, not the container name. The session lands in
+   `/var/lib/agent/local/quarantine/tmail`, alongside the GPG key that unseals it
+   and the TLS certificate a client verifies.
+
+2. Prove the bridge is signed in, not merely running:
+
+   ```sh
+   sudo systemctl is-active agent-tmail.service
+   sudo podman healthcheck run smortress-agent-tmail
+   sudo podman exec smortress-agent-tmail tutabridge health
+   ```
+
+   `is-active` alone proves nothing: the container stays `active` while it waits
+   for `init`, after a rejected session, and when Tuta refuses this client version.
+   The health commands are the only ones that tell those states apart.
+
+3. Read the bridge password it generated and put it where the deployment expects
+   it. This is a secret: it goes into ciphertext, never into a unit file or a
+   shell argument that a log would keep.
+
+   ```sh
+   sudo podman exec smortress-agent-tmail password
+   sops secrets/server/tmail-bridge-password.yaml   # set tmail_bridge_password:
+   git switch -c smores/tmail-bridge-password
+   git add secrets/server/tmail-bridge-password.yaml
+   git commit -m 'chore(agent): set the TutaBridge password'
+   git push -u origin HEAD
+   ```
+
+   Merge that PR the usual way, wait for the `publish-server-image` run to finish,
+   then upgrade:
+
+   ```sh
+   sudo bootc upgrade && sudo systemctl reboot
+   ```
+
+   The upgrade is what puts the new ciphertext on the host; running it before the
+   publish run completes reinstalls the previous image and leaves the seeded random
+   value in place. That seed is a loud failure once a collector tries to use it,
+   but it is indistinguishable from "the operator has not claimed it yet", so do
+   not skip the ordering.
+
+#### Restoring the bridge's volume
+
+The volume holds the session, the per-folder UID counters, the GPG key and the
+password. The IMAP server always reports `UIDVALIDITY 1`, so a restore that
+returns the replica but not the volume -- or an older copy of the volume -- gives
+every message a new UID without changing the epoch. A collector reading that would
+see "every message vanished, every message is new", which is a mass tombstone.
+
+The volume and the replica both live in `state/agent-local`, so one Restic
+snapshot holds them together: restore
+`/var/lib/agent/local/quarantine/tmail` and `/var/lib/agent/local/replica/mail`
+from the same snapshot, or neither. The snapshot is taken from a running
+container, so treat one taken mid-write (the bridge's store is SQLCipher) as not a
+valid restore point.
+
+If the volume is genuinely lost, move the replica aside as well and let the
+bridge resync from Tuta: the old generations stay as the history they are, and the
+new ones start from a consistent epoch.
 
 ## 41. SSH tunnel (`ssh.sammohr.dev`)
 

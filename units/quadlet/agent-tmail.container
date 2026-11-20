@@ -1,0 +1,58 @@
+# The mail collector's provider half: a local IMAP server in front of Tuta's API.
+#
+# Tuta refuses to serve IMAP, so there is no host, port or credential to point
+# mbsync at directly; TutaBridge is the only thing that can hold a Tuta session
+# and present the mailbox to a standard client. It therefore sees every message
+# in plaintext, by design, and the session it keeps on its volume is a copy of
+# the account's access: `/data` holds the session, the GPG key that unseals it,
+# the bridge password and the TLS certificate. That volume lives under
+# `state/agent-local/quarantine`, is in the personal recovery group, and is never
+# in git. Losing it does not just force another `init` (manual-steps 40.15): the
+# per-folder UID counters live in it too, and the bridge reports UIDVALIDITY 1
+# regardless, so a restore that kept the Maildir and lost the volume would look
+# like every message had been replaced.
+#
+# It is on the collectors' network, not a deployment network: it has egress to
+# Tuta and no route to either gateway, the facades, the model or the web UIs.
+# Nothing publishes a port; mbsync dials this container's own name on that
+# network (mbsyncrc holds the string, and the tests keep the two in step). The
+# network is shared with the finance collector, so a peer can reach plaintext IMAP
+# and the SMTP port bounded only by the bridge password -- accepted, because both
+# collectors are personal-authority processes writing into the personal dataset.
+#
+# User=1000 is the bridge's documented override (it otherwise runs as 10001), and
+# the reason is the certificate: the image's umask makes cert.pem owner-only, so
+# isync can read the one file it verifies only if it shares the owner. The cost is
+# stated rather than hidden: the bridge then runs as the uid that owns the
+# deployment's config.yaml, .env and replica. The session, GPG key and bridge
+# password stay unreadable to the sync container only because it mounts that one
+# file, not the volume.
+[Unit]
+Description=TutaBridge: local IMAP for the mail collector
+Requires=zfs-ready@state-agent-local.service smortress-agent-config.service agent-collect-network.service
+After=network-online.target zfs-ready@state-agent-local.service smortress-agent-config.service agent-collect-network.service
+Wants=network-online.target
+
+[Container]
+Image=ghcr.io/smores56/homelab-platform/agent-tmail@sha256:044415d323d3c876c4275cc4cd0bdcbef303218bf5b1356b06aa31e0b6c92ba7
+ContainerName=smortress-agent-tmail
+Network=agent-collect.network
+User=1000:1000
+Volume=/var/lib/agent/local/quarantine/tmail:/data:z
+# Everything the bridge writes lives under /data (HOME, the three XDG dirs, the
+# keyring and the password store); the entrypoint's only other writable path is
+# TUTABRIDGE_RUNTIME_DIR=/tmp/tutabridge.
+ReadOnly=true
+Tmpfs=/tmp:rw,size=64m
+NoNewPrivileges=true
+DropCapability=ALL
+
+[Service]
+# tini forwards a deliberate stop as SIGTERM, so 143 is a clean exit, not a crash.
+SuccessExitStatus=143
+Restart=on-failure
+# First start generates the GPG key, the password store and the TLS certificate.
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

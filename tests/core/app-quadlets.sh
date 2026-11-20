@@ -52,6 +52,7 @@ readonly app_quadlets=(
   units/quadlet/agent-facade-general.container
   units/quadlet/agent-webui-personal.container
   units/quadlet/agent-webui-general.container
+  units/quadlet/agent-tmail.container
 )
 
 # Ports that are published on loopback for the operator's own curl and are
@@ -772,85 +773,148 @@ for spec in \
   fi
 done
 
-# 8. The finance collector: the one process with egress that writes into the
-#    personal dataset. It runs the repository's own code out of the booted image,
-#    as uid 1000, with a read-only root, on a network of its own -- never the
+# 8. The collectors: the only processes with egress that write into the personal
+#    dataset. Each runs the repository's own code out of the booted image, as uid
+#    1000, with a read-only root, on the collectors' network -- never a
 #    deployment's, because the general network carries the provider key.
-collector=units/systemd/smortress-agent-collect-finance.service
-collector_timer=units/systemd/smortress-agent-collect-finance.timer
-if [[ -f $collector ]]; then
-  ok "$collector exists"
-else
-  bad "$collector exists"
-fi
-if [[ -f $collector ]]; then
-  eq "$(grep -cE -- '--network ' "$collector")" 1 "$collector names exactly one network"
-  if grep -qF -- '--network systemd-agent-collect' "$collector"; then
-    ok "$collector names the network Quadlet actually creates"
+collector_cases=(
+  "finance|units/systemd/smortress-agent-collect-finance.service|units/systemd/smortress-agent-collect-finance.timer|simplefin-access-url"
+)
+for collector_case in "${collector_cases[@]}"; do
+  IFS='|' read -r name collector collector_timer secret <<<"$collector_case"
+  if [[ -f $collector ]]; then
+    ok "$collector exists"
   else
-    bad "$collector names the network Quadlet actually creates" "$(grep -- '--network' "$collector")"
+    bad "$collector exists"
+    continue
   fi
+  networks=$(grep -cE -- '--network ' "$collector")
+  eq "$(grep -cE -- '--network systemd-agent-collect' "$collector")" "$networks" \
+    "$name collector names the network Quadlet actually creates"
   if grep -qE '^Requires=.*agent-collect-network\.service' "$collector" &&
      grep -qE '^After=.*agent-collect-network\.service' "$collector"; then
-    ok "$collector starts the generated network unit"
+    ok "$name collector starts the generated network unit"
   else
-    bad "$collector starts the generated network unit"
+    bad "$name collector starts the generated network unit"
   fi
   if grep -qE -- '--network agent-(local|general)\.network' "$collector"; then
-    bad "$collector is not on a deployment network"
+    bad "$name collector is not on a deployment network"
   else
-    ok "$collector is not on a deployment network"
+    ok "$name collector is not on a deployment network"
   fi
   for flag in '--read-only' '--cap-drop=all' '--security-opt no-new-privileges' '--user 1000:1000'; do
     if grep -qF -- "$flag" "$collector"; then
-      ok "$collector runs with $flag"
+      ok "$name collector runs with $flag"
     else
-      bad "$collector runs with $flag"
+      bad "$name collector runs with $flag"
     fi
   done
-  if grep -qF -- '--secret simplefin-access-url,type=mount,uid=1000,gid=1000,mode=0400' "$collector"; then
-    ok "$collector mounts only its own credential"
+  if grep -qF -- "--secret $secret,type=mount,uid=1000,gid=1000,mode=0400" "$collector"; then
+    ok "$name collector mounts only its own credential"
   else
-    bad "$collector mounts only its own credential"
+    bad "$name collector mounts only its own credential"
   fi
   if grep -qE -- 'agent-(hosted-key|facade-(personal|general)-token)' "$collector"; then
-    bad "$collector never names another deployment's secret"
+    bad "$name collector never names another deployment's secret"
   else
-    ok "$collector never names another deployment's secret"
+    ok "$name collector never names another deployment's secret"
   fi
-  image=$(grep -oE 'ghcr\.io/smores56/homelab-platform/[a-z-]+@sha256:[0-9a-f]{64}' "$collector" | head -1)
-  if app_image_matches "$image"; then
-    ok "$collector runs a pinned image from the table"
-  else
-    bad "$collector runs a pinned image from the table" "$image"
-  fi
+  while IFS= read -r image; do
+    if app_image_matches "$image"; then
+      ok "$name collector runs a pinned image from the table"
+    else
+      bad "$name collector runs a pinned image from the table" "$image"
+    fi
+  done < <(grep -oE 'ghcr\.io/smores56/homelab-platform/[a-z-]+@sha256:[0-9a-f]{64}' "$collector")
   if grep -qF -- '/usr/lib/agent-facade:/usr/lib/agent-facade:ro' "$collector"; then
-    ok "$collector runs the code the booted image ships"
+    ok "$name collector runs the code the booted image ships"
   else
-    bad "$collector runs the code the booted image ships"
+    bad "$name collector runs the code the booted image ships"
   fi
-fi
-if [[ -f $collector_timer ]]; then
-  eq "$(sed -n 's/^Unit=//p' "$collector_timer")" smortress-agent-collect-finance.service \
-    "$collector_timer runs the collector"
-  if grep -qxF 'Persistent=true' "$collector_timer"; then
-    ok "$collector_timer closes a missed run on the next boot"
+  if [[ -f $collector_timer ]]; then
+    eq "$(sed -n 's/^Unit=//p' "$collector_timer")" "$(basename "$collector")" \
+      "$collector_timer runs the collector"
+    if grep -qxF 'Persistent=true' "$collector_timer"; then
+      ok "$collector_timer closes a missed run on the next boot"
+    else
+      bad "$collector_timer closes a missed run on the next boot"
+    fi
   else
-    bad "$collector_timer closes a missed run on the next boot"
+    bad "$collector_timer exists"
+  fi
+done
+
+# 8b. The bridge: the provider half. It holds the Tuta session, so its volume is
+#     the account, and it sits on the collectors' network rather than a
+#     deployment's.
+bridge=units/quadlet/agent-tmail.container
+if [[ -f $bridge ]]; then
+  ok "$bridge exists"
+  image=$(grep -oE '^Image=.*' "$bridge" | cut -d= -f2-)
+  if app_image_matches "$image"; then
+    ok "the bridge runs a pinned image from the table"
+  else
+    bad "the bridge runs a pinned image from the table" "$image"
+  fi
+  eq "$(grep -cE '^Network=' "$bridge")" 1 "the bridge names exactly one network"
+  if grep -qxF 'Network=agent-collect.network' "$bridge"; then
+    ok "the bridge is on the collectors' network"
+  else
+    bad "the bridge is on the collectors' network"
+  fi
+  if grep -qxF 'Volume=/var/lib/agent/local/quarantine/tmail:/data:z' "$bridge"; then
+    ok "the bridge's session volume is the one dataset path"
+  else
+    bad "the bridge's session volume is the one dataset path"
+  fi
+  if grep -qxF 'ReadOnly=true' "$bridge"; then
+    ok "the bridge has a read-only root"
+  else
+    bad "the bridge has a read-only root"
+  fi
+  if grep -qxF 'User=1000:1000' "$bridge"; then
+    ok "the bridge runs as the uid that owns its certificate"
+  else
+    bad "the bridge runs as the uid that owns its certificate"
+  fi
+  if grep -qE '^Tmpfs=/tmp:' "$bridge"; then
+    ok "the bridge has a writable tmpfs for its runtime dir"
+  else
+    bad "the bridge has a writable tmpfs for its runtime dir"
+  fi
+  for flag in 'NoNewPrivileges=true' 'DropCapability=ALL'; do
+    if grep -qxF "$flag" "$bridge"; then
+      ok "the bridge sets $flag"
+    else
+      bad "the bridge sets $flag"
+    fi
+  done
+  if grep -qE '^PublishPort=' "$bridge"; then
+    bad "the bridge publishes nothing"
+  else
+    ok "the bridge publishes nothing"
   fi
 else
-  bad "$collector_timer exists"
+  bad "$bridge exists"
 fi
+
 if grep -qF 'units/quadlet/agent-collect.network' image/Containerfile; then
   ok "the collector network ships in the image"
 else
   bad "the collector network ships in the image"
 fi
-if grep -qF 'simplefin-access-url' scripts/app-secrets.sh; then
-  ok "the access URL becomes a Podman secret"
-else
-  bad "the access URL becomes a Podman secret"
-fi
+for secret in simplefin-access-url tmail-bridge-password; do
+  if grep -qE "^${secret//./\\.}\\.yaml[[:space:]]" image/rootfs/etc/smortress/secrets.manifest; then
+    ok "$secret has a decrypt manifest entry"
+  else
+    bad "$secret has a decrypt manifest entry"
+  fi
+  if grep -qF "$secret" scripts/app-secrets.sh; then
+    ok "$secret becomes a Podman secret"
+  else
+    bad "$secret becomes a Podman secret"
+  fi
+done
 
 printf '\n%d checks, %d failed\n' "$((pass + fail))" "$fail"
 ((fail == 0))
