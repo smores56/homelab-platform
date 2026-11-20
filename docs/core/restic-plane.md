@@ -148,6 +148,15 @@ backup/tag/snapshots/forget/prune/check`, `curl` — goes through `timeout`, so 
 hang is a recorded failure, not a wedged unit. `TimeoutStartSec` in the unit is
 only a safety net above those.
 
+A unit with no `last_success` recorded **against the repository it is writing**
+is a first upload — a brand-new state file, a lost state file, or a repository
+change — and is sized for reading every byte: `RESTIC_DEADLINE_FIRST_LOCAL` or
+`RESTIC_DEADLINE_FIRST_R2`, tried `RESTIC_ATTEMPTS_FIRST` times. The state file
+already says which happened; nothing calls `restic stats`, `df` or the network
+to guess the size. A first attempt that used its whole window is followed by the
+next scheduled run, which resumes from what restic already wrote instead of
+re-reading it.
+
 Cleanup is best effort by design. On normal exit and on TERM/INT the job
 destroys its own staging snapshot; after SIGKILL or power loss the next
 invocation reconciles it. Reconciliation happens *after* the lock is acquired
@@ -224,11 +233,25 @@ so a success whose result could not be written also fails.
 | Backend | Schedule | Per-attempt deadline | Attempts | Run expiry | Max snapshot age |
 | --- | --- | --- | --- | --- | --- |
 | `ssd`, `hdd` | 3600 s | 1800 s | 2 (+60 s sleep) | 4320 s | 8400 s |
+| `ssd`, `hdd`, first upload | — | 14400 s | 1 (+60 s sleep) | 15060 s | 8400 s |
 | `r2` | 86400 s | 14400 s | 2 (+600 s sleep) | 31800 s | 118800 s |
+| `r2`, first upload | 86400 s | 32400 s | 1 (+600 s sleep) | 34800 s | 118800 s |
 
 Run expiry is `attempts × (deadline + sleep) + grace` (600 s local, 1800 s r2);
 max age adds the schedule interval and a grace of 1080 s (local) or 2400 s
-(r2): `8400 = 3600 + 2×1860 + 1080` and `118800 = 86400 + 2×15000 + 2400`.
+(r2): `8400 = 3600 + 2×1860 + 1080` and `118800 = 86400 + 2×15000 + 2400`. The
+first-upload run expiry uses the first-upload bound and its single attempt:
+`15060 = 1×14460 + 600` and `34800 = 1×33000 + 1800`. Max snapshot age is
+unchanged: it counts from a first success, which a first upload does not have,
+so the fail-closed "no persisted successful snapshot" verdict covers that window
+instead of an age budget.
+
+The unit's `TimeoutStartSec=50400` is the safety net, and it is above the worst
+single group rather than below it: `50400 = 32400 (one first r2 attempt) +
+14400 (repository maintenance) + 3600 (per-command slack)`, and
+`attempts_first × deadline_first_r2 = 32400 < 50400` strictly. It also stays
+under the 86400 s daily r2 schedule, so a run the net kills is retried by the
+next daily timer instead of losing a day.
 
 The repository query is read-only and uses `restic snapshots --no-lock`: a prune
 holding the exclusive lock must not manufacture a freshness failure, and an
@@ -332,9 +355,11 @@ These need the physical host and are not claimed by the repository tests:
   with the disk unplugged.
 - ZFS snapshot visibility at `.zfs/snapshot/<backend>` for every group, and the
   first real restic backup reading it.
-- The first full R2 upload fitting `RESTIC_DEADLINE_R2` (4 h); if it does not,
-  run the driver by hand with a longer deadline and let the hourly/daily timers
-  continue afterwards.
+- A cold first upload of all ten units fitting the 14 h `TimeoutStartSec` in
+  one `r2` run. Each group is bounded by `RESTIC_DEADLINE_FIRST_R2` (9 h) with a
+  single attempt, so a first `r2` run that outlives the net records a failure
+  for the groups it did not reach and the next daily run resumes from what
+  restic already uploaded.
 - Healthchecks.io delivery through Pushover, and the `/fail` ping path.
 - Prune/check runtimes, restic lock contention between a prune and the hourly
   jobs, and `read-data-subset` cost on the 5 TB repository.
@@ -349,7 +374,10 @@ gate, `pending_reap` for failed IDs, stale-staging reconciliation before
 creation, readiness and mount gates that prevent any backup, retention carrying
 both tags, no wildcard retention or bulk deletion, the fail-closed freshness
 join (missing state, newer failure over an older success, expired running
-attempt, missing repository snapshot, unverified tag/wrong path), repository
+attempt, missing repository snapshot, unverified tag/wrong path), first-upload
+sizing (one attempt and the longer deadline with no recorded success, routine
+retries and deadline afterwards, a slow first run neither timed out nor expired,
+a success against another repository not counting), repository
 init refusing an unmounted or non-empty directory, and `format=value` in
 `sops-decrypt`. `scripts/check-server-image.sh` asserts the static shape: mount
 units present with the right UUIDs, every restic unit enabled, the driver

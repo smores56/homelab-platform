@@ -36,6 +36,7 @@ usage: smortress-restic-backup <ssd|hdd|r2> [--unit <name>]... [--no-maintenance
 
 environment (defaults are the host contract):
   RESTIC_DEADLINE_LOCAL, RESTIC_DEADLINE_R2, RESTIC_ATTEMPTS,
+  RESTIC_DEADLINE_FIRST_LOCAL, RESTIC_DEADLINE_FIRST_R2, RESTIC_ATTEMPTS_FIRST,
   RESTIC_RETRY_SLEEP_LOCAL, RESTIC_RETRY_SLEEP_R2, RESTIC_LOCK_WAIT
 EOF
 }
@@ -74,8 +75,10 @@ attempt_log=""
 attempt_err=""
 paths_json="[]"
 attempt_start=""
-deadline=$(job_deadline "$backend")
-sleep_time=$(job_retry_sleep "$backend")
+# Sized per unit inside the loop: a first upload and a routine increment are not
+# the same job. Empty until a unit is known.
+deadline=""
+sleep_time=""
 
 cleanup_staging() {
   local snapshot
@@ -426,7 +429,7 @@ main() {
     exit 1
   fi
 
-  local failed=0 unit job_ok attempt in_filter g
+  local failed=0 unit job_ok attempt in_filter g job_attempts
   for unit in "${units[@]}"; do
     if ((${#unit_filter[@]} > 0)); then
       in_filter=0
@@ -445,14 +448,26 @@ main() {
 
     job_ok=0
     attempt=0
-    while ((attempt < attempts)); do
+    # Which kind of run this is comes from state this script already writes: a
+    # unit that has no success against the repository it is writing has never
+    # uploaded this set, so it is sized for the full read, not the increment.
+    if [[ $(jq -r '(.last_success == null) or (.repository != $r)' \
+      --arg r "$repo" "$state" 2>/dev/null) == true ]]; then
+      deadline=$(job_deadline_first "$backend")
+      job_attempts=$attempts_first
+    else
+      deadline=$(job_deadline "$backend")
+      job_attempts=$attempts
+    fi
+    sleep_time=$(job_retry_sleep "$backend")
+    while ((attempt < job_attempts)); do
       attempt=$((attempt + 1))
       if run_attempt; then
         job_ok=1
         break
       fi
-      if ((attempt < attempts)); then
-        warn "$backend/$unit: retrying in ${sleep_time}s (attempt $attempt/$attempts)"
+      if ((attempt < job_attempts)); then
+        warn "$backend/$unit: retrying in ${sleep_time}s (attempt $attempt/$job_attempts)"
         sleep "$sleep_time"
       fi
     done

@@ -25,7 +25,12 @@ Environment=RESTIC_CACHE_DIR=/var/cache/smortress-restic
 Type=oneshot
 ExecStart=/usr/libexec/smortress-restic-backup %i
 # Safety net only: every restic, zfs and curl call has its own deadline in the
-# script, which is what turns a hang into a recorded failure.
-TimeoutStartSec=21600
+# script, which is what turns a hang into a recorded failure. This bound has to
+# clear the worst single group rather than sit under it: a first r2 upload gets
+# one attempt of 32400 s (RESTIC_DEADLINE_FIRST_R2 x RESTIC_ATTEMPTS_FIRST),
+# plus 14400 s of repository maintenance and 3600 s of per-command slack. It
+# stays under the 86400 s daily r2 schedule, so a run this net does kill is
+# retried by the next daily timer instead of vanishing for a day.
+TimeoutStartSec=50400
 KillSignal=SIGTERM
 TimeoutStopSec=120
