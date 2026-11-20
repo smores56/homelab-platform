@@ -147,10 +147,18 @@ if grep -q 'smortress-apps-egress.service' image/Containerfile; then
 else
   bad 'the image enables the loader'
 fi
-if grep -q 'nft -f /etc/nftables/smortress-apps.nft' "$unit"; then
-  ok 'the unit loads the shipped ruleset'
+if grep -q 'nft -f /usr/etc/nftables/smortress-apps.nft' "$unit"; then
+  ok 'the unit loads the immutable vendor ruleset'
 else
-  bad 'the unit loads the shipped ruleset' "$(cat "$unit")"
+  bad 'the unit loads the immutable vendor ruleset' "$(cat "$unit")"
+fi
+# /etc is bootc's merge of the image's vendor copy: it can be hand-edited into
+# drift, or deleted outright, and either leaves the tenant unfiltered once the
+# unit restarts. Loading the vendor path removes both failure modes.
+if grep -qE 'nft .*-f +/etc/' "$unit"; then
+  bad 'the unit does not load a mergeable /etc copy' "$(cat "$unit")"
+else
+  ok 'the unit does not load a mergeable /etc copy'
 fi
 
 # The ruleset names the account, so the account must exist when nft loads it;
