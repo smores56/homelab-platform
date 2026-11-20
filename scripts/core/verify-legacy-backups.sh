@@ -23,23 +23,23 @@ set -euo pipefail
 
 readonly SELF=${0##*/}
 readonly SCRATCH_ROOT=/var/tmp
-readonly DUMP_PATH=/var/lib/data/immich/db-dumps/immich.dump
+readonly DUMP_PATH=/var/lib/immich/dumps/immich.dump
 
 # Trees the new core retains. Presence is checked for every one of them; the
 # restore sample is only the subset small enough to copy twice.
 readonly RETAINED_TREES=(
-  /var/lib/data/immich
-  /var/lib/data/photos
-  /var/lib/data/books
-  /var/lib/data/music
-  /var/lib/data/wallpapers
-  /var/lib/data/vault
-  /var/lib/data/todo
+  /var/lib/immich/postgres
+  /var/srv/photos
+  /var/srv/books
+  /var/srv/music
+  /var/srv/wallpapers
+  /var/srv/files/vault
+  /var/srv/files/todo
 )
 readonly SAMPLE_INCLUDES=(
-  /var/lib/data/books
-  /var/lib/data/vault
-  /var/lib/data/todo
+  /var/srv/books
+  /var/srv/files/vault
+  /var/srv/files/todo
 )
 
 repo_sel=all

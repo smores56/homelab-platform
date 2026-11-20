@@ -90,6 +90,18 @@ else
   fail 'scratch confinement is missing'
 fi
 
+# The trees it insists on are the ones the live layout keeps. Aiming at the
+# pre-migration /var/lib/data made every presence check fail the moment the data
+# moved, which reads as a backup problem while being a stale path.
+checks=$((checks + 1))
+if ! grep -q '/var/lib/data' scripts/core/verify-legacy-backups.sh &&
+  grep -q '/var/srv/files/vault' scripts/core/verify-legacy-backups.sh &&
+  grep -q '/var/lib/immich/dumps/immich.dump' scripts/core/verify-legacy-backups.sh; then
+  pass 'the verifier checks the trees the live layout keeps'
+else
+  fail 'the verifier still points at the pre-migration layout'
+fi
+
 # Neither script may print secret values.
 checks=$((checks + 1))
 if grep -nE 'cat /run/secrets|cat .*restic-password|cat .*restic-r2.env' \
