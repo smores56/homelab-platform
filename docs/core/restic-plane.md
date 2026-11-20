@@ -17,10 +17,13 @@ Everything here runs on the host: bash, systemd, `restic` 0.19.1, `zfs`, `jq`,
 | `hdd` | `/var/lib/restic/hdd/restic` | 5 TB HDD, ext4 `LABEL=restic-hdd`, `/var/lib/restic/hdd` | hourly at `:05` | `smortress-restic-backup-hdd.timer` |
 | `r2` | `s3:https://385f7d47e2e8438fbda5d6f76d760434.r2.cloudflarestorage.com/homelab-restic/smortress` | none | daily at `00:00` | `smortress-restic-backup-r2.timer` |
 
-The mount units key on the filesystem UUID, not on a device name:
+The mount units key on an identity the disk keeps, not on a device name:
 
-- `var-lib-restic-ssd.mount`: `e040eab7-3df0-4b7d-96e0-71fb9a5eff93`
-- `var-lib-restic-hdd.mount`: `973b7492-bb88-43c7-bac3-772384e45220`
+- `var-lib-restic-ssd.mount`: `LABEL=restic-ssd`. The 970 is re-created by wiping
+  it, and a new filesystem means a new UUID, so a UUID here stops matching after
+  the first re-wipe. The label survives that.
+- `var-lib-restic-hdd.mount`: `973b7492-bb88-43c7-bac3-772384e45220`, its
+  filesystem UUID; the disk is repartitioned only under a migration delta.
 
 Both are `WantedBy=local-fs.target`, so neither can block boot. The HDD is the
 one with `nofail` semantics by contract: `JobTimeoutSec=45` bounds the wait for

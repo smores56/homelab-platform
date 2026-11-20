@@ -2711,8 +2711,9 @@ or reformats them.
    sudo systemctl list-timers 'smortress-restic-*'
    ```
 
-   The first must report `e040eab7-3df0-4b7d-96e0-71fb9a5eff93` and the second
-   `973b7492-bb88-43c7-bac3-772384e45220`. Four timers must be listed: SSD and
+   The first must report a `by-label/restic-ssd` source and the second
+   `973b7492-bb88-43c7-bac3-772384e45220`. If the SSD is absent, `blkid -L
+   restic-ssd` is empty and only the SSD jobs and the freshness check fail. Four timers must be listed: SSD and
    HDD hourly, R2 daily at midnight, and the verifier at `:40`.
 
 2. Confirm the R2 write credentials. The bucket `homelab-restic` and the path
