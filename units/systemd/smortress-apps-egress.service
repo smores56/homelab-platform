@@ -15,7 +15,11 @@ Before=systemd-logind.service shutdown.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/bin/nft -f /etc/nftables/smortress-apps.nft
+# The vendor path, not /etc: bootc merges the image's /etc into the host's, so
+# an /etc copy is editable into drift (a stale tenant uid) or deletable outright
+# (no ruleset at the next start, and the tenant falls through to `policy
+# accept`). /usr/etc is the image's own copy and cannot be either.
+ExecStart=/usr/bin/nft -f /usr/etc/nftables/smortress-apps.nft
 
 [Install]
 WantedBy=sysinit.target
