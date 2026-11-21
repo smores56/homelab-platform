@@ -49,18 +49,17 @@ is skipped on pushes by its `if:` guard; it has not run yet because no pull
 request exists on the repository (branch protection is not applied, see
 `docs/runbook.md`). Its first PR run URL belongs in "Runtime result" below.
 
-### What cannot run here
+### What did not run here
 
-Opening a real fork PR requires a second GitHub identity: GitHub forbids
-forking your own repository, and a private repo only accepts forks from
-accounts with access. The machine user does not exist yet (see
-`docs/manual-steps.md`, step 1), so the runtime half of the test is **manual**,
-not executed.
+The machine user now exists (`docs/manual-steps.md` section 48) and has Write
+on this public repository, so it can fork it and the fork half is executable.
+It was not run in this pass; the branch-run half that was run is the next
+section. The fork PR's first URL still belongs in "Runtime result".
 
 ### Manual runtime test
 
-1. Complete `docs/manual-steps.md` steps 1 and 3 (machine user, environment
-   secret).
+1. Complete `docs/manual-steps.md` section 48 (machine user, token, roles) and
+   section 2 (environment secret).
 2. As the machine user, fork `smores56/homelab-platform` and open a branch
    whose `.github/workflows/probe.yml` contains:
 
@@ -93,8 +92,112 @@ approval, and every fork run receives a read-only `GITHUB_TOKEN` regardless.
 
 ### Runtime result
 
-Not executed: no second identity. Manual step recorded above; static half
-passes.
+Not executed: the fork half was not run. The static half passes, and the
+branch-run half is recorded in the next section.
+
+## The machine user has Write, not Admin, and no branch run reaches a main-only environment
+
+SDLC #710. Property under test: the general shell's GitHub identity can push
+branches and open PRs, and cannot push `main`, force-push, delete a branch,
+edit a workflow, merge without the owner, change settings, or read a
+`main`-only environment's secret from a branch run. The identity is a classic
+`repo` PAT held by `smores56-agent`; it is exfiltratable by design, so the
+collaborator role and the repository protections are the controls
+(`docs/manual-steps.md` section 48).
+
+### What runs automatically
+
+Nothing carries this token in CI, by design: a CI job that could read it would
+defeat the boundary. The static half is therefore the existing PR boundary
+check, which is independent of the identity:
+
+```sh
+scripts/check-pr-secret-boundary.sh
+# expect: no pull_request workflow references secrets beyond GITHUB_TOKEN, the
+#         read-only plan pair and the Tailscale OAuth client
+```
+
+The machine-user probes are manual because the token must never enter a
+workflow. The exact commands and isolation are in
+`docs/manual-steps.md` 48.5; the results below are from 2026-11-21.
+
+### Manual runtime test
+
+Run every git command with the owner's credential helper disabled
+(`-c credential.helper= -c credential.https://github.com.helper=` and
+`GIT_CONFIG_GLOBAL=/dev/null`). Otherwise `!gh auth git-credential` authenticates
+as `smores56`, the ruleset bypass, and every control looks unenforced.
+
+1. Role read-back: 20 active repositories show `role_name=write` and
+   `permissions.admin=false`, `permissions.maintain=false`, `permissions.push=true`;
+   `sdlc` is included. The other 60 repositories are archived and GitHub refuses
+   the collaborator change with `Repository was archived so is read-only.`
+2. Branch push to `homelab-platform` succeeds (`agent/t0-probe`).
+3. Push, force-push, and deletion of `main` are rejected on
+   `homelab-platform`, `nix-config`, and `kanbei`.
+4. A branch push that adds `.github/workflows/t0-probe.yml` is rejected by the
+   token scope.
+5. A PR from `agent/t0-probe` cannot be merged, with or without `--admin`.
+6. `publish-app-images.yml` (server-image), `tofu-apply.yml` (cloudflare), and
+   `tofu-plan-pr.yml` (cloudflare-plan) dispatched or triggered on the machine
+   user's branch are rejected by the environment policy before any step runs.
+7. `PATCH` on the repository, `PUT` on a collaborator, and the classic branch
+   protection read return `404`; `admin=false` is unchanged.
+
+### Results
+
+| Probe | Expected | Observed 2026-11-21 |
+| --- | --- | --- |
+| classic PAT scopes | `repo` only | `X-Oauth-Scopes: repo` |
+| collaborator role | Write, no Admin/Maintain | 20 × `write`; `admin=false`, `maintain=false` |
+| push `agent/*` | allowed | `* [new branch] agent/t0-probe-machine` |
+| push `main` | rejected | `push declined due to repository rule violations` |
+| force-push `main` | rejected | same |
+| delete `main` | rejected | `refusing to delete the current branch: refs/heads/main` |
+| push workflow file | rejected | `refusing to allow a Personal Access Token to create or update workflow ... without workflow scope` |
+| merge PR, no admin | rejected | `the base branch policy prohibits the merge` |
+| merge PR, `--admin` | rejected | `At least 1 approving review is required`; `Required status check "tofu plan" is failing` |
+| `PATCH` repository | refused | `404 Not Found` |
+| `PUT` collaborator | refused | `404 Not Found` |
+| branch run, `server-image` | refused before steps | `Branch "agent/t0-probe-machine" is not allowed to deploy to server-image due to environment protection rules.` |
+| branch run, `cloudflare` | refused before steps | `Branch "agent/t0-probe-machine" is not allowed to deploy to cloudflare due to environment protection rules.` |
+| PR run, `cloudflare-plan` | refused before steps | `Branch "refs/pull/93/merge" is not allowed to deploy to cloudflare-plan due to environment protection rules.` |
+
+Run URLs: [44872248868](https://github.com/smores56/homelab-platform/actions/runs/44872248868)
+(server-image), [44872273360](https://github.com/smores56/homelab-platform/actions/runs/44872273360)
+(cloudflare), [44872279543](https://github.com/smores56/homelab-platform/actions/runs/44872279543)
+(cloudflare-plan). Each job has zero steps and the second annotation `The
+deployment was rejected or didn't satisfy other protection rules.` The probe PR
+was `smores56/homelab-platform#93`, closed unmerged, and its branch deleted.
+
+### Open gaps
+
+These are failures of the control, not of the probe:
+
+- **`homelab-apps` has no ruleset and no branch protection.** The machine user
+  can push `main`; not executed. No live ruleset enforces the app-only merge or
+  the `apps-schema` check the design relies on, so that path is unguarded.
+- **`sdlc` cannot have a ruleset or branch protection on the free plan.**
+  `GET /repos/smores56/sdlc/rulesets` and the branch-protection endpoint return
+  `Upgrade to GitHub Pro or make this repository public` (HTTP 403). The machine
+  user has Write there, so it can push `main`; not executed.
+- **Only `~DEFAULT_BRANCH` is covered.** The live rulesets on
+  `homelab-platform`, `nix-config`, and `kanbei` target the default branch only.
+  The app-gating ruleset from `docs/manual-steps.md` section 1 item 3 is absent,
+  so a non-main branch has no force-push or deletion rule. The machine user's
+  own `agent/*` branches are intentionally exempt, but the gate the design
+  describes for every other branch is not present.
+- **Archived repositories are excluded.** GitHub refuses collaborator changes
+  on all 60, so a private archived history is not readable by the machine user.
+- **`sdlc approve` has no author check.** It adds `status:approved` and a hash
+  comment without comparing the comment author (`sdlc_issues.py:569-593` in
+  `dotfiles`). A machine-user approval would be accepted; it was not executed.
+- **The token is non-expiring** by owner decision; manual revocation is the
+  only kill switch.
+
+The environment half is now correct: `cloudflare` and `server-image` allow
+`main` only, and `cloudflare-plan` allows `main` and `smores/*` (it had zero
+policies before 2026-11-21).
 
 ## The platform policy stack fails closed
 
