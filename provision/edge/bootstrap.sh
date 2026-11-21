@@ -46,15 +46,16 @@ if [[ ! -s /usr/share/keyrings/tailscale-archive-keyring.gpg ]]; then
 fi
 apt-get install -y -qq caddy tailscale nftables jq openssl unattended-upgrades >/dev/null
 
-# Ubuntu 22.04 ships Caddy 2.4, whose tls block cannot express `issuer`; the
-# Caddyfile below needs 2.7 (Ubuntu 24.04). Fail here rather than at the first
-# certificate order, which is a 443 listener that cannot be renewed.
+# The Caddyfile needs Caddy 2.6, whose `tls` block accepts `issuer`. Ubuntu
+# 24.04 ships 2.6.2 and was validated against it; jammy's 2.4 does not parse
+# the block. Fail here rather than at the first certificate order, which is a
+# 443 listener that cannot be renewed.
 caddy_version=$(caddy version 2>/dev/null | awk 'NR == 1 { print $1 }')
 if [[ ! $caddy_version =~ ^v?2\.([0-9]+)\. ]]; then
   die "unexpected Caddy version '$caddy_version'"
 fi
-if ((BASH_REMATCH[1] < 7)); then
-  die "Caddy $caddy_version is too old; the Caddyfile needs 2.7. Deploy Ubuntu 24.04."
+if ((BASH_REMATCH[1] < 6)); then
+  die "Caddy $caddy_version is too old; the Caddyfile needs 2.6. Deploy Ubuntu 24.04."
 fi
 
 # SSH: keys only and no root password. sshd keeps the FIRST value it obtains and
@@ -124,6 +125,10 @@ EnvironmentFile=/etc/caddy/edge.env
 EOF
 systemctl daemon-reload
 caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null
+# The packaged unit serves a hello page on 80 until this file replaces its
+# config, so an operator masking it during provisioning is normal; unmask before
+# the enable, or the box's only public listener never comes back.
+systemctl unmask caddy >/dev/null 2>&1 || true
 systemctl enable caddy
 systemctl restart caddy
 

@@ -14,7 +14,7 @@ the shape, the failure modes and the rebuild.
 | --- | --- |
 | Provider | RackNerd, 4 GB KVM VPS (Black Friday 2026), New York |
 | Resources | 4 vCPU, 4 GB RAM, 60 GB SSD, 10 TB transfer/month at 1 Gbps |
-| OS | Ubuntu 24.04, whose `caddy` package is 2.7; jammy's 2.4 cannot parse the TLS options |
+| OS | Ubuntu 24.04 (Caddy 2.6.2, which the Caddyfile validates against; jammy's 2.4 cannot parse the TLS options) |
 | Address | one IPv4; IPv6 is a support ticket and was not requested |
 | Price | $47.98/year, lifetime recurring |
 | Control plane | RackNerd `ctrl`: reboot, OS reinstall, HTML5 VNC, optional network firewall |
@@ -151,7 +151,8 @@ so the re-issued certificates do not depend on a new account registration.
 Both halves are outside the repository:
 
 - `provision/edge/verify.sh` on the box: firewall shape, sshd, no port 80,
-  Caddy listening, tailnet up with `tag:vps`.
+  Caddy listening, tailnet up with `tag:vps`; and with `EXPECT_UPSTREAM=1`, the
+  upstream certificate, both Serve ports and the 443 refusal.
 - `scripts/verify-public-edge.sh` from anywhere: both names over valid TLS,
   certificate life above 14 days, and the six paths (three per name) that must
   answer 404.

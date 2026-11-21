@@ -18,7 +18,8 @@ ctrl panel offers no cloud-init and no API to declare one.
 
 1. Deploy the VPS from the panel's **Ubuntu 24.04** template, in the datacenter
    recorded in the runbook, and note the IPv4 in `docs/core/public-edge.md`.
-   The Caddyfile needs Caddy 2.7; jammy's 2.4 is refused by the bootstrap.
+   The Caddyfile is validated against noble's Caddy 2.6.2; jammy's 2.4 is
+   refused by the bootstrap.
 2. In the panel: enable the network firewall with exactly `tcp/443`,
    `udp/41641` and ICMP echo. Console/VNC bypasses it, so this cannot lock you
    out.
@@ -26,7 +27,9 @@ ctrl panel offers no cloud-init and no API to declare one.
    key, the host's MagicDNS name and an ACME contact address. A root SSH key
    must already be in `/root/.ssh/authorized_keys`; the template takes it from
    the order form, and the bootstrap leaves key auth as the only way in.
-4. Reconnect over the tailnet and run `verify.sh`.
+4. Reconnect over the tailnet and run `verify.sh`. Its upstream half (the two
+   Serve ports and the 443 refusal) is gated on `EXPECT_UPSTREAM=1`: run that
+   once the image that declares 8446/8447 is on smortress, and before cutover.
 
 The DNS cutover is not part of this: it waits for #709's retirement gate and is
 two applies of `edge_ipv4` (`tofu/dns.tf`), cluster records first. See
