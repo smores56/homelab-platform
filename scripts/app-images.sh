@@ -61,12 +61,10 @@ app_images=(
   # The browsing collector's provider half: a real Brave from Brave's own release
   # `.deb`, which is the only way to get a browser that speaks the Sync protocol.
   # Built and signed here because the artifact is pinned by version and hash in the
-  # Containerfile rather than mirrored. The digest below is the FIRST local build
-  # of that Containerfile, because `publish-brave` has not run yet; the workflow
-  # prints the authoritative row, and a `workflow_dispatch` run is the way to
-  # replace it (docs/manual-steps.md section 40.17, step 1) -- the Quadlet's
-  # `Image=` is the other half and moves with it.
-  'brave|built:images/brave/Containerfile|sha256:88c8f0456c4ddbe2e3ca961105bb76560ccdf7a11889c26cb741987490137ffc'
+  # Containerfile rather than mirrored. The digest is the publish-brave run for
+  # that Containerfile; a rebuild prints a new row, and the Quadlet's `Image=` is
+  # the other half and moves with it.
+  'brave|built:images/brave/Containerfile|sha256:9b505ba383925597812ffb1d52876b3b5f8f00b2bf999418936521cbb13d707e'
 )
 
 # app_image_ref NAME -> the only reference a Quadlet may contain.
