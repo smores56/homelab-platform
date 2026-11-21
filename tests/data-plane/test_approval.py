@@ -9,17 +9,20 @@ from __future__ import annotations
 import tempfile
 import threading
 import unittest
+from dataclasses import replace
 
 from data_plane.approval import (
+    ApprovalAuthority,
     ApprovalClaims,
     SignedApprovalVerifier,
     UsedApprovalStore,
     claims_for,
+    pending_from_intent,
     sign_approval,
     verify_approval,
 )
 from data_plane.broker import Broker, Intent, WriteRequest
-from data_plane.confirmation import FieldChange, NormalizedOperation
+from data_plane.confirmation import FieldChange, NormalizedOperation, operation_hash
 from data_plane.errors import (
     AuthorizationError,
     ConfirmationError,
@@ -270,9 +273,13 @@ class FakeAdapter:
 
 
 class FakeIntentStore:
+    """In-memory stand-in for the journal port; the SQLite journal is tested
+    in test_intents and exercised end to end in test_broker_effects."""
+
     def __init__(self) -> None:
         self.by_id: dict[str, Intent] = {}
         self.by_key: dict[str, Intent] = {}
+        self.spent: list[str] = []
 
     def get(self, intent_id: str) -> Intent | None:
         return self.by_id.get(intent_id)
@@ -283,6 +290,39 @@ class FakeIntentStore:
     def save(self, intent: Intent) -> None:
         self.by_id[intent.intent_id] = intent
         self.by_key[intent.idempotency_key] = intent
+
+    def routine_effects(
+        self, run_id: str, exclude_intent_id: str | None = None
+    ) -> int:
+        return sum(
+            1
+            for intent in self.by_id.values()
+            if intent.run_id == run_id
+            and not intent.requires_confirmation
+            and intent.intent_id != exclude_intent_id
+            and intent.state
+            in {IntentState.APPLYING, IntentState.APPLIED, IntentState.OUTCOME_UNKNOWN}
+        )
+
+    def approve(self, intent_id: str, approval: dict, now: int) -> Intent:
+        return self._spend(intent_id, approval, IntentState.APPROVED)
+
+    def reserve(self, intent_id: str, approval: dict | None, now: int) -> Intent:
+        intent = self.by_id[intent_id]
+        if approval is None:
+            if intent.state is IntentState.AWAITING_CONFIRMATION:
+                raise ConfirmationRequired(f"intent {intent_id} needs an approval")
+            self.save(replace(intent, state=IntentState.APPLYING))
+            return self.by_id[intent_id]
+        return self._spend(intent_id, approval, IntentState.APPLYING)
+
+    def _spend(self, intent_id: str, approval: dict, state: IntentState) -> Intent:
+        if approval["nonce"] in self.spent:
+            raise ConfirmationError("approval was already used")
+        self.spent.append(approval["nonce"])
+        intent = self.by_id[intent_id]
+        self.save(replace(intent, state=state, approval=dict(approval)))
+        return self.by_id[intent_id]
 
 
 class FakeRecorder:
@@ -351,7 +391,7 @@ class BrokerCrossPodApprovalTests(unittest.TestCase):
 
         self.assertEqual(effect, {"applied": 1})
         self.assertNotIn("note-1", self.adapters["notes"].records)
-        self.assertTrue(self.store.used(approval.nonce))
+        self.assertIn(approval.nonce, self.intents.spent)
         self.assertEqual(self.recorder.events[0]["approval"]["approved_by"], "operator")
 
     def test_delete_without_an_approval_is_refused(self) -> None:
@@ -384,7 +424,7 @@ class BrokerCrossPodApprovalTests(unittest.TestCase):
         claims = self.claims(("notes", "delete"))
         write = self.delete_request("del-4")
         _, operation = self.broker.propose(claims, write)
-        _, token = self.verifier.issue(operation, "operator")
+        approval, token = self.verifier.issue(operation, "operator")
 
         other_pod = Broker(
             self.sources,
@@ -401,8 +441,19 @@ class BrokerCrossPodApprovalTests(unittest.TestCase):
         transferred = other_pod.apply(claims, write, approval_token=token)
         self.assertEqual(transferred, {"applied": 1})
 
+        # The journal spent the nonce once; a replay of the same token against
+        # a fresh intent cannot pass the binding, and the journal refuses the
+        # spent nonce.
+        self.assertEqual(self.intents.spent.count(approval.nonce), 1)
+        another = WriteRequest(
+            source_id="notes",
+            capability="delete",
+            targets=("note-9",),
+            idempotency_key="del-other",
+        )
+        self.broker.propose(claims, another)
         with self.assertRaises(ConfirmationError):
-            self.verifier.verify(token, operation)
+            other_pod.apply(claims, another, approval_token=token)
 
     def test_confirm_spends_the_nonce_and_leaves_apply_tokenless(self) -> None:
         claims = self.claims(("notes", "delete"))
@@ -412,7 +463,7 @@ class BrokerCrossPodApprovalTests(unittest.TestCase):
 
         approved = self.broker.confirm(claims, write, token)
         self.assertIs(approved.state, IntentState.APPROVED)
-        self.assertTrue(self.store.used(approval.nonce))
+        self.assertIn(approval.nonce, self.intents.spent)
         self.broker.apply(claims, write)
         self.assertIs(self.intents.find("del-5").state, IntentState.APPLIED)
 
@@ -445,6 +496,115 @@ class BrokerCrossPodApprovalTests(unittest.TestCase):
         unauthorized = self.claims(("books", "read"))
         with self.assertRaises(AuthorizationError):
             self.broker.apply(unauthorized, write, approval_token=token)
+
+
+class VerifierInspectTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.store = UsedApprovalStore()
+        self.addCleanup(self.store.close)
+        self.verifier = SignedApprovalVerifier(
+            KEY, self.store, clock=lambda: NOW, max_ttl=900
+        )
+        self.claims, self.token = self.verifier.issue(operation(), "operator")
+
+    def test_inspect_binds_without_spending_the_nonce(self) -> None:
+        inspected = self.verifier.inspect(self.token, operation())
+
+        self.assertEqual(inspected.nonce, self.claims.nonce)
+        self.assertFalse(self.store.used(self.claims.nonce))
+        self.assertEqual(self.verifier.verify(self.token, operation()), inspected)
+
+    def test_inspect_refuses_another_operation(self) -> None:
+        with self.assertRaises(ConfirmationError):
+            self.verifier.inspect(self.token, operation(targets=("note-9",)))
+        self.assertFalse(self.store.used(self.claims.nonce))
+
+
+def pending_intent(**overrides):
+    from data_plane.intents import Intent as JournalIntent
+
+    values = dict(
+        intent_id="intent-1",
+        source_id="notes",
+        capability="delete",
+        state=IntentState.AWAITING_CONFIRMATION,
+        operation_hash=operation_hash(operation()),
+        idempotency_key="op-1",
+        base_revision="rev-1",
+        created_at=NOW,
+        updated_at=NOW,
+        expires_at=NOW + 60,
+        attempts=0,
+        result=None,
+        error=None,
+        operation=operation().normalized(),
+        requires_confirmation=True,
+        run_id="run-1",
+        pre_image={"note-1": {"revision": "rev-1", "record": {"title": "Old"}}},
+    )
+    values.update(overrides)
+    return JournalIntent(**values)
+
+
+class ApprovalAuthorityTests(unittest.TestCase):
+    """The human surface signs the effect owner's record, never a caller's."""
+
+    def setUp(self) -> None:
+        self.journal = {"intent-1": pending_intent()}
+        self.authority = ApprovalAuthority(
+            self.pending,
+            KEY,
+            ttl=300,
+            clock=lambda: NOW,
+        )
+
+    def pending(self, intent_id: str):
+        return pending_from_intent(self.journal.get(intent_id))
+
+    def test_the_rendered_card_is_the_stored_operation(self) -> None:
+        card = self.authority.render("intent-1")
+
+        self.assertIn("delete", card)
+        self.assertIn('"note-1"', card)
+        self.assertIn("pre-image", card)
+        self.assertIn("Old", card)
+
+    def test_approve_signs_the_canonical_operation(self) -> None:
+        claims, token = self.authority.approve("intent-1", "smores")
+
+        self.assertEqual(claims.operation_hash, operation_hash(operation()))
+        self.assertEqual(claims.intent_id, "intent-1")
+        verified = verify_approval(token, KEY, now=NOW, max_ttl=900)
+        self.assertEqual(verified, claims)
+
+    def test_approve_takes_no_operation_argument(self) -> None:
+        with self.assertRaises(TypeError):
+            self.authority.approve("intent-1", "smores", operation())  # type: ignore[misc]
+
+    def test_ttl_never_outlives_the_intent(self) -> None:
+        claims, _ = self.authority.approve("intent-1", "smores")
+
+        self.assertEqual(claims.expires_at, NOW + 60)
+
+    def test_expired_pending_record_is_refused(self) -> None:
+        self.journal["intent-1"] = pending_intent(expires_at=NOW - 1)
+        with self.assertRaises(ConfirmationError):
+            self.authority.render("intent-1")
+        with self.assertRaises(ConfirmationError):
+            self.authority.approve("intent-1", "smores")
+
+    def test_an_approved_intent_is_no_longer_pending(self) -> None:
+        self.journal["intent-1"] = pending_intent(state=IntentState.APPROVED)
+        with self.assertRaises(ConfirmationError):
+            self.authority.approve("intent-1", "smores")
+
+    def test_missing_intent_is_refused(self) -> None:
+        with self.assertRaises(ConfirmationError):
+            self.authority.approve("intent-missing", "smores")
+
+    def test_pending_from_intent_needs_a_stored_operation(self) -> None:
+        with self.assertRaises(ConfirmationError):
+            pending_from_intent(pending_intent(operation=None))
 
 
 if __name__ == "__main__":

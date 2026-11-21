@@ -16,6 +16,7 @@ import time
 import unittest
 import urllib.error
 import urllib.request
+from dataclasses import replace
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -32,6 +33,10 @@ from apps.data_plane import (  # noqa: E402 - path setup above
 from data_plane.broker import Broker, Intent  # noqa: E402
 from data_plane.collectors.relay import RecordSchema, Relay  # noqa: E402
 from data_plane.confirmation import ConfirmationGate  # noqa: E402
+from data_plane.errors import (  # noqa: E402
+    ConfirmationError,
+    ConfirmationRequired,
+)
 from data_plane.event_log import EventLog  # noqa: E402
 from data_plane.identity import (  # noqa: E402
     LOCAL_PROFILE,
@@ -42,6 +47,7 @@ from data_plane.model import (  # noqa: E402
     Capability,
     EffectClass,
     FieldAuthority,
+    IntentState,
     SourceContract,
     Visibility,
 )
@@ -428,9 +434,13 @@ class FakeAdapter:
 
 
 class FakeIntentStore:
+    """In-memory stand-in for the journal port; the SQLite journal is tested
+    in test_intents and exercised end to end in test_broker_effects."""
+
     def __init__(self) -> None:
         self.by_id: dict[str, Intent] = {}
         self.by_key: dict[str, Intent] = {}
+        self.spent: list[str] = []
 
     def get(self, intent_id: str) -> Intent | None:
         return self.by_id.get(intent_id)
@@ -441,6 +451,39 @@ class FakeIntentStore:
     def save(self, intent: Intent) -> None:
         self.by_id[intent.intent_id] = intent
         self.by_key[intent.idempotency_key] = intent
+
+    def routine_effects(
+        self, run_id: str, exclude_intent_id: str | None = None
+    ) -> int:
+        return sum(
+            1
+            for intent in self.by_id.values()
+            if intent.run_id == run_id
+            and not intent.requires_confirmation
+            and intent.intent_id != exclude_intent_id
+            and intent.state
+            in {IntentState.APPLYING, IntentState.APPLIED, IntentState.OUTCOME_UNKNOWN}
+        )
+
+    def approve(self, intent_id: str, approval: dict, now: int) -> Intent:
+        return self._spend(intent_id, approval, IntentState.APPROVED)
+
+    def reserve(self, intent_id: str, approval: dict | None, now: int) -> Intent:
+        intent = self.by_id[intent_id]
+        if approval is None:
+            if intent.state is IntentState.AWAITING_CONFIRMATION:
+                raise ConfirmationRequired(f"intent {intent_id} needs an approval")
+            self.save(replace(intent, state=IntentState.APPLYING))
+            return self.by_id[intent_id]
+        return self._spend(intent_id, approval, IntentState.APPLYING)
+
+    def _spend(self, intent_id: str, approval: dict, state: IntentState) -> Intent:
+        if approval["nonce"] in self.spent:
+            raise ConfirmationError("approval was already used")
+        self.spent.append(approval["nonce"])
+        intent = self.by_id[intent_id]
+        self.save(replace(intent, state=state, approval=dict(approval)))
+        return self.by_id[intent_id]
 
 
 class FakeRecorder:
@@ -491,6 +534,7 @@ class BrokerServiceTests(unittest.TestCase):
             "idempotency_key": "del-1",
             "field_diff": [],
             "base_revision": "rev-1",
+            "run_id": "run-1",
         }
         values.update(overrides)
         return values
@@ -542,6 +586,20 @@ class BrokerServiceTests(unittest.TestCase):
         status, applied = self.post("/apply", write)
         self.assertEqual(status, 200)
         self.assertEqual(self.adapter.records["note-1"]["title"], "New")
+
+    def test_a_routine_write_needs_a_run(self) -> None:
+        write = self.write(
+            capability="update",
+            idempotency_key="update-2",
+            field_diff=[["title", "Old", "New"]],
+            base_revision="rev-1",
+        )
+        del write["run_id"]
+
+        status, payload = self.post("/propose", write)
+
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"]["code"], "validation")
 
     def test_missing_workload_token_is_unauthorized(self) -> None:
         status, payload = self.harness.request(

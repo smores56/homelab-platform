@@ -9,6 +9,7 @@ from __future__ import annotations
 import threading
 import time
 import unittest
+from dataclasses import replace
 
 from data_plane.broker import (
     Broker,
@@ -144,9 +145,13 @@ class FakeAdapter:
 
 
 class FakeIntentStore:
+    """In-memory stand-in for the journal port; the SQLite journal is tested
+    in test_intents and exercised end to end in test_broker_effects."""
+
     def __init__(self) -> None:
         self.by_id: dict[str, Intent] = {}
         self.by_key: dict[str, Intent] = {}
+        self.spent: list[str] = []
 
     def get(self, intent_id: str) -> Intent | None:
         return self.by_id.get(intent_id)
@@ -157,6 +162,39 @@ class FakeIntentStore:
     def save(self, intent: Intent) -> None:
         self.by_id[intent.intent_id] = intent
         self.by_key[intent.idempotency_key] = intent
+
+    def routine_effects(
+        self, run_id: str, exclude_intent_id: str | None = None
+    ) -> int:
+        return sum(
+            1
+            for intent in self.by_id.values()
+            if intent.run_id == run_id
+            and not intent.requires_confirmation
+            and intent.intent_id != exclude_intent_id
+            and intent.state
+            in {IntentState.APPLYING, IntentState.APPLIED, IntentState.OUTCOME_UNKNOWN}
+        )
+
+    def approve(self, intent_id: str, approval: dict, now: int) -> Intent:
+        return self._spend(intent_id, approval, IntentState.APPROVED)
+
+    def reserve(self, intent_id: str, approval: dict | None, now: int) -> Intent:
+        intent = self.by_id[intent_id]
+        if approval is None:
+            if intent.state is IntentState.AWAITING_CONFIRMATION:
+                raise ConfirmationRequired(f"intent {intent_id} needs an approval")
+            self.save(replace(intent, state=IntentState.APPLYING))
+            return self.by_id[intent_id]
+        return self._spend(intent_id, approval, IntentState.APPLYING)
+
+    def _spend(self, intent_id: str, approval: dict, state: IntentState) -> Intent:
+        if approval["nonce"] in self.spent:
+            raise ConfirmationError("approval was already used")
+        self.spent.append(approval["nonce"])
+        intent = self.by_id[intent_id]
+        self.save(replace(intent, state=state, approval=dict(approval)))
+        return self.by_id[intent_id]
 
 
 class FakeRecorder:
@@ -178,6 +216,7 @@ def request(**overrides) -> WriteRequest:
         idempotency_key="key-1",
         field_diff=(FieldChange(field="title", before="Old", after="New"),),
         base_revision="rev-1",
+        run_id="run-1",
     )
     values.update(overrides)
     return WriteRequest(**values)
@@ -619,20 +658,21 @@ class BrokerTests(unittest.TestCase):
         error = self.store.find("leak-1").error or ""
         self.assertNotIn("SECRET", error)
         self.assertNotIn("\x1b", error)
-
-    def test_effect_event_records_the_approver_and_token_hash(self) -> None:
+    def test_effect_event_records_the_durable_approval(self):
         claims = self.local(("notes", "delete"))
         write = request(capability="delete", field_diff=(), idempotency_key="audit-1")
-        _, operation = self.broker.propose(claims, write)
-        _, token = self.gate.issue(operation, "smores")
+        intent, operation = self.broker.propose(claims, write)
+        claims_, token = self.gate.issue(operation, "smores")
         self.broker.confirm(claims, write, token)
 
         self.broker.apply(claims, write)
 
         approval = self.recorder.events[0]["approval"]
         self.assertEqual(approval["approved_by"], "smores")
-        self.assertEqual(len(approval["token_sha256"]), 64)
-        self.assertNotEqual(approval["token_sha256"], token)
+        self.assertEqual(approval["intent_id"], intent.intent_id)
+        self.assertEqual(approval["operation_hash"], claims_.operation_hash)
+        self.assertEqual(approval["nonce"], claims_.nonce)
+        self.assertNotIn(token, str(approval))
 
     def test_apply_before_propose_is_rejected(self) -> None:
         claims = self.local(("notes", "update"))

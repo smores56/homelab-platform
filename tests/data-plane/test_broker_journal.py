@@ -123,6 +123,7 @@ class BrokerJournalTests(unittest.TestCase):
             idempotency_key="key-create",
             field_diff=(FieldChange(field="title", before=None, after="New"),),
             base_revision=None,
+            run_id="run-1",
         )
         intent, _ = self.broker.propose(token, request)
         self.assertIs(intent.state, IntentState.APPROVED)
@@ -177,6 +178,7 @@ class BrokerJournalTests(unittest.TestCase):
             idempotency_key="key-unknown",
             field_diff=(FieldChange(field="title", before=None, after="Maybe"),),
             base_revision=None,
+            run_id="run-2",
         )
         self.broker.propose(token, request)
         with self.assertRaises(OutcomeUnknown):

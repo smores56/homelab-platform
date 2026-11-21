@@ -31,8 +31,8 @@ outside this directory and are named under [Assumptions](#assumptions).
 | Service | Objects | Port | State | Identity | Network |
 | --- | --- | --- | --- | --- | --- |
 | `event-service` | Deployment (1, Recreate), Service, PVC 2Gi | 8080 | SQLite event log | `event-service` SA, no token, no Role | ingress from write-broker and confirmation only; egress DNS only |
-| `write-broker` | Deployment (1, Recreate), Service | 8080 | stateless; intents and effects in event-service | `write-broker` SA, no token, no Role | ingress from `tenant-apps/nanobot`, `broker/broker` and confirmation; egress event-service only; no public egress |
-| `confirmation-surface` | Deployment (1, Recreate), Service | 8080 | stateless; approvals in event-service | `confirmation-surface` SA, no token, no Role | ingress from `ingress/cloudflared`; egress event-service + write-broker |
+| `write-broker` | Deployment (1, Recreate), Service | 8080 | SQLite intent journal, pre-images, approvals and effects on `data-plane-approvals` | `write-broker` SA, no token, no Role | ingress from `tenant-apps/nanobot`, `broker/broker` and confirmation; egress event-service only; no public egress |
+| `confirmation-surface` | Deployment (1, Recreate), Service | 8080 | none of its own; renders and rejects rows in the broker journal | `confirmation-surface` SA, no token, no Role | ingress from `ingress/cloudflared`; egress event-service + write-broker |
 | `collector-brave` | Deployment (1, Recreate) | 8080 pod-local | collector + relay in one pod | `collector-relay` SA, no token, no Role | egress `broker/brave-proxy` only; no public egress |
 | `collector-finance` | Deployment (1, Recreate) | 8080 pod-local | same | same | egress `broker/finance-proxy` only |
 | `collector-tuta` | Deployment (1, Recreate) | 8080 pod-local | same | same | egress `broker/tuta-proxy` only |
@@ -85,16 +85,22 @@ and `latest`.
 
 The image's entrypoint is `python -m apps.data_plane.run`; the Deployment `args`
 is the service name. `apps/data_plane/run.py` implements `event`, `broker`, `relay`,
-`confirmation` and `collector`; every one of them is wired by this base (see [Assumptions](#assumptions)). The fixture broker keeps a local
-SQLite journal, but the deployment contract here is the event-service-backed
-broker: the base sets `EVENT_SERVICE_URL` and no local claim.
+`confirmation` and `collector`; every one of them is wired by this base (see
+[Assumptions](#assumptions)). The broker keeps its intent journal, pre-images,
+consumed approval nonces and effect log in one SQLite file on the
+`data-plane-approvals` claim; the confirmation surface reads the same file,
+because it signs the operation the broker stored rather than one a caller
+supplied.
 
 - every service answers `GET /healthz` on `DATA_PLANE_PORT`; the body is
   `{"status": "ok", "service": ...}` only, never an epoch, a group or a
   destination, because the probe is unauthenticated;
 - `DATA_PLANE_HOST`, `DATA_PLANE_PORT`, `DATA_PLANE_DB`, `DATA_PLANE_CATALOG`,
-  `DATA_PLANE_SCHEMA`, `DATA_PLANE_MAX_BODY_BYTES` and
-  `DATA_PLANE_SECRET_FILE` are the configuration surface;
+  `DATA_PLANE_SCHEMA`, `DATA_PLANE_MAX_BODY_BYTES`, `DATA_PLANE_SECRET_FILE`,
+  `DATA_PLANE_OPERATOR_KEY_FILE`, `DATA_PLANE_OPERATOR_TOKEN_FILE` and
+  `APPROVAL_TTL_SECONDS` are the configuration surface; `DATA_PLANE_DB` is the
+  broker journal for `broker` and `confirmation`, and the event log for
+  `event`;
 - `collector-relay` selects its source with `SOURCE_ID`, its schema with
   `DATA_PLANE_SCHEMA` and its only external destination with `SOURCE_PROXY_URL`;
 - `DATA_PLANE_SECRET_FILE` names a path, not a value. The base mounts nothing

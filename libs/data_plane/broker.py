@@ -5,15 +5,19 @@ adapter call. Reads are authorization plus a single adapter call; writes always
 pass through an intent so a retry is idempotent, a stale revision is rejected
 before the effect lands, and an ambiguous effect is never replayed blindly.
 
-Storage is injected: ``IntentStore`` owns durable intent state and
-``EffectRecorder`` owns the authoritative effect journal. Neither is implemented
-here, so the same broker serves the local and external planes with different
-journals.
+A routine write is one target with an allowed field set, a pinned revision, a
+captured pre-image, and a run identity; it applies without a human. Everything
+else parks in AWAITING_CONFIRMATION with the exact operation and pre-image the
+effect owner stored, and only the human surface' signed approval can move it.
+
+Storage is injected: the ``IntentStore`` port owns durable intent, pre-image,
+and approval state, and ``EffectRecorder`` owns the authoritative effect
+journal. Neither is implemented here, so the same broker serves the local and
+external planes with different journals.
 """
 
 from __future__ import annotations
 
-import hashlib
 import re
 import threading
 import time
@@ -21,7 +25,11 @@ import uuid
 from dataclasses import dataclass, replace
 from typing import Any, Callable, Mapping, Protocol, runtime_checkable
 
-from .approval import ApprovalClaims, ApprovalVerifier
+from .approval import (
+    ApprovalClaims,
+    ApprovalVerifier,
+    approval_record,
+)
 from .confirmation import ConfirmationGate, FieldChange, NormalizedOperation
 from .errors import (
     ConfirmationError,
@@ -53,7 +61,7 @@ _SECRET_PATTERN = re.compile(
     r"(?i)(token|secret|password|passwd|key)\s*[=:]\s*\S+"
 )
 _MAX_ERROR_TEXT = 160
-_MAX_REMEMBERED_APPROVALS = 1024
+_DEFAULT_INTENT_TTL = 900
 
 
 def _describe_exception(exc: BaseException) -> str:
@@ -90,7 +98,12 @@ class SourceAdapter(Protocol):
 
 @runtime_checkable
 class IntentStore(Protocol):
-    """Durable intent state, keyed by intent id and by idempotency key."""
+    """Durable intent state, keyed by intent id and by idempotency key.
+
+    ``approve`` and ``reserve`` are transactions, not field setters: an approval
+    is spent exactly once, and it is spent in the same write that either records
+    the human approval or reserves the effect.
+    """
 
     def get(self, intent_id: str) -> Intent | None:
         """Return the intent with ``intent_id`` or ``None``."""
@@ -100,6 +113,19 @@ class IntentStore(Protocol):
 
     def save(self, intent: Intent) -> None:
         """Persist the intent, replacing any prior revision of it."""
+
+    def routine_effects(
+        self, run_id: str, exclude_intent_id: str | None = None
+    ) -> int:
+        """Count effects the run already started without an approval."""
+
+    def approve(self, intent_id: str, approval: Mapping[str, Any], now: int) -> Intent:
+        """Consume ``approval`` and mark the intent approved."""
+
+    def reserve(
+        self, intent_id: str, approval: Mapping[str, Any] | None, now: int
+    ) -> Intent:
+        """Consume any approval and mark the effect applying, atomically."""
 
 
 @runtime_checkable
@@ -115,7 +141,10 @@ class WriteRequest:
     """A caller's proposed write, before the broker normalizes it.
 
     ``epoch`` lets a caller pin the source epoch it observed; ``None`` accepts
-    the contract's current epoch and is how a caller asks for replay.
+    the contract's current epoch and is how a caller asks for replay. ``run_id``
+    is the user intent a routine write belongs to: the broker budgets routine
+    effects per run, so a run that already applied one needs an exact target-set
+    approval for the next.
     """
 
     source_id: str
@@ -128,6 +157,7 @@ class WriteRequest:
     attendee_scope: tuple[str, ...] = ()
     destination: str | None = None
     epoch: int | None = None
+    run_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -143,6 +173,18 @@ class Intent:
     updated_at: int
     effect: dict[str, Any] | None = None
     error: str | None = None
+    run_id: str | None = None
+    expires_at: int = 0
+    pre_image: dict[str, Any] | None = None
+    approval: dict[str, Any] | None = None
+
+    def overdue(self, now: float) -> bool:
+        return (
+            self.state
+            in {IntentState.PROPOSED, IntentState.AWAITING_CONFIRMATION, IntentState.APPROVED}
+            and self.expires_at > 0
+            and now >= self.expires_at
+        )
 
 
 class Broker:
@@ -159,7 +201,10 @@ class Broker:
         clock: Clock = time.time,
         *,
         approval_verifier: ApprovalVerifier | None = None,
+        intent_ttl: int = _DEFAULT_INTENT_TTL,
     ) -> None:
+        if isinstance(intent_ttl, bool) or not isinstance(intent_ttl, int) or intent_ttl < 1:
+            raise ValidationError("intent_ttl must be a positive integer")
         self._sources = dict(sources)
         self._adapters = dict(adapters)
         self._issuer = issuer
@@ -168,10 +213,10 @@ class Broker:
         self._intents = intents
         self._events = events
         self._clock = clock
+        self._intent_ttl = intent_ttl
         # Single-writer serialization: the revision check, the adapter apply,
         # and the read-back must not interleave with another write.
         self._lock = threading.RLock()
-        self._approvals: dict[str, dict[str, Any]] = {}
 
     # -- reads ---------------------------------------------------------
 
@@ -201,10 +246,12 @@ class Broker:
     def propose(
         self, claims: WorkloadClaims | str, request: WriteRequest
     ) -> tuple[Intent, NormalizedOperation]:
-        """Normalize and persist a write, returning its intent and operation.
+        """Normalize and persist a write, capturing the base state it replaces.
 
-        The same idempotency key with the same operation replays the prior
-        intent; a different operation under that key is a conflict.
+        The base revisions and pre-images are read under the write lock, so the
+        snapshot a human approves is the one the effect will overwrite. The same
+        idempotency key with the same operation replays the prior intent; a
+        different operation under that key is a conflict.
         """
 
         resolved = self._authorize(claims, request.source_id, request.capability)
@@ -216,31 +263,46 @@ class Broker:
             )
         self._validate_request(request, contract)
 
-        existing = self._intents.find(request.idempotency_key)
-        if existing is not None:
-            self._require_epoch(existing.operation, contract)
-            operation = self._build(request, contract, existing.intent_id)
-            self._require_same_operation(existing.operation, operation)
-            return existing, operation
+        with self._lock:
+            existing = self._intents.find(request.idempotency_key)
+            if existing is not None:
+                self._require_epoch(existing.operation, contract)
+                operation = self._build(request, contract, existing.intent_id)
+                self._require_same_operation(existing.operation, operation)
+                return existing, operation
 
-        operation = self._build(request, contract, uuid.uuid4().hex)
-        requires = self._needs_confirmation(resolved, contract, capability)
-        now = int(self._clock())
-        intent = Intent(
-            intent_id=operation.intent_id,
-            state=(
-                IntentState.AWAITING_CONFIRMATION
-                if requires
-                else IntentState.APPROVED
-            ),
-            operation=operation,
-            idempotency_key=request.idempotency_key,
-            requires_confirmation=requires,
-            created_at=now,
-            updated_at=now,
-        )
-        self._intents.save(intent)
-        return intent, operation
+            operation = self._build(request, contract, uuid.uuid4().hex)
+            requires = self._needs_confirmation(
+                resolved,
+                contract,
+                capability,
+                operation.targets,
+                request.run_id,
+            )
+            if not requires and not (request.run_id or "").strip():
+                raise ValidationError(
+                    "a routine write needs the run it belongs to; pass run_id"
+                )
+            pre_image = self._capture(operation)
+            now = int(self._clock())
+            intent = Intent(
+                intent_id=operation.intent_id,
+                state=(
+                    IntentState.AWAITING_CONFIRMATION
+                    if requires
+                    else IntentState.APPROVED
+                ),
+                operation=operation,
+                idempotency_key=request.idempotency_key,
+                requires_confirmation=requires,
+                created_at=now,
+                updated_at=now,
+                run_id=request.run_id,
+                expires_at=now + self._intent_ttl,
+                pre_image=pre_image,
+            )
+            self._intents.save(intent)
+            return intent, operation
 
     def confirm(
         self, claims: WorkloadClaims | str, request: WriteRequest, token: str
@@ -260,10 +322,11 @@ class Broker:
                 )
 
             approval = self._verify_approval(token, operation)
-            self._remember_approval(intent.intent_id, approval, token)
-            approved = self._transition(intent, IntentState.APPROVED)
-            self._intents.save(approved)
-            return approved
+            # The journal spends the nonce while it records the approval, so a
+            # replay or a concurrent confirmer cannot both succeed.
+            return self._intents.approve(
+                intent.intent_id, approval_record(approval), int(self._clock())
+            )
 
     def apply(
         self,
@@ -304,6 +367,24 @@ class Broker:
             raise OutcomeUnknown(
                 f"intent {intent.intent_id} has an unknown outcome; reconcile it first"
             )
+        now = int(self._clock())
+        if intent.overdue(now):
+            self._intents.save(
+                self._transition(
+                    intent, IntentState.EXPIRED, error="intent expired before it applied"
+                )
+            )
+            raise ConfirmationError(
+                f"intent {intent.intent_id} expired before it was applied"
+            )
+        if intent.state in {
+            IntentState.EXPIRED,
+            IntentState.REJECTED,
+            IntentState.SUPERSEDED,
+        }:
+            raise ConfirmationError(
+                f"intent {intent.intent_id} is {intent.state.value} and cannot apply"
+            )
         if intent.state not in _APPLICABLE:
             raise ValidationError(
                 f"intent {intent.intent_id} is {intent.state.value} and cannot be applied"
@@ -315,19 +396,22 @@ class Broker:
         resolved = self._issuer.verify(claims) if isinstance(claims, str) else claims
         capability = contract.capability(request.capability)
         requires = intent.requires_confirmation or self._needs_confirmation(
-            resolved, contract, capability
+            resolved,
+            contract,
+            capability,
+            operation.targets,
+            intent.run_id,
+            intent.intent_id,
         )
-        already_approved = intent.intent_id in self._approvals
-        if requires and not already_approved:
+        approval: dict[str, Any] | None = None
+        if requires and intent.approval is None:
             if approval_token is None:
                 raise ConfirmationRequired(
                     f"intent {intent.intent_id} requires human confirmation"
                 )
-            approval = self._verify_approval(approval_token, operation)
-            self._remember_approval(intent.intent_id, approval, approval_token)
-            if intent.state is not IntentState.APPROVED:
-                intent = self._transition(intent, IntentState.APPROVED)
-                self._intents.save(intent)
+            # Inspecting spends nothing: a stale revision below must not burn
+            # the operator's one approval.
+            approval = approval_record(self._verify_approval(approval_token, operation))
 
         adapter = self._adapter(operation.source_id)
         for target in operation.targets:
@@ -342,8 +426,12 @@ class Broker:
                     f"target {target!r} moved past base revision {operation.base_revision!r}"
                 )
 
-        intent = self._transition(intent, IntentState.APPLYING)
-        self._intents.save(intent)
+        # The journal spends the approval nonce in the same transaction that
+        # writes APPLYING, so an approval and the effect it pays for cannot
+        # diverge after a crash.
+        intent = self._intents.reserve(
+            intent.intent_id, approval, int(self._clock())
+        )
 
         try:
             result = adapter.apply(operation, intent.idempotency_key)
@@ -512,20 +600,60 @@ class Broker:
             destination=request.destination,
         )
 
-    @staticmethod
     def _needs_confirmation(
+        self,
         claims: WorkloadClaims,
         contract: SourceContract,
         capability: Capability,
+        targets: tuple[str, ...],
+        run_id: str | None,
+        exclude_intent_id: str | None = None,
     ) -> bool:
         # A local session writing to a general source is a write-down across the
         # confidentiality boundary, so even a reversible create needs a human.
         if capability.requires_confirmation:
             return True
-        return (
+        if (
             claims.profile == LOCAL_PROFILE
             and contract.visibility is Visibility.GENERAL
-        )
+        ):
+            return True
+        # Bulk is measured per user intent/run, not per tool call: a target set
+        # larger than one, or a second target after a routine effect landed in
+        # the same run, needs the exact target set approved.
+        if len(targets) > 1:
+            return True
+        if run_id:
+            return (
+                self._intents.routine_effects(
+                    run_id, exclude_intent_id=exclude_intent_id
+                )
+                > 0
+            )
+        return False
+
+    def _capture(self, operation: NormalizedOperation) -> dict[str, Any]:
+        """Snapshot the base state of every target, pinned to its revision.
+
+        The caller holds the write lock, so the revision read and the record read
+        describe the same base. A caller-supplied revision that no longer matches
+        is refused here instead of after the approval.
+        """
+
+        adapter = self._adapter(operation.source_id)
+        pre_image: dict[str, Any] = {}
+        for target in operation.targets:
+            revision = adapter.revision(target)
+            if operation.base_revision is not None and revision != operation.base_revision:
+                raise StaleError(
+                    f"target {target!r} is at revision {revision!r}, not"
+                    f" {operation.base_revision!r}"
+                )
+            pre_image[target] = {
+                "revision": revision,
+                "record": dict(adapter.read(target)),
+            }
+        return pre_image
 
     @staticmethod
     def _require_epoch(operation: NormalizedOperation, contract: SourceContract) -> None:
@@ -579,36 +707,25 @@ class Broker:
     def _verify_approval(
         self, token: str, operation: NormalizedOperation
     ) -> ApprovalClaims | Any:
-        """Prefer the signed cross-pod verifier over the in-process gate.
+        """Verify the approval without spending it when the verifier can.
 
         A broker configured with ``approval_verifier`` verifies the operator's
-        signature and consumes the nonce in the shared store. The gate remains
-        for single-process tests and local runs; it is never consulted when a
-        verifier is configured, so an in-process approval cannot stand in for
-        an operator signature.
+        signature; the intent journal spends the nonce when it reserves the
+        effect. The gate remains for single-process tests and local runs; it is
+        never consulted when a verifier is configured, so an in-process approval
+        cannot stand in for an operator signature.
         """
 
         if self._approval_verifier is not None:
+            inspect = getattr(self._approval_verifier, "inspect", None)
+            if callable(inspect):
+                return inspect(token, operation)
             return self._approval_verifier.verify(token, operation)
         if self._gate is None:
             raise ConfirmationError(
                 "no approval verifier or confirmation gate is configured"
             )
         return self._gate.verify(token, operation)
-
-    def _remember_approval(self, intent_id: str, approval: Any, token: str) -> None:
-        # Durable intent rows have no approval columns yet (intents.py is owned
-        # by another lane); keep the audit record in memory for the effect event.
-        if len(self._approvals) >= _MAX_REMEMBERED_APPROVALS:
-            self._approvals.pop(next(iter(self._approvals)))
-        approved_at = getattr(approval, "approved_at", None)
-        if approved_at is None:
-            approved_at = getattr(approval, "issued_at", None)
-        self._approvals[intent_id] = {
-            "approved_by": approval.approved_by,
-            "approved_at": approved_at,
-            "token_sha256": hashlib.sha256(token.encode("utf-8")).hexdigest(),
-        }
 
     def _mark_unknown(self, intent: Intent, reason: str) -> None:
         self._intents.save(
@@ -642,9 +759,10 @@ class Broker:
             "epoch": operation.epoch,
             "state": intent.state.value,
             "effect": dict(intent.effect or {}),
+            "pre_image": dict(intent.pre_image or {}),
+            "run_id": intent.run_id,
             "at": int(self._clock()),
         }
-        approval = self._approvals.get(intent.intent_id)
-        if approval is not None:
-            event["approval"] = dict(approval)
+        if intent.approval is not None:
+            event["approval"] = dict(intent.approval)
         self._events.record(event)
