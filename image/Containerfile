@@ -255,6 +255,7 @@ RUN set -eux; \
       smortress-agent-config.service \
       smortress-agent-job-provision.service \
       smortress-nvidia-cdi.service \
+      smortress-selinux-nvidia-map.service \
       smortress-apps-user.service \
       smortress-apps-quota.service \
       smortress-apps-deny.service \

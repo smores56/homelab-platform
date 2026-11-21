@@ -545,6 +545,24 @@ if grep -q '^AddDevice=nvidia.com/gpu=all$' "$agent_model" &&
 else
   bad 'the model server addresses the GPU through the CDI device and its label'
 fi
+# The CDI spec only hands the container a device node; SELinux decides whether
+# llama.cpp may mmap it. crun creates that node as container_file_t and
+# nvidia_container_t has no `map` on the type, so the server silently ran on CPU
+# with nvidia-smi showing nothing. The rule ships as a CIL file and is loaded
+# before the model server starts.
+map_cil=image/rootfs/usr/share/selinux/smortress/agent-nvidia-map.cil
+map_unit=units/systemd/smortress-selinux-nvidia-map.service
+if grep -qF '(allow nvidia_container_t container_file_t (chr_file (map)))' "$map_cil"; then
+  ok 'the rule that lets the model server map the GPU ships'
+else
+  bad 'the rule that lets the model server map the GPU ships'
+fi
+if grep -qxF 'Before=agent-model.service' "$map_unit" &&
+  grep -qF 'semodule -i /usr/share/selinux/smortress/agent-nvidia-map.cil' "$map_unit"; then
+  ok 'the rule is loaded before the model server starts'
+else
+  bad 'the rule is loaded before the model server starts'
+fi
 if grep -q 'nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml' units/systemd/smortress-nvidia-cdi.service &&
   grep -q '^Before=agent-model.service$' units/systemd/smortress-nvidia-cdi.service &&
   grep -qE '^(Requires|After)=.*smortress-nvidia-cdi.service' "$agent_model"; then

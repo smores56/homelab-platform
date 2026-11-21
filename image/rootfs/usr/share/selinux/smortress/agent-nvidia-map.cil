@@ -1,0 +1,9 @@
+;; llama.cpp talks to the driver by mapping /dev/nvidia0, not by reading it.
+;; crun creates the CDI-injected nodes in the container's own /dev tmpfs, where
+;; they carry container_file_t, and nvidia_container_t has no `map` permission on
+;; that type: the open() succeeds, the mmap() is denied, and CUDA answers
+;; "no CUDA-capable device is detected" -- so the server silently runs on CPU
+;; while nvidia-smi shows no process at all. Everything else on the node (open,
+;; read, write, ioctl) is already allowed; this one rule is the difference
+;; between a GPU and a silent CPU fallback.
+(allow nvidia_container_t container_file_t (chr_file (map)))

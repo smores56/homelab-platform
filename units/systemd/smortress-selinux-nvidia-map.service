@@ -1,0 +1,25 @@
+# /usr/lib/systemd/system/smortress-selinux-nvidia-map.service
+[Unit]
+Description=Allow the agent model container to mmap the NVIDIA device nodes
+# The CDI spec hands the container a /dev/nvidia0 it cannot use: crun creates the
+# node in the container's /dev tmpfs as container_file_t, and nvidia_container_t
+# has no `map` on that type, so llama.cpp opens the device, fails the mmap, and
+# CUDA reports no device -- while the server quietly runs on CPU and nvidia-smi
+# shows nothing. The rule is a file in the image; this unit only loads it, before
+# the one container that needs it, on every boot, because a base update can
+# recompile the policy store without it.
+ConditionPathExists=/usr/share/selinux/smortress/agent-nvidia-map.cil
+ConditionSecurity=selinux
+After=local-fs.target
+# A model server started first probes CUDA once, gives up, and keeps the CPU
+# device for its whole life; ordering here is what makes the rule effective.
+Before=agent-model.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/semodule -i /usr/share/selinux/smortress/agent-nvidia-map.cil
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

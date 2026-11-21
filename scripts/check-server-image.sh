@@ -1133,7 +1133,8 @@ check "the model container is ordered after the CDI spec unit" \
   grep -qE '^After=.*smortress-nvidia-cdi\.service' units/quadlet/agent-model.container
 check "the CDI unit runs the documented command" \
   has 'nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml' units/systemd/smortress-nvidia-cdi.service
-for unit in smortress-nvidia-cdi.service smortress-agent-config.service; do
+for unit in smortress-nvidia-cdi.service smortress-agent-config.service \
+  smortress-selinux-nvidia-map.service; do
   check "image enables $unit" has "$unit" image/Containerfile
 done
 # shellcheck disable=SC2016  # the matched text is a line of the seed script

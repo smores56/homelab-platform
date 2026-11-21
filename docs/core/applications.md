@@ -391,6 +391,17 @@ because the spec pins this host's driver and the cards that are actually present
 Without the label the process gets NVML `Insufficient Permissions` instead of a
 GPU; with `label=disable` it works and the container's SELinux confinement is gone.
 
+The label is necessary and was not sufficient. crun creates the injected device
+node in the container's `/dev` tmpfs, where it carries `container_file_t`, and
+`nvidia_container_t` had no `map` permission on that type: the open succeeded,
+the mmap was denied, CUDA answered "no CUDA-capable device is detected", and the
+server ran on CPU with `nvidia-smi` showing no process at all -- for every boot,
+silently, until it was measured. `smortress-selinux-nvidia-map.service` loads one
+CIL rule (`image/rootfs/usr/share/selinux/smortress/agent-nvidia-map.cil`) before
+`agent-model` starts, on every boot, because a base update recompiles the policy
+store. `nvidia-smi --query-compute-apps` listing `llama-server` is the proof that
+it took effect; `docs/manual-steps.md` section 40.9 checks it.
+
 `smortress-agent-config.service` seeds each deployment's `config.yaml` from the
 image's template *once* (`cp -n`): the runtime rewrites that file and an operator
 edits the copy in the dataset. It rewrites `.env` on every boot instead, because

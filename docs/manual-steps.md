@@ -4233,6 +4233,17 @@ start -- the seed unit creates them, and a facade that lets podman create its ow
 bind source gets a root-owned directory inside a 0750 dataset and fails its first
 memory write.
 
+The model server must be *on* the GPU, and that is a separate fact from the
+container being up: it can load the model and listen on 8080 while CUDA reported
+no device. `nvidia-smi` must list `llama-server` with the model resident; with no
+entry, look for `ggml_cuda_init: failed to initialize CUDA` in the unit's log and
+for a `denied { map } ... nvidia_container_t ... container_file_t` audit line,
+which means `smortress-selinux-nvidia-map.service` did not load its rule.
+
+```sh
+nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv
+```
+
 The proxy and the two gateways answer on loopback. The proxy check is also the only
 proof the provider key works: `200` on `/v1/models` means the key was accepted by the
 provider, `401` means the ciphertext still holds the seeded random value (40.7).
