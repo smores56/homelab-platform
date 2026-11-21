@@ -17,6 +17,7 @@ from .imap import (
     message_headers,
     normalize_flags,
     parse_idle_line,
+    pinned_tls_context,
     uid_diff,
     validate_folder,
 )
@@ -33,6 +34,7 @@ __all__ = [
     "message_headers",
     "normalize_flags",
     "parse_idle_line",
+    "pinned_tls_context",
     "uid_diff",
     "validate_folder",
 ]

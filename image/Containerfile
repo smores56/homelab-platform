@@ -291,6 +291,7 @@ RUN set -eux; \
       *:*) ;; \
       *) echo "BASE_IMAGE must be a tagged reference: ${BASE_IMAGE}" >&2; exit 1 ;; \
     esac; \
+    test -n "${BASE_DIGEST}" || { echo "BASE_DIGEST is empty: the image would not record the base it was built on" >&2; exit 1; }; \
     command -v python3 >/dev/null || { echo "the image has no python3 for the plan verifier" >&2; exit 1; }; \
     jq -e '.default[0].type == "reject"' /etc/containers/policy.json >/dev/null; \
     jq -e '.transports.docker["ghcr.io/smores56/homelab-platform"][0].keyPath == "/etc/pki/containers/smortress.pub"' /etc/containers/policy.json >/dev/null; \

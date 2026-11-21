@@ -2543,8 +2543,9 @@ step 3 — the second run is the one that gates step 5.
 
    Expected: `success` and `digest-pinned`. The run summary also carries the
    `ghcr.io/ublue-os/ucore@sha256:...` base the build resolved, and the image
-   label repeats it. The renderer in step 4 also refuses a
-   digest that equals the pinned base, so an unpublished image stops there.
+   label repeats it. The renderer in step 4 also refuses a derived image that is
+   the base itself (it names the uCore repository), so an unpublished image stops
+   there.
 
 3. Stage the operator values. None of these files is committed
    (`ignition/operator/` is gitignored), and the two recovery passphrases are not
@@ -2652,7 +2653,7 @@ step 3 — the second run is the one that gates step 5.
    binding entered the config: stop and fix the template, do not install.
 
 5. Write the live media, then install from it. The live media must be Fedora
-   CoreOS `live` from the same release as the pinned base, and the installer is
+   CoreOS `live` from the same release as the uCore base tag, and the installer is
    what refuses an Ignition spec it cannot write.
 
    ```sh
@@ -5528,7 +5529,11 @@ spare must be enrolled too.
    ssh -A -t smortress 'sudo -k; sudo true'              # new tty, prompts again
    for _ in 1 2 3 4 5; do ssh -t smortress 'sudo -k; sudo -S true < /dev/null'; done
    ssh -A -t smortress 'sudo -k; sudo true'
-   # expect: refused before any prompt for 300 seconds, then a tap works again
+   # expect: every factor refused for 300 seconds. `preauth` is `required`, not
+   # `die`, so dispatch continues and the cue or the password prompt may still
+   # appear -- the refusal lands at the end, on the aggregate impression. The
+   # point is that a correct tap and the correct password both fail while the
+   # tally stands, and then a tap works again after --reset.
    ```
 
    Read the tally from a root shell opened before the lockout, or wait it out:
