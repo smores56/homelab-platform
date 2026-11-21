@@ -162,7 +162,7 @@ check "the shipped set is one key" test "$(grep -c '^ssh-ed25519 ' "$keys_file")
 # whose only other way in is the console.
 check "the build refuses an empty key file" has 'test -s /etc/ssh/authorized_keys.d/smores' image/Containerfile
 check "the build refuses a FIDO handle in the key file" \
-  has "grep -q 'sk-ssh-ed25519' /etc/ssh/authorized_keys.d/smores" image/Containerfile
+  has "! grep -q 'sk-ssh-ed25519' /etc/ssh/authorized_keys.d/smores" image/Containerfile
 # Nothing delivers a key through Ignition any more. The operator's rollback key
 # in smortress.bu is a different path and stays.
 check "ignition no longer writes an authorised-keys file" lacks 'path: /var/lib/homelab/.ssh' ignition/smortress.bu
@@ -297,9 +297,13 @@ check "the build uses the committed lockfile" has 'cargo build --release --locke
 check "the build installs the build dependencies" has 'openssl-devel pam-devel' image/Containerfile
 check "the module lands where PAM loads it" has '/usr/lib64/security/libpam_rssh.so' image/Containerfile
 check "the build fails if libpam_rssh is missing" has 'test -f /usr/lib64/security/libpam_rssh.so' image/Containerfile
+# Both are `required` rows of the sudo stack, so their absence fails closed and
+# leaves every non-root account unable to escalate at all.
+check "the build fails if the failure counter is missing" has 'test -f /usr/lib64/security/pam_faillock.so' image/Containerfile
+check "the build fails if the password fallback is missing" has 'test -f /usr/lib64/security/pam_unix.so' image/Containerfile
 # The retired TOTP module must not come back through a stale package layer.
 check "no package installs pam_oath" lacks 'install pam_oath' image/Containerfile
-check "the build fails if the OATH module is present" has 'test -f /usr/lib64/security/pam_oath.so' image/Containerfile
+check "the build fails if the OATH module is present" has '! test -f /usr/lib64/security/pam_oath.so' image/Containerfile
 check "no pam_userdb assert remains" lacks 'pam_userdb' image/Containerfile
 check "no gdbmtool assert remains" lacks 'gdbmtool' image/Containerfile
 check "tmpfiles no longer creates a sudo usersfile directory" \
@@ -309,21 +313,28 @@ check "tmpfiles no longer creates a sudo usersfile directory" \
 # never mix: the touch option is fixed at enrollment, so the login credential is
 # no-touch-required and the sudo credential asks for the tap. A plain
 # ssh-ed25519 line here would let sudo accept a key that never asks for a touch,
-# and `no-touch-required` would do the same per key. An empty file is allowed and
-# expected until the owner enrolls the keys (docs/manual-steps.md section 44):
-# pam_rssh finds no matching key, returns PAM_AUTH_ERR, and the password is the
-# way in until the public halves are committed.
+# so two shapes are checked below: every line is an sk line, and no line carries
+# the `no-touch-required` option text. Neither check proves the credential is
+# touch-required, and nothing read from the file could: the public half does not
+# record a touch policy, and pam_rssh at the pinned commit (image/pins.env,
+# e8dd046) rebuilds the signed message with sig.flags but never reads the
+# user-presence bit, so a credential minted with `-O no-touch-required` looks
+# identical here. The only proof of the property is the cover-the-sensor drill
+# in docs/manual-steps.md section 44, which fails exactly when the credential
+# signs without a tap. An empty file is allowed and expected until the owner
+# enrolls the keys: pam_rssh finds no matching key, returns PAM_AUTH_ERR, and the
+# password is the way in until the public halves are committed.
 sudo_keys=image/rootfs/etc/ssh/sudo_authorized_keys
 check "the image ships the sudo key file" test -e "$sudo_keys"
 if grep -qvE '^sk-ssh-ed25519@openssh\.com [A-Za-z0-9+/]+[=]{0,2}([[:space:]].*)?$' "$sudo_keys"; then
-  bad "the sudo key file carries only touch-required sk lines"
+  bad "every sudo key line is an sk-ssh-ed25519 line"
 else
-  ok "the sudo key file carries only touch-required sk lines"
+  ok "every sudo key line is an sk-ssh-ed25519 line"
 fi
 if grep -q 'no-touch-required' "$sudo_keys"; then
-  bad "no sudo credential is minted touch-free"
+  bad "no sudo key line carries the no-touch-required option"
 else
-  ok "no sudo credential is minted touch-free"
+  ok "no sudo key line carries the no-touch-required option"
 fi
 # The build refuses the missing file, and the mode is the build's business:
 # /etc/ssh is world-readable, and the sudo list names credentials that unlock
@@ -332,18 +343,16 @@ check "the build refuses a missing sudo key file" has 'test -e /etc/ssh/sudo_aut
 check "the sudo key file is installed 0600" has 'chmod 0600 /etc/ssh/sudo_authorized_keys' image/Containerfile
 
 # The SELinux half. The targeted policy grants sudo_t no access to the forwarded
-# agent socket, so the image ships a local module and a unit that loads it; the
-# permission set is unproven until the host drill (`ausearch -m avc -c sudo`),
-# which is why the module is a file to edit rather than a script to renumber.
-# The permission is connectto, not connect: an AF_UNIX stream connect is checked
-# as CONNECTTO on the peer socket's label, and `connect` only against the
-# caller's own socket, which sudodomain already allows -- a module asking for
-# connect grants nothing and is indistinguishable from a missing one at the tap.
-# No local SELinux policy ships: sudo runs unconfined on this base (sudo_exec_t,
+# agent socket, which would cost the tap if sudo ran as sudo_t. It does not, and
+# no local SELinux policy ships: sudo runs unconfined on this base (sudo_exec_t,
 # process stays unconfined_t), so `sudo_t` does not resolve and an unconfined
 # domain already holds the permission the agent socket needs. A module here would
-# be dead code that fails to link; the drill in manual-steps section 44 is the
-# tripwire if a future base confines sudo.
+# be dead code that fails to link; the AVC drill in manual-steps section 44 is
+# the tripwire if a future base confines sudo.
+# The permission to grant then is connectto, not connect: an AF_UNIX stream
+# connect is checked as CONNECTTO on the peer socket's label, and `connect` only
+# against the caller's own socket, which sudodomain already allows -- a rule
+# asking for connect grants nothing and looks like a policy that never loaded.
 check "no local sudo policy module ships" \
   test ! -e image/rootfs/usr/share/smortress/selinux/smortress_sudo_rssh.cil
 check "no policy loader unit ships" \
@@ -351,8 +360,6 @@ check "no policy loader unit ships" \
 check "no policy loader script ships" \
   test ! -e scripts/selinux-sudo-rssh-load.sh
 check "the image wires no policy loader" lacks 'smortress-selinux-sudo-rssh' image/Containerfile
-check "sudo keeps the forwarded agent socket for pam_rssh" \
-  has 'Defaults env_keep += "SSH_AUTH_SOCK"' image/rootfs/etc/sudoers.d/10-human-gate
 
 # The retired TOTP stack may not leave a trace: the skill moved to a touch, and a
 # leftover usersfile, enrollment script or package reference would be state

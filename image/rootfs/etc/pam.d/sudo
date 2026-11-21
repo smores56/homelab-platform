@@ -57,7 +57,10 @@ auth  required                   pam_faillock.so preauth deny=5 unlock_time=300
 # `cue` prints the one line that asks for the tap; the tap itself is in the
 # client's agent.
 auth  [success=2 default=ignore] libpam_rssh.so auth_key_file=/etc/ssh/sudo_authorized_keys cue
-# The fallback. try_first_pass reuses a password the touch prompt already took.
+# The fallback. try_first_pass is a no-op today: libpam_rssh's `cue` is a
+# PAM_TEXT_INFO and sets no authtok, so pam_unix prompts regardless. It stays,
+# and it is the reason not to put a prompt-setting module ahead of this row:
+# such a module would hand pam_unix a stale value to reuse.
 auth  [success=1 default=ignore] pam_unix.so try_first_pass
 # Count the failure. faillock records one row per PAM transaction and sudo makes
 # several per invocation, so a handful of wrong prompts -- not invocations -- is

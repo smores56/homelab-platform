@@ -4820,6 +4820,21 @@ spare must be enrolled too.
    parses to no entries, so no key matches), and never `PAM_IGNORE`, so every
    non-success is ignored onto `pam_unix`.
 
+   None of those three proves the credential is touch-required: the public half
+   records no touch policy, and `pam_rssh` never reads the user-presence bit, so
+   no file says whether the credential needs a tap. Covering the sensor is the
+   only proof, with the key plugged in and the agent holding the handle:
+
+   ```sh
+   ssh -A -t smortress 'sudo -k; sudo true'   # cover the sensor; do not touch
+   # expect: no signature, the account password, success
+   ```
+
+   A touch-required credential cannot answer without the tap, so the failure is
+   logged and ignored onto `pam_unix`; one minted with `-O no-touch-required`
+   signs anyway and the command succeeds silently, which is the failure this
+   drill exists to catch.
+
    `default=ignore` is what swallows all of them by design, so a stack mistake
    here never fails loudly: it degrades to the password. The evidence is in the
    module's syslog output, logged under `sudo`'s own name (the module never sets
