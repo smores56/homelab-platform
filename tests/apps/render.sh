@@ -79,8 +79,7 @@ alpha=$out/alpha.container
 if [[ -f $alpha ]]; then ok 'one Quadlet per app'; else bad 'one Quadlet per app'; fi
 
 contains "$alpha" "Image=ghcr.io/example/alpha@sha256:$digest" 'the image is the digest-pinned one'
-contains "$alpha" 'PublishPort=127.0.0.1:' 'the port is published on loopback'
-contains "$alpha" ':8080' 'the published port is the declared container port'
+lacks "$alpha" 'PublishPort=' 'nothing is published: ingress is root-owned'
 # Quadlet links a container to a Quadlet network only when the value carries
 # the .network suffix, and it names the created network after NetworkName, so
 # both halves must agree or the container starts against a network that does
@@ -123,8 +122,8 @@ else
   ok 'no rendered unit names the tenant by id'
 fi
 
-alpha_port=$(sed -n 's/^PublishPort=127\.0\.0\.1:\([0-9]*\):.*/\1/p' "$alpha")
-beta_port=$(sed -n 's/^PublishPort=127\.0\.0\.1:\([0-9]*\):.*/\1/p' "$beta")
+alpha_port=$(jq -r '.apps.alpha.loopbackPort' "$out/plan.json")
+beta_port=$(jq -r '.apps.beta.loopbackPort' "$out/plan.json")
 if [[ $alpha_port =~ ^[0-9]+$ ]] && ((alpha_port >= 20000 && alpha_port < 30000)); then
   ok 'the loopback port comes from the platform range'
 else
@@ -140,10 +139,10 @@ else
   bad 'two apps get different MCS levels' "alpha='$alpha_level' beta='$beta_level'"
 fi
 
-if [[ $(grep -c '^Volume=' "$alpha") == 1 && $(grep -c '^PublishPort=' "$alpha") == 1 ]]; then
-  ok 'exactly one bind and one published port'
+if [[ $(grep -c '^Volume=' "$alpha") == 1 && $(grep -c '^PublishPort=' "$alpha") == 0 ]]; then
+  ok 'exactly one bind and no published port'
 else
-  bad 'exactly one bind and one published port'
+  bad 'exactly one bind and no published port'
 fi
 
 if jq -e '.apps.alpha.basePath == "/apps/alpha" and .apps.alpha.egress == "none" and .apps.alpha.quota == "5G"' \
@@ -320,10 +319,11 @@ if [[ -x /usr/libexec/podman/quadlet ]]; then
   if XDG_CONFIG_HOME="$gen/xdg" /usr/libexec/podman/quadlet -dryrun -user >"$gen/units" 2>"$gen/err"; then
     if grep -q -- '--security-opt label=level:s0:c' "$gen/units" &&
       grep -q -- '--env TZ=UTC' "$gen/units" &&
-      grep -q -- '--publish 127.0.0.1:' "$gen/units"; then
+      grep -q -- '--sysctl net.ipv4.ip_unprivileged_port_start=0' "$gen/units" &&
+      ! grep -q -- '--publish' "$gen/units"; then
       ok 'the host generator accepts the rendered unit'
     else
-      bad 'the host generator accepts the rendered unit' "$(grep -E 'security-opt|env|publish' "$gen/units" | head -5)"
+      bad 'the host generator accepts the rendered unit' "$(grep -E 'security-opt|env|publish|sysctl' "$gen/units" | head -5)"
     fi
     # The limits have to survive into the generated service, which is the unit
     # the user manager actually starts.
