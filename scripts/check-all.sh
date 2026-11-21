@@ -63,6 +63,7 @@ backrest|npm ci --prefix backrest && npm --prefix backrest run typecheck && npm 
 tofu-check|tests/tofu/check.sh|tests/tofu/*,tofu/*
 tofu-fmt|tofu fmt -check -recursive tofu|tofu/*
 provision|tests/provision/check.sh|tests/provision/*,provision/*
+edge|tests/edge/check.sh|tests/edge/*,scripts/verify-public-edge.sh
 core|tests/core/check.sh && tests/core/storage-layout.sh && tests/core/restic-drill.sh && tests/core/tailscale-serve.sh && tests/core/apps-egress.sh && tests/core/apps-user.sh && tests/core/agent-drill.sh|tests/core/*,clusters/*,scripts/core/*,scripts/access-*
 apps|tests/apps/check.sh && tests/apps/render.sh && tests/apps/quota.sh && tests/apps/ingress.sh|tests/apps/*,clusters/*,scripts/apps-*
 deploy|tests/deploy/state.sh && tests/deploy/receiver.sh && tests/deploy/verify.sh && tests/deploy/platform.sh && tests/deploy/boot.sh && tests/deploy/apps.sh && tests/deploy/notify.sh && tests/deploy/poll.sh && tests/deploy/heartbeat.sh|tests/deploy/*,clusters/*,scripts/deploy-*
@@ -73,7 +74,7 @@ data-plane|tests/data-plane/check.sh|tests/data-plane/*,apps/data_plane/*
 tuta-calendar|venv="${XDG_CACHE_HOME:-$HOME/.cache}/check-all/tuta-calendar"; if [ ! -x "$venv/bin/python" ]; then python3 -m venv "$venv" && "$venv/bin/pip" install -q --disable-pip-version-check -r images/tuta-calendar/requirements.lock; fi; PATH="$venv/bin:$PATH" tests/tuta-calendar/check.sh|tests/tuta-calendar/*
 agent-egress|tests/agent-egress/check.sh|tests/agent-egress/*
 brave|tests/brave/check.sh|tests/brave/*
-lint|yamllint -c .yamllint.yaml $(git ls-files '*.yaml' '*.yml') provision/smortress/user-data && actionlint && shellcheck scripts/*.sh tests/policies/*.sh tests/tofu/*.sh tests/access/*.sh tests/backup/*.sh tests/digest/*.sh tests/observability/*.sh tests/agent-control/*.sh tests/tuta-calendar/*.sh tests/agent-egress/*.sh tests/brave/*.sh clusters/homelab/flux-system/bootstrap.sh clusters/homelab/platform/backup/*.sh provision/*/*.sh tests/provision/*.sh scripts/core/*.sh tests/core/*.sh backrest/scripts/*.sh backrest/container/entrypoint.sh tests/backrest/*.sh tests/apps/*.sh tests/deploy/*.sh tests/check-all/*.sh .githooks/* && scripts/check-action-pins.sh && scripts/check-pr-secret-boundary.sh && scripts/check-codeowners.sh && git diff --check "${BASE:-origin/main}"|.github/*,CODEOWNERS,scripts/*,clusters/*,tests/*,provision/*,backrest/*,.githooks/*
+lint|yamllint -c .yamllint.yaml $(git ls-files '*.yaml' '*.yml') provision/smortress/user-data && actionlint && shellcheck scripts/*.sh tests/policies/*.sh tests/tofu/*.sh tests/access/*.sh tests/backup/*.sh tests/digest/*.sh tests/observability/*.sh tests/agent-control/*.sh tests/tuta-calendar/*.sh tests/agent-egress/*.sh tests/brave/*.sh clusters/homelab/flux-system/bootstrap.sh clusters/homelab/platform/backup/*.sh provision/*/*.sh tests/provision/*.sh scripts/core/*.sh tests/core/*.sh backrest/scripts/*.sh backrest/container/entrypoint.sh tests/backrest/*.sh tests/apps/*.sh tests/deploy/*.sh tests/edge/*.sh tests/check-all/*.sh .githooks/* && scripts/check-action-pins.sh && scripts/check-pr-secret-boundary.sh && scripts/check-codeowners.sh && git diff --check "${BASE:-origin/main}"|.github/*,CODEOWNERS,scripts/*,clusters/*,tests/*,provision/*,backrest/*,.githooks/*
 EOF
 
 if $list; then
