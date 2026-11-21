@@ -260,6 +260,7 @@ RUN firewall-offline-cmd --set-default-zone=drop
 # by default, or the escalation tooling the runbooks depend on is absent. The PAM
 # modules are the `required` rows of the sudo stack: a base that dropped one
 # would fail closed and leave every non-root account unable to escalate at all.
+# A NOPASSWD grant would bypass pam_authenticate entirely and void the whole stack.
 RUN set -eux; \
     case "${BASE_IMAGE}" in *@sha256:*) ;; *) echo "BASE_IMAGE is not digest-pinned" >&2; exit 1 ;; esac; \
     command -v python3 >/dev/null || { echo "the image has no python3 for the plan verifier" >&2; exit 1; }; \
@@ -272,3 +273,4 @@ RUN set -eux; \
     test -f /usr/lib64/security/pam_unix.so || { echo "pam_unix.so is missing: it is the sudo gate's password fallback (design #767)" >&2; exit 1; }; \
     test -e /etc/ssh/sudo_authorized_keys || { echo "the sudo key file is missing: libpam_rssh.so reads it on every prompt (design #767)" >&2; exit 1; }; \
     ! test -f /usr/lib64/security/pam_oath.so || { echo "pam_oath.so is still in the image: sudo's TOTP is retired (design #767)" >&2; exit 1; }; \
+    ! grep -rhvE '^[[:space:]]*#' /etc/sudoers /etc/sudoers.d | grep -q 'NOPASSWD' || { echo "a sudoers line grants NOPASSWD: it would bypass pam_authenticate and void the whole stack (design #767)" >&2; exit 1; }

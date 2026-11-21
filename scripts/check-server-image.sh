@@ -293,6 +293,11 @@ check "the sudoers drop-in is parsed at build time" has 'visudo -cf /etc/sudoers
 check "the sops env drop-in is installed 0440" has 'chmod 0440 /etc/sudoers.d/10-human-gate /etc/sudoers.d/20-sops-env' image/Containerfile
 check "the sops env drop-in is parsed at build time" has 'visudo -cf /etc/sudoers.d/20-sops-env' image/Containerfile
 check "the sops env drop-in drops every identity source" grep -q '^Defaults env_delete += ' image/rootfs/etc/sudoers.d/20-sops-env
+# Nothing proves the base ships no NOPASSWD grant unless the build asserts it, so
+# the Containerfile carries the grep and this check refuses a build that lost it.
+# A NOPASSWD line would bypass pam_authenticate: no touch, no password, no tally.
+check "the build fails on a NOPASSWD grant" \
+  has "! grep -rhvE '^[[:space:]]*#' /etc/sudoers /etc/sudoers.d | grep -q 'NOPASSWD'" image/Containerfile
 # The tailnet is the only route in, so a drop-in sshd refuses to
 # parse would cost a console recovery; the build parses the shipped config
 # instead of leaving the host to find out at boot.
