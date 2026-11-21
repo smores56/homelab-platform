@@ -476,6 +476,11 @@ reset_state
 seed_all_healthy
 export RESTIC_HEALTHCHECK_URL=https://hc.invalid/ping/abc
 run scripts/smortress-restic-verify.sh --local --json
+# A verdict that is not JSON makes every assertion below fail with the same
+# message, so print what was actually returned once instead of hiding it.
+if ! jq -e . >/dev/null 2>&1 <<<"$out"; then
+  printf 'local verdict was not JSON: %s\n' "$out" >&2
+fi
 eq "$rc" 0 "a healthy plane answers the local query"
 eq "$(jq -r '.ssd.usable' <<<"$out")" true "the SSD is reported usable"
 eq "$(jq -r '.hdd.usable' <<<"$out")" true "the HDD is reported usable"
