@@ -44,7 +44,11 @@ After=zfs-ready@state-agent-local.service smortress-agent-config.service agent-b
 # prints a new row in scripts/app-images.sh and this line moves with it.
 Image=ghcr.io/smores56/homelab-platform/brave@sha256:9b505ba383925597812ffb1d52876b3b5f8f00b2bf999418936521cbb13d707e
 ContainerName=smortress-agent-brave
-Network=agent-brave.network
+# The address is pinned, not merely joined: Podman's IPAM hands out the lowest
+# free address, so an unpinned browser that starts before the proxy takes
+# 10.89.73.2 and the proxy then dies with "IPAM error: requested ip address
+# 10.89.73.2 is already allocated" until its restart limit trips.
+Network=agent-brave.network:ip=10.89.73.4
 User=1000:1000
 Volume=/var/lib/agent/local/quarantine/brave-profile:/data:z
 # Nothing outside `/data` and `/tmp` is written: Chromium's caches, the profile and

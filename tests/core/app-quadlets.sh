@@ -813,6 +813,38 @@ for spec in \
   fi
 done
 
+# 7b. A static peer address is all-or-nothing per network. Podman's IPAM hands
+#     out the lowest free address, so an unpinned container that starts first
+#     takes the address a peer asked for and the peer fails with "IPAM error:
+#     requested ip address ... is already allocated" until its restart limit
+#     trips. That happened at boot: the browser took 10.89.73.2 before the
+#     egress proxy claimed it. Two containers may also never pin the same one.
+#     The rule is generic: a network with any pinned container pins every
+#     container on it.
+declare -A net_pins=() net_unpinned=()
+for q in units/quadlet/*.container; do
+  while IFS= read -r spec; do
+    net=${spec%%:*}
+    if [[ $spec == *':ip='* ]]; then
+      ip=${spec##*:ip=}
+      if [[ " ${net_pins[$net]:-} " == *" $ip "* ]]; then
+        bad "static addresses on $net are unique" "$q also pins $ip"
+      fi
+      net_pins[$net]+="$ip "
+    else
+      net_unpinned[$net]+="$q "
+    fi
+  done < <(sed -n 's/^Network=//p' "$q")
+done
+for net in "${!net_pins[@]}"; do
+  if [[ -z ${net_unpinned[$net]:-} ]]; then
+    ok "every container on $net pins its address"
+  else
+    bad "every container on $net pins its address" \
+      "${net_unpinned[$net]}unpinned, would race for ${net_pins[$net]%% *}"
+  fi
+done
+
 # 8. The collectors: the only processes with egress that write into the personal
 #    dataset. Each runs the repository's own code out of the booted image, as uid
 #    1000, with a read-only root, on the collectors' network -- never a
@@ -1177,7 +1209,7 @@ fi
 if [[ -f $brave ]]; then
   ok "$brave exists"
   eq "$(grep -cE '^Network=' "$brave")" 1 "$brave joins exactly one network"
-  if grep -qxF 'Network=agent-brave.network' "$brave"; then
+  if grep -qE '^Network=agent-brave\.network(:ip=[0-9.]+)?$' "$brave"; then
     ok "the browser is on the internal network and nowhere else"
   else
     bad "the browser is on the internal network and nowhere else"
