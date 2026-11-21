@@ -92,6 +92,10 @@ contains "$alpha" 'Volume=/srv/apps/alpha:/data:Z' 'the only bind is the app dat
 contains "$alpha" 'ReadOnly=true' 'the root filesystem is read-only'
 contains "$alpha" 'NoNewPrivileges=true' 'no-new-privileges is set'
 contains "$alpha" 'DropCapability=ALL' 'all capabilities are dropped'
+# Dropping every capability removes CAP_NET_BIND_SERVICE, so an image that
+# listens below 1024 would fail to bind. The sysctl opens low ports to the
+# unprivileged user inside the namespace instead of re-granting the cap.
+contains "$alpha" 'Sysctl=net.ipv4.ip_unprivileged_port_start=0' 'low ports bind without capabilities'
 contains "$alpha" 'SecurityLabelLevel=s0:c' 'a per-app MCS level is set'
 contains "$alpha" 'Environment=TZ=UTC' 'declared env reaches the unit'
 contains "$alpha" 'Secret=app-alpha-api-key,type=mount,target=/run/secrets/api-key' 'secrets mount under their own name'

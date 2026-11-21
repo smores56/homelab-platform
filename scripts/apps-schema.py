@@ -68,9 +68,11 @@ EGRESS_CLASSES = {"internet", "none"}
 QUOTA_CEILING = "50G"
 
 #: The container port is never published on the host: the platform assigns its
-#: own loopback port for the reverse proxy, and rootless podman binds low ports
-#: inside the namespace without privilege. Any port the image listens on is
-#: therefore legal.
+#: own loopback port for the reverse proxy. Any port the image listens on is
+#: therefore legal, because every rendered unit lowers
+#: `net.ipv4.ip_unprivileged_port_start` in its own namespace: every capability
+#: is dropped, including the one that would otherwise be needed for ports below
+#: 1024.
 PORT_MIN = 1
 PORT_MAX = 65535
 
@@ -418,6 +420,13 @@ def render_unit(name: str, data: dict[str, Any], loopback: int, level: tuple[int
         f"PodmanArgs=--signature-policy={APPS_POLICY}",
         "NoNewPrivileges=true",
         "DropCapability=ALL",
+        # Around Linux 5.7 an unprivileged user may bind 1024 and up in its
+        # own namespace; the drop above takes CAP_NET_BIND_SERVICE away, and
+        # rootless podman is still subject to the initial netns sysctl, so
+        # an image listening on a low port would exit with EACCES.
+        # Lowering the threshold for this container's namespace keeps every
+        # capability dropped and still makes any declared port legal.
+        "Sysctl=net.ipv4.ip_unprivileged_port_start=0",
         f"SecurityLabelLevel=s0:c{first},c{second}",
     ]
     for key in sorted(data.get("env", {})):
