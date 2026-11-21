@@ -31,6 +31,12 @@ a missing device, the HDD jobs then record failures, and the freshness verifier
 turns that into an alert. A missing 970 is treated the same way at boot; unlike
 the HDD it is expected to be present, and its jobs fail until it is.
 
+That red state is the expected state until the 970 is partitioned and labelled
+(SDLC #796). While it is absent, every `ssd` unit records `repo-not-mounted`, the
+verifier counts them as failures and reports the check down, and `hdd` and `r2`
+prove the plane on their own. Nothing in the plane skips or mutes a destination
+that is not there.
+
 The R2 bucket and repository path already exist. The write key pair is read from
 SOPS (`r2_access_key_id`, `r2_secret_access_key`); when either is absent or
 empty the `r2` jobs record failures and the verifier stays red rather than
