@@ -52,18 +52,30 @@ and start from their own `[Install]` section; see `docs/core/applications.md`.
 
 ## Base pin
 
-`image/pins.env` is the single pin file. The base is the multi-arch uCore
-`stable-nvidia` index at
+`image/pins.env` holds every external reference the image consumes. The base is
+not pinned to a digest: it tracks the multi-arch uCore stream tag
 
 ```text
-ghcr.io/ublue-os/ucore@sha256:bf251f7668136af11d482dc3c86b49e40d7ef017fea37c5774679a693541a5ed
+ghcr.io/ublue-os/ucore:stable-nvidia
 ```
 
-published 2026-11-15 03:09:12Z. The amd64 manifest in that index is
-`sha256:e97dd4593a3b6845820da3aea11c0245f1f243d28df6510ed2da48c3848700f2`.
-The tag is recorded for humans; every consumer uses the digest. `stable-nvidia`
-is deliberate: uCore ships the NVIDIA userspace and the OpenZFS module used by
-`smortress`.
+`stable-nvidia` is deliberate: uCore ships the NVIDIA userspace and the OpenZFS
+module used by `smortress`. The tag is what the build asks for; every other
+reference here (host binaries, `pam_rssh`, the tool pins) is hash-pinned, and the
+application and Quadlet images stay digest-pinned.
+
+The trade is explicit. The base is always current, with no digest
+reproducibility: upstream publishes new stream builds constantly and ghcr/quay
+garbage-collect superseded digests within hours, so a pinned base digest rots
+into a `manifest unknown` build failure (three times in one day). What replaces
+the pin is a record plus a counterweight: `scripts/build-image.sh` and the publish
+workflow resolve the tag's digest at build time, pass it as the `BASE_DIGEST`
+build arg, and the image carries it in
+`org.opencontainers.image.base.digest` (the tag goes in
+`org.opencontainers.image.base.name`); the publish run summary prints the same
+reference. A built image therefore still says exactly what it was built on, and
+the guards on the result are `scripts/check-server-image.sh`, the cosign
+signature on the derived image and `bootc rollback`.
 
 The base already provides what the design needs, verified by inspecting the
 image: the ZFS kernel module and tools, Podman with the Quadlet generator,
@@ -84,33 +96,40 @@ present, or if the image carries no `semodule` for the loader unit.
 ## Build, push and sign
 
 ```sh
-scripts/refresh-pins.sh --write           # re-read the uCore tag; rewrites only the digest
-scripts/build-image.sh                    # local build; never pushes or signs
+scripts/refresh-pins.sh                   # informational: the digest the tag resolves to now
+scripts/build-image.sh                    # local build; resolves the base digest, never pushes or signs
 scripts/verify-image.sh ghcr.io/smores56/homelab-platform/server@sha256:<digest>
 ```
 
-`refresh-pins.sh` is the one place that reads a moving uCore tag; it prints the
-digest or rewrites `image/pins.env`, and every other consumer is digest-only.
+`refresh-pins.sh` prints `<tag>@<digest>` and changes nothing: the base is a tag,
+so there is no pin to refresh and `--check` has no base drift to report. The
+digest that matters is the one a build actually used, and that is on the image
+and in the run summary.
 
 CI is `.github/workflows/publish-server-image.yml`: a push to `main` touching
 `image/`, `units/`, `secrets/` or `scripts/`, or a manual dispatch. The job:
 
 1. verifies that `secrets.COSIGN_PRIVATE_KEY` corresponds to the committed
    `image/cosign.pub` before building anything;
-2. builds with `scripts/build-image.sh` (the base and every tool are
-   digest/hash-pinned), around a layer cache at
-   `ghcr.io/smores56/homelab-platform-cache/server` — a cache key covers the
+3. builds with `scripts/build-image.sh`, which passes `BASE_IMAGE` and
+   `BASE_DIGEST` to the Containerfile, so the image's
+   `org.opencontainers.image.base.digest` label names the base this run built
+   on (every tool pin is still hash-pinned). Layers come from and go to
+   `ghcr.io/smores56/homelab-platform-cache/server`, outside the
+   `ghcr.io/smores56/homelab-platform` prefix the host's policy trusts, because
+   the cache holds unsigned intermediate manifests. A cache key covers the
    parent layer and the instruction text, not the repositories it reads, so the
-   `sudo-build` stage and the package layer are reused until the pinned base
-   digest or the `RUN` line changes. A failing cache push fails the build, which
+   `sudo-build` stage and the package layer are reused only while the uCore
+   stream resolves to the same digest; a base that moved re-resolves them, which
+   is the freshness the tag is for. A failing cache push fails the build, which
    is why the login precedes it;
-3. pushes `sha-<first 12 of the commit>`, reads the registry digest from
+4. pushes `sha-<first 12 of the commit>`, reads the registry digest from
    Podman's `--digestfile`, signs that digest with
    `cosign sign --key env://COSIGN_PRIVATE_KEY`, and verifies it against the
    committed public key;
-4. moves `:latest` onto that digest, from `main` runs only and only after the
+5. moves `:latest` onto that digest, from `main` runs only and only after the
    signature verified;
-5. prints the digest for the operator to pin in
+6. prints the digest for the operator to pin in
    `ignition/operator/derived-image`.
 
 The workflow is never triggered by `pull_request`, holds no secret in that

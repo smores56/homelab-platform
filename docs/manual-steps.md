@@ -2506,12 +2506,15 @@ step 3 — the second run is the one that gates step 5.
    `cosign.key` to the Bitwarden item. If the key is rotated, re-sign every digest
    that is still deployed before replacing `image/cosign.pub`.
 
-2. Refresh the base pin, publish the image and pin its digest. `refresh-pins.sh
-   --write` is the only step that reads the uCore tag; review the diff it makes.
+2. Publish the image and pin its digest. The base is not pinned: it tracks the
+   uCore `stable-nvidia` stream tag, and the publish workflow resolves that tag's
+   digest at build time, records it in the image's
+   `org.opencontainers.image.base.digest` label and prints it in the run summary.
+   `refresh-pins.sh` only tells you what the tag resolves to right now; it writes
+   nothing.
 
    ```sh
-   scripts/refresh-pins.sh --write
-   git diff image/pins.env
+   scripts/refresh-pins.sh        # informational: <tag>@<digest>, no file changes
    gh workflow run publish-server-image.yml
    gh run list --workflow publish-server-image.yml --limit 1
    gh run watch "$(gh run list --workflow publish-server-image.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
@@ -2519,6 +2522,12 @@ step 3 — the second run is the one that gates step 5.
    printf '%s\n' "ghcr.io/smores56/homelab-platform/server@${digest}" \
      >ignition/operator/derived-image
    ```
+
+   The derived image stays digest-pinned even though the base does not: the run
+   summary's digest is the one signed and verified, and `bootc` consumes only
+   that. What the moving base gives up is reproducibility of the base layer; the
+   counterweights are `scripts/check-server-image.sh`, the cosign signature and
+   `bootc rollback`.
 
    `render-ignition.sh` refuses anything that is not
    `<registry>/<repo>@sha256:<64 hex>`.
@@ -2532,7 +2541,9 @@ step 3 — the second run is the one that gates step 5.
      && echo digest-pinned
    ```
 
-   Expected: `success` and `digest-pinned`. The renderer in step 4 also refuses a
+   Expected: `success` and `digest-pinned`. The run summary also carries the
+   `ghcr.io/ublue-os/ucore@sha256:...` base the build resolved, and the image
+   label repeats it. The renderer in step 4 also refuses a
    digest that equals the pinned base, so an unpublished image stops there.
 
 3. Stage the operator values. None of these files is committed
@@ -2662,8 +2673,9 @@ step 3 — the second run is the one that gates step 5.
    whether or not the bytes landed. The release match is one comparison:
 
    ```sh
-   podman run --rm "$(grep ^UCORE_IMAGE image/pins.env | cut -d= -f2)" \
-     cat /etc/os-release | grep ^VERSION_ID
+   # UCORE_IMAGE interpolates UCORE_TAG, so it is read by sourcing the file.
+   (. image/pins.env && podman run --rm "$UCORE_IMAGE" \
+     cat /etc/os-release | grep ^VERSION_ID)
    # on the live media:
    grep ^VERSION_ID /etc/os-release
    ```

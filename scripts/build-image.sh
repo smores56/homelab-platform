@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 # Build the derived bootc image locally. Never pushes and never signs.
 #
-# The build fails closed when the base image is not digest-pinned, when the
-# public cosign key has not been provisioned, or when a tool pin is missing.
+# The base tracks the uCore stream tag in image/pins.env; this script resolves
+# that tag's digest and passes it as BASE_DIGEST, so a local build records the
+# same org.opencontainers.image.base.digest label a CI build does. The build
+# fails closed on a digest-pinned or `:latest` base, on a base the registry will
+# not resolve, when the public cosign key has not been provisioned, or when a tool
+# pin is missing.
 set -euo pipefail
 
 repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
@@ -15,8 +19,21 @@ if ! command -v "$engine" >/dev/null 2>&1; then
   exit 1
 fi
 
-if [[ ! $UCORE_IMAGE =~ @sha256:[0-9a-f]{64}$ ]]; then
-  echo "build-image: UCORE_IMAGE is not digest-pinned: $UCORE_IMAGE" >&2
+case $UCORE_IMAGE in
+  *:latest) echo "build-image: UCORE_IMAGE must be a stream tag, not :latest: $UCORE_IMAGE" >&2; exit 1 ;;
+  *@sha256:*) echo "build-image: UCORE_IMAGE must be a stream tag, not a digest: $UCORE_IMAGE" >&2; exit 1 ;;
+  *:*) ;;
+  *) echo "build-image: UCORE_IMAGE is not a tagged reference: $UCORE_IMAGE" >&2; exit 1 ;;
+esac
+# A caller that already resolved the digest (the publish workflow does, so the run
+# summary names it before the build starts) passes it in BASE_DIGEST.
+if [[ -z ${BASE_DIGEST:-} ]]; then
+  command -v skopeo >/dev/null 2>&1 \
+    || { echo "build-image: skopeo is not installed; it resolves the base digest" >&2; exit 1; }
+  BASE_DIGEST=$(skopeo inspect --format '{{.Digest}}' "docker://$UCORE_IMAGE")
+fi
+if [[ ! $BASE_DIGEST =~ ^sha256:[0-9a-f]{64}$ ]]; then
+  echo "build-image: cannot resolve the base digest of $UCORE_IMAGE: ${BASE_DIGEST:-none}" >&2
   exit 1
 fi
 if [[ ! -s $repo/image/cosign.pub ]]; then
@@ -47,6 +64,7 @@ fi
 
 "$engine" build \
   --build-arg "BASE_IMAGE=$UCORE_IMAGE" \
+  --build-arg "BASE_DIGEST=$BASE_DIGEST" \
   --build-arg "SOPS_VERSION=$SOPS_VERSION" \
   --build-arg "SOPS_SHA256=$SOPS_SHA256" \
   --build-arg "AGE_VERSION=$AGE_VERSION" \
@@ -61,5 +79,5 @@ fi
   -t "$image" \
   "$repo"
 
-echo "built $image"
+echo "built $image on $UCORE_IMAGE@$BASE_DIGEST"
 echo "next: $engine push $image; sign the pushed digest; pin it in ignition/operator/derived-image"
