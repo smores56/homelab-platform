@@ -161,5 +161,16 @@ else
   fail 'application quadlet checks'
 fi
 
+# The agent shell dispatcher has its own harness: it proves the class is fixed by
+# the entry point, the mount and network split per class, the containment flags,
+# the uid-keyed firewall ranges and the runner subuid provisioning, without root
+# or Podman.
+checks=$((checks + 1))
+if tests/core/agent-jobs.sh; then
+  pass 'agent shell dispatcher checks'
+else
+  fail 'agent shell dispatcher checks'
+fi
+
 printf '\n%d checks, %d failed\n' "$checks" "$failures"
 ((failures == 0))
