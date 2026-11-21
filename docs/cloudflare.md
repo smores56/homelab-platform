@@ -202,6 +202,11 @@ zone with no application of its own is reachable only by the owner's identity.
   | `ntfy.sammohr.dev` | the notification bus (SDLC #649); the Android app cannot complete an Access login, and a service token cannot ride alongside the ntfy bearer the broker injects. ntfy's own auth is the gate — `deny-all` default, no signup, and its per-visitor request limiter |
   | `recovery.sammohr.dev` | the hosted Backrest reader (#707). Design #701 opens it so family can use it with nothing set up in advance, so the reader's own password is the only login and the login endpoint is rate limited at 10 requests per 10 s per IP (`tofu/rate-limit.tf`). What makes this exposure acceptable is not a gate but write denial: the Worker refuses every write RPC and the R2 token cannot write, so the surface is a read-only browser (`docs/core/backrest.md`). Re-adding an Access application here is the documented fallback if that denial weakens |
 
+  `photos.sammohr.dev` and `opds.sammohr.dev` leave the zone's data path at
+  #725's cutover: their records become grey-cloud `A`s to the edge VPS, which
+  means Access no longer evaluates for them and these two rows become inert.
+  They stay until then, and they are the rollback (`docs/core/public-edge.md`).
+
   The set carries no `prevent_destroy`, deliberately. Removing a name deletes
   its bypass application and the name falls back to the wildcard deny on the
   next request; adding one is a reviewed widening. The wildcard and the

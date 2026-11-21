@@ -3864,12 +3864,14 @@ sudo systemctl start smortress-tailscale-serve.service
 tailscale serve status
 ```
 
-The status output must show four routes: 443 to `http://127.0.0.1:2283` (Immich),
-8443 to `http://127.0.0.1:8083` (OPDShelf), 10000 to `http://127.0.0.1:8384`
-(Syncthing GUI), and `/wallpapers/` on 443 to the directory `/srv/wallpapers`.
-That last one is the only route with no application behind it: Serve publishes
-the wallpaper dataset as static files, and the path shows a `Path` target where
-the other three show a `Proxy`. Nothing here is Funnel.
+The status output must show seven routes: 443 to `http://127.0.0.1:2283`
+(Immich), 8443 to `http://127.0.0.1:8083` (OPDShelf), 10000 to
+`http://127.0.0.1:8384` (Syncthing GUI), 8444 and 8445 to the two agent web
+UIs, 8446 to `http://127.0.0.1:2283` and 8447 to `http://127.0.0.1:8083` for
+the public edge (`§50.6`), and `/wallpapers/` on 443 to the directory
+`/srv/wallpapers`. The wallpaper route is the only one with no application
+behind it: Serve publishes the wallpaper dataset as static files, and the path
+shows a `Path` target where the others show a `Proxy`. Nothing here is Funnel.
 
 The wallpaper route fails in a client rather than on this host, so prove it from
 a tailnet device — the timer on the laptops fetches exactly this URL and carries
@@ -6770,3 +6772,141 @@ checkout: it parses and refuses non-root, `--help` lists the three subcommands,
 `--dry-run` executes no `podman` or `restic` command under a recording `PATH`
 shim, and every probe script is a constant with the path passed as a positional
 argument.
+
+## 50. Public edge VPS (#725, T1): key, panel firewall, bootstrap, cutover
+
+The edge is a RackNerd 4 GB KVM VPS in New York with one IPv4 and no IPv6. It
+runs Caddy for `photos.sammohr.dev` and `opds.sammohr.dev`, joins the tailnet as
+`tag:vps`, and proxies to Serve ports 8446 and 8447. `docs/core/public-edge.md`
+is the shape and the failure modes; this section is the operator order. Nothing
+here can be done by repo code: keys, the panel, and the console need a human.
+
+> The cutover (`§50.8`) changes which Immich is authoritative. It waits for
+> #709's retirement gate and for the origin-parity comparison, not for the box
+> to exist.
+
+### 50.1 Apply the tailnet policy first
+
+A key can only carry a tag its owner may apply, and the tag has to exist in
+`tagOwners` before that. Apply the policy that carries `tag:vps`, the
+`tag:vps -> tag:smortress:8446,8447` rule and its deny tests:
+
+```sh
+cd /srv/git/github.com/smores56/homelab-platform/main
+tofu -chdir=tofu apply -no-color
+```
+
+Evidence: the apply output, and the policy tests refusing any widening.
+
+### 50.2 Mint a preauthorized `tag:vps` key
+
+In the Tailscale admin console: **Settings → Keys → Generate auth key**, tag
+`tag:vps`, preauthorized, 1-day expiry, reusable off. Do not store it anywhere;
+it is used once, in `§50.4`, and the node's key expiry is off because it is
+tagged.
+
+### 50.3 Panel firewall
+
+RackNerd ctrl → the VPS → Firewall → enable, with exactly these inbound rules:
+
+| Protocol | Port | Why |
+| --- | --- | --- |
+| TCP | 443 | the two public names |
+| UDP | 41641 | direct WireGuard, so the tailnet does not relay to DERP |
+| ICMP | echo | path-MTU diagnosis of the proxied connections |
+
+Console/VNC bypasses this firewall, so a wrong rule cannot lock the box out.
+
+### 50.4 Deploy and join from the console
+
+Deploy the Ubuntu template in New York, note the IPv4 in
+`docs/core/public-edge.md`, and from the HTML5 console:
+
+```sh
+curl -fsSL https://tailscale.com/install.sh | sh
+tailscale up --auth-key 'tskey-auth-…' --advertise-tags=tag:vps \
+  --hostname=edge --accept-routes=false
+tailscale status
+```
+
+Port 22 is closed at the panel, so this console session is the only way in
+until the tailnet link is up.
+
+### 50.5 Copy the bootstrap over the tailnet and run it
+
+From a laptop on the tailnet:
+
+```sh
+cd /srv/git/github.com/smores56/homelab-platform/main
+git fetch origin && git checkout origin/main
+tar -C provision -cf - edge | ssh root@edge 'tar -C /root -xf -'
+ssh root@edge
+```
+
+Then on the box:
+
+```sh
+SMORTRESS_FQDN=smortress.stonecat-jazz.ts.net \
+EDGE_ACME_EMAIL=… \
+EDGE_HOST_KEY=/root/edge-host-key \
+  /root/edge/bootstrap.sh
+```
+
+The join is skipped because `§50.4` already did it. `EDGE_HOST_KEY` is the key
+from the recovery kit; copy it next to the tree first (`scp`), and omit the
+variable to let the box generate a fresh one. `verify.sh` runs at the end; every
+line must read `ok`.
+
+### 50.6 Declare the Serve routes on smortress
+
+They ship with the image that carries #725, so deploy it first, then:
+
+```sh
+sudo firewall-cmd --reload
+sudo systemctl restart smortress-tailscale-serve.service
+tailscale serve status
+```
+
+Expected: the previous routes unchanged, plus 8446 → `http://127.0.0.1:2283`
+and 8447 → `http://127.0.0.1:8083`.
+
+### 50.7 Prove it before touching the zone
+
+```sh
+EDGE_IP=<vps-ipv4> scripts/verify-public-edge.sh
+```
+
+All ten probes must pass: both names over valid TLS, certificates more than
+14 days from expiry, and 404 for `/apps/agent-local/v1`,
+`/apps/agent-general/v1` and `/wallpapers/` on both names.
+
+### 50.8 The cutover (after #709's gate)
+
+First record 30 days of `photos` + `opds` transfer from Cloudflare's analytics;
+if it is a meaningful fraction of 10 TB, stop and size the plan instead. Then:
+
+```sh
+cd /srv/git/github.com/smores56/homelab-platform/main
+$EDITOR tofu/terraform.tfvars   # edge_ipv4 = "<vps-ipv4>"
+tofu -chdir=tofu plan -no-color
+```
+
+Expected: the two proxied CNAMEs removed and two grey-cloud `A` records with
+`ttl = 300` created, in one plan. Nothing else.
+
+```sh
+tofu -chdir=tofu apply -no-color
+scripts/verify-public-edge.sh
+```
+
+Rollback is the same edit with `edge_ipv4 = ""`: the `A` records go, and both
+names return to the cluster tunnel.
+
+### 50.9 The rebuild drill, timed
+
+Destroy nothing on the first attempt: reinstall the template from the panel on
+the real box, then repeat `§50.3`–`§50.7`. The kit rows (`§5`,
+`docs/core/recovery-kit.md`) must already hold the ctrl login with its 2FA
+recovery codes, the edge SSH host key and Caddy's data directory. Record the
+elapsed time and the panel bandwidth graph in the issue; if the rebuild is not
+minutes, T2 does not move Backrest here.
