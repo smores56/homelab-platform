@@ -10,6 +10,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 from data_plane.collectors.raw import RawReplica
+from data_plane.collectors.raw import cli as raw_cli
 from data_plane.collectors.raw.cli import EXIT_REFUSED, main
 
 CAPTURED = "2026-11-19T00:00:00+00:00"
@@ -173,6 +174,15 @@ class FinanceCommandTests(unittest.TestCase):
             self.assertEqual(code, 0, err)
             self.assertEqual(json.loads(out)["source_id"], "finance.ledger")
             self.assertIsNotNone(RawReplica.latest_generation(root / "replica"))
+
+
+class FinanceWindowTests(unittest.TestCase):
+    def test_the_window_is_asked_for_in_epoch_seconds(self) -> None:
+        # SimpleFIN refuses `start-date=2026-08-21` with
+        # "Invalid start-date provided. It must be a UNIX timestamp integer."
+        start, end = raw_cli._window(1_800_000_000, 90)
+        self.assertEqual(end, 1_800_000_000)
+        self.assertEqual(start, 1_800_000_000 - 97 * 86400)
 
 
 class EntryPointTests(unittest.TestCase):
