@@ -37,6 +37,7 @@ import shutil
 import sqlite3
 import sys
 import tempfile
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
@@ -56,11 +57,23 @@ UNIT = "agent-brave-snapshot"
 SIDECARS = ("-wal", "-WAL", "-journal", "-JOURNAL", "-shm", "-SHM")
 COPY_MODE = 0o600
 
+#: `sqlite3.Connection.backup()` retries a locked source on its own schedule and
+#: never consults `timeout`, so a browser that holds ``History`` can keep it
+#: looping for as long as the browser runs. A oneshot that cannot return also
+#: cannot act on SIGTERM, which is how this unit sat in `stop-sigterm` after its
+#: 600 s start limit. The deadline turns that into the fallback that already
+#: exists for a source SQLite will not back up.
+BACKUP_DEADLINE = 30.0
+
 Backup = Callable[[Path, Path], None]
 
 
 class SnapshotError(RuntimeError):
     """A refused source, copy or staging directory."""
+
+
+class BackupStalled(SnapshotError):
+    """The backup API did not finish inside the deadline."""
 
 
 def log(event: str, **fields: object) -> None:
@@ -95,6 +108,28 @@ def _backup_api(source: Path, target: Path) -> None:
             destination.close()
     finally:
         connection.close()
+
+
+def _bounded_backup(
+    backup: Backup, source: Path, target: Path, deadline: float
+) -> None:
+    """Run ``backup`` but give up after ``deadline``; a stalled call is abandoned."""
+
+    failure: list[BaseException] = []
+
+    def attempt() -> None:
+        try:
+            backup(source, target)
+        except BaseException as error:  # noqa: BLE001 - reported to the caller
+            failure.append(error)
+
+    worker = threading.Thread(target=attempt, name="brave-snapshot-backup", daemon=True)
+    worker.start()
+    worker.join(deadline)
+    if worker.is_alive():
+        raise BackupStalled(f"the live database did not back up within {deadline:g}s")
+    if failure:
+        raise failure[0]
 
 
 def _sidecars(database: Path) -> list[Path]:
@@ -162,6 +197,7 @@ def snapshot_database(
     target: str | Path,
     *,
     backup: Backup = _backup_api,
+    deadline: float = BACKUP_DEADLINE,
 ) -> Path:
     """Publish one consistent copy of ``source`` at ``target``; return the path."""
 
@@ -173,13 +209,13 @@ def snapshot_database(
     if staging.exists():
         staging.unlink()
     try:
-        backup(origin, staging)
+        _bounded_backup(backup, origin, staging, deadline)
         _normalize(staging)
         os.chmod(staging, COPY_MODE)
         os.replace(staging, destination)
-    except sqlite3.Error:
+    except (sqlite3.Error, BackupStalled):
         # The fallback is the live-artifact case: the browser holds the database
-        # and the read-only connection could not start a backup.
+        # and the read-only connection could not start or finish a backup.
         if staging.exists():
             staging.unlink()
         _copy_with_sidecars(origin, destination)

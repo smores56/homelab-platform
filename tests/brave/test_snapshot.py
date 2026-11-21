@@ -14,6 +14,8 @@ import shutil
 import sqlite3
 import stat
 import tempfile
+import threading
+import time
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -108,6 +110,48 @@ class SnapshotTests(unittest.TestCase):
             sqlite3.connect(str(self.target)).execute("PRAGMA journal_mode").fetchone()[0],
             "delete",
         )
+
+    def test_a_stalled_backup_falls_back_to_the_copy(self) -> None:
+        # `sqlite3.Connection.backup()` retries a locked source forever, sleeping
+        # between attempts and ignoring `timeout`; the browser holding ``History``
+        # is exactly that case. Unbounded, this is a oneshot that never returns and
+        # cannot act on SIGTERM, so the deadline turns it into the fallback below.
+        writer, _ = live_history(self.live, rows=2)
+        self.addCleanup(writer.close)
+        release = threading.Event()
+        self.addCleanup(release.set)
+
+        def stall(_source: Path, _target: Path) -> None:
+            release.wait()
+
+        started = time.monotonic()
+        snapper.snapshot_database(self.live, self.target, backup=stall, deadline=0.2)
+        elapsed = time.monotonic() - started
+
+        self.assertLess(elapsed, 5)
+        self.assertEqual(url_count(self.target), 2)
+        self.assertEqual(sorted(p.name for p in self.target.parent.iterdir()), ["History"])
+        self.assertFalse(Path(str(self.target) + ".partial").exists())
+
+    def test_a_finished_backup_is_used_rather_than_the_copy(self) -> None:
+        create_history(self.live)
+        calls: list[Path] = []
+
+        def quick(source: Path, target: Path) -> None:
+            calls.append(source)
+            connection = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
+            try:
+                destination = sqlite3.connect(str(target))
+                try:
+                    connection.backup(destination)
+                finally:
+                    destination.close()
+            finally:
+                connection.close()
+
+        snapper.snapshot_database(self.live, self.target, backup=quick)
+
+        self.assertEqual(calls, [self.live])
 
     def test_the_copy_is_readable_by_a_reader_that_checks_integrity(self) -> None:
         create_history(self.live, visits=3)
