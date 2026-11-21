@@ -107,7 +107,7 @@ storage:
 systemd:
   units:
     # BEGIN AUTOREBASE — removed by `render-ignition.sh --stock`, which installs
-    # onto the pinned base and leaves the switch to `bootc switch` later.
+    # onto the base and leaves the switch to `bootc switch` later.
     - name: ucore-unsigned-autorebase.service
       enabled: true
       contents: |

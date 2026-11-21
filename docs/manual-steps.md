@@ -2543,8 +2543,9 @@ step 3 — the second run is the one that gates step 5.
 
    Expected: `success` and `digest-pinned`. The run summary also carries the
    `ghcr.io/ublue-os/ucore@sha256:...` base the build resolved, and the image
-   label repeats it. The renderer in step 4 also refuses a
-   digest that equals the pinned base, so an unpublished image stops there.
+   label repeats it. The renderer in step 4 also refuses a derived image that is
+   the base itself (it names the uCore repository), so an unpublished image stops
+   there.
 
 3. Stage the operator values. None of these files is committed
    (`ignition/operator/` is gitignored), and the two recovery passphrases are not
@@ -2652,7 +2653,7 @@ step 3 — the second run is the one that gates step 5.
    binding entered the config: stop and fix the template, do not install.
 
 5. Write the live media, then install from it. The live media must be Fedora
-   CoreOS `live` from the same release as the pinned base, and the installer is
+   CoreOS `live` from the same release as the uCore base tag, and the installer is
    what refuses an Ignition spec it cannot write.
 
    ```sh

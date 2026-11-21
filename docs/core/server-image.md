@@ -372,7 +372,7 @@ install.
 
 These require the physical host and are not claimed as proven by this task:
 
-- Booting the pinned uCore digest on the real 980 and completing both
+- Booting the uCore base on the real 980 and completing both
   auto-rebase stages.
 - Tang reachability at `10.0.0.193:7654` from the dracut environment, and the
   TPM2 half of threshold 2 on this board.

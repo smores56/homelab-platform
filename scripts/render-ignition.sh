@@ -22,10 +22,10 @@ repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 source "$repo/image/pins.env"
 
 synthetic=false
-# --stock is only for uCore installer media: it installs onto the pinned base
-# and drops the autorebase units. Plain FCOS media needs those units to reach
-# uCore at all; the FCOS → uCore transition is the supported path, not a
-# direct bootc switch. Unused for the smortress install on FCOS media.
+# --stock is only for uCore installer media: it installs onto the base and drops
+# the autorebase units. Plain FCOS media needs those units to reach uCore at all;
+# the FCOS → uCore transition is the supported path, not a direct bootc switch.
+# Unused for the smortress install on FCOS media.
 stock=false
 check=false
 output="$repo/ignition/smortress.ign"
@@ -35,8 +35,8 @@ usage() {
 usage: render-ignition.sh [--check] [--synthetic] [--stock] [--output FILE]
   --check      validate with butane instead of writing output
   --synthetic  use committed fixtures; no ignition/operator values required
-  --stock      uCore installer media only: install onto the pinned base and drop
-               the autorebase units. Plain FCOS media MUST keep them.
+  --stock      uCore installer media only: install onto the base and drop the
+               autorebase units. Plain FCOS media MUST keep them.
   --output     output path (default: ignition/smortress.ign)
 EOF
   exit 2
@@ -116,7 +116,14 @@ else
   command -v "$sops_bin" >/dev/null 2>&1 \
     || die "sops is not installed; install sops or set SOPS_BIN"
   if $stock; then
-    derived_image=$UCORE_IMAGE
+    # The base is a stream tag and Ignition takes a digest only, so the tag is
+    # resolved here: a render that cannot reach the registry fails instead of
+    # writing a tag into a deployment reference.
+    command -v skopeo >/dev/null 2>&1 \
+      || die "--stock resolves the uCore tag to a digest; install skopeo"
+    base_digest=$(skopeo inspect --format '{{.Digest}}' "docker://$UCORE_IMAGE") \
+      || die "cannot resolve ${UCORE_IMAGE} to a digest; the installer must boot a digest"
+    derived_image="${UCORE_IMAGE%%:*}@${base_digest}"
   else
     derived_image=$(read_line "$repo/ignition/operator/derived-image")
   fi
@@ -143,8 +150,10 @@ fi
 
 [[ $derived_image =~ ^[a-z0-9][a-z0-9./-]*@sha256:[0-9a-f]{64}$ ]] \
   || die "derived image must be <registry>/<repo>@sha256:<digest>: $derived_image"
-if ! $stock && [[ $derived_image == "$UCORE_IMAGE" ]]; then
-  die "derived image equals the pinned base; publish it first, or use --stock on uCore installer media"
+# The base is a tag, so the reference is compared by repository: a derived image
+# that names the uCore repository is the base itself, not a published build.
+if ! $stock && [[ ${derived_image%@*} == "${UCORE_IMAGE%%:*}" ]]; then
+  die "derived image is the uCore base itself; publish the derived image first, or use --stock on uCore installer media"
 fi
 [[ $disk =~ ^/dev/disk/by-id/[A-Za-z0-9._:-]+$ ]] \
   || die "disk must be a /dev/disk/by-id path: $disk"
