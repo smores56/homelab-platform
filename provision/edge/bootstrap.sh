@@ -50,6 +50,16 @@ apt-get install -y -qq caddy tailscale nftables jq unattended-upgrades >/dev/nul
 # 50-cloud-init.conf, which turns password auth back on, so this has to be 99.
 install -d -m 0755 /etc/ssh/sshd_config.d
 install -m 0644 "$here/99-edge-hardening.conf" /etc/ssh/sshd_config.d/99-edge-hardening.conf
+# The host key is a kit item: it pins the box identity across a reinstall, so a
+# client's known_hosts entry survives and the operator never has to accept a
+# new fingerprint over a console session they cannot verify. Without it a fresh
+# key is generated and every client's entry goes stale.
+if [[ -n ${EDGE_HOST_KEY:-} ]]; then
+  [[ -r $EDGE_HOST_KEY ]] || die "EDGE_HOST_KEY is set but not readable"
+  install -m 0600 "$EDGE_HOST_KEY" /etc/ssh/ssh_host_ed25519_key
+  ssh-keygen -y -f /etc/ssh/ssh_host_ed25519_key >/etc/ssh/ssh_host_ed25519_key.pub
+  chmod 0644 /etc/ssh/ssh_host_ed25519_key.pub
+fi
 sshd -t
 systemctl reload ssh 2>/dev/null || systemctl reload sshd
 

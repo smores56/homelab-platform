@@ -71,6 +71,7 @@ check "the bootstrap fixes the node hostname" has '--hostname=edge' "$edge/boots
 check "the bootstrap validates the ruleset before applying it" has 'nft -c -f /etc/nftables.conf' "$edge/bootstrap.sh"
 check "the bootstrap validates the Caddyfile before enabling Caddy" has 'caddy validate --config /etc/caddy/Caddyfile' "$edge/bootstrap.sh"
 check "sshd hardening sorts after cloud-init" has '99-edge-hardening.conf' "$edge/bootstrap.sh"
+check "the bootstrap restores the kit's host key" has 'EDGE_HOST_KEY' "$edge/bootstrap.sh"
 check "the verify proves the node carries the edge tag" has 'tag:vps' "$edge/verify.sh"
 check "the verify proves nothing listens on 80" has 'sport = :80' "$edge/verify.sh"
 
