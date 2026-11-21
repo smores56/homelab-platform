@@ -82,6 +82,25 @@ sudo systemctl stop 'smortress-agent-*'
 The collectors matter as much as the applications: they write into
 `/var/lib/agent/local/quarantine`, which is a state tree below.
 
+Containers are not units. `smortress-agent-mail-stream` and
+`smortress-agent-model` are created outside systemd and hold bind mounts into
+`/var/lib/agent/local` and `/var/lib/agent/model`, so a `systemctl` sweep leaves
+them running and the pool refuses to export with `pool is busy`:
+
+```sh
+sudo podman ps -a --format '{{.Names}}	{{.Status}}'
+sudo podman stop smortress-agent-mail-stream smortress-agent-model
+```
+
+A container with a restart policy is the second half of the same problem: the
+reboot in phase D brings `podman-restart.service` up before the datasets exist,
+and the container writes into a plain directory on the root filesystem. Park
+them for the window and restore the policy afterwards:
+
+```sh
+sudo systemctl mask --now podman-restart.service
+```
+
 Only now copy the state trees. `opdshelf` and both gateways keep state of their
 own; they are the reason this is a separate phase, not a footnote:
 
