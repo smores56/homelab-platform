@@ -89,13 +89,18 @@ jobs:
             echo
           } >>"$GITHUB_STEP_SUMMARY"
           echo "base: ${base}@${digest}"
-      # The build pushes its layer cache to the same registry, so the credential
-      # must exist before the build; the push and cosign below reuse it.
-      - name: log in to ghcr.io
+      - name: build
         env:
           GH_TOKEN: ${{ github.token }}
+          # A sibling package, never IMAGE_REPO: the cache is a pile of unsigned
+          # intermediate manifests and must not sit where a pullable image is
+          # expected.
+          CACHE_FROM: ghcr.io/smores56/homelab-platform-cache/server
+          CACHE_TO: ghcr.io/smores56/homelab-platform-cache/server
         run: |
           set -euo pipefail
+          # The cache push happens inside the build, so the login precedes it;
+          # push and cosign reuse the authfile.
           authfile="$RUNNER_TEMP/auth.json"
           export DOCKER_CONFIG="$RUNNER_TEMP/docker-config"
           mkdir -p "$DOCKER_CONFIG"
@@ -104,14 +109,7 @@ jobs:
           cp "$authfile" "$DOCKER_CONFIG/config.json"
           echo "REGISTRY_AUTH_FILE=$authfile" >>"$GITHUB_ENV"
           echo "DOCKER_CONFIG=$DOCKER_CONFIG" >>"$GITHUB_ENV"
-      - name: build
-        env:
-          # A sibling package, never IMAGE_REPO: the cache is a pile of unsigned
-          # intermediate manifests and must not sit where a pullable image is
-          # expected.
-          CACHE_FROM: ghcr.io/smores56/homelab-platform-cache/server
-          CACHE_TO: ghcr.io/smores56/homelab-platform-cache/server
-        run: scripts/build-image.sh
+          scripts/build-image.sh
       - name: push, sign and verify the pushed digest
         env:
           COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}

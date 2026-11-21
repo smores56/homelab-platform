@@ -111,18 +111,13 @@ CI is `.github/workflows/publish-server-image.yml`: a push to `main` touching
 
 1. verifies that `secrets.COSIGN_PRIVATE_KEY` corresponds to the committed
    `image/cosign.pub` before building anything;
+2. resolves the base digest — `skopeo inspect --format '{{.Digest}}'
+   docker://ghcr.io/ublue-os/ucore:stable-nvidia` — fails the job if that fails,
+   exports it as `BASE_DIGEST` and prints the reference in the run summary;
 3. builds with `scripts/build-image.sh`, which passes `BASE_IMAGE` and
    `BASE_DIGEST` to the Containerfile, so the image's
    `org.opencontainers.image.base.digest` label names the base this run built
-   on (every tool pin is still hash-pinned). Layers come from and go to
-   `ghcr.io/smores56/homelab-platform-cache/server`, outside the
-   `ghcr.io/smores56/homelab-platform` prefix the host's policy trusts, because
-   the cache holds unsigned intermediate manifests. A cache key covers the
-   parent layer and the instruction text, not the repositories it reads, so the
-   `sudo-build` stage and the package layer are reused only while the uCore
-   stream resolves to the same digest; a base that moved re-resolves them, which
-   is the freshness the tag is for. A failing cache push fails the build, which
-   is why the login precedes it;
+   on (every tool pin is still hash-pinned);
 4. pushes `sha-<first 12 of the commit>`, reads the registry digest from
    Podman's `--digestfile`, signs that digest with
    `cosign sign --key env://COSIGN_PRIVATE_KEY`, and verifies it against the
@@ -377,7 +372,7 @@ install.
 
 These require the physical host and are not claimed as proven by this task:
 
-- Booting the pinned uCore digest on the real 980 and completing both
+- Booting the uCore base on the real 980 and completing both
   auto-rebase stages.
 - Tang reachability at `10.0.0.193:7654` from the dracut environment, and the
   TPM2 half of threshold 2 on this board.

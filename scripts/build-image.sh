@@ -52,15 +52,10 @@ done
 tag="sha-$(git -C "$repo" rev-parse --short=12 HEAD)"
 image="${IMAGE_REPO}:${tag}"
 
-# Remote layer cache, used only by CI. Unset locally, so a local build neither
-# reads nor writes the registry cache and stays offline-safe.
+# Remote layer cache, CI only: unset locally so a local build stays offline-safe.
 cache_args=()
-if [[ -n ${CACHE_FROM:-} ]]; then
-  cache_args+=(--cache-from "$CACHE_FROM")
-fi
-if [[ -n ${CACHE_TO:-} ]]; then
-  cache_args+=(--cache-to "$CACHE_TO")
-fi
+[[ -n ${CACHE_FROM:-} ]] && cache_args+=(--cache-from "$CACHE_FROM")
+[[ -n ${CACHE_TO:-} ]] && cache_args+=(--cache-to "$CACHE_TO")
 
 "$engine" build \
   --build-arg "BASE_IMAGE=$UCORE_IMAGE" \
