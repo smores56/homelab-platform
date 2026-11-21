@@ -176,13 +176,17 @@ check "the enrollment unit creates the state directory at the same mode" \
 # git grep reads the index, so the exclusion is only the check's own pattern and
 # the sudo key file: the sudo credentials' public halves are committed there by
 # design, and the sk-only rule above is what keeps them touch-required.
-if git grep -qF -- 'sk-ssh-ed25519@openssh.com' -- . \
-    ':(exclude)scripts/check-server-image.sh' \
-    ':(exclude)image/rootfs/etc/ssh/sudo_authorized_keys'; then
-  bad "no sk- handle is committed anywhere but the sudo key file"
-else
-  ok "no sk- handle is committed anywhere but the sudo key file"
-fi
+# git grep exits 1 for "no match" and >1 for "could not search", and only the
+# first means clean: reading both as ok would pass a tree the grep never read.
+sk_status=0
+git grep -qF -- 'sk-ssh-ed25519@openssh.com' -- . \
+  ':(exclude)scripts/check-server-image.sh' \
+  ':(exclude)image/rootfs/etc/ssh/sudo_authorized_keys' || sk_status=$?
+case $sk_status in
+  1) ok "no sk- handle is committed anywhere but the sudo key file" ;;
+  0) bad "a sk- handle is committed outside the sudo key file" ;;
+  *) bad "git grep failed while looking for a committed sk- handle (exit $sk_status)" ;;
+esac
 # Tailscale SSH stays off (design #748). Removing the flag from the enrollment
 # unit only fixes the first boot; the preference lives in tailscaled's state and
 # a separate unit re-asserts it every boot, which is why it must be enabled and
@@ -286,7 +290,8 @@ actual_sudoers=$(grep -E '^Defaults[[:space:]]' "$sudoers_dropin")
 if [[ $actual_sudoers == "$expected_sudoers" ]]; then
   ok "the sudoers gate is the reviewed four defaults in order"
 else
-  bad "the sudoers gate is the reviewed four defaults in order" "$actual_sudoers"
+  bad "the sudoers gate is the reviewed four defaults in order"
+  printf '     got: %s\n' "$(printf '%s' "$actual_sudoers" | tr '\n' ';')" >&2
 fi
 check "the sudoers drop-in is installed 0440" has 'chmod 0440 /etc/sudoers.d/10-human-gate' image/Containerfile
 check "the sudoers drop-in is parsed at build time" has 'visudo -cf /etc/sudoers.d/10-human-gate' image/Containerfile
