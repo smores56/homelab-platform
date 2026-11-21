@@ -1,0 +1,29 @@
+# Collect a browsing pass whenever the profile's History changes.
+#
+# The replica is a copy of the browser's own database, so the only sensible trigger
+# is the database changing: `PathModified` on the file, not a fixed schedule. The
+# wait is systemd's, which is what debounces a series of writes into one pass.
+#
+# Both names are watched because the sidecar is where a write is visible first, and
+# the answer for this artifact is the journal rather than the log: SQLite derives
+# `-wal` in lower case when a database is in WAL mode (Brave's `DIPS` and
+# `segmentation_platform/ukm_db` in the same profile are), while the pinned Brave
+# 1.100.58 leaves `History` in rollback-journal mode -- launched against a scratch
+# profile, `PRAGMA journal_mode` answered `delete` and `History-journal` was the file
+# beside it. `History-wal` is watched anyway: a later Chromium switching the database
+# to WAL then needs no edit here, and a watch on a name nothing creates costs nothing.
+#
+# The six-hourly timer (`...-brave.timer`, `Persistent=true`) is the reconcile: an
+# event this watcher missed -- a write that landed while a pass was already running,
+# a watcher that could not start -- is closed on the next tick.
+[Unit]
+Description=Collect Brave history when the profile's History changes
+
+[Path]
+PathModified=/var/lib/agent/local/quarantine/brave-profile/Default/History
+PathModified=/var/lib/agent/local/quarantine/brave-profile/Default/History-wal
+PathModified=/var/lib/agent/local/quarantine/brave-profile/Default/History-journal
+Unit=smortress-agent-collect-brave.service
+
+[Install]
+WantedBy=paths.target

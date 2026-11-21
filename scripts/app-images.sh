@@ -58,6 +58,15 @@ app_images=(
   # responder, the only two peers a browsing collector may reach. Built here
   # because the policy and the checks that enforce it are ours.
   'agent-egress|built:images/agent-egress/Containerfile|sha256:535b96b8ca9efd303a168c9efe59c5acc8ef65e624d64f0ca22dbf58a31919c4'
+  # The browsing collector's provider half: a real Brave from Brave's own release
+  # `.deb`, which is the only way to get a browser that speaks the Sync protocol.
+  # Built and signed here because the artifact is pinned by version and hash in the
+  # Containerfile rather than mirrored. The digest below is the FIRST local build
+  # of that Containerfile, because `publish-brave` has not run yet; the workflow
+  # prints the authoritative row, and a `workflow_dispatch` run is the way to
+  # replace it (docs/manual-steps.md section 40.17, step 1) -- the Quadlet's
+  # `Image=` is the other half and moves with it.
+  'brave|built:images/brave/Containerfile|sha256:88c8f0456c4ddbe2e3ca961105bb76560ccdf7a11889c26cb741987490137ffc'
 )
 
 # app_image_ref NAME -> the only reference a Quadlet may contain.

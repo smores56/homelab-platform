@@ -786,6 +786,21 @@ done
 # with no mount, so python3 exited on a path that was not in its namespace.
 check "the proxy unit mounts its own program" \
   has 'Volume=/usr/libexec/agent-proxy:/usr/libexec/agent-proxy:ro' units/quadlet/agent-proxy.container
+# The browsing collector's provider half (`apps/brave_ingest/`: the seed planter and
+# the History snapshot) runs in the same agent-runtime image and imports nothing
+# outside that tree, so it ships beside the facade modules for the same reason: a
+# program the image installs on the host has to be mounted into the container that
+# runs it, and a module left out of the COPY list is an import error at first boot.
+for module in apps/brave_ingest/*.py; do
+  check "image installs ${module#apps/brave_ingest/}" has "$module" image/Containerfile
+done
+for unit in units/systemd/smortress-agent-brave-seed.service \
+  units/systemd/smortress-agent-collect-brave.service; do
+  check "$unit mounts the installed tree" \
+    has '--volume /usr/lib/agent-facade:/usr/lib/agent-facade:ro' "$unit"
+done
+check "the browser unit ships with the egress gate it depends on" \
+  has 'units/quadlet/agent-brave.container' image/Containerfile
 check "Syncthing's sync port is permitted on the tailscale zone" \
   has '<port port="22000" protocol="tcp"/>' image/rootfs/etc/firewalld/zones/tailscale.xml
 check "Syncthing's QUIC port is permitted on the tailscale zone" \

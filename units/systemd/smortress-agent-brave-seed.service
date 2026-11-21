@@ -1,0 +1,56 @@
+# Plant the Sync seed into the browsing profile, before the browser reads it.
+#
+# Brave has no CLI to join a Sync chain, and the join UI needs a human to type a
+# 25-word code. Everything that UI writes is a preference, so this one-shot writes
+# the same preferences first: `brave_sync_v2.seed` (the OSCrypt blob),
+# `sync.requested`, `sync.keep_everything_synced` and `sync.has_setup_completed`.
+# The seed itself is a Podman secret mounted at uid 1000 mode 0400 and read from
+# the file; it is never in argv, never in an environment variable and never in a
+# log line, and the `Preferences` document it lands in is written 0600.
+#
+# The conversion is the whole trick: the secret carries the contract form every
+# other tool here speaks (`v10` + base64 of IV + ciphertext) and Brave stores
+# base64 of the raw `v10` + IV + ciphertext bytes. `apps/brave_ingest/seed.py`
+# converts, merges into whatever else the profile has, and writes nothing when the
+# document would come out the same -- so a boot after the first one leaves the
+# browser's own concurrent rewrite of unrelated keys alone.
+#
+# `--network none` because nothing here dials anything: the seed is a file and the
+# profile is a volume. It runs before `agent-brave.service` (the Quadlet-generated
+# name for `agent-brave.container`) rather than as its dependency, so a missing or
+# malformed seed is a failed unit in the journal and not a browser that refuses to
+# start: an unseeded browser still collects nothing and is otherwise harmless, and
+# stopping it would also stop the collection that would show the mistake.
+[Unit]
+Description=Plant the Brave Sync seed into the browsing profile
+Requires=zfs-ready@state-agent-local.service sops-decrypt.service smortress-app-secrets.service smortress-agent-config.service
+After=zfs-ready@state-agent-local.service sops-decrypt.service smortress-app-secrets.service smortress-agent-config.service
+Before=agent-brave.service
+# The profile directory is created by smortress-agent-config.service (personal
+# side only); a podman bind mount of a missing source is a start failure, so the
+# check names the same thing the config seeder does.
+ConditionPathExists=/var/lib/agent/local/quarantine/brave-profile
+
+[Service]
+Type=oneshot
+# Preferences carries the seed. A group-readable file would be the chain's key
+# readable by every process in that group, and the seeder's own temp file inherits
+# this umask.
+UMask=0077
+ExecStart=/usr/bin/podman run --rm --replace --name smortress-agent-brave-seed \
+  --network none \
+  --read-only --cap-drop=all --security-opt no-new-privileges \
+  --tmpfs /tmp:rw,size=16m --user 1000:1000 \
+  --secret brave-sync-seed,type=mount,uid=1000,gid=1000,mode=0400 \
+  --volume /usr/lib/agent-facade:/usr/lib/agent-facade:ro \
+  --volume /var/lib/agent/local/quarantine/brave-profile:/data:z \
+  --env PYTHONPATH=/usr/lib/agent-facade/libs:/usr/lib/agent-facade \
+  --env PYTHONDONTWRITEBYTECODE=1 \
+  --entrypoint python3 \
+  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:276d44685c65c0cb2a25f190b63c65c8906f9dc76486fb1c05ae71b5826bda08 \
+  -m apps.brave_ingest.seed --prefs /data/Default/Preferences \
+  --seed-file /run/secrets/brave-sync-seed
+# A refusal (missing secret, empty or malformed seed, unwritable profile) is exit 3
+# and writes nothing. Restarting would only repeat it; the journal names the reason
+# and docs/manual-steps.md section 40.17 says what to do about it.
+Restart=no
