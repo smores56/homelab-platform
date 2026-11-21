@@ -77,6 +77,7 @@ if [[ -f $exempt ]]; then
   require "fork-only"
   require "ci-change-refused"
   require "exec-label"
+  require "json-config-refused"
   require "read-only-credentials"
   if grep -qE 'secrets\.(CLOUDFLARE_API_TOKEN|R2_STATE_ACCESS_KEY_ID|R2_STATE_SECRET_ACCESS_KEY)\b' "$exempt"; then
     echo "$exempt: the pre-merge plan may hold only the read-only credentials" >&2

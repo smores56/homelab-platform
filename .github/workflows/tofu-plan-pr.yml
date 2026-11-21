@@ -8,7 +8,8 @@ name: tofu-plan-pr
 #
 # The Tailscale pair is the one credential here that is not read-only by scope:
 # `TAILSCALE_OAUTH_CLIENT_*` has no narrower scope than `policy_file`, which can
-# rewrite the whole tailnet, so a plan reaches a credential that could write. What
+# rewrite the whole tailnet, so a plan reaches a credential that could write. The
+# credential is write-scoped to the policy and cannot be narrowed further; what
 # keeps that safe is that a plan saves no policy, the API evaluates
 # `tailscale_acl.tests` on any save, and guards 3 and 4 below refuse a PR that
 # could run something other than the reviewed HCL.
@@ -28,7 +29,10 @@ name: tofu-plan-pr
 #      human read, never an automatic plan;
 #   4. executable HCL (`local-exec`, `remote-exec`, `provisioner`, the
 #      `external` data source) is refused unless the owner applies the
-#      `tofu-allow-exec` label.
+#      `tofu-allow-exec` label, and any `*.tf.json` under `tofu/` is refused
+#      outright: OpenTofu loads JSON config beside the HCL, where the same
+#      construct is JSON a keyword grep reads straight past, and no label makes
+#      that reviewable.
 #
 # scripts/check-pr-secret-boundary.sh asserts these guards statically, and
 # tests/tofu/check.sh asserts the credential split.
@@ -96,6 +100,16 @@ jobs:
             echo "::notice::no tofu/ changes; the plan check passes without credentials"
             echo "run=false" >>"$GITHUB_OUTPUT"
             exit 0
+          fi
+
+          # guard: json-config-refused
+          # OpenTofu reads `*.tf.json` as configuration too, and a provisioner
+          # there is JSON that the grep below can miss entirely. JSON config has
+          # no reviewed form in this repository, so its presence is the refusal.
+          if grep -qE '^tofu/.*\.tf\.json$' <<<"$changed"; then
+            echo "::error::this PR adds or changes a *.tf.json file under tofu/."
+            echo "::error::OpenTofu loads JSON config the executable-HCL grep cannot read; keep config in .tf."
+            exit 1
           fi
 
           if grep -rnE 'local-exec|remote-exec|provisioner|data[[:space:]]+"external"' tofu/; then

@@ -471,6 +471,13 @@ else
   bad "the pre-merge plan refuses a PR that changes CI"
 fi
 if grep -q 'tofu-allow-exec' "$pr"; then ok "the pre-merge plan gates executable HCL on a label"; else bad "the pre-merge plan gates executable HCL on a label"; fi
+# OpenTofu loads `*.tf.json` beside the HCL, where a provisioner is JSON the
+# keyword grep cannot be trusted to read: the guard refuses the file outright.
+if grep -qF '^tofu/.*\.tf\.json$' "$pr" && grep -qF '# guard: json-config-refused' "$pr"; then
+  ok "the pre-merge plan refuses JSON config under tofu/"
+else
+  bad "the pre-merge plan refuses JSON config under tofu/"
+fi
 if grep -qE 'ref: \$\{\{ github.event.pull_request.head.sha \}\}' "$pr"; then
   ok "the pre-merge plan plans the PR head"
 else
