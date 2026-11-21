@@ -281,6 +281,8 @@ jobs:
         run: tests/core/apps-egress.sh
       - name: apps tenant user checks
         run: tests/core/apps-user.sh
+      - name: agent runtime drill checks
+        run: tests/core/agent-drill.sh
       - name: apps schema checks
         run: tests/apps/check.sh
       - name: apps render checks

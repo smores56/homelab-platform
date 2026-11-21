@@ -39,6 +39,7 @@ tests/data-plane/check.sh               # data-plane contracts, identity, journa
 tests/tuta-calendar/check.sh            # calendar exporter: crypto, session seal, entity mapping, pagination
 tests/agent-egress/check.sh            # collector egress: allowlist proxy, SNI gate, DNS responder, log redaction
 tests/brave/check.sh                    # browsing collector: seed planting, History snapshot, collector over the copy
+tests/core/agent-drill.sh               # operator drill: root gate, dry run, probe shapes (no host)
 yamllint .
 actionlint .                              # a workflow GitHub cannot parse never runs, silently
 shellcheck scripts/*.sh tests/policies/*.sh tests/tofu/*.sh \
