@@ -63,9 +63,9 @@ backrest|npm ci --prefix backrest && npm --prefix backrest run typecheck && npm 
 tofu-check|tests/tofu/check.sh|tests/tofu/*,tofu/*
 tofu-fmt|tofu fmt -check -recursive tofu|tofu/*
 provision|tests/provision/check.sh|tests/provision/*,provision/*
-core|tests/core/check.sh && tests/core/storage-layout.sh && tests/core/restic-drill.sh && tests/core/tailscale-serve.sh && tests/core/apps-egress.sh && tests/core/apps-user.sh|tests/core/*,clusters/*,scripts/*
-apps|tests/apps/check.sh && tests/apps/render.sh && tests/apps/quota.sh && tests/apps/ingress.sh|tests/apps/*,clusters/*,scripts/*
-deploy|tests/deploy/state.sh && tests/deploy/receiver.sh && tests/deploy/verify.sh && tests/deploy/platform.sh && tests/deploy/boot.sh && tests/deploy/apps.sh && tests/deploy/notify.sh && tests/deploy/poll.sh && tests/deploy/heartbeat.sh|tests/deploy/*,clusters/*,scripts/*
+core|tests/core/check.sh && tests/core/storage-layout.sh && tests/core/restic-drill.sh && tests/core/tailscale-serve.sh && tests/core/apps-egress.sh && tests/core/apps-user.sh|tests/core/*,clusters/*,scripts/core/*,scripts/access-*
+apps|tests/apps/check.sh && tests/apps/render.sh && tests/apps/quota.sh && tests/apps/ingress.sh|tests/apps/*,clusters/*,scripts/apps-*
+deploy|tests/deploy/state.sh && tests/deploy/receiver.sh && tests/deploy/verify.sh && tests/deploy/platform.sh && tests/deploy/boot.sh && tests/deploy/apps.sh && tests/deploy/notify.sh && tests/deploy/poll.sh && tests/deploy/heartbeat.sh|tests/deploy/*,clusters/*,scripts/deploy-*
 backup|tests/backup/check.sh|tests/backup/*
 observability|tests/observability/check.sh|tests/observability/*
 digest|tests/digest/check.sh|tests/digest/*
@@ -102,8 +102,15 @@ elif $changed; then
     printf 'check-all: no such base %s\n' "$base" >&2
     exit 2
   }
+  # The merge base, not the tip: a branch behind main must not select the
+  # groups for commits it does not contain.
+  compare=$(git merge-base "$base" HEAD) || {
+    printf 'check-all: %s has no merge base with HEAD\n' "$base" >&2
+    exit 2
+  }
+  BASE=$compare
   claim_file=$(mktemp)
-  { git diff --name-only "$base"
+  { git diff --name-only "$compare"
     git ls-files --others --exclude-standard; } >"$claim_file"
 fi
 
