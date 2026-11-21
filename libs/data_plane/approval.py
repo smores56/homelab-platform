@@ -10,8 +10,14 @@ issued. This module carries the same binding as an HMAC-signed claim set:
 * ``issued_at``/``expires_at`` bound how long the claim is live, and the
   verifier refuses a claim issued in the future or with a lifetime beyond
   ``max_ttl``;
-* the nonce is consumed exactly once through a shared SQLite table, so a second
-  broker (or a second pod) cannot replay it.
+* spending the nonce is the intent journal's transaction
+  (:meth:`data_plane.intents.IntentStore.reserve`), so a second broker cannot
+  replay an approval and a crash cannot spend one without reserving the effect.
+
+:class:`ApprovalAuthority` is the human surface. It renders the operation the
+effect owner stored (:class:`PendingApproval`) and signs exactly that; it takes
+no operation argument, so the runtime that provoked the intent cannot show one
+diff and have another approved.
 
 Nothing here knows a source adapter or reaches the network. SQLite is the same
 stdlib dependency the intent journal already uses.
@@ -33,9 +39,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Protocol, runtime_checkable
 
-from .confirmation import NormalizedOperation, operation_hash
+from .confirmation import (
+    Approval as GateApproval,
+    NormalizedOperation,
+    operation_hash,
+    render,
+)
 from .errors import ConfirmationError
 from .identity import canonical_json
+from .model import IntentState
 
 MAX_APPROVAL_TTL_SECONDS = 900
 DEFAULT_APPROVAL_TTL_SECONDS = 900
@@ -333,6 +345,25 @@ class SignedApprovalVerifier:
         return claims, sign_approval(claims, self._key)
 
     def verify(self, token: str, operation: NormalizedOperation) -> ApprovalClaims:
+        claims = self.inspect(token, operation)
+        # Only a fully matched approval spends its nonce, so a wrong intent or
+        # hash cannot burn a valid operator approval.
+        self._store.consume(
+            claims.nonce,
+            intent_id=claims.intent_id,
+            operation_hash=claims.operation_hash,
+        )
+        return claims
+
+    def inspect(self, token: str, operation: NormalizedOperation) -> ApprovalClaims:
+        """Verify the signature and binding without spending the nonce.
+
+        The broker uses this when the intent journal owns consumption: the
+        journal spends the nonce in the same transaction that reserves the
+        effect, so a failed revision check cannot burn an operator approval and
+        a crash cannot spend one without reserving the effect.
+        """
+
         claims = verify_approval(
             token, self._key, now=int(self._clock()), max_ttl=self._max_ttl
         )
@@ -342,11 +373,156 @@ class SignedApprovalVerifier:
             raise ConfirmationError("approval does not match the operation")
         if claims.epoch != operation.epoch:
             raise ConfirmationError("source epoch changed; re-confirm the operation")
-        # Only a fully matched approval spends its nonce, so a wrong intent or
-        # hash cannot burn a valid operator approval.
-        self._store.consume(
-            claims.nonce,
-            intent_id=claims.intent_id,
-            operation_hash=claims.operation_hash,
-        )
         return claims
+
+
+def approval_record(approval: ApprovalClaims | GateApproval | Any) -> dict[str, Any]:
+    """Normalize a signed or in-process approval into the journal's row shape."""
+
+    issued_at = getattr(approval, "issued_at", None)
+    if issued_at is None:
+        issued_at = getattr(approval, "approved_at", None)
+    if issued_at is None:
+        raise ConfirmationError("approval has no issue time")
+    return {
+        "intent_id": str(approval.intent_id),
+        "operation_hash": str(approval.operation_hash),
+        "epoch": int(approval.epoch),
+        "approved_by": str(approval.approved_by),
+        "issued_at": int(issued_at),
+        "expires_at": int(approval.expires_at),
+        "nonce": str(approval.nonce),
+    }
+
+
+@dataclass(frozen=True)
+class PendingApproval:
+    """The effect owner's canonical record of one waiting operation."""
+
+    operation: NormalizedOperation
+    expires_at: int
+    pre_image: Mapping[str, Any] | None = None
+    run_id: str | None = None
+
+    @property
+    def intent_id(self) -> str:
+        return self.operation.intent_id
+
+    @property
+    def digest(self) -> str:
+        return operation_hash(self.operation)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "intent_id": self.intent_id,
+            "operation": self.operation.normalized(),
+            "operation_hash": self.digest,
+            "expires_at": self.expires_at,
+            "run_id": self.run_id,
+            "pre_image": None if self.pre_image is None else dict(self.pre_image),
+        }
+
+    def render(self) -> str:
+        """Render the card the human reads, with no remote resources."""
+
+        lines = [render(self.operation), f"expires at: {self.expires_at}"]
+        if self.run_id:
+            lines.append(f"run: {json.dumps(self.run_id, ensure_ascii=True)}")
+        if self.pre_image is None:
+            lines.append("pre-image: (none)")
+        else:
+            lines.append("pre-image: " + canonical_json(dict(self.pre_image)).decode("utf-8"))
+        return "\n".join(lines)
+
+
+def pending_from_intent(intent: Any | None) -> PendingApproval:
+    """Project one journal row into the record a human approves.
+
+    The surface never receives an operation from its caller; this is the only
+    way it learns what an intent will do.
+    """
+
+    if intent is None:
+        raise ConfirmationError("no pending intent under that id")
+    try:
+        state = IntentState(intent.state)
+    except (TypeError, ValueError) as exc:
+        raise ConfirmationError("pending intent has an unknown state") from exc
+    if state is not IntentState.AWAITING_CONFIRMATION:
+        raise ConfirmationError(
+            f"intent {intent.intent_id} is {state.value}, not awaiting approval"
+        )
+    if intent.operation is None:
+        raise ConfirmationError(
+            f"intent {intent.intent_id} has no stored operation to approve"
+        )
+    pre_image = intent.pre_image
+    if pre_image is not None and not isinstance(pre_image, Mapping):
+        raise ConfirmationError(f"intent {intent.intent_id} has a malformed pre-image")
+    return PendingApproval(
+        operation=NormalizedOperation.from_normalized(intent.operation),
+        expires_at=int(intent.expires_at),
+        pre_image=None if pre_image is None else dict(pre_image),
+        run_id=getattr(intent, "run_id", None),
+    )
+
+
+@dataclass(frozen=True)
+class ApprovalAuthority:
+    """The human-only surface: render what the effect owner stored, then sign.
+
+    ``pending`` reads the effect owner's journal. There is deliberately no way
+    to pass an operation in, so a runtime that renders a falsified diff cannot
+    change what the human approves.
+    """
+
+    pending: Callable[[str], PendingApproval]
+    key: bytes | str
+    ttl: int = DEFAULT_APPROVAL_TTL_SECONDS
+    max_ttl: int = MAX_APPROVAL_TTL_SECONDS
+    clock: Callable[[], float] = time.time
+
+    def __post_init__(self) -> None:
+        _key_bytes(self.key)
+        if isinstance(self.max_ttl, bool) or not isinstance(self.max_ttl, int):
+            raise ConfirmationError("approval max_ttl must be a positive integer")
+        if self.max_ttl < 1 or self.max_ttl > MAX_APPROVAL_TTL_SECONDS:
+            raise ConfirmationError(
+                f"approval max_ttl must be between 1 and {MAX_APPROVAL_TTL_SECONDS}"
+            )
+        if isinstance(self.ttl, bool) or not isinstance(self.ttl, int):
+            raise ConfirmationError("approval ttl must be a positive integer")
+        if self.ttl < 1 or self.ttl > self.max_ttl:
+            raise ConfirmationError(
+                f"approval ttl must be between 1 and {self.max_ttl} seconds"
+            )
+
+    def record(self, intent_id: str) -> PendingApproval:
+        """Return the pending record, refusing one that has already expired."""
+
+        record = self.pending(intent_id)
+        if not isinstance(record, PendingApproval):
+            raise ConfirmationError("the effect owner returned no pending operation")
+        if record.expires_at <= int(self.clock()):
+            raise ConfirmationError(
+                f"intent {record.intent_id} expired before it was reviewed"
+            )
+        return record
+
+    def render(self, intent_id: str) -> str:
+        return self.record(intent_id).render()
+
+    def approve(self, intent_id: str, approved_by: str) -> tuple[ApprovalClaims, str]:
+        """Sign the stored operation; the token dies with the intent."""
+
+        record = self.record(intent_id)
+        now = int(self.clock())
+        lifetime = min(self.ttl, record.expires_at - now)
+        if lifetime < 1:
+            raise ConfirmationError(
+                f"intent {record.intent_id} expires too soon to approve"
+            )
+        claims = claims_for(
+            record.operation, approved_by, issued_at=now, ttl=lifetime
+        )
+        return claims, sign_approval(claims, self.key)

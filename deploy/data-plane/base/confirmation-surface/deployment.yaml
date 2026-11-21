@@ -69,10 +69,12 @@ spec:
               value: /run/secrets/confirmation/key
             - name: DATA_PLANE_SECRET_FILE
               value: /run/secrets/confirmation/token
+            # The effect owner's journal on the shared control-state volume:
+            # pending operations, their pre-images, and the consumed approval
+            # nonces. The surface renders and signs those rows, never a request
+            # body, so it must read the same file the write broker writes.
             - name: DATA_PLANE_DB
-              value: /var/lib/data-plane/approvals.sqlite
-            - name: DATA_PLANE_APPROVAL_DB
-              value: /var/lib/data-plane/approvals.sqlite
+              value: /var/lib/data-plane/broker.sqlite
             - name: APPROVAL_TTL_SECONDS
               value: "900"
             - name: PYTHONDONTWRITEBYTECODE

@@ -40,6 +40,9 @@ def _intent(intent: Intent) -> dict[str, Any]:
         "effect": intent.effect,
         "error": intent.error,
         "operation": intent.operation.normalized(),
+        "run_id": intent.run_id,
+        "pre_image": intent.pre_image,
+        "expires_at": intent.expires_at,
     }
 
 
@@ -81,6 +84,7 @@ def write_request(body: dict[str, Any]) -> WriteRequest:
         attendee_scope=tuple(common.field_str_list(body, "attendee_scope")),
         destination=common.field_optional_str(body, "destination"),
         epoch=common.field_optional_int(body, "epoch"),
+        run_id=common.field_optional_str(body, "run_id"),
     )
 
 

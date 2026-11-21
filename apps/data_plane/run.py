@@ -27,6 +27,7 @@ from data_plane.approval import (
     MAX_APPROVAL_TTL_SECONDS,
     SignedApprovalVerifier,
     UsedApprovalStore,
+    pending_from_intent,
 )
 from data_plane.broker import Broker
 from data_plane.broker_journal import BrokerJournal
@@ -42,6 +43,7 @@ from data_plane.model import (
     EffectClass,
     FieldAuthority,
     FidelityLimit,
+    IntentState,
     SourceContract,
     Visibility,
 )
@@ -434,16 +436,20 @@ def _run_confirmation(args: argparse.Namespace) -> int:
     )
     sources = _load_catalog(args.catalog)
     db = Path(_required(args.db, "--db (DATA_PLANE_DB)"))
-    try:
-        store = UsedApprovalStore(args.approval_db or db)
-    except (OSError, sqlite3.Error) as exc:
-        raise ConfigError(f"cannot open the approval store: {exc}") from exc
+    # The effect owner's journal holds the canonical operation for each pending
+    # intent; this surface renders and signs that record, never a request body.
+    journal = IntentStore(db)
     try:
         service = confirmation_service.ConfirmationService(
             operator_key,
             operator_token,
             sources,
-            store=store,
+            pending_record=lambda intent_id: pending_from_intent(
+                journal.get_or_none(intent_id)
+            ),
+            reject_intent=lambda intent_id, reason: journal.update_state(
+                intent_id, IntentState.REJECTED, error=reason
+            ),
             max_ttl=args.approval_ttl,
         )
         common.serve(
@@ -453,7 +459,7 @@ def _run_confirmation(args: argparse.Namespace) -> int:
             host=args.host,
         )
     finally:
-        store.close()
+        journal.close()
     return 0
 
 

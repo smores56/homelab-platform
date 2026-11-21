@@ -6,12 +6,20 @@ OUTCOME_UNKNOWN may not return to APPLYING (an effect that may have landed is
 never re-applied blindly; only a recorded result resolves it), and APPLIED and
 FAILED are terminal. The transitions are a closed table, not an if-chain, so a
 caller cannot invent a shortcut by passing a state the journal never considered.
+
+The journal is also the effect owner's approval ledger. A dangerous operation
+parks in AWAITING_CONFIRMATION with the exact operation and pre-image it will
+perform; the human surface reads that row, and :meth:`IntentStore.reserve`
+spends the approval nonce and writes APPLYING in one transaction. An approval
+therefore cannot outlive an edit, a timeout, a restore, or a crash between the
+two writes.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import threading
 import time
@@ -21,11 +29,23 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping
 
-from .errors import IdempotencyConflict, OutcomeUnknown, ValidationError
+from .errors import (
+    ConfirmationError,
+    ConfirmationRequired,
+    IdempotencyConflict,
+    OutcomeUnknown,
+    ValidationError,
+)
 from .identity import canonical_json
 from .model import IntentState
 
 _BUSY_TIMEOUT_MS = 5000
+
+_NONCE_PATTERN = re.compile(r"\A[0-9A-Za-z_-]{8,128}\Z")
+_HASH_PATTERN = re.compile(r"\A[0-9a-f]{64}\Z")
+_EDITABLE_STATES = frozenset(
+    {IntentState.PROPOSED, IntentState.AWAITING_CONFIRMATION, IntentState.APPROVED}
+)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS intents (
@@ -43,9 +63,19 @@ CREATE TABLE IF NOT EXISTS intents (
     result JSON,
     error TEXT,
     operation JSON,
-    requires_confirmation INTEGER NOT NULL DEFAULT 0
+    requires_confirmation INTEGER NOT NULL DEFAULT 0,
+    run_id TEXT,
+    pre_image JSON,
+    approval JSON
 );
 CREATE INDEX IF NOT EXISTS intents_state_idx ON intents (state, expires_at);
+CREATE INDEX IF NOT EXISTS intents_run_idx ON intents (run_id, state);
+CREATE TABLE IF NOT EXISTS consumed_approvals (
+    nonce TEXT PRIMARY KEY,
+    intent_id TEXT NOT NULL,
+    operation_hash TEXT NOT NULL,
+    consumed_at REAL NOT NULL
+);
 """
 
 
@@ -143,6 +173,9 @@ class Intent:
     error: str | None
     operation: dict[str, Any] | None = None
     requires_confirmation: bool = False
+    run_id: str | None = None
+    pre_image: dict[str, Any] | None = None
+    approval: dict[str, Any] | None = None
 
     @property
     def terminal(self) -> bool:
@@ -184,6 +217,25 @@ class IntentStore:
             self._connection.execute(
                 "ALTER TABLE intents ADD COLUMN requires_confirmation INTEGER NOT NULL DEFAULT 0"
             )
+        # Rows written before the effect owner kept pre-images and approvals stay
+        # readable; the broker refuses to apply one that never captured either.
+        for column, declaration in (
+            ("run_id", "TEXT"),
+            ("pre_image", "JSON"),
+            ("approval", "JSON"),
+        ):
+            if column not in columns:
+                self._connection.execute(
+                    f"ALTER TABLE intents ADD COLUMN {column} {declaration}"
+                )
+        self._connection.execute(
+            "CREATE TABLE IF NOT EXISTS consumed_approvals (nonce TEXT PRIMARY KEY,"
+            " intent_id TEXT NOT NULL, operation_hash TEXT NOT NULL,"
+            " consumed_at REAL NOT NULL)"
+        )
+        self._connection.execute(
+            "CREATE INDEX IF NOT EXISTS intents_run_idx ON intents (run_id, state)"
+        )
 
     def __enter__(self) -> "IntentStore":
         return self
@@ -206,6 +258,7 @@ class IntentStore:
         idempotency_key: str,
         base_revision: str | None = None,
         ttl: float = 900,
+        run_id: str | None = None,
     ) -> Intent:
         """Journal a new proposal, or return the one this key already proposed.
 
@@ -222,6 +275,8 @@ class IntentStore:
             raise ValidationError("ttl must be positive")
         if base_revision is not None:
             base_revision = _require_text(base_revision, "base_revision")
+        if run_id is not None:
+            run_id = _require_text(run_id, "run_id")
 
         with self._write() as db:
             row = db.execute(
@@ -251,12 +306,13 @@ class IntentStore:
                 attempts=0,
                 result=None,
                 error=None,
+                run_id=run_id,
             )
             db.execute(
                 "INSERT INTO intents (intent_id, source_id, capability, state,"
                 " operation_hash, idempotency_key, base_revision, created_at,"
-                " updated_at, expires_at, attempts, result, error)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)",
+                " updated_at, expires_at, attempts, result, error, run_id)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)",
                 (
                     intent.intent_id,
                     intent.source_id,
@@ -269,6 +325,7 @@ class IntentStore:
                     intent.updated_at,
                     intent.expires_at,
                     intent.attempts,
+                    intent.run_id,
                 ),
             )
             return intent
@@ -304,7 +361,8 @@ class IntentStore:
                 "INSERT INTO intents (intent_id, source_id, capability, state,"
                 " operation_hash, idempotency_key, base_revision, created_at,"
                 " updated_at, expires_at, attempts, result, error, operation,"
-                " requires_confirmation) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)",
+                " requires_confirmation, run_id, pre_image, approval)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)",
                 (
                     intent_id,
                     _require_text(intent.source_id, "source_id"),
@@ -320,6 +378,9 @@ class IntentStore:
                     self._encode(intent.result),
                     None if intent.operation is None else canonical_json(intent.operation).decode("utf-8"),
                     int(bool(intent.requires_confirmation)),
+                    intent.run_id,
+                    self._encode(intent.pre_image),
+                    self._encode(intent.approval),
                 ),
             )
             return self._load(db, intent_id)
@@ -455,6 +516,288 @@ class IntentStore:
             ).fetchall()
         return [self._intent(row) for row in rows]
 
+    # -- pre-images and approvals --------------------------------------
+
+    def set_pre_image(
+        self, intent_id: str, pre_image: Mapping[str, Any]
+    ) -> Intent:
+        """Record the base state a write would overwrite.
+
+        An edit invalidates a recorded approval: the row returns to
+        AWAITING_CONFIRMATION so the human surface renders the new state.
+        """
+
+        encoded = self._encode(pre_image)
+        if encoded is None:
+            raise ValidationError("pre_image must be a mapping")
+        with self._write() as db:
+            intent = self._load(db, intent_id)
+            if intent.state not in _EDITABLE_STATES:
+                raise TransitionError(
+                    f"intent {intent_id} is {intent.state.value}; its pre-image is fixed"
+                )
+            state = (
+                IntentState.AWAITING_CONFIRMATION
+                if intent.state is IntentState.APPROVED and intent.approval is not None
+                else intent.state
+            )
+            db.execute(
+                "UPDATE intents SET pre_image = ?, approval = NULL, state = ?,"
+                " updated_at = ? WHERE intent_id = ?",
+                (encoded, state.value, float(self._clock()), intent_id),
+            )
+            return self._load(db, intent_id)
+
+    def approve(
+        self,
+        intent_id: str,
+        approval: Mapping[str, Any],
+        now: float | None = None,
+    ) -> Intent:
+        """Consume ``approval`` and mark the intent approved, in one transaction."""
+
+        moment = float(self._clock()) if now is None else float(now)
+        with self._write() as db:
+            intent = self._load(db, intent_id)
+            if intent.state is not IntentState.AWAITING_CONFIRMATION:
+                raise TransitionError(
+                    f"intent {intent_id} is {intent.state.value}, not awaiting confirmation"
+                )
+            if not intent.overdue(moment):
+                record = self._approval(intent, approval, moment)
+                self._spend(db, record, moment)
+                db.execute(
+                    "UPDATE intents SET state = ?, approval = ?, updated_at = ?"
+                    " WHERE intent_id = ?",
+                    (
+                        IntentState.APPROVED.value,
+                        canonical_json(record).decode("utf-8"),
+                        moment,
+                        intent_id,
+                    ),
+                )
+                return self._load(db, intent_id)
+            self._expire(db, intent_id, "approval window closed")
+        raise ConfirmationError(f"intent {intent_id} expired before it was approved")
+
+    def reserve(
+        self,
+        intent_id: str,
+        approval: Mapping[str, Any] | None = None,
+        now: float | None = None,
+    ) -> Intent:
+        """Consume any approval and mark the effect applying, atomically.
+
+        Every check the operator surface could skip lives here: the approval must
+        name this intent, its stored operation hash, its epoch, and an expiry
+        inside the intent's own window, and its nonce is spent once. The state
+        write happens in the same transaction, so a crash cannot leave a spent
+        approval beside an unreserved effect or the reverse.
+        """
+
+        moment = float(self._clock()) if now is None else float(now)
+        with self._write() as db:
+            intent = self._load(db, intent_id)
+            if approval is not None:
+                record = self._approval(intent, approval, moment)
+                if self._spent(db, record["nonce"]):
+                    raise ConfirmationError(
+                        "approval was already used; request a new confirmation"
+                    )
+            if intent.state is IntentState.AWAITING_CONFIRMATION:
+                if intent.overdue(moment):
+                    self._expire(db, intent_id, "approval window closed")
+                else:
+                    if approval is None:
+                        raise ConfirmationRequired(
+                            f"intent {intent_id} requires an approval before it applies"
+                        )
+                    record = self._approval(intent, approval, moment)
+                    self._spend(db, record, moment)
+                    # Both edges are in the transition table: the approval is
+                    # recorded and spent before the effect is reserved, in one
+                    # transaction.
+                    db.execute(
+                        "UPDATE intents SET state = ?, approval = ? WHERE intent_id = ?",
+                        (
+                            IntentState.APPROVED.value,
+                            canonical_json(record).decode("utf-8"),
+                            intent_id,
+                        ),
+                    )
+                    intent = self._load(db, intent_id)
+                    self._check(intent, IntentState.APPLYING, None)
+                    return self._advance_to_applying(db, intent, None, moment)
+            else:
+                self._check(intent, IntentState.APPLYING, None)
+                if approval is not None:
+                    raise ValidationError(
+                        f"intent {intent_id} is already approved; it needs no second approval"
+                    )
+                return self._advance_to_applying(db, intent, None, moment)
+        raise ConfirmationError(f"intent {intent_id} expired before it was applied")
+
+    def routine_effects(
+        self, run_id: str, exclude_intent_id: str | None = None
+    ) -> int:
+        """Count effects that a user run already started without an approval."""
+
+        run_id = _require_text(run_id, "run_id")
+        states = sorted(
+            state.value
+            for state in (
+                IntentState.APPLYING,
+                IntentState.APPLIED,
+                IntentState.OUTCOME_UNKNOWN,
+            )
+        )
+        placeholders = ", ".join("?" for _ in states)
+        query = (
+            "SELECT COUNT(*) FROM intents WHERE run_id = ? AND requires_confirmation = 0"
+            " AND state IN (" + placeholders + ")"
+        )
+        params: list[Any] = [run_id, *states]
+        if exclude_intent_id is not None:
+            query += " AND intent_id != ?"
+            params.append(exclude_intent_id)
+        with self._lock:
+            row = self._connection.execute(query, params).fetchone()
+        return int(row[0]) if row is not None else 0
+
+    def cancel_pending(self, reason: str = "cancelled") -> list[str]:
+        """Expire every intent that has not started applying.
+
+        Restore calls this before it reconciles: an approval minted against the
+        pre-restore state must not survive into the restored one.
+        """
+
+        reason = _require_text(reason, "reason")
+        states = sorted(state.value for state in EXPIRING_STATES)
+        placeholders = ", ".join("?" for _ in states)
+        with self._write() as db:
+            rows = db.execute(
+                "SELECT intent_id FROM intents WHERE state IN (" + placeholders + ")",
+                states,
+            ).fetchall()
+            ids = [str(row["intent_id"]) for row in rows]
+            db.execute(
+                "UPDATE intents SET state = ?, error = ?, approval = NULL, updated_at = ?"
+                " WHERE state IN (" + placeholders + ")",
+                (IntentState.EXPIRED.value, reason, float(self._clock()), *states),
+            )
+            return ids
+
+    def used_approval(self, nonce: str) -> bool:
+        """Whether this nonce has already paid for an effect."""
+
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT 1 FROM consumed_approvals WHERE nonce = ?", (nonce,)
+            ).fetchone()
+        return row is not None
+
+    # -- internals -----------------------------------------------------
+
+    def _advance_to_applying(
+        self,
+        db: sqlite3.Connection,
+        intent: Intent,
+        approval: Mapping[str, Any] | None,
+        moment: float,
+    ) -> Intent:
+        db.execute(
+            "UPDATE intents SET state = ?, attempts = attempts + 1, updated_at = ?,"
+            " approval = COALESCE(?, approval) WHERE intent_id = ?",
+            (
+                IntentState.APPLYING.value,
+                moment,
+                None if approval is None else canonical_json(dict(approval)).decode("utf-8"),
+                intent.intent_id,
+            ),
+        )
+        return self._load(db, intent.intent_id)
+
+    def _expire(self, db: sqlite3.Connection, intent_id: str, reason: str) -> None:
+        db.execute(
+            "UPDATE intents SET state = ?, error = ?, approval = NULL, updated_at = ?"
+            " WHERE intent_id = ?",
+            (IntentState.EXPIRED.value, reason, float(self._clock()), intent_id),
+        )
+
+    def _spent(self, db: sqlite3.Connection, nonce: str) -> bool:
+        row = db.execute(
+            "SELECT 1 FROM consumed_approvals WHERE nonce = ?", (nonce,)
+        ).fetchone()
+        return row is not None
+
+    def _spend(
+        self, db: sqlite3.Connection, record: Mapping[str, Any], moment: float
+    ) -> None:
+        try:
+            db.execute(
+                "INSERT INTO consumed_approvals (nonce, intent_id, operation_hash,"
+                " consumed_at) VALUES (?, ?, ?, ?)",
+                (
+                    record["nonce"],
+                    record["intent_id"],
+                    record["operation_hash"],
+                    moment,
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise ConfirmationError(
+                "approval was already used; request a new confirmation"
+            ) from exc
+
+    @staticmethod
+    def _approval(
+        intent: Intent, approval: Mapping[str, Any], moment: float
+    ) -> dict[str, Any]:
+        """Validate one approval record against the stored intent."""
+
+        if not isinstance(approval, Mapping):
+            raise ConfirmationError("approval must be a mapping")
+        record = dict(approval)
+        if record.get("intent_id") != intent.intent_id:
+            raise ConfirmationError("approval was issued for another intent")
+        if record.get("operation_hash") != intent.operation_hash:
+            raise ConfirmationError("approval does not match the stored operation")
+        if not isinstance(record.get("operation_hash"), str) or not _HASH_PATTERN.match(
+            record["operation_hash"]
+        ):
+            raise ConfirmationError("approval operation hash is not a SHA-256")
+        nonce = record.get("nonce")
+        if not isinstance(nonce, str) or not _NONCE_PATTERN.match(nonce):
+            raise ConfirmationError("approval nonce is malformed")
+        approved_by = record.get("approved_by")
+        if (
+            not isinstance(approved_by, str)
+            or not approved_by.strip()
+            or len(approved_by) > 128
+            or any(ord(ch) < 32 for ch in approved_by)
+        ):
+            raise ConfirmationError("approval must name a printable approver")
+        epoch = record.get("epoch")
+        if isinstance(epoch, bool) or not isinstance(epoch, int) or epoch < 1:
+            raise ConfirmationError("approval epoch must be a positive integer")
+        if intent.operation is not None:
+            stored_epoch = intent.operation.get("epoch")
+            if stored_epoch is not None and int(stored_epoch) != epoch:
+                raise ConfirmationError("approval epoch does not match the operation")
+        for name in ("issued_at", "expires_at"):
+            value = record.get(name)
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ConfirmationError(f"approval {name} must be an integer")
+        if record["expires_at"] <= record["issued_at"]:
+            raise ConfirmationError("approval expiry must be after its issue time")
+        if record["issued_at"] > moment:
+            raise ConfirmationError("approval was issued in the future")
+        if record["expires_at"] <= moment:
+            raise ConfirmationError("approval has expired")
+        if record["expires_at"] > int(intent.expires_at):
+            raise ConfirmationError("approval outlives the intent; issue a shorter one")
+        return record
+
     @contextmanager
     def _write(self) -> Iterator[sqlite3.Connection]:
         with self._lock:
@@ -541,4 +884,11 @@ class IntentStore:
             if row["operation"] is None
             else json.loads(str(row["operation"])),
             requires_confirmation=bool(row["requires_confirmation"]),
+            run_id=None if row["run_id"] is None else str(row["run_id"]),
+            pre_image=None
+            if row["pre_image"] is None
+            else json.loads(str(row["pre_image"])),
+            approval=None
+            if row["approval"] is None
+            else json.loads(str(row["approval"])),
         )
