@@ -21,6 +21,14 @@ provider "tailscale" {}
 
 locals {
   tailnet_policy = {
+    # The host the rules name, resolved here rather than left to the API's
+    # device-name lookup: an explicit hosts entry is what the policy validator
+    # accepts in both rules and tests, and the address is the node's stable
+    # tailnet IP.
+    hosts = {
+      smortress = "100.122.171.11"
+    }
+
     # An access rule only ever accepts; anything no rule accepts is dropped, so
     # the default is deny without a rule saying so.
     acls = [
@@ -36,7 +44,7 @@ locals {
         # three ports it can give a root path to (scripts/tailscale-serve.sh).
         action = "accept"
         src    = ["group:owner"]
-        dst    = ["smortress:443,8443,10000"]
+        dst    = ["smortress:443", "smortress:8443", "smortress:10000"]
       },
       {
         # Syncthing syncs between the laptops and the host. It is not HTTP, so
