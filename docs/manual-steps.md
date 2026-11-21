@@ -4826,6 +4826,18 @@ spare must be enrolled too.
    its ident) and only at warn and above, which is why a config error is visible
    only here:
 
+   The message names which of the three shapes you hit, and each one is a
+   different repair, so read it before touching the stack:
+
+   | log line | meaning |
+   |---|---|
+   | `SSH agent socket address not configured` | no `SSH_AUTH_SOCK` in sudo's environment: the session forwarded no agent (`ssh -A` with no agent running does this), or `env_keep` is missing |
+   | `Broken pipe (os error 32)` | the variable is set and the socket is dead: a multiplexed session, or an agent that exited |
+   | `Failed to authenticate key N: SSH-Agent reports failure` then `None of these keys passed authentication` | the socket is live and the token is absent, or the touch was refused; one `cue` per credential tried |
+
+   A working tap logs nothing here, because the module reports success below its
+   default warn level.
+
    ```sh
    sudo journalctl -t sudo -g 'SSH agent|authorized_keys|keys passed' -n 20 --no-pager
    # expect: no output after a working tap — success is logged at info, below the
