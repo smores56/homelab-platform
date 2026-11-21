@@ -9,6 +9,7 @@ wrapper has no test-only branch in the logic below it.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import socket
 import ssl
@@ -107,9 +108,12 @@ def _publish(
     *,
     name: str = "gen-0001",
     captured_at: str = CAPTURED,
+    progress=None,
 ):
     generation = StagingGeneration(root, name, source_id=SOURCE_ID)
-    report = collect_mailbox(mailbox, generation, previous_replica(generation), captured_at)
+    report = collect_mailbox(
+        mailbox, generation, previous_replica(generation), captured_at, progress
+    )
     generation.commit_next(complete=True)
     return report
 
@@ -315,6 +319,54 @@ class MailCollectionTests(unittest.TestCase):
             self.assertIn("mail::%Lists%2FNews::1", published.object_ids())
             metadata = published.metadata("mail::%Lists%2FNews::1")
             self.assertEqual(metadata["folder"], "Lists/News")
+
+    def test_a_pass_reports_each_folder_as_it_finishes(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            lines: list[str] = []
+            _publish(
+                Path(work),
+                ScriptedMailbox(
+                    {
+                        "INBOX": ScriptedFolder(1, {"1": _message("1")}),
+                        "Lists/News": ScriptedFolder(1, {"2": _message("2")}),
+                    }
+                ),
+                progress=lines.append,
+            )
+            # The elapsed field is real time, so only the rest is asserted.
+            elapsed = re.compile(r", [0-9.]+s$")
+            self.assertEqual(
+                [elapsed.sub("", line) for line in lines],
+                [
+                    "folder 1/2 INBOX: collecting",
+                    "folder 1/2 INBOX: 1 messages, 0 carried",
+                    "folder 2/2 Lists/News: collecting",
+                    "folder 2/2 Lists/News: 1 messages, 0 carried",
+                ],
+            )
+
+    def test_a_second_pass_reports_what_it_carried(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            _publish(root, ScriptedMailbox({"INBOX": ScriptedFolder(1, {"1": _message("1")})}))
+            lines: list[str] = []
+            _publish(
+                root,
+                ScriptedMailbox({"INBOX": ScriptedFolder(1, {"1": _message("1")})}),
+                name="gen-0002",
+                progress=lines.append,
+            )
+            self.assertEqual(len(lines), 2)
+            self.assertTrue(lines[1].startswith("folder 1/1 INBOX: 1 messages, 1 carried, "))
+
+    def test_the_package_is_the_entry_point(self) -> None:
+        # `-m data_plane.collectors.stream` must run the same main as the module,
+        # and must not re-execute imap.py under __main__ the way `-m …stream.imap`
+        # does (two copies of every class, and a RuntimeWarning saying so).
+        import data_plane.collectors.stream.__main__ as entry
+        from data_plane.collectors.stream import imap
+
+        self.assertIs(entry.main, imap.main)
 
     def test_flags_are_stored_sorted(self) -> None:
         with tempfile.TemporaryDirectory() as work:
