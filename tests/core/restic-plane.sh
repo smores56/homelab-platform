@@ -174,6 +174,11 @@ export STUB_LOG=$log REPO_ROOT=$PWD
 export PATH="$bin:$PATH"
 export RESTIC_BIN=$bin/restic ZFS_BIN=$bin/zfs ZFS_READY_BIN=$bin/zfs-ready CURL_BIN=$bin/curl
 export RESTIC_BASE=$repos RESTIC_STATE_ROOT=$state STORAGE_LAYOUT=$PWD/scripts/storage-layout.sh
+# The driver refuses to run without a cache it can create; the unit supplies one
+# via CacheDirectory, so the harness supplies its own instead of relying on
+# /var/cache being writable (it is not on a CI runner).
+export RESTIC_CACHE_DIR=$work/cache
+mkdir -p "$RESTIC_CACHE_DIR"
 export SMORTRESS_SECRETS_DIR=$secrets RESTIC_MOUNTINFO=$work/mountinfo
 export RESTIC_ATTEMPTS=1 RESTIC_RETRY_SLEEP_LOCAL=0 RESTIC_RETRY_SLEEP_R2=0
 export RESTIC_LOCK_WAIT=5 RESTIC_DEADLINE_LOCAL=20 RESTIC_DEADLINE_R2=20
