@@ -5592,14 +5592,26 @@ spare must be enrolled too.
 ## 45. Tailnet policy and enrollment key (design #767, T1)
 
 `tofu/tailscale.tf` owns the tailnet policy: one `tailscale_acl` resource, gated on
-`var.tailnet`, that admits `group:owner` — the address `var.email` already pins —
-to `smortress` on 22, on Serve's 443/8443/10000 and on Syncthing's 22000, and
-admits nothing else. Tailscale accepts only what a rule accepts, so the default is
-deny without a rule saying so. The resource carries `tests`, which the Tailscale
-API evaluates every time the policy is saved: a rule that widens access fails the
-plan instead of reaching the tailnet. The provider reads its OAuth client from
-`TAILSCALE_OAUTH_CLIENT_ID` and `TAILSCALE_OAUTH_CLIENT_SECRET`, and no credential
-is committed.
+`var.tailnet`, that admits `group:owner` to `smortress` on 22, on Serve's
+443/8443/10000 and on Syncthing's 22000, and admits nothing else. Tailscale
+accepts only what a rule accepts, so the default is deny without a rule saying
+so.
+
+`smortress` is named by its tag, `tag:smortress`. The provider does both halves —
+`data.tailscale_device` resolves the node by hostname, `tailscale_device_tags`
+gives it the tag — and the ACL resource depends on the tag resource, so an apply
+can never name a tag no device carries. Device tagging needs the CI client's
+`devices:core` scope; a `policy_file`-only client can rewrite the policy but not
+the tag.
+
+The group member is `var.tailscale_login`, the tailnet's own `user@provider`
+(here `smores56@github`), **not** the Access `var.email`: Tailscale accepts a
+group member it does not know without error and then admits nobody, which is
+exactly how the first apply cut every laptop out of the tailnet. The same login
+appears in the policy's `tests`, which the API evaluates on every save: a rule
+that widens access fails the plan instead of reaching the tailnet. The provider
+reads its OAuth client from `TAILSCALE_OAUTH_CLIENT_ID` and
+`TAILSCALE_OAUTH_CLIENT_SECRET`, and no credential is committed.
 
 The policy is the only network half: Tailnet Lock is deliberately **not** used.
 The owner disabled it rather than maintain a signing-key set, so nothing decides

@@ -47,11 +47,11 @@ locals {
       },
     ]
 
-    # One group, one member: the owner identity the zone already pins. A tailnet
-    # whose login is a different address fails at plan time with the API's own
-    # message rather than admitting nobody silently.
+    # One group, one member: the login Tailscale shows for the owner. It is not
+    # the Access email: Tailscale accepts a member it does not know and admits
+    # nobody, so this value has to be the tailnet's own `user@provider`.
     groups = {
-      "group:owner" = [var.email]
+      "group:owner" = [var.tailscale_login]
     }
 
     # tagOwners exists for the deny test below: a node carrying tag:untrusted is
@@ -72,7 +72,7 @@ locals {
     # beside a new rule that opened 8443, 10000 or 22000.
     tests = [
       {
-        src    = var.email
+        src    = var.tailscale_login
         accept = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:10000", "tag:smortress:22000"]
       },
       {

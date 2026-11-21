@@ -28,6 +28,16 @@ variable "email" {
   }
 }
 
+variable "tailscale_login" {
+  type        = string
+  description = "The tailnet's own login for the owner (e.g. user@github), which is what a Tailscale group member must be. Not the IdP address Cloudflare asserts."
+
+  validation {
+    condition     = can(regex("^[^@]+@[^@]+$", var.tailscale_login))
+    error_message = "tailscale_login is the login Tailscale shows for the account, such as smores56@github."
+  }
+}
+
 variable "host_tunnel_id" {
   type        = string
   description = "UUID of the human-owned host tunnel (nix-config `webProxy`, cloudflared on smortress). Read it from the tunnel credentials JSON's TunnelID."
