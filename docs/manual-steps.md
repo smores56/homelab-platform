@@ -586,7 +586,7 @@ re-imported. State is never committed.
 
 ```sh
 # on smortress, as the operator
-cd ~/src/homelab-platform
+cd /srv/git/github.com/smores56/homelab-platform/main
 sudo cp /var/lib/cloudflare-tofu/terraform.tfstate tofu/terraform.tfstate
 sudo chown "$(id -u):$(id -g)" tofu/terraform.tfstate
 ```
@@ -648,7 +648,7 @@ already exists. Do it in this order and read the `state list` diff.
    (`docs/secrets.md`), which only the admin identity decrypts:
 
    ```sh
-   cd ~/src/homelab-platform
+   cd /srv/git/github.com/smores56/homelab-platform/main
    sops secrets/cloudflare.yaml     # create it: cloudflare-api-token,
                                     # r2-state-access-key-id, r2-state-secret-access-key
    ```
@@ -661,7 +661,7 @@ already exists. Do it in this order and read the `state list` diff.
 2. Back up the local state and record what it holds, before touching anything:
 
    ```sh
-   cd ~/src/homelab-platform
+   cd /srv/git/github.com/smores56/homelab-platform/main
    cp tofu/terraform.tfstate "tofu/terraform.tfstate.pre-r2-$(date +%F)"
    ./scripts/tofu-cloudflare.sh state pull > "/var/backups/tofu-state-$(date +%F).json" 2>/dev/null \
      || tofu -chdir=tofu state pull > "/var/backups/tofu-state-$(date +%F).json"
@@ -4192,7 +4192,7 @@ sign-in below.
    collector uses, on the same volume:
 
    ```sh
-   cd ~/src/homelab-platform
+   cd /srv/git/github.com/smores56/homelab-platform/main
    sudo PYTHONPATH=libs python3 -m data_plane.collectors.raw \
      --root /var/lib/agent/local/replica/calendar calendar \
      --entities /var/lib/agent/local/quarantine/calendar
