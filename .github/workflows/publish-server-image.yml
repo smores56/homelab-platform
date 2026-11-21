@@ -8,11 +8,17 @@ name: publish-server-image
 on:
   push:
     branches: [main]
+    # Everything the Containerfile COPYs, plus the pins it reads. `libs/` and
+    # `apps/` were missing: a change to the collector code they bake into
+    # /usr/lib/agent-facade merged without rebuilding an image, so the fix sat
+    # in git while the host kept running the old bytes.
     paths:
       - "image/**"
       - "units/**"
       - "secrets/**"
       - "scripts/**"
+      - "libs/**"
+      - "apps/**"
       - ".github/workflows/publish-server-image.yml"
   workflow_dispatch:
 

@@ -903,6 +903,16 @@ for gate in smortress-apps-deny smortress-apps-user smortress-apps-egress smortr
     grep -q '^Before=.*systemd-logind.service' "units/systemd/$gate.service"
 done
 
+# Every directory the Containerfile copies is baked into the image, so a change
+# under it has to rebuild that image. `libs/` was absent from the publish
+# workflow's path filter and a collector fix merged without ever being built.
+copied=$(awk '/^COPY / { for (i = 2; i <= NF; i++) print $i }' image/Containerfile |
+  grep -v '^--' | grep / | cut -d/ -f1 | sort -u)
+for directory in $copied; do
+  check "the publish workflow rebuilds on ${directory}/ changes" \
+    grep -qF "\"${directory}/**\"" .github/workflows/publish-server-image.yml
+done
+
 # Repository-wide CI rules that new files must not evade.
 probe "workflow actions are SHA-pinned" scripts/check-action-pins.sh
 probe "PR workflows hold no secrets" scripts/check-pr-secret-boundary.sh
