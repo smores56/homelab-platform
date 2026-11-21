@@ -16,8 +16,9 @@ ctrl panel offers no cloud-init and no API to declare one.
 
 ## Order
 
-1. Deploy the VPS from the panel's Ubuntu template, in the datacenter recorded
-   in the runbook, and note the IPv4 in `docs/core/public-edge.md`.
+1. Deploy the VPS from the panel's **Ubuntu 24.04** template, in the datacenter
+   recorded in the runbook, and note the IPv4 in `docs/core/public-edge.md`.
+   The Caddyfile needs Caddy 2.7; jammy's 2.4 is refused by the bootstrap.
 2. In the panel: enable the network firewall with exactly `tcp/443`,
    `udp/41641` and ICMP echo. Console/VNC bypasses it, so this cannot lock you
    out.

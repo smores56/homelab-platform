@@ -44,21 +44,43 @@ if [[ ! -s /usr/share/keyrings/tailscale-archive-keyring.gpg ]]; then
     -o /etc/apt/sources.list.d/tailscale.list
   apt-get update -qq
 fi
-apt-get install -y -qq caddy tailscale nftables jq unattended-upgrades >/dev/null
+apt-get install -y -qq caddy tailscale nftables jq openssl unattended-upgrades >/dev/null
 
-# SSH: keys only and no root password. The file name sorts after cloud-init's
-# 50-cloud-init.conf, which turns password auth back on, so this has to be 99.
+# Ubuntu 22.04 ships Caddy 2.4, whose tls block cannot express `issuer`; the
+# Caddyfile below needs 2.7 (Ubuntu 24.04). Fail here rather than at the first
+# certificate order, which is a 443 listener that cannot be renewed.
+caddy_version=$(caddy version 2>/dev/null | awk 'NR == 1 { print $1 }')
+if [[ ! $caddy_version =~ ^v?2\.([0-9]+)\. ]]; then
+  die "unexpected Caddy version '$caddy_version'"
+fi
+if ((BASH_REMATCH[1] < 7)); then
+  die "Caddy $caddy_version is too old; the Caddyfile needs 2.7. Deploy Ubuntu 24.04."
+fi
+
+# SSH: keys only and no root password. sshd keeps the FIRST value it obtains and
+# Ubuntu's sshd_config includes this directory first, so the drop-in has to sort
+# before cloud-init's 50-cloud-init.conf, which turns password auth back on. 05
+# is the same prefix docs/core/server-image.md uses for the host.
 install -d -m 0755 /etc/ssh/sshd_config.d
-install -m 0644 "$here/99-edge-hardening.conf" /etc/ssh/sshd_config.d/99-edge-hardening.conf
+install -m 0644 "$here/05-edge-hardening.conf" /etc/ssh/sshd_config.d/05-edge-hardening.conf
+if [[ ! -s /root/.ssh/authorized_keys ]]; then
+  say "warning: /root/.ssh/authorized_keys is empty; key auth becomes the only login and the console the only way to add one"
+fi
 # The host key is a kit item: it pins the box identity across a reinstall, so a
 # client's known_hosts entry survives and the operator never has to accept a
 # new fingerprint over a console session they cannot verify. Without it a fresh
 # key is generated and every client's entry goes stale.
+# The source copy is consumed: a recovery-kit private key must not be left
+# lying on a public host.
 if [[ -n ${EDGE_HOST_KEY:-} ]]; then
   [[ -r $EDGE_HOST_KEY ]] || die "EDGE_HOST_KEY is set but not readable"
+  if ! ssh-keygen -y -P '' -f "$EDGE_HOST_KEY" >/dev/null 2>&1; then
+    die "EDGE_HOST_KEY is passphrase-protected; the box cannot unlock it unattended"
+  fi
   install -m 0600 "$EDGE_HOST_KEY" /etc/ssh/ssh_host_ed25519_key
-  ssh-keygen -y -f /etc/ssh/ssh_host_ed25519_key >/etc/ssh/ssh_host_ed25519_key.pub
+  ssh-keygen -y -f /etc/ssh/ssh_host_ed25519_key </dev/null >/etc/ssh/ssh_host_ed25519_key.pub
   chmod 0644 /etc/ssh/ssh_host_ed25519_key.pub
+  rm -f -- "$EDGE_HOST_KEY"
 fi
 sshd -t
 systemctl reload ssh 2>/dev/null || systemctl reload sshd
@@ -85,11 +107,14 @@ fi
 # drop-in because the package ships no EnvironmentFile of its own.
 install -d -m 0750 /etc/caddy
 install -m 0644 "$here/Caddyfile" /etc/caddy/Caddyfile
-umask 027
-cat >/etc/caddy/edge.env <<EOF
+(
+  # A subshell: the umask must not leak into every file written afterwards.
+  umask 027
+  cat >/etc/caddy/edge.env <<EOF
 SMORTRESS_FQDN=$SMORTRESS_FQDN
 EDGE_ACME_EMAIL=$EDGE_ACME_EMAIL
 EOF
+)
 chgrp caddy /etc/caddy/edge.env
 chmod 0640 /etc/caddy/edge.env
 install -d -m 0755 /etc/systemd/system/caddy.service.d

@@ -22,6 +22,12 @@ check() {
 }
 
 has() { grep -qF -- "$1" "$2"; }
+sites_are_two() {
+  local got
+  got=$(grep -E '^[a-z0-9.-]+[[:space:]]*\{' "$edge/Caddyfile" \
+    | sed 's/[[:space:]]*{$//' | sort | tr '\n' ' ')
+  [[ $got == 'opds.sammohr.dev photos.sammohr.dev ' ]]
+}
 lacks() { ! grep -qF -- "$1" "$2"; }
 
 [ -d "$art" ] || { echo "missing $art" >&2; exit 1; }
@@ -61,6 +67,8 @@ check "the edge has no admin API" has 'admin off' "$edge/Caddyfile"
 check "the edge proxies Immich on its own Serve port" has 'https://{$SMORTRESS_FQDN}:8446' "$edge/Caddyfile"
 check "the edge proxies OPDShelf on its own Serve port" has 'https://{$SMORTRESS_FQDN}:8447' "$edge/Caddyfile"
 check "the edge declares no plain HTTP site" lacks 'http://' "$edge/Caddyfile"
+check "the edge never proxies 443" lacks ':443' "$edge/Caddyfile"
+check "the edge serves exactly the two names" sites_are_two
 check "the edge firewall drops by default" has 'policy drop' "$edge/nftables.conf"
 check "the edge firewall admits 443" has 'tcp dport 443 accept' "$edge/nftables.conf"
 check "the edge firewall admits WireGuard" has 'udp dport 41641 accept' "$edge/nftables.conf"
@@ -70,7 +78,8 @@ check "the bootstrap joins with the edge tag" has '--advertise-tags=tag:vps' "$e
 check "the bootstrap fixes the node hostname" has '--hostname=edge' "$edge/bootstrap.sh"
 check "the bootstrap validates the ruleset before applying it" has 'nft -c -f /etc/nftables.conf' "$edge/bootstrap.sh"
 check "the bootstrap validates the Caddyfile before enabling Caddy" has 'caddy validate --config /etc/caddy/Caddyfile' "$edge/bootstrap.sh"
-check "sshd hardening sorts after cloud-init" has '99-edge-hardening.conf' "$edge/bootstrap.sh"
+check "sshd hardening sorts before cloud-init" has '05-edge-hardening.conf' "$edge/bootstrap.sh"
+check "the bootstrap refuses a Caddy older than 2.7" has 'is too old; the Caddyfile needs 2.7' "$edge/bootstrap.sh"
 check "the bootstrap restores the kit's host key" has 'EDGE_HOST_KEY' "$edge/bootstrap.sh"
 check "the verify proves the node carries the edge tag" has 'tag:vps' "$edge/verify.sh"
 check "the verify proves nothing listens on 80" has 'sport = :80' "$edge/verify.sh"
