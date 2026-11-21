@@ -56,7 +56,7 @@ the digest that run produced.
 | `immich-valkey` | `…/immich-valkey@sha256:3add1a33…` | `docker.io/valkey/valkey:9` |
 | `opdshelf` | `…/opdshelf@sha256:b82f94f7…` | `docker.io/koalilla/opds-server@sha256:b82f94f7…` |
 | `syncthing` | `…/syncthing@sha256:2b71da7c…` | `docker.io/syncthing/syncthing:2.1.7` |
-| `agent-model` | `…/agent-model@sha256:ae96e52f…` | `ghcr.io/ggml-org/llama.cpp:server-cuda` |
+| `agent-model` | `…/agent-model@sha256:26f89ebd…` | `ghcr.io/ggml-org/llama.cpp:server-cuda` (b12602) |
 | `agent-runtime` | `…/agent-runtime@sha256:276d4468…` | `docker.io/nousresearch/hermes-agent:v0.23.1` |
 | `agent-webui` | `…/agent-webui@sha256:fb50509e…` | built from `images/agent-webui/Containerfile` |
 

@@ -32,7 +32,9 @@ After=network-online.target zfs-ready@state-agent-model.service smortress-nvidia
 Wants=network-online.target
 
 [Container]
-Image=ghcr.io/smores56/homelab-platform/agent-model@sha256:ae96e52f8b2106ea82bad786ee2d08bb9b0a8c93403df9c27ae1bf065a118089
+# b12602 of scripts/app-images.sh: the first llama.cpp build with the merged
+# Inkling 2 loop architecture (PR #32694). b12464, the previous pin, predates it.
+Image=ghcr.io/smores56/homelab-platform/agent-model@sha256:26f89ebd3bf17a5ecf6caee62bdabfa55abea3058150879f6f07b1fc786baa2d
 ContainerName=smortress-agent-model
 Network=agent-local.network
 User=1000:1000

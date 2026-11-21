@@ -37,7 +37,10 @@ app_images=(
   # Agent deployments (SDLC #711). agent-model is the pinned local inference
   # server; agent-runtime is Hermes, used by both gateways and by the hosted
   # proxy, which is why the proxy needs no third image and no package manager.
-  'agent-model|ghcr.io/ggml-org/llama.cpp:server-cuda|sha256:ae96e52f8b2106ea82bad786ee2d08bb9b0a8c93403df9c27ae1bf065a118089'
+  # b12602 is the first build carrying the merged Inkling 2 loop architecture
+  # (llama.cpp PR #32694, merged 2026-11-20): the previous pin, b12464 of
+  # 2026-11-17, cannot load an `inkling2_loop` GGUF at all.
+  'agent-model|ghcr.io/ggml-org/llama.cpp:server-cuda|sha256:26f89ebd3bf17a5ecf6caee62bdabfa55abea3058150879f6f07b1fc786baa2d'
   'agent-runtime|docker.io/nousresearch/hermes-agent:v0.23.1|sha256:276d44685c65c0cb2a25f190b63c65c8906f9dc76486fb1c05ae71b5826bda08'
   # Built by this repository (SDLC #775), not mirrored: upstream's entrypoint
   # installs its Python dependencies from PyPI at container start, which a sealed
