@@ -70,15 +70,17 @@ locals {
     }
 
     # The Tailscale API evaluates these every time the policy is saved, so a rule
-    # that widens access fails the plan and never reaches the tailnet.
+    # that widens access fails the plan and never reaches the tailnet. Both sides
+    # list every admitted destination: a test naming only :22 would save cleanly
+    # beside a new rule that opened 8443, 10000 or 22000.
     tests = [
       {
         src    = var.email
-        accept = ["smortress:22"]
+        accept = ["smortress:22", "smortress:443", "smortress:8443", "smortress:10000", "smortress:22000"]
       },
       {
         src  = "tag:untrusted"
-        deny = ["smortress:22", "smortress:443"]
+        deny = ["smortress:22", "smortress:443", "smortress:8443", "smortress:10000", "smortress:22000"]
       },
     ]
   }

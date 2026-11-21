@@ -541,8 +541,10 @@ has 'the policy admits Serve traffic' '"smortress:443", "smortress:8443", "smort
 has 'the policy admits Syncthing' '"smortress:22000"'
 has 'the policy keeps the owner in one group' '"group:owner"[[:space:]]*=[[:space:]]*\[var\.email\]'
 has 'the policy carries tests' 'tests[[:space:]]*=[[:space:]]*\['
-has 'a test proves an admitted laptop reaches sshd' 'accept[[:space:]]*=[[:space:]]*\["smortress:22"\]'
-has 'a test proves a non-owner device reaches nothing' 'deny[[:space:]]*=[[:space:]]*\["smortress:22"'
+has 'a test proves every admitted port reaches the owner' \
+  'accept[[:space:]]*=[[:space:]]*\["smortress:22", "smortress:443", "smortress:8443", "smortress:10000", "smortress:22000"\]'
+has 'a test proves a tagged device reaches none of them' \
+  'deny[[:space:]]*=[[:space:]]*\["smortress:22", "smortress:443", "smortress:8443", "smortress:10000", "smortress:22000"\]'
 has 'the tailscale provider is declared' 'provider "tailscale" \{\}'
 has 'the tailscale provider is pinned to the 0.29 line' 'version[[:space:]]*=[[:space:]]*"~> 0\.29'
 if grep -qE 'oauth_client_(id|secret)[[:space:]]*=[[:space:]]*"[^"]' "$work/code.tf"; then
