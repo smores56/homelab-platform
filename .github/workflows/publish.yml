@@ -114,11 +114,11 @@ jobs:
           echo "TAG=$tag" >>"$GITHUB_ENV"
           # A cache key covers the parent layer and the instruction's text, not
           # the repositories the instruction reads, so the package layer
-          # survives every build that leaves the base digest and the RUN line
-          # alone. That is the invalidation this repository wants: the pin bump
-          # in image/pins.env is the reviewed change that re-resolves packages,
-          # and nothing else rebuilds. A failing cache push fails the build,
-          # which is why the login precedes it.
+          # survives every build that leaves the resolved base and the RUN line
+          # alone. The base is a moving release tag, so a Fedora release move
+          # re-resolves packages on its own; between moves a rebuild reuses the
+          # layer, and a failing cache push fails the build, which is why the
+          # login precedes it.
           podman build \
             --build-arg "BASE_IMAGE=$BASE_IMAGE" \
             --build-arg "BASE_DIGEST=$base_digest" \

@@ -70,9 +70,10 @@ when `--check` sees a newer release; it has nothing to say about the base.
 CI keeps the package layer in `ghcr.io/smores56/smorespro-image-cache`, a
 sibling package to the image. A cache key covers the parent layer and the
 instruction's text, not the repositories the instruction reads, so the layer is
-reused until the base digest in `image/pins.env` or the `RUN` line changes — the
-pin bump is what re-resolves packages. `scripts/build-image.sh` never touches the
-cache; a local build is uncached and offline-safe.
+reused until the base tag resolves to a different digest or the `RUN` line
+changes; a Fedora release move re-resolves packages by itself.
+`scripts/build-image.sh` never touches the cache; a local build is uncached and
+offline-safe.
 
 ## Package sources
 
