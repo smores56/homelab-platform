@@ -77,41 +77,22 @@ defer_cap=${DEPLOY_DRAIN_DEFER_CAP:-60}
 
 # The verifier ships in the image rootfs beside the receiver rather than through
 # the `smortress-src` loop, which installs `.sh` files only.
-verify_bin=${DEPLOY_VERIFY_BIN:-}
-if [[ -z $verify_bin ]]; then
-  if [[ -x /usr/libexec/deploy-verify.py ]]; then
-    verify_bin=/usr/libexec/deploy-verify.py
-  else
-    verify_bin=$self_dir/../image/rootfs/usr/libexec/deploy-verify.py
-  fi
-fi
+verify_bin=$(deploy_resolve "${DEPLOY_VERIFY_BIN:-}" deploy-verify.py \
+  "$self_dir/../image/rootfs/usr/libexec/deploy-verify.py")
 # The verifier bounds each HTTP call (30 s) itself; this bounds the call as a
 # whole, so a wedged process cannot hold the deploy lock until TimeoutStartSec.
 verify_deadline=${DEPLOY_VERIFY_DEADLINE:-300}
 
 # The platform gate ships the same way and owns its own 3600 s budget and every
 # child's deadline; this is only the net under a wedged gate.
-platform_bin=${DEPLOY_PLATFORM_BIN:-}
-if [[ -z $platform_bin ]]; then
-  if [[ -x /usr/libexec/deploy-platform ]]; then
-    platform_bin=/usr/libexec/deploy-platform
-  else
-    platform_bin=$self_dir/deploy-platform.sh
-  fi
-fi
+platform_bin=$(deploy_resolve "${DEPLOY_PLATFORM_BIN:-}" deploy-platform \
+  "$self_dir/deploy-platform.sh")
 gate_timeout=${DEPLOY_GATE_DEADLINE:-4200}
 
 # The apps apply ships through the same loop. It keeps its own 5400 s budget and
 # every child's deadline; this is the net under a wedged one, and it stays inside
 # the drain unit's own TimeoutStartSec.
-apps_bin=${DEPLOY_APPS_BIN:-}
-if [[ -z $apps_bin ]]; then
-  if [[ -x /usr/libexec/deploy-apps ]]; then
-    apps_bin=/usr/libexec/deploy-apps
-  else
-    apps_bin=$self_dir/deploy-apps.sh
-  fi
-fi
+apps_bin=$(deploy_resolve "${DEPLOY_APPS_BIN:-}" deploy-apps "$self_dir/deploy-apps.sh")
 apps_timeout=${DEPLOY_APPS_DEADLINE:-6000}
 
 say() { printf 'deploy-drain: %s\n' "$*"; }
