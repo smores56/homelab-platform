@@ -1,4 +1,9 @@
 # /etc/sudoers.d/10-human-gate
+#
+# 30 minutes, cached per TTY. The ticket is keyed on the terminal device and the
+# session leader's start time (sudo's timestamp.c, start_time_matches), so a
+# session that later reuses the same pts number does not inherit it; anything
+# already in this session does, and `log_subcmds` records what it ran.
 Defaults timestamp_timeout=30
 Defaults timestamp_type=tty
 Defaults log_subcmds
