@@ -172,5 +172,10 @@ check 'a second restore into the same target is asserted' \
 check 'the FTS index is rebuilt from the restored records' \
   grep -qF 'MemoryIndex' "$script"
 
+check 'an absent oneshot collector is classified, not failed' \
+  bash -c 'grep -q "^container_is_transient()" "$1" && grep -q "container_is_transient \"\$container\"" "$1"' _ "$script"
+check 'the transient rule keys on oneshot units, not on --rm' \
+  bash -c 'grep -q "Type=oneshot" "$1" && ! grep -qE "\|\| grep -qE -- .--rm" "$1"' _ "$script"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 ((fail == 0))

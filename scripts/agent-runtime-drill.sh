@@ -259,6 +259,23 @@ file_probe='if [ ! -e "$1" ]; then printf "absent: no such path in this namespac
 # for the gateway and the strongest a compromise can reach, and as uid 1000,
 # which is the uid the workload actually runs at. Exit 0 from a probe means the
 # path is absent, which is the only result that passes.
+# A timer-driven collector is a `Type=oneshot` unit that runs `podman run --rm`:
+# between runs there is no container to exec into, and that absence is the
+# schedule working, not a failure. The unit that brings it back is what the
+# definition drill audits, so an absent oneshot is a SKIP. The signal is
+# `Type=oneshot` and not `--rm`, because the long-running services use `--rm` too
+# (the mail stream does) and their absence is a real failure. The unit is found
+# by the container it actually creates, not by any mention of its name.
+container_is_transient() { # container_is_transient <container>
+  local name=$1 file
+  for file in "$repo"/units/quadlet/*.container \
+    "$repo"/units/systemd/smortress-agent-*.service; do
+    grep -qE "^ContainerName=${name}$|--name[= ]${name}( |\$)" "$file" 2>/dev/null || continue
+    grep -qE '^Type=oneshot$' "$file" && return 0
+  done
+  return 1
+}
+
 probe_path() { # probe_path <container> <path> <probe> <label>
   local container=$1 path=$2 probe=$3 label=$4
   local running rc=0 out detail='' failed=0 uid
@@ -271,7 +288,11 @@ probe_path() { # probe_path <container> <path> <probe> <label>
     return 0
   fi
   if ((rc != 0)); then
-    record FAIL "$label" "$container: $(last_line "$running")"
+    if container_is_transient "$container"; then
+      record SKIP "$label" "$container is a oneshot and is absent between runs; the definition drill covers its next run"
+    else
+      record FAIL "$label" "$container: $(last_line "$running")"
+    fi
     return 0
   fi
   if [[ $running != true ]]; then
