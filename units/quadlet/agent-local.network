@@ -1,14 +1,22 @@
 # The personal deployment's only network, and the reason it has no route off the
 # host.
 #
-# It is deliberately NOT `Internal=true`. Netavark builds no DNAT rules at all
-# for an internal network (`src/firewall/nft.rs`: `if !setup_portfw.internal`),
-# so a `PublishPort=` on one is silently dead -- which is what left the personal
-# gateway and web UI unreachable while their containers ran and listened. Egress
-# is denied by the route instead: `no_default_route=true` keeps the bridge
-# forwarding-enabled, so the host (and through it Tailscale Serve) reaches a
-# published port, while the container gets no default route, so nothing on this
-# network can reach the LAN or the internet.
+# It is deliberately NOT `Internal=true`, which breaks two things at once.
+#
+# * Netavark builds no port-forwarding DNAT rules for an internal network
+#   (`src/firewall/nft.rs`: `if !setup_portfw.internal`), so a `PublishPort=` on
+#   one is silently dead: the container listens, the unit is green, and
+#   127.0.0.1 refuses the connection.
+# * With firewalld as the netavark backend an internal network is never trusted
+#   for host access, so the container cannot reach the bridge's own resolver at
+#   10.89.2.1:53. Name resolution fails outright (`gaierror -3`), which is why
+#   the gateway's MCP client sat out its 60 s connect timeout against a facade
+#   that was listening the whole time.
+#
+# Egress is denied by the route instead: `no_default_route=true` keeps the
+# bridge forwarding-enabled, so the network is trusted for the bridge resolver
+# and for published ports, while the container gets no default route and cannot
+# reach the LAN or the internet.
 #
 # The model server, the gateway, the facade and the web UI reach each other by
 # container name, as before.

@@ -249,7 +249,7 @@ the other side's sources.
 
 | Deployment | Quadlets | Network | May reach | May not reach |
 | --- | --- | --- | --- | --- |
-| Personal | `agent-local`, `agent-model`, `agent-facade-personal`, `agent-webui-personal` | `agent-local.network`, `no_default_route=true` | each other, by container name; the host reaches their published ports | the internet, the LAN, the general deployment -- no default route exists |
+| Personal | `agent-local`, `agent-model`, `agent-facade-personal`, `agent-webui-personal` | `agent-local.network`, `no_default_route=true` | each other, by container name; the host reaches their published ports; the bridge resolver answers names | the internet, the LAN, the general deployment -- no default route exists |
 | General | `agent-general`, `agent-proxy`, `agent-facade-general`, `agent-webui-general` | `agent-general.network`, a plain bridge | the pinned provider, through the proxy; each other, by container name | the personal deployment, every personal source |
 
 The personal gateway publishes `127.0.0.1:18001`; the general one publishes
@@ -260,11 +260,18 @@ publish nothing at all.
 Publishing is the reason `agent-local.network` is not `Internal=true`. Netavark
 creates no port-forwarding DNAT rules for an internal network and adds
 bidirectional isolation drops, so a published port on one is silently dead: the
-container listens, the unit is green, and the host cannot connect. Egress is
-denied by the route instead (`Options=no_default_route=true`): the bridge still
-forwards, so the host -- and through it Tailscale Serve -- reaches the published
-port, while the container has no route off its own subnet. That is still a
-network property, not a firewall exception.
+container listens, the unit is green, and the host cannot connect. Worse, with
+firewalld as the netavark backend an internal network is never trusted for host
+access, so the container cannot reach the bridge's own resolver either: name
+resolution fails and every container-name call, MCP included, times out.
+
+Egress is denied by the route instead (`Options=no_default_route=true`): the
+bridge still forwards, so the network is trusted for the bridge resolver and for
+published ports, while the container has no route off its own subnet. That is
+still a network property, not a firewall exception. The accepted residual is
+that a container on a forwarding-enabled network can reach services the host
+binds on the bridge address; the personal boundary is that it cannot route
+anywhere else, and no host credential, socket or dataset is on that bridge.
 
 ### Collectors
 
@@ -583,12 +590,15 @@ successful start — it is proven by serving representative data from it.
   anything it fetches as untrusted input, not as data the personal side may act on.
 - The personal deployment has no egress at all, which is verified as a route
   property (`Options=no_default_route=true`) rather than as a firewall rule. It
-  cannot be `Internal=true` as well: netavark skips port forwarding for internal
-  networks, which is what silently killed the gateway's and the web UI's
-  published ports until the network was changed. A future change that attaches a
-  second network to `agent-local` could add a default route with it;
+  cannot be `Internal=true`: netavark skips port forwarding for internal
+  networks, and firewalld never trusts one for host access, so both the
+  published ports and name resolution are dead -- which is exactly what happened
+  before the network was changed. A future change that attaches a second network
+  to `agent-local` could add a default route with it;
   `tests/core/app-quadlets.sh` asserts the unit declares exactly one network and
-  which one, and that no publishing container sits on an internal network.
+  which one, and that no publishing container sits on an internal network. The
+  residual of a forwarding-enabled network is host services bound on the bridge
+  address; the bridge carries no credential, socket or dataset.
 - The runtime's defaults are broad: `computer_use`, `cronjob`, `delegation`,
   `skills`, `image_gen`, `connections` and `session_search` are enabled unless the
   config says otherwise, and disabling is per toolset with no per-tool switch.
