@@ -250,6 +250,42 @@ if grep -q 'condition     = var.cluster_tunnel_id != ""' <<<"$cluster_dns"; then
 has 'cluster_tunnel_id is a variable' 'variable "cluster_tunnel_id"'
 hasnt "no tunnel UUID is authored in the config" '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 
+# The public edge (design #725) is declared now and applied at the cutover: an
+# empty edge_ipv4 keeps both names on the cluster tunnel, and setting it retires
+# their proxied CNAMEs in the same plan that creates the grey-cloud A records.
+echo "== public edge DNS"
+has 'edge_ipv4 is a variable' 'variable "edge_ipv4"'
+has 'an empty edge_ipv4 is valid' 'var\.edge_ipv4 == "" \|\| can\(regex'
+has 'the edge names are the two applications' 'edge_hosts[[:space:]]*=[[:space:]]*\["photos", "opds"\]'
+has 'the edge DNS set is empty until the cutover' 'var\.edge_ipv4 == "" \? \[\] : local\.edge_hosts'
+has 'the edge names leave the cluster set in the same plan' 'setsubtract\('
+if grep -qF 'local.edge_dns_hosts,' "$work/code.tf"; then
+  ok 'the cluster set subtracts the edge names'
+else
+  bad 'the cluster set subtracts the edge names'
+fi
+edge_dns=$(extract cloudflare_dns_record.edge)
+if [[ -z $edge_dns ]]; then
+  bad "edge DNS record exists"
+else
+  ok "edge DNS record exists"
+  if grep -qF 'for_each = toset(local.edge_dns_hosts)' <<<"$edge_dns"; then ok "edge DNS follows the gated set"; else bad "edge DNS follows the gated set"; fi
+  if grep -qF 'type    = "A"' <<<"$edge_dns"; then ok "edge DNS is an address record"; else bad "edge DNS is an address record"; fi
+  if grep -qF 'content = var.edge_ipv4' <<<"$edge_dns"; then ok "edge DNS points at the edge address"; else bad "edge DNS points at the edge address"; fi
+  if grep -qF 'proxied = false' <<<"$edge_dns"; then ok "edge DNS is grey cloud"; else bad "edge DNS is grey cloud"; fi
+  if grep -qE 'ttl[[:space:]]*=[[:space:]]*300' <<<"$edge_dns"; then ok "edge DNS carries an explicit TTL"; else bad "edge DNS carries an explicit TTL"; fi
+  if grep -qE 'ttl[[:space:]]*=[[:space:]]*1$' <<<"$edge_dns"; then
+    bad "edge DNS does not use the proxied-record TTL" "ttl = 1 is only legal on a proxied record"
+  else
+    ok "edge DNS does not use the proxied-record TTL"
+  fi
+  if grep -qF 'condition     = contains(keys(local.cluster_ingress), each.value)' <<<"$edge_dns"; then
+    ok "edge DNS names only hostnames the ingress map knows"
+  else
+    bad "edge DNS names only hostnames the ingress map knows"
+  fi
+fi
+
 # The cluster tunnel's hostname config lives here, not in a dashboard (SDLC #583).
 echo "== cluster tunnel ingress"
 cluster_cfg=$(extract cloudflare_zero_trust_tunnel_cloudflared_config.cluster)

@@ -73,6 +73,20 @@ variable "cluster_hosts" {
   }
 }
 
+variable "edge_ipv4" {
+  type        = string
+  description = "Public IPv4 of the edge VPS (design #725). Empty until the cutover, which is why the two edge names stay on the cluster tunnel: setting it retires their proxied CNAMEs and creates the grey-cloud A records in one apply. The edge is not proxied, so this address is what the internet reaches."
+  default     = ""
+
+  validation {
+    condition = var.edge_ipv4 == "" || can(regex(
+      "^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$",
+      var.edge_ipv4,
+    ))
+    error_message = "edge_ipv4 is either empty or a single dotted-quad IPv4 address (the edge has one IPv4 and no IPv6 allocation)."
+  }
+}
+
 variable "acme_account_id" {
   type        = string
   description = "Numeric Let's Encrypt ACME account id behind the in-VM CSR client. Pinned into the CAA accounturi so no other account of that CA can issue for the zone. Empty until that client has registered: the pin is applied later, and no CAA record is written meanwhile."

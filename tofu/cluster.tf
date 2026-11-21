@@ -25,9 +25,21 @@ locals {
     photos = "http://immich-server.immich.svc.cluster.local:2283"
   }
 
+  # The two names the public edge serves (design #725). They stay on the cluster
+  # tunnel until `edge_ipv4` is set, because Cloudflare refuses a second record
+  # at a name: the apply that creates the grey-cloud A must retire the proxied
+  # CNAME in the same plan, or neither can be applied at all.
+  edge_hosts     = ["photos", "opds"]
+  edge_dns_hosts = var.edge_ipv4 == "" ? [] : local.edge_hosts
+
   # The DNS set follows the ingress map unless explicitly pinned, so a cutover
-  # is one edit here and the two cannot disagree.
-  cluster_hosts = var.cluster_hosts == null ? sort(keys(local.cluster_ingress)) : var.cluster_hosts
+  # is one edit here and the two cannot disagree. The edge names leave it only
+  # when their own record exists, which keeps the tunnel as the fallback while
+  # the cutover has not happened.
+  cluster_hosts = setsubtract(
+    var.cluster_hosts == null ? sort(keys(local.cluster_ingress)) : var.cluster_hosts,
+    local.edge_dns_hosts,
+  )
 
   # Ordered rules; the catch-all is appended last and must stay last.
   cluster_ingress_rules = [

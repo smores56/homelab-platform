@@ -21,6 +21,34 @@ resource "cloudflare_dns_record" "cluster" {
   }
 }
 
+# The public edge (design #725): two grey-cloud address records, one IPv4
+# each, pointing at the VPS that terminates TLS for them. Grey cloud on purpose:
+# Cloudflare must not sit in the media path, and TLS-ALPN-01 needs the name to
+# answer directly. An explicit TTL rather than `ttl = 1`, which is the
+# proxied-record value and is rejected on a record Cloudflare does not proxy.
+#
+# The set is empty until `edge_ipv4` is set, so this resource is declared now
+# and applied at the cutover, in the same plan that takes both names off the
+# cluster tunnel (tofu/cluster.tf, `edge_dns_hosts`).
+resource "cloudflare_dns_record" "edge" {
+  for_each = toset(local.edge_dns_hosts)
+
+  zone_id = data.cloudflare_zone.this.zone_id
+  name    = "${each.value}.${var.domain}"
+  type    = "A"
+  content = var.edge_ipv4
+  proxied = false
+  ttl     = 300
+  comment = "public edge VPS (design #725)"
+
+  lifecycle {
+    precondition {
+      condition     = contains(keys(local.cluster_ingress), each.value)
+      error_message = "local.edge_hosts names a hostname the cluster ingress map does not know: the cutover would create a record with no origin to fall back to."
+    }
+  }
+}
+
 # CAA pins issuance for the zone to the ACME account Kanbei's in-VM client uses
 # (docs/cloudflare.md, "CAA"). Two tags because a wildcard order is authorized
 # by issuewild, not issue.
