@@ -486,6 +486,14 @@ if grep -q '^Internal=' units/quadlet/agent-local.network; then
 else
   ok 'the personal network is not an internal network'
 fi
+# `podman network create --ignore` leaves an existing network's config alone, so
+# an option change without this is silently ignored until someone deletes the
+# network by hand.
+if grep -qxF 'NetworkDeleteOnStop=true' units/quadlet/agent-local.network; then
+  ok 'the personal network is recreated from this file at every boot'
+else
+  bad 'the personal network is recreated from this file at every boot'
+fi
 if grep -q '^Internal=' units/quadlet/agent-general.network; then
   bad 'the general network has egress'
 else

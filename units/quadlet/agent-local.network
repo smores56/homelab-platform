@@ -30,3 +30,10 @@ Description=Smortress agent-local network (no egress)
 
 [Network]
 Options=no_default_route=true
+# `podman network create --ignore` never updates a network that already exists,
+# so a changed option here silently does not apply until the network is
+# recreated. Deleting it on stop makes the next boot build it from this file
+# again -- without this, the switch from `Internal=true` to
+# `no_default_route=true` kept the old config straight through a reboot and the
+# ports and resolver stayed dead.
+NetworkDeleteOnStop=true

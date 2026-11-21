@@ -268,7 +268,11 @@ resolution fails and every container-name call, MCP included, times out.
 Egress is denied by the route instead (`Options=no_default_route=true`): the
 bridge still forwards, so the network is trusted for the bridge resolver and for
 published ports, while the container has no route off its own subnet. That is
-still a network property, not a firewall exception. The accepted residual is
+still a network property, not a firewall exception. `NetworkDeleteOnStop=true`
+is on the unit because `podman network create --ignore` never updates a network
+that already exists: without it an option change here is silently ignored until
+someone deletes the network by hand, which is how the first attempt at this fix
+survived a reboot with the old config. The accepted residual is
 that a container on a forwarding-enabled network can reach services the host
 binds on the bridge address; the personal boundary is that it cannot route
 anywhere else, and no host credential, socket or dataset is on that bridge.
