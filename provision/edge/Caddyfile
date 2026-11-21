@@ -1,0 +1,41 @@
+{
+	# One ACME address for both names; Let's Encrypt uses it for expiry notices
+	# only. No CAA pin is written for this account (design #725): the zone's CAA
+	# story is pinned to Kanbei's account, and a second pin would turn a rebuild
+	# into a renewal outage.
+	email {$EDGE_ACME_EMAIL}
+
+	# No admin API: the only way to change this file is to change it on disk and
+	# restart, which is deliberate on a box whose config is not versioned here.
+	admin off
+
+	# Port 80 is never opened, at the panel or at the host firewall. Without this
+	# Caddy binds :80 to answer HTTP-01 and to redirect, and both fail closed in
+	# a way that looks like an outage.
+	auto_https disable_redirects
+}
+
+# The two public names. Each proxies to its own Serve port on smortress, never
+# to 443: 443 also carries the agent gateway APIs and /wallpapers, and neither
+# name may publish them. The upstream certificate is the tailnet's own
+# *.ts.net certificate, so Caddy verifies it against the public roots and
+# relays bytes; it terminates nothing for the host.
+photos.sammohr.dev {
+	tls {
+		issuer acme {
+			disable_http_challenge
+		}
+	}
+	encode zstd gzip
+	reverse_proxy https://{$SMORTRESS_FQDN}:8446
+}
+
+opds.sammohr.dev {
+	tls {
+		issuer acme {
+			disable_http_challenge
+		}
+	}
+	encode zstd gzip
+	reverse_proxy https://{$SMORTRESS_FQDN}:8447
+}
