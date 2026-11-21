@@ -87,6 +87,7 @@ contains "$alpha" ':8080' 'the published port is the declared container port'
 # not exist and never pulls in the unit that creates it.
 contains "$alpha" 'Network=smortress-apps.network' 'egress none joins the internal network'
 contains "$out/smortress-apps.network" 'NetworkName=smortress-apps' 'the network keeps its planned name'
+contains "$out/smortress-apps.network" 'Subnet=10.89.0.0/24' 'the tenant network has a fixed subnet'
 contains "$out/smortress-apps.network" 'Internal=true' 'the internal network has no route out'
 contains "$alpha" 'Volume=/srv/apps/alpha:/data:Z' 'the only bind is the app data directory, relabelled'
 contains "$alpha" 'ReadOnly=true' 'the root filesystem is read-only'

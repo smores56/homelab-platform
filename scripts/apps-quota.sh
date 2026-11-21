@@ -176,14 +176,19 @@ for index in "${!names[@]}"; do
     fi
   fi
 
+  # `zfs project -d` prints P for a directory whose project id was set
+  # explicitly — which is what the stamp below does — and I for one that
+  # inherited it; both are stamped, and the inherit guard for the tree is
+  # `zfs project -c` below. Demanding I made --check report drift on every
+  # correct directory, so the deploy gate could never pass.
   read -r current_id current_flag < <(dir_project "$dir") || true
-  if [[ $current_id != "$project" || $current_flag != I ]]; then
+  if [[ $current_id != "$project" || ($current_flag != P && $current_flag != I) ]]; then
     if other=$(collision "$project" "$dir"); then
       report "$name: project id $project is already stamped on $other"
       continue
     fi
     if $check; then
-      report "$name: project id is $current_id/${current_flag:--}, want $project/I"
+      report "$name: project id is $current_id/${current_flag:--}, want $project/P"
     else
       "$zfs_bin" project -p "$project" -r -s "$dir" \
         || fail "could not assign project $project to $dir"
