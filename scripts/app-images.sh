@@ -53,7 +53,7 @@ app_images=(
   # The calendar's provider half: our own Tuta client (apps/tuta_calendar), built
   # and signed here because Tuta serves no CalDAV and no SDK of theirs ships. The
   # digest is the publish-tuta-calendar run for the Containerfile at that path.
-  'tuta-calendar|built:images/tuta-calendar/Containerfile|sha256:c60a3021245e7874821daa54ede7cef7cfb35da6bf58855b5538d2037fd37e4b'
+  'tuta-calendar|built:images/tuta-calendar/Containerfile|sha256:c2eb3babf933250fefc9ead2cf993e5dd7c4b009e1ed00138315d46c44822111'
   # The collector egress gate (apps/agent_egress): an allowlist proxy and its DNS
   # responder, the only two peers a browsing collector may reach. Built here
   # because the policy and the checks that enforce it are ours.

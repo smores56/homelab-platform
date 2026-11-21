@@ -31,7 +31,7 @@ ExecStart=/usr/bin/podman run --rm --replace --name smortress-agent-calendar-dum
   --volume /var/lib/agent/local/quarantine/tuta-calendar:/data:z \
   --volume /var/lib/agent/local/quarantine/calendar:/entities:z \
   --env HOME=/tmp \
-  ghcr.io/smores56/homelab-platform/tuta-calendar@sha256:c60a3021245e7874821daa54ede7cef7cfb35da6bf58855b5538d2037fd37e4b \
+  ghcr.io/smores56/homelab-platform/tuta-calendar@sha256:c2eb3babf933250fefc9ead2cf993e5dd7c4b009e1ed00138315d46c44822111 \
   dump --store /data --out /entities
 # Stage 2: publish what the dump wrote. The collector derives the ICS projection
 # itself and carries a vanished event forward with an absence reason: the SDK
