@@ -34,16 +34,18 @@ dataset so `.zfs` automounts are never followed. State trees are not copied
 here: they have writers, and a live PGDATA or sqlite file copies into a corrupt
 tree. Phase B copies those after the units are stopped.
 
-`.zfs` gives way to `--one-file-system`, and `-X` is deliberately narrowed to
-`user.*`: rsync tries to remove `security.selinux` from every destination
-directory, ext4 answers `fremovexattr: Permission denied`, and the exit code is
-23 even though every byte landed. SELinux labels are not carried at all — they
-are rebuilt in phase E with `chcon`, exactly as section 40.18 does for a drill.
-ACLs still travel in `-A`; `-X` corrects xattrs, not permissions.
+`.zfs` gives way to `--one-file-system`. There is no `-X`: rsync removes
+`security.selinux` from every destination directory, ext4 answers
+`fremovexattr: Permission denied`, and rsync exits 23 after moving every byte —
+a red gate over nothing. This rsync build has no `--xattrs-include` either, so
+the choice is all xattrs or none; none is correct here because SELinux labels
+are rebuilt in phase E with `chcon`, exactly as section 40.18 does for a drill,
+and no application under these trees keeps `user.*` xattrs. ACLs still travel in
+`-A`, which is what the tenants' trees actually carry.
 
 ```sh
 sudo install -d -m 0755 /var/lib/restic/ssd/pool-copy
-opts=(-aHA --numeric-ids --one-file-system -X '--xattrs-include=user.*')
+opts=(-aHA --numeric-ids --one-file-system)
 sudo rsync "${opts[@]}" /var/srv/git/ /var/lib/restic/ssd/pool-copy/srv/git/
 for d in files photos books music wallpapers apps repo-archive; do
   sudo rsync "${opts[@]}" "/var/srv/$d/" "/var/lib/restic/ssd/pool-copy/srv/$d/"
