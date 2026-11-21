@@ -4827,24 +4827,42 @@ spare must be enrolled too.
    `id_smortress_sudo_2`, the spare `_3`. The suffix matches the `-C`
    (`smores-sudo-key1`, `-key2`, `-key3`), which is what makes the committed
    public line identifiable later, and every client's loader adds each
-   `~/.ssh/id_smortress_sudo*` file, so a spare key or a replaced laptop needs no
-   renaming. Write the serial that `ykman info` prints next to the physical
-   label: that is the only record that makes "which key is this" answerable once
-   three of them are in a drawer.
+   `~/.ssh/id_smortress_sudo*` file, so a handle minted here needs no renaming —
+   only one fetched back with `-K` does, below. Write the serial that `ykman
+   info` prints next to the physical label: that is the only record that makes
+   "which key is this" answerable once three of them are in a drawer.
 
    `-O resident` is what lets the credential live on the key rather than in the
    handle file, so a replacement laptop fetches it back rather than minting a
    second one:
 
    ```sh
-   cd ~/.ssh && ssh-keygen -K && ssh-add id_ed25519_sk*
+   cd ~/.ssh && ssh-keygen -K
    ```
 
-   `-K` does not load the agent. It downloads the resident credential as
-   `id_ed25519_sk*` handle files into the working directory, and `ssh-add` is the
-   step that puts them in the agent; skip it and sudo has nothing to ask for a
-   signature. Do **not** add `-O no-touch-required`: that option is the whole
-   difference between the two credentials.
+   `-K` does not load the agent, and it does not know this procedure's names: it
+   writes each resident credential it finds as an `id_ed25519_sk*` handle with its
+   `.pub` beside it, and nothing on the client reads that shape. Rename every
+   downloaded handle **and its `.pub`** to `~/.ssh/id_smortress_sudo_<n>` before
+   adding it, using the number that matches the credential's `-C` label (`_1` is
+   `smores-sudo-key1`):
+
+   ```sh
+   cd ~/.ssh
+   ls id_ed25519_sk*                    # one handle plus .pub per key
+   mv id_ed25519_sk     id_smortress_sudo_1
+   mv id_ed25519_sk.pub id_smortress_sudo_1.pub
+   ssh-add ~/.ssh/id_smortress_sudo_*   # what actually loads the agent
+   ```
+
+   The names are load-bearing twice. dotfiles' `scripts/add-sudo-credential.sh`
+   — and the reboot step in its README — adds every `~/.ssh/id_smortress_sudo*`
+   handle and nothing else, so a handle left under a `-K` name is never loaded:
+   after the next reboot the agent is empty, `libpam_rssh` finds no key, and the
+   tap degrades to the password silently. The suffix is also what ties the
+   committed public line in step 2 to the physical key. Skip `ssh-add` and sudo
+   has nothing to ask for a signature. Do **not** add `-O no-touch-required`:
+   that option is the whole difference between the two credentials.
 
 2. Commit the public halves, one `sk-ssh-ed25519` line per key, and
    nothing else. The file is empty in the repository until the first enrollment,
