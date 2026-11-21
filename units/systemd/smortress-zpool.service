@@ -7,7 +7,16 @@ Description=Create or import the tank ZFS pool on the encrypted data device
 # is therefore explicit: the data LUKS device, then the pool, then zfs-mount.
 DefaultDependencies=no
 After=systemd-cryptsetup@data.service cryptsetup.target zfs-import-scan.service
-Requires=systemd-cryptsetup@data.service
+# The mapper is guaranteed by the unit that creates it, not by the unit the
+# crypttab generator writes: on the very first boot — the one that formats p5 —
+# /etc/crypttab has no data entry yet, so systemd-cryptsetup@data.service does
+# not exist in that boot's transaction and a Requires= on it cannot resolve.
+# smortress-data-init.service opens the device on that boot, and on every later
+# boot the crypttab entry (written by it) opens the device before this unit's
+# After= ordering point. Requiring the data-init unit is therefore the stricter
+# contract of the two, not a weaker one.
+Requires=smortress-data-init.service
+After=smortress-data-init.service
 # init-zpool chowns each dataset root to an account *name* — the tenant's, for
 # /srv/apps — so systemd-sysusers has to have allocated it before the pool is
 # created. DefaultDependencies=no would otherwise leave the two unordered, and a

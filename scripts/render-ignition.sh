@@ -10,9 +10,11 @@
 # account password hash. The hash is image ciphertext
 # (secrets/server/smores-password-hash.yaml): the same value is re-applied at boot
 # by units/systemd/smortress-password.service, so a reinstall must not need an
-# operator file. Nothing here reads a private key. The rendered Ignition contains
-# the two LUKS recovery passphrases and the account hash: it is written mode 0600
-# and is removed by FCOS after first boot.
+# operator file. Nothing here reads a private key and nothing here reads a
+# recovery passphrase: no secret enters Ignition or the installer media (design
+# #701), and the operator adds both LUKS passphrases after the install
+# (docs/manual-steps.md section 37 step 8.1). The rendered file still carries the
+# account hash, so it is written mode 0600 and removed by FCOS after first boot.
 set -euo pipefail
 
 repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
@@ -104,14 +106,11 @@ if $synthetic; then
   derived_image="${IMAGE_REPO}@sha256:0000000000000000000000000000000000000000000000000000000000000000"
   disk='/dev/disk/by-id/nvme-SyntheticDisk'
   password_hash=$fixture_hash
-  root_pass='synthetic-root-recovery-passphrase-000000000000000000000000'
-  data_pass='synthetic-data-recovery-passphrase-000000000000000000000000'
   tang_url='http://10.0.0.193:7654'
   tang_thumbprint=$(printf 'A%.0s' {1..43})
 else
   require_file "$repo/image/cosign.pub"
-  for f in derived-image disk root-recovery-passphrase \
-    data-recovery-passphrase tang-thumbprint ssh_authorized_keys; do
+  for f in derived-image disk tang-thumbprint ssh_authorized_keys; do
     require_file "$repo/ignition/operator/$f"
   done
   command -v "$sops_bin" >/dev/null 2>&1 \
@@ -134,8 +133,6 @@ else
       die "cannot read the smores password hash from ${hash_ciphertext#"$repo"/}; mint it with sops (docs/manual-steps.md section 37) and re-run with SOPS_AGE_KEY_FILE pointing at the admin identity"
     fi
   fi
-  root_pass=$(read_line "$repo/ignition/operator/root-recovery-passphrase")
-  data_pass=$(read_line "$repo/ignition/operator/data-recovery-passphrase")
   tang_url='http://10.0.0.193:7654'
   if [[ -s $repo/ignition/operator/tang-url ]]; then
     tang_url=$(read_line "$repo/ignition/operator/tang-url")
@@ -153,10 +150,6 @@ fi
   || die "disk must be a /dev/disk/by-id path: $disk"
 [[ $password_hash =~ ^\$6\$[^$]{1,16}\$[./A-Za-z0-9]{86}$ ]] \
   || die "the smores password hash must be sha512crypt (openssl passwd -6)"
-[[ $root_pass =~ ^[[:print:]]{12,}$ ]] \
-  || die "root recovery passphrase must be >=12 printable characters and one line"
-[[ $data_pass =~ ^[[:print:]]{12,}$ ]] \
-  || die "data recovery passphrase must be >=12 printable characters and one line"
 [[ $tang_url =~ ^https?://[A-Za-z0-9.:-]+$ ]] \
   || die "Tang URL must be http(s)://host:port: $tang_url"
 [[ $tang_thumbprint =~ ^[A-Za-z0-9_-]{43}$ ]] \
@@ -164,16 +157,14 @@ fi
 
 work=$tmp/smortress.bu
 cp "$template" "$work"
-# The substitutions carry the passphrases, so they go through a 0600 script
-# file instead of sed's argv, which /proc exposes to every local user.
+# The account hash is the one secret in the output, so it goes through a 0600
+# script file instead of sed's argv, which /proc exposes to every local user.
 subs=$tmp/subs.sed
 umask 077
 printf '%s\n' \
   "s|@DERIVED_IMAGE@|$(escape "$derived_image")|g" \
   "s|@DISK_BY_ID@|$(escape "$disk")|g" \
   "s|@SMORES_PASSWORD_HASH@|$(escape "$password_hash")|g" \
-  "s|@ROOT_RECOVERY_PASSPHRASE@|$(escape "$root_pass")|g" \
-  "s|@DATA_RECOVERY_PASSPHRASE@|$(escape "$data_pass")|g" \
   "s|@TANG_URL@|$(escape "$tang_url")|g" \
   "s|@TANG_THUMBPRINT@|$(escape "$tang_thumbprint")|g" >"$subs"
 sed -i -f "$subs" "$work"

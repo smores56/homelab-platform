@@ -84,6 +84,7 @@ COPY units/quadlet/pattern.container /usr/share/smortress/quadlet/pattern.contai
 # /usr/local is a symlink to /var on bootc, so helpers go under /usr/libexec
 # and lose the .sh suffix that the units would otherwise have to know about.
 COPY scripts/storage-layout.sh scripts/zfs-ready.sh scripts/sops-decrypt.sh scripts/init-zpool.sh \
+     scripts/init-data-luks.sh \
      scripts/open-hdd.sh scripts/access-bootstrap.sh scripts/access-lockdown.sh \
      scripts/fix-crypttab.sh \
      scripts/restic-plane-common.sh scripts/smortress-restic-backup.sh \
@@ -197,6 +198,7 @@ RUN set -eux; \
       zfs-import-scan.service \
       zfs-mount.service \
       zfs-zed.service \
+      smortress-data-init.service \
       smortress-zpool.service \
       smortress-cryptsetup-hdd.service \
       smortress-access-bootstrap.service \

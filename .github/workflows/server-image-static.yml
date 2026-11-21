@@ -56,6 +56,10 @@ jobs:
         run: shellcheck scripts/*.sh
       - name: render Ignition from fixtures
         run: scripts/render-ignition.sh --synthetic --check
+      - name: Ignition carries no secret
+        # The template, the renderer and the rendered config: a passphrase that
+        # reappears in any of them is invisible to every other check.
+        run: tests/core/ignition-boundary.sh
       - name: render the uCore-media variant
         # --stock drops the autorebase units; it must stay renderable and must
         # not be reachable from a plain render.
