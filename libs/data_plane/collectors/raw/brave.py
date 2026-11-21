@@ -82,6 +82,22 @@ def _jsonable(value: Any) -> Any:
     raise PublishError(f"a column holds an unsupported type {type(value).__name__}")
 
 
+def _decode_text(value: bytes) -> str | bytes:
+    """Hand back TEXT that is not UTF-8 as the bytes it is.
+
+    Chromium stores binary values in TEXT-affinity columns (``meta.value`` for
+    several keys), and sqlite3 decodes every TEXT value before the collector can
+    look at it, so the default factory aborts the whole dump with ``Could not
+    decode to UTF-8``. A value that decodes stays a string; one that does not is
+    carried as bytes and base64 in ``_jsonable``.
+    """
+
+    try:
+        return value.decode("utf-8")
+    except UnicodeDecodeError:
+        return value
+
+
 def _tables(connection: sqlite3.Connection) -> list[str]:
     rows = connection.execute(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
@@ -136,6 +152,7 @@ def collect_brave_db(
 
     try:
         connection = sqlite3.connect(f"file:{quote(str(path))}?mode=ro", uri=True)
+        connection.text_factory = _decode_text
     except sqlite3.Error as exc:
         raise PublishError(f"{path.name} is not a readable SQLite database") from exc
     try:

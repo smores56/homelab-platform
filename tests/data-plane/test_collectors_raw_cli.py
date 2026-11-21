@@ -10,6 +10,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 from data_plane.collectors.raw import RawReplica
+from data_plane.collectors.raw import cli as raw_cli
 from data_plane.collectors.raw.cli import EXIT_REFUSED, main
 
 CAPTURED = "2026-11-19T00:00:00+00:00"
@@ -173,6 +174,45 @@ class FinanceCommandTests(unittest.TestCase):
             self.assertEqual(code, 0, err)
             self.assertEqual(json.loads(out)["source_id"], "finance.ledger")
             self.assertIsNotNone(RawReplica.latest_generation(root / "replica"))
+
+
+class FinanceWindowTests(unittest.TestCase):
+    def test_the_window_is_asked_for_in_epoch_seconds(self) -> None:
+        # SimpleFIN refuses `start-date=2026-08-21` with
+        # "Invalid start-date provided. It must be a UNIX timestamp integer."
+        start, end = raw_cli._window(1_800_000_000, 30)
+        self.assertEqual(end, 1_800_000_000)
+        self.assertEqual(start, 1_800_000_000 - 37 * 86400)
+
+    def test_the_window_never_exceeds_the_providers_cap(self) -> None:
+        # "Requested date range exceeds limit of 90 days and was capped." The
+        # overlap is inside the cap, not on top of it.
+        start, end = raw_cli._window(1_800_000_000, 90)
+        self.assertEqual(end, 1_800_000_000)
+        self.assertEqual(start, 1_800_000_000 - 90 * 86400)
+
+
+class EntryPointTests(unittest.TestCase):
+    """What a unit names is `-m data_plane.collectors.raw`, not a module inside it."""
+
+    def test_the_package_is_the_entry_point(self) -> None:
+        # A package without `__main__` cannot be executed that way at all:
+        # `No module named data_plane.collectors.raw.__main__`, which every
+        # collector unit in `units/systemd/` names.
+        import subprocess
+        import sys
+
+        import data_plane.collectors.raw.__main__ as entry
+        from data_plane.collectors.raw import cli
+
+        self.assertIs(entry.main, cli.main)
+        process = subprocess.run(
+            [sys.executable, "-m", "data_plane.collectors.raw", "--help"],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(process.returncode, 0, process.stderr)
+        self.assertIn("--root", process.stdout)
 
 
 if __name__ == "__main__":

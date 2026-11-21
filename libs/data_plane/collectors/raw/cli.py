@@ -39,6 +39,9 @@ from .simplefin import AccessUrl, fetch_accountset
 EXIT_REFUSED = 3
 #: Days of overlap on the provider request, so a boundary transaction is not lost.
 _WINDOW_OVERLAP_DAYS = 7
+#: SimpleFIN caps a read at 90 days: "Requested date range exceeds limit of 90
+#: days and was capped." The overlap is part of the cap, not added to it.
+_WINDOW_CAP_DAYS = 90
 
 _SOURCE_IDS = {
     "mail": MAIL_SOURCE,
@@ -169,20 +172,27 @@ def _access_url(args: argparse.Namespace) -> AccessUrl:
     return AccessUrl.parse(raw)
 
 
+def _window(now: int, window_days: int) -> tuple[int, int]:
+    """The provider window in epoch seconds, which is what SimpleFIN accepts.
+
+    It refuses an ISO date outright: "Invalid start-date provided. It must be a
+    UNIX timestamp integer." The overlap is deliberate -- a transaction that
+    posts just after the start boundary must not fall between two runs.
+    """
+
+    span = min(window_days + _WINDOW_OVERLAP_DAYS, _WINDOW_CAP_DAYS)
+    return now - span * 86400, now
+
+
 def _fetched_accountset(access: AccessUrl, args: argparse.Namespace) -> Mapping:
     """Read one AccountSet over the network, with an explicit bounded window."""
 
     now = args.now if args.now is not None else int(datetime.now(timezone.utc).timestamp())
-    # The overlap is deliberate: the provider's window is inclusive by date, and
-    # a transaction that posts just after midnight must not fall between two runs.
-    start = datetime.fromtimestamp(
-        now - (args.window_days + _WINDOW_OVERLAP_DAYS) * 86400, timezone.utc
-    ).date()
-    end = datetime.fromtimestamp(now, timezone.utc).date()
+    start, end = _window(now, args.window_days)
     return fetch_accountset(
         access,
-        start_date=start.isoformat(),
-        end_date=end.isoformat(),
+        start_date=str(start),
+        end_date=str(end),
         pending=args.include_pending,
     )
 
