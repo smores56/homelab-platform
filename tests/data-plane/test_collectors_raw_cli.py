@@ -175,5 +175,28 @@ class FinanceCommandTests(unittest.TestCase):
             self.assertIsNotNone(RawReplica.latest_generation(root / "replica"))
 
 
+class EntryPointTests(unittest.TestCase):
+    """What a unit names is `-m data_plane.collectors.raw`, not a module inside it."""
+
+    def test_the_package_is_the_entry_point(self) -> None:
+        # A package without `__main__` cannot be executed that way at all:
+        # `No module named data_plane.collectors.raw.__main__`, which every
+        # collector unit in `units/systemd/` names.
+        import subprocess
+        import sys
+
+        import data_plane.collectors.raw.__main__ as entry
+        from data_plane.collectors.raw import cli
+
+        self.assertIs(entry.main, cli.main)
+        process = subprocess.run(
+            [sys.executable, "-m", "data_plane.collectors.raw", "--help"],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(process.returncode, 0, process.stderr)
+        self.assertIn("--root", process.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()
