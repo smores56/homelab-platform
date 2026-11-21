@@ -1414,5 +1414,19 @@ else
   bad 'every smortress unit the image enables declares [Install]' "${never_starts[*]}"
 fi
 
+# A unit that runs the data plane has to hand the container the package, not
+# only the facade tree: `-m data_plane` with `/usr/lib/agent-facade` alone is
+# `No module named data_plane` on every tick. The calendar collector shipped
+# that way and failed its first real run after a clean dump.
+for unit in units/systemd/*.service; do
+  grep -q -- '-m data_plane' "$unit" || continue
+  if grep -q -- '--env PYTHONPATH=/usr/lib/agent-facade/libs:/usr/lib/agent-facade' "$unit"; then
+    ok "$unit puts the data plane on PYTHONPATH"
+  else
+    bad "$unit puts the data plane on PYTHONPATH" \
+      "$(grep -n 'PYTHONPATH' "$unit" || echo 'no PYTHONPATH at all')"
+  fi
+done
+
 printf '\n%d checks, %d failed\n' "$((pass + fail))" "$fail"
 ((fail == 0))
