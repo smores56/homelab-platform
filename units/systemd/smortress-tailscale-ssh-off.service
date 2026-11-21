@@ -1,6 +1,8 @@
 [Unit]
-# Tailscale SSH stays off (design #748). Access is the only route into sshd, and
-# a tailnet device reaches the host through the tunnel like any other client.
+# Tailscale SSH stays off (design #748). No Cloudflare connector exists any more
+# (#767 T6), so the tailnet plus loopback for Cockpit is the whole route into
+# sshd, and firewalld decides which of the two arrives: tailscale0 in the
+# `tailscale` zone, everything else in `drop`.
 #
 # The preference lives in tailscaled's state file, so removing `--ssh` from
 # smortress-tailscale-up.service fixes only the first enrollment: a preference
