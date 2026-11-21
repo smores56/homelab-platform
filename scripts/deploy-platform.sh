@@ -417,6 +417,25 @@ restore_staged_deployment() {
 # `--apply` here on purpose -- the reboot is the deploy, and it happens only after
 # `pending.json` exists, so a crash between the two leaves the boot gate a record
 # to judge instead of an unrecorded new deployment.
+# The booted image, for the "already running" decision. Not the gate's helper:
+# this script is also run by hand, where the gate's state is not its business.
+booted_digest() {
+  local doc
+  doc=$(timeout --signal=TERM --kill-after=10 "$(clamp_timeout "$stage_status_timeout")" \
+    "$bootc_bin" status --booted --json 2>/dev/null) || return 1
+  jq -er '.status.booted.image.imageDigest // empty' <<<"$doc" 2>/dev/null
+}
+
+# booted_matches <index> <manifest>: the verified image is what this host is
+# already running. Both forms are accepted for the same reason the staged check
+# accepts both: bootc reports one or the other.
+booted_matches() {
+  local index=$1 manifest=$2 booted
+  booted=$(booted_digest 2>/dev/null) || return 1
+  [[ -n $booted ]] || return 1
+  [[ $booted == "$index" || $booted == "$manifest" ]]
+}
+
 cmd_stage() {
   local commit='' digests='' index='' manifest='' staged='' rc=0
   while (($#)); do
@@ -448,6 +467,22 @@ cmd_stage() {
     warn "cannot journal the stage start"
     return 4
   }
+
+  # Already running the verified image: a manual `bootc upgrade` (or a deploy
+  # that repeats itself) leaves bootc with nothing to stage, and "no staged
+  # entry" is not a refusal when the booted image *is* the verified one. Record
+  # the deployment instead so the state stops naming an older commit.
+  if booted_matches "$index" "$manifest"; then
+    state_record_verified homelab-platform "$commit" "$index" "$manifest" || {
+      warn "cannot record the already-booted image"
+      return 4
+    }
+    record_clear held || warn "cannot clear the satisfied hold record"
+    journal_append stage-already-booted "$(jq -nc --arg commit "$commit" --arg digest "$index" \
+      '{commit:$commit,digest:$digest}')" || warn "cannot journal the already-booted image"
+    say "already running $commit; recorded without a reboot"
+    return 6
+  fi
 
   # The host tracks the tag, so `bootc upgrade` and a hand-run switch both work
   # later. The digest is still what was verified and what the denylist and the

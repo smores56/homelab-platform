@@ -391,10 +391,13 @@ run_gate() {
 
 # --- 1. stage: the exact switch argv, then the staged-digest check ----------
 reset_case
-printf 'staged=%s\nbooted=%s\n' "$digest_manifest" "$digest_manifest" >"$STUB_BOOTC_STATE"
+# The host is running the previous deployment and bootc staged the new one: if
+# booted already equalled the verified digest, stage would (correctly) record an
+# already-running image and never reboot.
+printf 'staged=%s\nbooted=%s\n' "$digest_manifest" "$digest_prev_manifest" >"$STUB_BOOTC_STATE"
 run_stage --commit "$commit" --digests "$digests"
 check_eq "$rc" 0 "a stage whose digest bootc reports passes"
-check_eq "$(head -n 1 "$log/bootc-calls")" \
+check_eq "$(grep '^switch ' "$log/bootc-calls" | head -n 1)" \
   "switch --enforce-container-sigpolicy $image_ref:latest" \
   "stage switches to the tracked tag and enforces the signature policy"
 check_no_grep "$log/bootc-calls" '--apply' "stage never applies the deployment"
@@ -426,7 +429,7 @@ fi
 # bootc may report the index form for the same staged image, and a host that
 # reports the form the reference did not use must still pass.
 reset_case
-printf 'staged=%s\nbooted=%s\n' "$digest_index" "$digest_index" >"$STUB_BOOTC_STATE"
+printf 'staged=%s\nbooted=%s\n' "$digest_index" "$digest_prev_manifest" >"$STUB_BOOTC_STATE"
 run_stage --commit "$commit" --digests "$digests"
 check_eq "$rc" 0 "a staged image reported as the index form passes"
 check_grep "$log/systemctl-calls" 'reboot' "the index form still reaches the reboot"
@@ -443,6 +446,20 @@ check_eq "$(journal_field stage-digest-mismatch '.staged')" "$digest_other" \
 check_eq "$(journal_field stage-digest-mismatch '.digest')" "$digest_index" \
   "the refusal journals the digest that was verified"
 check_eq "$(head -n 1 "$log/curl-urls")" "$ping_url/fail" "a refused stage pages the deploy check"
+
+# A manual `bootc upgrade` leaves the state naming an older commit. When the
+# booted image is the verified one there is nothing to stage, and that must
+# record the deployment rather than refuse a null staged entry.
+reset_case
+printf 'staged=
+booted=%s\n' "$digest_manifest" >"$STUB_BOOTC_STATE"
+run_stage --commit "$commit" --digests "$digests"
+check_eq "$rc" 6 "an already-booted verified image is recorded, not refused"
+check_no_grep "$log/systemctl-calls" 'reboot' "an already-booted image never reboots"
+check_eq "$(journal_field stage-already-booted '.commit')" "$commit" \
+  "the already-booted image is journaled"
+check_json "$(cat "$state_dir/state.json")" '.repos["homelab-platform"].commit' "$commit" \
+  "the already-booted image is recorded in state"
 
 reset_case
 export STUB_BOOTC_NO_STAGED=1

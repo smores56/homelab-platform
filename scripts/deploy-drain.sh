@@ -397,6 +397,14 @@ while :; do
                 say "$repo $commit: staged image refused"
                 refused=$((refused + 1))
                 ;;
+              6)
+                # The host already runs the verified image: a manual upgrade
+                # moved it, and the state now catches up without a reboot.
+                journal_append stage-already-booted "$(jq -nc --arg id "$id" --arg repo "$repo" \
+                  --arg commit "$commit" '{id:$id,repo:$repo,commit:$commit}')" ||
+                  warn "cannot journal the already-running image"
+                say "$repo $commit: already running; recorded"
+                ;;
               *)
                 # A staging failure is an outage, not a verdict: the path unit
                 # re-fires this drain as soon as it exits, so exiting here would
