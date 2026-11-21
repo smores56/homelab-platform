@@ -17,6 +17,7 @@ from typing import Any
 from data_plane.collectors.raw.simplefin import (
     AccessUrl,
     claim_setup_token,
+    USER_AGENT,
     fetch_accountset,
     redact,
 )
@@ -86,6 +87,21 @@ class ClaimTests(unittest.TestCase):
         self.assertEqual(access.username, "alice")
         self.assertEqual(seen, ["POST"])
 
+    def test_the_claim_names_a_user_agent(self) -> None:
+        # The beta bridge sits behind Cloudflare, which answers Error 1010 for
+        # `Python-urllib`; a request that identifies itself is the difference
+        # between an access URL and a 403.
+        claim = "https://bridge.example.org/claim/abc"
+        token = base64.b64encode(claim.encode("utf-8")).decode("ascii")
+        seen: list[str | None] = []
+
+        def opener(request, timeout=30):
+            seen.append(request.get_header("User-agent"))
+            return FakeResponse(ACCESS.encode("utf-8"))
+
+        claim_setup_token(token, opener=opener)
+        self.assertEqual(seen, [USER_AGENT])
+
     def test_refuses_a_token_that_is_not_base64(self) -> None:
         with self.assertRaises(ValidationError):
             claim_setup_token("not base64 at all!!")
@@ -111,6 +127,7 @@ class FetchTests(unittest.TestCase):
             captured["url"] = request.full_url
             captured["authorization"] = request.get_header("Authorization")
             captured["accept"] = request.get_header("Accept")
+            captured["user-agent"] = request.get_header("User-agent")
             return FakeResponse(json.dumps({"accounts": []}).encode("utf-8"))
 
         payload = fetch_accountset(
@@ -123,6 +140,7 @@ class FetchTests(unittest.TestCase):
         expected = base64.b64encode(b"alice:s3cr@t").decode("ascii")
         self.assertEqual(captured["authorization"], f"Basic {expected}")
         self.assertEqual(captured["accept"], "application/json")
+        self.assertEqual(captured["user-agent"], USER_AGENT)
         self.assertNotIn("alice", captured["url"])
         self.assertNotIn("s3cr", captured["url"])
 

@@ -28,6 +28,10 @@ from typing import Any, Callable, Mapping
 from ...errors import AuthenticationError, ValidationError
 
 DEFAULT_TIMEOUT = 30
+#: The bridge is behind Cloudflare, which answers Error 1010 ("blocked based on
+#: your browser's signature", status 403) for the default `Python-urllib` agent.
+#: Name the caller instead of borrowing a browser's.
+USER_AGENT = "homelab-platform-agent/1.0 (+https://github.com/smores56/homelab-platform)"
 #: A bearer that never expires is still one the log must not see.
 _REDACTED = "<redacted>"
 
@@ -127,7 +131,12 @@ def claim_setup_token(
     parts = urllib.parse.urlsplit(claim_url.strip())
     if parts.scheme != "https" or not parts.hostname:
         raise ValidationError("the SimpleFIN claim URL is not https")
-    request = urllib.request.Request(claim_url.strip(), data=b"", method="POST")
+    request = urllib.request.Request(
+        claim_url.strip(),
+        data=b"",
+        method="POST",
+        headers={"User-Agent": USER_AGENT},
+    )
     try:
         with opener(request, timeout=timeout) as response:
             body = response.read().decode("utf-8")
@@ -159,6 +168,7 @@ def fetch_accountset(
         headers={
             "Authorization": _authorization(access),
             "Accept": "application/json",
+            "User-Agent": USER_AGENT,
         },
     )
     try:
