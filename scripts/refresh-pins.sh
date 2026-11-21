@@ -19,7 +19,7 @@ case "${1:-}" in
 esac
 
 if ! command -v skopeo >/dev/null 2>&1; then
-  echo "refresh-pins.sh: skopeo is not installed; use 'nix shell nixpkgs#skopeo -c scripts/refresh-pins.sh'" >&2
+  echo "refresh-pins.sh: skopeo is not installed; install skopeo" >&2
   exit 1
 fi
 
