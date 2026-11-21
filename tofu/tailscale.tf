@@ -21,6 +21,18 @@ provider "tailscale" {}
 
 locals {
   tailnet_policy = {
+    # The host the rules name, resolved here rather than left to the API's
+    # device-name lookup: an explicit hosts entry is what the policy validator
+    # accepts in both rules and tests. The literal is the address the node holds
+    # once enrolled, and it is the whole route in: a reinstall that enrolls the
+    # node again can hand it a different address, and then dst =
+    # ["smortress:22"] names an address the host does not hold. Read the current
+    # one with `tailscale ip -4` on the host and update it here before the next
+    # apply.
+    hosts = {
+      smortress = "100.122.171.11"
+    }
+
     # An access rule only ever accepts; anything no rule accepts is dropped, so
     # the default is deny without a rule saying so.
     acls = [
