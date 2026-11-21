@@ -581,6 +581,15 @@ else
   bad "the build sets the drop-in's mode and proves it parses"
 fi
 
+# A NOPASSWD rule skips pam_authenticate, so the touch row never runs and sudo
+# is passwordless with nothing at the prompt to show it. The build has to refuse
+# one rather than let a drop-in arrive unnoticed.
+if grep -qF "grep -rqE '^[^#]*NOPASSWD' /etc/sudoers /etc/sudoers.d" image/Containerfile; then
+  ok "the build refuses a sudoers rule that grants NOPASSWD"
+else
+  bad "the build refuses a sudoers rule that grants NOPASSWD"
+fi
+
 if grep -q 'chmod 0440 /etc/sudoers.d/10-human-gate /etc/sudoers.d/20-sops-env' image/Containerfile \
     && grep -q '^Defaults env_delete += ' image/rootfs/etc/sudoers.d/20-sops-env; then
   ok "the sops env drop-in is installed and drops every identity source"
@@ -588,7 +597,11 @@ else
   bad "the sops env drop-in is installed and drops every identity source"
 fi
 
-if ! grep -rqF 'NOPASSWD' image docs README.md scripts 2>/dev/null; then
+# The build's own assert names the word as the pattern it refuses, so that one
+# line is the only occurrence allowed: a rule or a doc that grants NOPASSWD
+# anywhere else is escalation that never reaches the touch stack.
+if ! grep -rnF 'NOPASSWD' image docs README.md scripts 2>/dev/null \
+    | grep -vF "NOPASSWD' /etc/sudoers" | grep -q .; then
   ok "nothing in the tree grants NOPASSWD"
 else
   bad "nothing in the tree grants NOPASSWD"

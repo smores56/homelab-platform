@@ -124,6 +124,16 @@ RUN set -eux; \
     chmod 0440 /etc/sudoers.d/10-human-gate /etc/sudoers.d/20-sops-env; \
     visudo -c
 
+# A passwordless rule skips pam_authenticate entirely, so the escalation stack's
+# pam_u2f row would never run and sudo would open with no prompt to show it; the
+# pattern below is the one no line this image ships may grant.
+RUN set -eux; \
+    test -d /etc/sudoers.d; \
+    if grep -rqE '^[^#]*NOPASSWD' /etc/sudoers /etc/sudoers.d; then \
+      echo "a sudoers rule grants passwordless escalation, which skips the touch stack" >&2; \
+      exit 1; \
+    fi
+
 # bootc images enable units at build time; the generator picks the rest up
 # from their [Install] sections.
 #
