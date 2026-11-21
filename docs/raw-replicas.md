@@ -284,10 +284,10 @@ deletion.
 
 `collect_brave_db(copy_path, generation, device=..., profile=..., captured_at=...)`
 
-The input is a **copy** taken while no Brave process holds the profile: Chromium
-locks `History` and keeps recent writes in the WAL, so a copy taken from a running
-browser is not a point-in-time database. Refusing a sibling `-wal` or `-journal`
-is how that mistake is caught instead of collected.
+The input is a **copy**, never the live file: Chromium holds `History` open for
+the life of the browser, so a copy taken from a running profile is not a
+point-in-time database. Refusing a sibling `-wal` or `-journal` is how that
+mistake is caught instead of collected.
 
 - `PRAGMA integrity_check` must answer `ok` before anything is written.
 - `brave::db` stores the copy's own bytes, so the replica is the file the browser
@@ -297,9 +297,73 @@ is how that mistake is caught instead of collected.
   collection time and rebuildable afterwards.
 - A database with no user tables publishes nothing.
 
-Fidelity limits: retention expiry, user deletion and profile recreation are
-indistinguishable; the work Mac is a declared gap; the headless Sync profile and
-its seed are removed, so there is no sync history.
+`device` and `profile` are the observation key, and both are constants of the
+deployment rather than anything discovered: `smortress` is this host, the only one
+whose history is collected, and `default` is the single headless profile
+`agent-brave.container` runs -- Chromium's own directory name is `Default`, and the
+label is deliberately the lower-case one so it reads as the deployment's name for
+the profile and not as a Chromium path. A second profile on this host would be a
+second label, not a second path, and the two would be distinguishable only by that
+label.
+
+### The provider half: a browser, not an export
+
+Brave exposes no history API and no CLI, and its Sync engine is the only thing that
+can fetch what another device wrote. So the provider half is the browser itself:
+`units/quadlet/agent-brave.container` runs a pinned Brave `.deb` from
+`images/brave/Containerfile` headless, in a profile that is a member of the
+account's Sync chain, and the chain is what fills `History` with the visits made
+elsewhere.
+
+The membership is a **seed**, planted rather than joined. `apps/brave_ingest/seed.py`
+writes the same three preferences Brave's join UI writes -- `brave_sync_v2.seed`
+(the OSCrypt blob), `sync.requested` and `sync.keep_everything_synced`, plus
+`sync.has_setup_completed`, without which the engine registers and downloads
+nothing -- into `Default/Preferences` before the browser starts, and the browser
+runs with `--password-store=basic` so the fixed key that decrypts the blob is the
+one it uses. The seed lives in one ciphertext
+(`secrets/server/brave-sync-seed.yaml`) and reaches exactly one unit, as a Podman
+secret; `docs/manual-steps.md` section 40.17 is the operator's half, including
+rotation and removal.
+
+The browser's only egress is the allowlist proxy on `agent-brave.network`, which
+tunnels `sync-v2.brave.com:443` and nothing else (`docs/core/applications.md`,
+"Collector egress"). That is also the limit of this source: a chain member that
+the proxy does not reach contributes nothing, and there is no second path to the
+provider.
+
+### The snapshot, and why the copy has a name
+
+`apps/brave_ingest/snapshot.py` takes the quiesced copy into
+`state/agent-local/quarantine/brave/History`, and
+`smortress-agent-collect-brave.service` runs it as its first stage, with the
+collector over the copy as the second. Two steps for the same reason the calendar
+pass has two: the collector refuses a database still being written, and only the
+snapshot knows how to copy one that is.
+
+It uses SQLite's backup API against a read-only connection first, which is the case
+the browser makes normal -- the database is open and being written while the copy
+is taken. When that cannot be used it falls back to copying `History` and its
+sidecars into a staging directory and folding the log into the main file there, and
+it publishes only the folded file. Either way the collector is handed one path with
+no sibling, the copy is replaced by rename so a half-written one is never readable,
+and it is `0600` in a `0750` directory because it is browsing history.
+
+Which sidecar the pinned artifact writes was checked rather than assumed: Brave
+1.100.58 leaves `History` in rollback-journal mode (`PRAGMA journal_mode` answers
+`delete`) and creates `History-journal`, while its other databases (`DIPS`,
+`segmentation_platform/ukm_db`) are WAL with the lower-case `-wal` SQLite derives
+from the name. Both spellings are treated as sidecars, and
+`smortress-agent-collect-brave.path` watches `History`, `History-wal` and
+`History-journal`, so a later Chromium switching the database to WAL needs no edit.
+The path unit is the trigger; the six-hourly `Persistent=true` timer is the
+reconcile.
+
+Fidelity limits: retention expiry, a deletion in the browser and a recreated
+profile are indistinguishable, so a vanished table is carried forward as
+`retention` and never tombstoned; the work Mac is outside agent collection and is a
+declared gap; and nothing here says whether a visit was made on this host or
+arrived over the chain, because Sync delivers rows, not provenance.
 
 ## Who reads a generation
 

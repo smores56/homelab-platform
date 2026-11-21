@@ -1,0 +1,89 @@
+# The browsing collector's provider half: a real Brave, headless, one profile.
+#
+# Brave has no CLI to join a Sync chain, so the only unattended path is a profile
+# whose `Preferences` already carries the OSCrypt blob the desktop's own join
+# wrote. This image is therefore just the browser: the seed is planted at boot by
+# `apps/brave_ingest/seed.py`, and the browser reads it, encrypts nothing new and
+# needs no key material of its own. `--password-store=basic` is what makes the
+# seed decryptable at all: it is the fixed "peanuts" key, which is exactly why the
+# planted blob must be treated as a secret (`docs/manual-steps.md` section 40.17).
+#
+# The browser is a **release artifact**, not a distribution package. Debian
+# carries `brave-browser` only through Brave's own apt repository, which this base
+# does not have and which a sealed host cannot reach at container start. The
+# `.deb` is downloaded once at build time from the GitHub release tag and checked
+# against the sha256 below, so the bytes that ship are the bytes reviewed. The
+# apt repository would also make the version a function of when the image was
+# built; the pin here makes it a reviewed fact.
+#
+# `brave-keyring` is the one package the release `.deb` depends on and Brave does
+# not put on GitHub: it installs the apt keyring and the repo file, neither of
+# which this image ever uses, but a hard `Depends:` fails the install without it.
+# It comes from Brave's own apt pool at the version and hash the pool's Packages
+# index named, so both halves stay pin-and-hash rather than "install and hope".
+#
+# The base is pinned by digest, not tagged: a tag would move under the next build
+# and the digest this repository signs, pins in `scripts/app-images.sh` and points
+# a Quadlet at would then name different bytes than the ones reviewed. This is
+# the same `python:3.13-slim` digest `images/agent-egress/Containerfile` and
+# `images/tuta-calendar/Containerfile` build from -- a Debian slim base this
+# repository already trusts -- so a base refresh happens in one deliberate change
+# across all three.
+FROM python:3.13-slim@sha256:e48f59cdba69a3cbd9ed2cf0f348d90d45a8d350d98134cf1070bc106ee9ed90
+
+# Brave 1.100.58, the newest amd64 release-channel build when this landed. Both
+# hashes were verified against the downloaded files:
+#   https://github.com/brave/brave-browser/releases/download/v1.100.58/brave-browser_1.100.58_amd64.deb
+#     sha256 2d9d1e664efd60343c77324c836be402cbe57ce12549975584dfa7d073f156a5
+#   https://brave-browser-apt-release.s3.brave.com/pool/main/b/brave-keyring/brave-keyring_1.20-1.deb
+#     sha256 9ea8725ad4241e4d30bc31b0d5213c7ce24b1dcd5247875b2de1bcba8c4e9b00
+ARG BRAVE_VERSION=1.100.58
+ARG BRAVE_SHA256=2d9d1e664efd60343c77324c836be402cbe57ce12549975584dfa7d073f156a5
+ARG BRAVE_KEYRING_VERSION=1.20-1
+ARG BRAVE_KEYRING_SHA256=9ea8725ad4241e4d30bc31b0d5213c7ce24b1dcd5247875b2de1bcba8c4e9b00
+ARG BRAVE_DEB_URL=https://github.com/brave/brave-browser/releases/download
+ARG BRAVE_KEYRING_URL=https://brave-browser-apt-release.s3.brave.com/pool/main/b/brave-keyring
+
+# `apt-get install ./…deb` rather than `dpkg -i`: the release package declares its
+# own dependency list (fontconfig, GTK, NSS, GBM, Vulkan and the rest) and resolving
+# it here is what keeps the list out of this file. `--no-install-recommends`
+# because the recommendations are desktop integration this image never runs.
+# curl is a build-time tool only; it is purged in the same layer so the browser is
+# not shipped beside a network client nobody asked for.
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends ca-certificates curl; \
+    curl -fsSLo /tmp/brave-keyring.deb \
+      "${BRAVE_KEYRING_URL}/brave-keyring_${BRAVE_KEYRING_VERSION}.deb"; \
+    curl -fsSLo /tmp/brave-browser.deb \
+      "${BRAVE_DEB_URL}/v${BRAVE_VERSION}/brave-browser_${BRAVE_VERSION}_amd64.deb"; \
+    echo "${BRAVE_KEYRING_SHA256}  /tmp/brave-keyring.deb" | sha256sum -c -; \
+    echo "${BRAVE_SHA256}  /tmp/brave-browser.deb" | sha256sum -c -; \
+    apt-get install -y --no-install-recommends /tmp/brave-keyring.deb /tmp/brave-browser.deb; \
+    rm -f /tmp/brave-keyring.deb /tmp/brave-browser.deb; \
+    apt-get purge -y curl; \
+    rm -rf /var/lib/apt/lists/* /var/cache/apt /var/cache/debconf; \
+    ln -s /opt/brave.com/brave/brave /usr/local/bin/brave; \
+    brave --version
+
+# Brave writes its profile under `$HOME/.config/brave` unless `--user-data-dir`
+# replaces it, and the Quadlet passes `--user-data-dir=/data`. HOME is that same
+# directory so a Chromium helper that ignores the flag still lands inside the
+# volume instead of on the read-only root.
+ENV HOME=/data
+
+# A numeric uid with no passwd entry: the profile volume is owned by 1000 and
+# nothing else in this image is written at runtime.
+RUN set -eux; \
+    install -d -o 1000 -g 1000 -m 0700 /data
+WORKDIR /data
+USER 1000:1000
+
+# The arguments live in the Quadlet's `Exec=`, not here: the proxy and DNS
+# addresses are the egress gate's, and the unit is where the tests assert them.
+#
+# `brave` is the name this repository and the runbooks use; the package ships its
+# launcher as `/opt/brave.com/brave/brave` behind a `/usr/bin/brave-browser-stable`
+# symlink, so the build adds that name and runs `brave --version`. A release that
+# renames its binary fails the build instead of the first boot.
+ENTRYPOINT ["brave"]

@@ -15,7 +15,7 @@ podman_bin=${PODMAN_BIN:-podman}
 # something to publish.
 # One line on purpose: tests/core/app-quadlets.sh reads the names from the
 # `readonly names=(` line to prove every declared secret has a decrypted source.
-readonly names=(immich-db-password opdshelf-admin-password agent-local-api-key agent-general-api-key agent-hosted-key agent-facade-personal-token agent-facade-general-token simplefin-access-url tmail-bridge-password)
+readonly names=(immich-db-password opdshelf-admin-password agent-local-api-key agent-general-api-key agent-hosted-key agent-facade-personal-token agent-facade-general-token simplefin-access-url tmail-bridge-password brave-sync-seed)
 
 for name in "${names[@]}"; do
   src=$secrets_dir/$name.yaml

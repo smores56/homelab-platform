@@ -151,6 +151,12 @@ for spec in personal:local general:general; do
     # every run: the session is the account's access, the dump is disposable.
     install -d -o 1000 -g 1000 -m 0700 "$home/quarantine/tuta-calendar"
     install -d -o 1000 -g 1000 -m 0750 "$home/quarantine/calendar"
+    # The browsing profile and the one copy of its History the collector reads.
+    # 0700 for the profile because the Sync seed is planted in it and that seed is
+    # the chain's key; 0750 for the snapshot because it is browsing history and is
+    # replaced on every pass (docs/raw-replicas.md, "Brave").
+    install -d -o 1000 -g 1000 -m 0700 "$home/quarantine/brave-profile"
+    install -d -o 1000 -g 1000 -m 0750 "$home/quarantine/brave"
   fi
 
   echo "agent-config-seed: $state is seeded" \

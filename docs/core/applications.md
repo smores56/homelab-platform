@@ -266,6 +266,7 @@ has no route off the host.
 | `smortress-agent-mail-stream.service` | `agent-collect.network` | `state/agent-local/replica/mail` | Podman secret `tmail-bridge-password`, uid 1000 mode 0400 |
 | `smortress-agent-collect-calendar.timer` → `.service` | `agent-collect.network` | `state/agent-local/quarantine/calendar` (the dump) and `state/agent-local/replica/calendar` (the collection) | none: the exporter authenticates with the sealed session on `state/agent-local/quarantine/tuta-calendar`, mounted only into the dump stage |
 | `agent-tmail` (Quadlet; it serves, no timer) | `agent-collect.network` | `state/agent-local/quarantine/tmail`, its own session volume | none: its credential is the session on that volume |
+| `smortress-agent-collect-brave.path` → `.service`, plus a six-hourly `.timer` reconcile | `agent-brave.network` for the browser (`agent-brave`); neither collection stage has a network | `state/agent-local/quarantine/brave` (the snapshot) and `state/agent-local/replica/brave` (the collection) | Podman secret `brave-sync-seed`, uid 1000 mode 0400, held by the seed unit only |
 
 Tuta serves no IMAP at all, so `agent-tmail` -- TutaBridge, mirrored and pinned
 like every other application image -- is the mail provider half: it holds the
@@ -331,12 +332,23 @@ it would dial an address the network cannot route.
 
 The network is deliberately not `agent-general.network` even though both have
 egress: the general side carries the hosted provider key, and a bank collector has
-no business on that segment. The unit runs the pinned `agent-runtime` digest with
-`--read-only --cap-drop=all --user 1000:1000`, mounting the booted image's own
-code at `/usr/lib/agent-facade`, so the program that reads an account is the one
-this deployment ships. A refusal exits 3 and publishes no generation; the timer is
-`Persistent=true`, so a missed run is closed on the next boot instead of leaving a
-hole in the replica.
+no business on that segment. A collector unit runs the pinned `agent-runtime`
+digest with `--read-only --cap-drop=all --user 1000:1000`, mounting the booted
+image's own code at `/usr/lib/agent-facade`, so the program that reads an account
+or a database is the one this deployment ships. A refusal exits 3 and publishes no
+generation; the timers are `Persistent=true`, so a missed run is closed on the next
+boot instead of leaving a hole in the replica.
+
+The browsing collector is the one pair where the provider half is a process of its
+own. `agent-brave.container` is the only container on `agent-brave.network`, and
+therefore the only one with an address to dial: the snapshot and the collection
+that follow it read and write local paths, so
+`smortress-agent-collect-brave.service` runs both stages with `--network none` and
+cannot reach the proxy even if it were asked to. The profile volume it shares with
+the seed unit is the chain membership -- the planted seed and the sync engine's
+device id live in it -- so it is mounted into the browser and written by exactly
+one other process, `smortress-agent-brave-seed.service`, before the browser starts
+(`docs/manual-steps.md` section 40.17).
 
 The model server (`agent-model`) is llama.cpp pinned at
 `ghcr.io/ggml-org/llama.cpp:server-cuda`, started with `-c 65536`. That number is a
@@ -537,6 +549,13 @@ successful start — it is proven by serving representative data from it.
   relabel fails with `EROFS`, and the content is already `bin_t`/`usr_t`, which
   `container_t` may read. Only dataset mounts relabel (`:z`); anything the bootc
   image installs under `/usr` is mounted read-only and unrelabelled.
+- The Brave Sync seed is a secret inside a restorable dataset, and therefore in the
+  Restic snapshots of it: the planted blob decrypts with Chromium's fixed
+  "peanuts" key, which is what `--password-store=basic` buys, so
+  `state/agent-local/quarantine/brave-profile` is a copy of the chain's key and a
+  restore of it into another host makes that host a chain member. That is what a
+  restore is for; a leaked copy is revoked on the chain side by removing the
+  device, not by rotating a password (section 40.17, step 7).
 - A facade token is a secret inside a restorable dataset: it sits in the seeded
   `config.yaml` under `state/agent-*`, so it is in Restic snapshots in R2 exactly as
   the gateway keys in `.env` already are. Both are self-issued and revocable, and

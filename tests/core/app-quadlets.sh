@@ -53,6 +53,7 @@ readonly app_quadlets=(
   units/quadlet/agent-webui-personal.container
   units/quadlet/agent-webui-general.container
   units/quadlet/agent-tmail.container
+  units/quadlet/agent-brave.container
 )
 
 # Ports that are published on loopback for the operator's own curl and are
@@ -1154,6 +1155,245 @@ for secret in simplefin-access-url tmail-bridge-password; do
     bad "$secret becomes a Podman secret"
   fi
 done
+
+# 8e. The browsing collector (#713): a real browser whose only egress is the gate
+#     above, a profile seeded before it starts, a snapshot the collector can
+#     accept, and a watcher on the profile's own database. The peer addresses are
+#     derived from the two gate Quadlets rather than repeated here: moving the
+#     proxy or the resolver has to fail this section too.
+brave=units/quadlet/agent-brave.container
+brave_seed=units/systemd/smortress-agent-brave-seed.service
+brave_collect=units/systemd/smortress-agent-collect-brave.service
+brave_path=units/systemd/smortress-agent-collect-brave.path
+brave_timer=units/systemd/smortress-agent-collect-brave.timer
+proxy_ip=$(sed -n 's/^Network=agent-brave\.network:ip=\([0-9.]*\)$/\1/p' units/quadlet/agent-egress-proxy.container)
+proxy_port=$(sed -n 's/^Exec=proxy .*--listen [0-9.]*:\([0-9]*\)$/\1/p' units/quadlet/agent-egress-proxy.container)
+dns_ip=$(sed -n 's/^Network=agent-brave\.network:ip=\([0-9.]*\)$/\1/p' units/quadlet/agent-egress-dns.container)
+if [[ -n $proxy_ip && -n $proxy_port && -n $dns_ip && $proxy_ip != "$dns_ip" ]]; then
+  ok "the egress gate names two distinct peers"
+else
+  bad "the egress gate names two distinct peers" "proxy=$proxy_ip:$proxy_port dns=$dns_ip"
+fi
+if [[ -f $brave ]]; then
+  ok "$brave exists"
+  eq "$(grep -cE '^Network=' "$brave")" 1 "$brave joins exactly one network"
+  if grep -qxF 'Network=agent-brave.network' "$brave"; then
+    ok "the browser is on the internal network and nowhere else"
+  else
+    bad "the browser is on the internal network and nowhere else"
+  fi
+  if grep -qE '^PublishPort=' "$brave"; then
+    bad "the browser publishes nothing"
+  else
+    ok "the browser publishes nothing"
+  fi
+  image=$(grep -oE '^Image=.*' "$brave" | cut -d= -f2-)
+  if app_image_matches "$image"; then
+    ok "the browser runs a pinned image from the table"
+  else
+    bad "the browser runs a pinned image from the table" "$image"
+  fi
+  if grep -qxF 'Volume=/var/lib/agent/local/quarantine/brave-profile:/data:z' "$brave"; then
+    ok "the profile volume is the chain membership, label-shared"
+  else
+    bad "the profile volume is the chain membership, label-shared"
+  fi
+  for flag in 'ReadOnly=true' 'User=1000:1000' 'NoNewPrivileges=true' 'DropCapability=ALL'; do
+    if grep -qxF "$flag" "$brave"; then
+      ok "the browser sets $flag"
+    else
+      bad "the browser sets $flag"
+    fi
+  done
+  if grep -qE '^Tmpfs=/tmp:' "$brave"; then
+    ok "the browser has a writable tmpfs for its scratch space"
+  else
+    bad "the browser has a writable tmpfs for its scratch space"
+  fi
+  if grep -qE -- "--dns=$dns_ip( |$)" "$brave"; then
+    ok "the browser resolves through the allowlist responder"
+  else
+    bad "the browser resolves through the allowlist responder" "want --dns=$dns_ip"
+  fi
+  if grep -qE -- "--proxy-server=http://$proxy_ip:$proxy_port( |\$)" "$brave"; then
+    ok "the browser's only egress is the allowlist proxy"
+  else
+    bad "the browser's only egress is the allowlist proxy" "want http://$proxy_ip:$proxy_port"
+  fi
+  if grep -qE -- '--memory=640m' "$brave" && grep -qE -- '--memory-swap=800m' "$brave"; then
+    ok "the browser is bounded at 640/800 MiB"
+  else
+    bad "the browser is bounded at 640/800 MiB"
+  fi
+  for flag in '--headless=new' '--no-sandbox' '--password-store=basic' '--user-data-dir=/data'; do
+    if grep -qF -- "$flag" "$brave"; then
+      ok "the browser runs with $flag"
+    else
+      bad "the browser runs with $flag"
+    fi
+  done
+  if grep -qxF 'Restart=always' "$brave" && grep -qxF 'SuccessExitStatus=143' "$brave"; then
+    ok "the browser restarts except on a deliberate stop"
+  else
+    bad "the browser restarts except on a deliberate stop"
+  fi
+  if grep -qE '^After=.*smortress-agent-brave-seed\.service' "$brave"; then
+    ok "the browser starts after its profile is seeded"
+  else
+    bad "the browser starts after its profile is seeded"
+  fi
+else
+  bad "$brave exists"
+fi
+
+if [[ -f $brave_seed ]]; then
+  ok "$brave_seed exists"
+  if grep -qE '^Before=.*agent-brave\.service' "$brave_seed"; then
+    ok "the seed is planted before the Quadlet-generated browser unit"
+  else
+    bad "the seed is planted before the Quadlet-generated browser unit"
+  fi
+  eq "$(grep -cF -- '--secret brave-sync-seed,type=mount,uid=1000,gid=1000,mode=0400' "$brave_seed")" 1 \
+    "the seed is a Podman secret at uid 1000 mode 0400"
+  if grep -qxF 'ConditionPathExists=/var/lib/agent/local/quarantine/brave-profile' "$brave_seed"; then
+    ok "the seed unit waits for the profile directory the seeder creates"
+  else
+    bad "the seed unit waits for the profile directory the seeder creates"
+  fi
+  if [[ $(grep -cE '^ *--network ' "$brave_seed") == 1 ]] &&
+     grep -qE '^ *--network none' "$brave_seed" &&
+     grep -qF -- '-m apps.brave_ingest.seed' "$brave_seed"; then
+    ok "the seeder is a local one-shot with no address"
+  else
+    bad "the seeder is a local one-shot with no address"
+  fi
+  if grep -qE -- '/var/lib/agent/local/quarantine/brave-profile:/data:z' "$brave_seed"; then
+    ok "the seeder is the second process that may write the profile"
+  else
+    bad "the seeder is the second process that may write the profile"
+  fi
+  if grep -qF 'smortress-agent-brave-seed.service' image/Containerfile; then
+    ok "the image enables the seed unit"
+  else
+    bad "the image enables the seed unit"
+  fi
+else
+  bad "$brave_seed exists"
+fi
+
+if [[ -f $brave_collect ]]; then
+  ok "$brave_collect exists"
+  eq "$(grep -cE '^ExecStart=' "$brave_collect")" 2 "$brave_collect is snapshot then collect"
+  snapshot_line=$(grep -nF 'apps.brave_ingest.snapshot' "$brave_collect" | cut -d: -f1)
+  collect_line=$(grep -nF 'data_plane.collectors.raw' "$brave_collect" | cut -d: -f1)
+  if [[ -n $snapshot_line && -n $collect_line && $snapshot_line -lt $collect_line ]]; then
+    ok "the snapshot stage runs before the collector stage"
+  else
+    bad "the snapshot stage runs before the collector stage" \
+      "snapshot=$snapshot_line collect=$collect_line"
+  fi
+  if grep -qE -- '/var/lib/agent/local/quarantine/brave-profile:/profile:ro' "$brave_collect" &&
+     grep -qE -- '/var/lib/agent/local/quarantine/brave:/quarantine:z' "$brave_collect"; then
+    ok "only the snapshot writes the quarantine copy"
+  else
+    bad "only the snapshot writes the quarantine copy"
+  fi
+  if grep -qE -- '/var/lib/agent/local/quarantine/brave:/quarantine:ro' "$brave_collect"; then
+    ok "the collector reads the copy read-only"
+  else
+    bad "the collector reads the copy read-only"
+  fi
+  if grep -qF -- 'brave --database /quarantine/History --device smortress --profile default' \
+    "$brave_collect"; then
+    ok "the collector names the device and profile the replica is keyed by"
+  else
+    bad "the collector names the device and profile the replica is keyed by"
+  fi
+  if [[ $(grep -cE -- '--network none' "$brave_collect") == 2 ]]; then
+    ok "neither stage has a network"
+  else
+    bad "neither stage has a network"
+  fi
+  if grep -qE -- '--secret ' "$brave_collect"; then
+    bad "the collection pass holds no Podman secret"
+  else
+    ok "the collection pass holds no Podman secret"
+  fi
+  while IFS= read -r image; do
+    if app_image_matches "$image"; then
+      ok "the collection pass runs a pinned image from the table"
+    else
+      bad "the collection pass runs a pinned image from the table" "$image"
+    fi
+  done < <(grep -oE 'ghcr\.io/smores56/homelab-platform/[a-z-]+@sha256:[0-9a-f]{64}' "$brave_collect")
+  for unit in smortress-agent-collect-brave.path smortress-agent-collect-brave.timer; do
+    if grep -qF "$unit" image/Containerfile; then
+      ok "the image enables $unit"
+    else
+      bad "the image enables $unit"
+    fi
+  done
+else
+  bad "$brave_collect exists"
+fi
+
+if [[ -f $brave_path ]]; then
+  ok "$brave_path exists"
+  eq "$(sed -n 's/^Unit=//p' "$brave_path")" "$(basename "$brave_collect")" \
+    "the watcher runs the collection pass"
+  eq "$(grep -cE '^PathModified=/var/lib/agent/local/quarantine/brave-profile/Default/History$' "$brave_path")" 1 \
+    "the watcher follows the profile's History"
+  if grep -qxF 'PathModified=/var/lib/agent/local/quarantine/brave-profile/Default/History-wal' "$brave_path"; then
+    ok "the watcher also follows the sidecar a write appears in first"
+  else
+    bad "the watcher also follows the sidecar a write appears in first"
+  fi
+else
+  bad "$brave_path exists"
+fi
+
+if [[ -f $brave_timer ]]; then
+  eq "$(sed -n 's/^Unit=//p' "$brave_timer")" "$(basename "$brave_collect")" \
+    "the reconcile timer runs the collection pass"
+  if grep -qxF 'Persistent=true' "$brave_timer"; then
+    ok "the reconcile timer closes a missed pass on the next boot"
+  else
+    bad "the reconcile timer closes a missed pass on the next boot"
+  fi
+  if grep -qE '^OnCalendar=\*-\*-\* 00/6:' "$brave_timer"; then
+    ok "the reconcile timer is six-hourly"
+  else
+    bad "the reconcile timer is six-hourly"
+  fi
+else
+  bad "$brave_timer exists"
+fi
+
+# shellcheck disable=SC2016  # the matched text is a line of the seed script
+if grep -qF 'install -d -o 1000 -g 1000 -m 0700 "$home/quarantine/brave-profile"' scripts/agent-config-seed.sh &&
+  grep -qF 'install -d -o 1000 -g 1000 -m 0750 "$home/quarantine/brave"' scripts/agent-config-seed.sh; then
+  ok "the seeder creates the profile 0700 and the copy 0750, personal only"
+else
+  bad "the seeder creates the profile 0700 and the copy 0750, personal only"
+fi
+for module in apps/brave_ingest/*.py; do
+  if grep -qF "$module" image/Containerfile; then
+    ok "the image installs ${module#apps/brave_ingest/}"
+  else
+    bad "the image installs ${module#apps/brave_ingest/}"
+  fi
+done
+if grep -qE '^brave-sync-seed\.yaml[[:space:]]+root[[:space:]]+root[[:space:]]+0400[[:space:]]+value' \
+  image/rootfs/etc/smortress/secrets.manifest; then
+  ok "brave-sync-seed has a decrypt manifest entry"
+else
+  bad "brave-sync-seed has a decrypt manifest entry"
+fi
+if grep -qF 'brave-sync-seed' scripts/app-secrets.sh; then
+  ok "brave-sync-seed becomes a Podman secret"
+else
+  bad "brave-sync-seed becomes a Podman secret"
+fi
 
 printf '\n%d checks, %d failed\n' "$((pass + fail))" "$fail"
 ((fail == 0))

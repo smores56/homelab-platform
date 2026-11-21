@@ -4260,6 +4260,204 @@ sign-in below.
    A dump that exits `3` publishes nothing, so a missed version bump shows up as
    an unchanged generation count rather than as a calendar that quietly emptied.
 
+### 40.17 Export the Brave sync seed and run the browsing collector
+
+The browsing collector's provider half is a real Brave running in the agent
+dataset: one headless profile, joined to this account's Sync chain, whose
+`History` the collector copies whenever it changes. Brave has no CLI to join a
+chain and the join UI needs a human to type a 25-word code, so the membership is a
+**seed**: the OSCrypt blob the desktop's own join wrote, planted into the profile's
+`Preferences` before the browser starts. Everything after that resumes it
+unattended.
+
+The seed is the chain's key. Anything holding it can read and write the synced
+history, so it lives in one ciphertext, reaches one unit as a Podman secret at uid
+1000 mode 0400, and lands in a `0600` `Preferences` document. Nothing logs it.
+
+1. Publish the browser image once. `units/quadlet/agent-brave.container` names
+   `ghcr.io/smores56/homelab-platform/brave` at the digest of the first local
+   build of `images/brave/Containerfile`, because the image does not exist in the
+   registry until `publish-brave` runs:
+
+   ```sh
+   gh workflow run publish-brave
+   gh run watch "$(gh run list --workflow publish-brave --limit 1 \
+     --json databaseId --jq '.[0].databaseId')"
+   ```
+
+   The run ends with the pin row on stdout and in the job summary. Replace the
+   `brave|built:images/brave/Containerfile|sha256:…` row in
+   `scripts/app-images.sh` **and** the `Image=` line in
+   `units/quadlet/agent-brave.container` with it, in one commit: a row that moves
+   without the Quadlet pins a digest the host never pulls, and the container fails
+   at start on a digest that does not exist.
+
+2. Export the seed from a desktop profile already in the chain, with Brave
+   **closed**. Brave stores base64 of the raw blob (`v10` + IV + ciphertext) and
+   the contract here is the `v10<base64>` form, so the export drops the `v10` the
+   decoded blob starts with and the literal prefix restores it:
+
+   ```sh
+   prefs="$HOME/.config/BraveSoftware/Brave-Browser/Default/Preferences"
+   seed="v10$(jq -r '.brave_sync_v2.seed' "$prefs" | base64 -d | tail -c +4 | base64 -w0)"
+   printf '%s\n' "${#seed}"        # a real seed is hundreds of characters, never 0
+   ```
+
+   A profile that has never joined has no `brave_sync_v2.seed` and `jq` prints
+   `null`: join Sync in that profile first, wait for the chain to deliver, then
+   close it and export again. The blob is portable because both sides run with
+   `--password-store=basic`, whose fixed "peanuts" key is what decrypts it; a seed
+   from a keyring-backed profile would not decrypt and is not worth exporting.
+
+3. Encrypt it and put it where the boot image reads it. `sops` takes the
+   recipients from the creation rule for that path, so no `--age` list is needed:
+
+   ```sh
+   ( umask 077
+     printf 'brave_sync_seed: %s\n' "$seed" >/tmp/brave-sync-seed.yaml
+     sops --encrypt --input-type yaml --output-type yaml \
+       --filename-override secrets/server/brave-sync-seed.yaml \
+       /tmp/brave-sync-seed.yaml >secrets/server/brave-sync-seed.yaml
+     rm -f /tmp/brave-sync-seed.yaml
+     unset seed
+   )
+   head -1 secrets/server/brave-sync-seed.yaml   # must be `brave_sync_seed: ENC[`
+   ```
+
+   Commit that, merge, wait for the `publish-server-image` run to finish, then
+   upgrade. The upgrade is what puts the new ciphertext on the host:
+
+   ```sh
+   sudo bootc upgrade && sudo systemctl reboot
+   ```
+
+4. Prove the seed planted. `smortress-agent-brave-seed.service` runs before the
+   browser at every boot and is idempotent, so it replants a rotated seed and
+   leaves the profile's other keys alone. Its journal names no value:
+
+   ```sh
+   sudo journalctl -u smortress-agent-brave-seed.service -n 5 --no-pager
+   sudo stat -c '%u:%g %a %n' \
+     /var/lib/agent/local/quarantine/brave-profile/Default/Preferences
+   sudo jq -r '.brave_sync_v2.seed | (test("^v10"), length > 0)' \
+     /var/lib/agent/local/quarantine/brave-profile/Default/Preferences
+   sudo jq -r '.sync' \
+     /var/lib/agent/local/quarantine/brave-profile/Default/Preferences
+   ```
+
+   The journal line is `{"event": "seed", "planted": true, …}` on the first boot
+   and `{"event": "seed", "planted": false, "unchanged": true, …}` after it. The
+   file is `1000:1000 600`. The first `jq` prints `false` then `true`: `false`
+   because the stored form is base64 (it starts `djEw…`, not `v10`), `true`
+   because it is not empty. The second prints `requested`, `keep_everything_synced`
+   and `has_setup_completed`, all `true` -- a profile with the seed but without
+   those three registers on the chain and downloads nothing.
+
+   A `{"event": "refused", …}` line instead means the seeder wrote nothing: the
+   secret still carries the shipped placeholder, the value is not a `v10` blob, or
+   `sops-decrypt` did not produce the file. Fix it with step 3 and reboot, not with
+   a restart of the unit.
+
+   Prove the value never reached a journal, without printing it:
+
+   ```sh
+   seed=$(sops -d secrets/server/brave-sync-seed.yaml | awk '{print $2}')
+   sudo journalctl -u smortress-agent-brave-seed.service \
+     -u smortress-agent-collect-brave.service --since '-1 day' | grep -cF "$seed"
+   unset seed
+   ```
+
+   It must print `0`.
+
+5. Prove the browser runs and that the proxy is what it talks to:
+
+   ```sh
+   sudo systemctl is-active agent-brave.service
+   sudo podman logs --tail 40 smortress-agent-brave
+   sudo journalctl -u agent-egress-proxy.service --since '-30 min' --no-pager | tail -40
+   sudo journalctl -u agent-egress-dns.service --since '-30 min' --no-pager | tail -20
+   ```
+
+   `agent-brave.service` is the Quadlet-generated name for
+   `agent-brave.container`, not the container name. `is-active` alone proves
+   little: the browser stays up with a seed it cannot decrypt. The proxy's journal
+   is the evidence that matters -- it names `sync-v2.brave.com:443` among the
+   CONNECT requests it tunnelled and nothing else, because
+   `image/rootfs/etc/smortress/agent/egress-policy.json` grants the `brave` label
+   exactly that hostname. The resolver's journal shows the same shape from the
+   other side: answers for that name, `refused` for every other name Chromium
+   tries (`accounts.google.com`, `clients2.google.com` and the component updater
+   among them).
+
+   A `sync-v2.brave.com` CONNECT that is refused, or no CONNECT at all, is the
+   failure to read carefully: refused means the policy and the image disagree
+   (rebuild both), and none means the browser never started its sync engine (a
+   seed that did not plant, or `sync.requested` missing -- see step 4).
+
+6. Prove a visit reaches the replica. With the profile joined, a visit made
+   anywhere in the chain arrives here as a change to `History`:
+
+   ```sh
+   sudo journalctl -u smortress-agent-collect-brave.service -f
+   ```
+
+   Browse to a site on a phone in the same chain, wait for the chain to deliver it
+   (a minute or two), and watch two JSON lines appear: the snapshot's
+   (`{"event": "snapshot", "out": "/quarantine/History", "urls": N, …}`) and the
+   collector's report (`{"source_id": "brave.history", "objects": …, "deleted": 0,
+   "published": "…"}`). Then read the visit out of the generation it published:
+
+   ```sh
+   gen=$(sudo ls -1 /var/lib/agent/local/replica/brave/published | tail -n 1)
+   sudo jq -r '.rows[] | "\(.[1]) \(.[2])"' \
+     "/var/lib/agent/local/replica/brave/published/$gen/objects/brave%3A%3Atable%3A%3Aurls"
+   ```
+
+   The URL you visited is in that list, with its title. `deleted` is always `0`:
+   retention expiry, a deletion in the browser and a recreated profile all look
+   the same from here, so a table that stops appearing is carried forward with an
+   absence reason instead of being tombstoned (`docs/raw-replicas.md`, "Brave").
+
+   No pass at all means the watcher saw nothing: `smortress-agent-collect-brave.path`
+   watches `Default/History` and its sidecars, and the six-hourly timer
+   (`…-brave.timer`, `Persistent=true`) is the reconcile. A red unit is a refusal
+   -- a database that failed `integrity_check`, a replica that could not be written
+   -- and the journal names the reason.
+
+7. Rotate or remove the seed.
+
+   **Rotate** (a new chain, or a seed you believe leaked): replace the value with
+   step 3, merge, wait for `publish-server-image`, `sudo bootc upgrade`, and
+   reboot. The seeder replants at every boot, so the new blob is in `Preferences`
+   before the browser reads it. Note what a rotation costs: a different seed is a
+   different chain, so the profile starts a fresh `History` and the previous
+   generations stay in the replica as the history they are.
+
+   **Remove this host from the chain**, which is the real revocation: on a desktop
+   in Brave's Sync settings, remove the `smortress` device. The seed on this host
+   keeps working for a cached profile and stops delivering anything new.
+
+   **Remove the seed from this host**: stop the browser, delete the profile, and
+   replace the ciphertext value with a random 32-byte hex placeholder so the
+   seeder refuses it (a value that is not a `v10` blob is refused, which is why the
+   shipped placeholder is that shape):
+
+   ```sh
+   sudo systemctl stop agent-brave.service
+   sudo rm -rf /var/lib/agent/local/quarantine/brave-profile
+   ( umask 077
+     printf 'brave_sync_seed: %s\n' "$(openssl rand -hex 32)" >/tmp/brave-sync-seed.yaml
+     sops --encrypt --input-type yaml --output-type yaml \
+       --filename-override secrets/server/brave-sync-seed.yaml \
+       /tmp/brave-sync-seed.yaml >secrets/server/brave-sync-seed.yaml
+     rm -f /tmp/brave-sync-seed.yaml
+   )
+   ```
+
+   `smortress-agent-config.service` recreates the profile directory (0700) at the
+   next boot, so the browser starts unseeded rather than not at all: it runs, it
+   collects nothing, and the seeder's refusal is the journal line that says why.
+
 ## 41. Delete the Cloudflare SSH route (design #767, T6)
 
 SSH is tailnet-only, so the Cloudflare route is deleted and not replaced. The

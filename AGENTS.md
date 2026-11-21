@@ -38,11 +38,12 @@ tests/digest/check.sh                   # digest builder fixtures, egress and re
 tests/data-plane/check.sh               # data-plane contracts, identity, journal, broker, backup, collectors, memory, CLI
 tests/tuta-calendar/check.sh            # calendar exporter: crypto, session seal, entity mapping, pagination
 tests/agent-egress/check.sh            # collector egress: allowlist proxy, SNI gate, DNS responder, log redaction
+tests/brave/check.sh                    # browsing collector: seed planting, History snapshot, collector over the copy
 nix run nixpkgs#yamllint -- .
 nix run nixpkgs#actionlint -- .              # a workflow GitHub cannot parse never runs, silently
 nix run nixpkgs#shellcheck -- scripts/*.sh tests/policies/*.sh tests/tofu/*.sh \
   tests/access/*.sh tests/backup/*.sh tests/digest/*.sh tests/observability/*.sh \
-  tests/agent-control/*.sh tests/agent-egress/*.sh \
+  tests/agent-control/*.sh tests/agent-egress/*.sh tests/brave/*.sh \
   clusters/homelab/flux-system/bootstrap.sh \
   clusters/homelab/platform/backup/*.sh provision/*.sh tests/provision/*.sh
 scripts/check-action-pins.sh
