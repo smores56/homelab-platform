@@ -301,6 +301,15 @@ jobs:
         run: tests/deploy/boot.sh
       - name: deploy apps apply tests
         run: tests/deploy/apps.sh
+      # The event path, the backstop and the dead-man: the notify job's shape and
+      # the signed bytes it sends, the hourly poll's refusal to decide anything,
+      # and the heartbeat's two failure reasons.
+      - name: deploy notify job tests
+        run: tests/deploy/notify.sh
+      - name: deploy poll tests
+        run: tests/deploy/poll.sh
+      - name: deploy heartbeat tests
+        run: tests/deploy/heartbeat.sh
 
   action-pins:
     name: action SHA pins

@@ -772,6 +772,18 @@ check "the boot gate wants its inputs without requiring them" \
 check "the boot gate is installed where the loop puts it" \
   has 'ExecStart=/usr/libexec/smortress-boot-gate' "$gate_unit"
 check "the image installs the boot gate" has 'scripts/smortress-boot-gate.sh' image/Containerfile
+# The `smortress-src` loop installs only what the COPY list names, and it strips
+# the `.sh`: `deploy-apps` was written in T5 and never listed, so the drain's apps
+# child was a path the image did not have. Every program a unit's ExecStart names
+# is asserted here for the same reason.
+for program in deploy-apps deploy-poll deploy-heartbeat; do
+  check "the image installs scripts/$program.sh" has "scripts/$program.sh" image/Containerfile
+done
+for program in deploy-poll deploy-heartbeat; do
+  check "a unit runs the installed $program" has "/usr/libexec/$program" units/systemd
+done
+# deploy-apps has no unit of its own: the drain runs it for a queued apps request.
+check "the drain resolves the installed deploy-apps" has '/usr/libexec/deploy-apps' scripts/deploy-drain.sh
 check "the boot gate is sandboxed" grep -qE '^ProtectSystem=strict' "$gate_unit"
 # The gate mutates the grubenv and the ostree deployment it rolls back to, and
 # nothing else: a wider writable tree would let a compromised gate rewrite a unit.
@@ -815,6 +827,11 @@ done
 serve_script=scripts/tailscale-serve.sh
 check "Serve declares the wallpaper library as static files" \
   has "serve --bg --https=443 --set-path=/wallpapers \"\$wallpapers\"" "$serve_script"
+# The receiver's forward is declared with the core routes: a CI notification has to
+# arrive on a host whose tenant plan is unreadable, and a `--tcp` forward is not a
+# Web handler, so the `/apps/` prune below cannot remove it.
+check "Serve forwards the deploy receiver's loopback port" \
+  has 'serve --bg --tcp=8484 tcp://127.0.0.1:8484' "$serve_script"
 check "the wallpaper library is the dataset mount point" has 'WALLPAPERS_DIR:-/srv/wallpapers' "$serve_script"
 check "stale-route pruning only considers tenant handlers" \
   has 'select(startswith("/apps/"))' "$serve_script"
@@ -943,6 +960,10 @@ check "Syncthing's sync port is permitted on the tailscale zone" \
   has '<port port="22000" protocol="tcp"/>' image/rootfs/etc/firewalld/zones/tailscale.xml
 check "Syncthing's QUIC port is permitted on the tailscale zone" \
   has '<port port="22000" protocol="udp"/>' image/rootfs/etc/firewalld/zones/tailscale.xml
+# The deploy receiver is the one service whose caller is a CI job, so its port has
+# to be open on the tailnet zone or the notify path silently times out.
+check "the deploy receiver's port is permitted on the tailscale zone" \
+  has '<port port="8484" protocol="tcp"/>' image/rootfs/etc/firewalld/zones/tailscale.xml
 
 # The apps tenant (#726) is named everywhere and numbered nowhere. sysusers
 # allocates its id, so anything that named 1001 — the dataset owner, the user

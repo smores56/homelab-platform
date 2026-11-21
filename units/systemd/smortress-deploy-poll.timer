@@ -1,0 +1,16 @@
+[Unit]
+Description=Hourly backstop poll for a newer main
+
+[Timer]
+# :20 sits between the hourly backup driver (:05) and the freshness verifier
+# (:40), so the poll never competes with either for the network or the budget it
+# shares with the verifier's anonymous API calls.
+OnCalendar=*-*-* *:20:00
+AccuracySec=1min
+# A host that was off through its slot polls once on the way up: that is exactly
+# the case the backstop exists for.
+Persistent=true
+Unit=smortress-deploy-poll.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,329 @@
+#!/usr/bin/env bash
+# Offline checks for the hourly deploy poll (SDLC #798, T6).
+#
+# The poll is the backstop, not a decider: it resolves `main` for each repository
+# through the anonymous GitHub API, and it enqueues a request only when the tip
+# differs from the deployed commit. Everything after that -- the tip check, the
+# commit graph, the digests, the gates -- is the receiver's, so this suite asserts
+# what the poll must not do as much as what it must: no deploy of its own, no
+# enqueue for a denylisted tip, no second entry for a tip already queued, no
+# inference of a bootstrap.
+#
+# The API is a fixture directory behind a fake `curl`, the state and the queue are
+# throwaway paths, and the journal, the queue entries and the command line are
+# real. No network, no root, no image.
+#
+#   tests/deploy/poll.sh
+set -uo pipefail
+
+root=$(git rev-parse --show-toplevel)
+cd "$root" || exit 1
+
+poll=scripts/deploy-poll.sh
+lib=scripts/deploy-state.sh
+for file in "$poll" "$lib"; do
+  [[ -r $file ]] || {
+    printf 'FAIL %s is missing\n' "$file" >&2
+    exit 1
+  }
+done
+for tool in jq curl; do
+  command -v "$tool" >/dev/null || {
+    printf 'FAIL %s is required\n' "$tool" >&2
+    exit 1
+  }
+done
+
+pass=0
+fail=0
+ok() {
+  pass=$((pass + 1))
+  printf 'ok   %s\n' "$1"
+}
+bad() {
+  fail=$((fail + 1))
+  printf 'FAIL %s\n' "$1" >&2
+  [[ -n ${2:-} ]] && printf '     %s\n' "${2//$'\n'/$'\n'     }" >&2
+  return 0
+}
+check_eq() { # got want label
+  if [[ $1 == "$2" ]]; then ok "$3"; else bad "$3" "want '$2', got '$1'"; fi
+}
+check_empty() { # got label
+  if [[ -z $1 ]]; then ok "$2"; else bad "$2" "$1"; fi
+}
+check_file() { # path label
+  if [[ -s $1 ]]; then ok "$2"; else bad "$2" "missing or empty: $1"; fi
+}
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+bin=$work/bin
+api=$work/api
+state=$work/state
+queue=$state/queue
+log=$work/log
+pings=$work/pings
+mkdir -p "$bin" "$api" "$queue"
+
+# Stand-in for curl: the API answers from $FAKE_API_DIR, keyed by the request
+# path, and every Healthchecks ping is recorded instead of sent. `--fail` and
+# `--fail-with-body` exit 22 on a 4xx/5xx, as the real one does, and a status of
+# `network` is a connect failure (exit 7).
+cat >"$bin/curl" <<'EOF'
+#!/usr/bin/env bash
+set -uo pipefail
+printf '%s\n' "$*" >>"${FAKE_LOG:?}"
+fail=0
+out=/dev/stdout
+write_out=
+url=
+while (($#)); do
+  case $1 in
+    --output) out=$2; shift 2 ;;
+    --write-out) write_out=$2; shift 2 ;;
+    --fail | --fail-with-body) fail=1; shift ;;
+    -H | --header | --max-time | --data-binary | -d | --retry) shift 2 ;;
+    -*) shift ;;
+    *) url=$1; shift ;;
+  esac
+done
+status=200
+body='{}'
+case $url in
+  *api.test*)
+    status=$(cat "$FAKE_API_STATUS" 2>/dev/null) || status=200
+    [[ $status == network ]] && exit 7
+    rel=${url#*api.test/}
+    if [[ -s $FAKE_API_DIR/${rel//\//_}.json ]]; then body=$(cat "$FAKE_API_DIR/${rel//\//_}.json"); fi ;;
+  *) printf '%s\n' "$url" >>"${FAKE_PING_LOG:?}" ;;
+esac
+[[ -n $write_out ]] && printf '%s' "$status"
+if [[ $out == /dev/stdout ]]; then printf '%s' "$body"; else printf '%s' "$body" >"$out"; fi
+if ((fail)) && ((status >= 400)); then exit 22; fi
+exit 0
+EOF
+chmod +x "$bin/curl"
+
+export PATH="$bin:$PATH"
+export FAKE_LOG=$log
+export FAKE_API_DIR=$api
+export FAKE_API_STATUS=$work/api-status
+export FAKE_PING_LOG=$pings
+export DEPLOY_STATE_DIR=$state
+export DEPLOY_LOCK_FILE=$work/deploy.lock
+export DEPLOY_PING_SECRET=$work/deploy-ping-url.yaml
+export DEPLOY_GITHUB_API=http://api.test
+export DEPLOY_POLL_CACHE=$work/poll-cache.json
+export DEPLOY_POLL_REPOS=homelab-apps
+printf 'http://ping.test/deploy\n' >"$DEPLOY_PING_SECRET"
+
+sha_current=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+sha_ahead=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+
+api_tip() { # repo sha
+  jq -cn --arg sha "$2" '{object: {sha: $sha, type: "commit"}}' \
+    >"$api/repos_smores56_${1}_git_ref_heads_main.json"
+}
+seed_state() { # repo commit -- merges, so both repositories can be seeded
+  local current
+  current=$(cat "$state/state.json" 2>/dev/null) || current='{"schema":1,"apps":{}}'
+  jq --arg repo "$1" --arg commit "$2" \
+    '.repos = ((.repos // {}) | .[$repo] = {commit: $commit})' <<<"$current" \
+    >"$state/state.json"
+}
+journal_events() { # event -> count
+  grep -c "\"event\":\"$1\"" "$state/journal.jsonl" 2>/dev/null || true
+}
+queue_entries() {
+  find "$queue" -maxdepth 1 -type f -name '*.json' | wc -l | tr -d ' '
+}
+last_entry() { # jq filter
+  local file
+  file=$(find "$queue" -maxdepth 1 -type f -name '*.json' | head -n1)
+  [[ -n $file ]] || return 1
+  jq -r "$1" "$file" 2>/dev/null
+}
+
+reset_case() {
+  : >"$log"
+  : >"$pings"
+  rm -f "$FAKE_API_STATUS" "$DEPLOY_POLL_CACHE" "$state/state.json" "$state/journal.jsonl" \
+    "$state/denylist.json"
+  find "$queue" -maxdepth 1 -type f -name '*.json' -delete
+  api_tip homelab-apps "$sha_ahead"
+  seed_state homelab-apps "$sha_current"
+}
+
+run() {
+  bash "$poll" >"$work/stdout" 2>"$work/stderr"
+}
+
+# --- the tip ahead of the deployed commit is enqueued once -------------------
+
+reset_case
+if run; then ok "a poll against a newer tip succeeds"; else bad "a poll against a newer tip succeeds" "$(cat "$work/stderr")"; fi
+check_eq "$(queue_entries)" 1 "a newer tip enqueues one request"
+check_eq "$(last_entry '.repo')" homelab-apps "the request names the repository"
+check_eq "$(last_entry '.commit')" "$sha_ahead" "the request names the tip"
+check_eq "$(last_entry '.source')" poll "the request records that the poll raised it"
+check_eq "$(last_entry '.id | test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")')" true \
+  "the request id is a uuid the drain accepts"
+check_eq "$(last_entry '.queued_at | type')" number "the request carries a queue time"
+check_eq "$(journal_events poll-enqueued)" 1 "the enqueue is journaled"
+# The listener's entries carry a nonce it spent; a poll has none to replay, so
+# its entry is the same shape without one.
+check_eq "$(last_entry 'keys_unsorted | join(",")')" 'schema,id,repo,commit,queued_at,source' \
+  "the entry is the listener's shape, without a nonce"
+
+# A second poll before the drain ran must not add a second request for the same
+# commit: the queue is one decision, and a duplicate would drain it twice.
+reset_case
+run
+run
+check_eq "$(queue_entries)" 1 "a tip already queued is not enqueued again"
+check_eq "$(journal_events poll-queued)" 1 "the repeat is journaled as already queued"
+
+# --- a tip that is already deployed is not enqueued --------------------------
+
+reset_case
+seed_state homelab-apps "$sha_ahead"
+if run; then ok "a poll with nothing to do succeeds"; else bad "a poll with nothing to do succeeds" "$(cat "$work/stderr")"; fi
+check_eq "$(queue_entries)" 0 "a deployed tip enqueues nothing"
+check_eq "$(journal_events poll-current)" 1 "the no-op is journaled"
+
+# --- a denylisted tip pages and enqueues nothing -----------------------------
+
+reset_case
+jq -cn --arg commit "$sha_ahead" \
+  '{schema: 1, commits: {($commit): {reason: "boot-gate", at: "2026-01-01T00:00:00Z"}}, digests: {}}' \
+  >"$state/denylist.json"
+run
+check_eq "$(queue_entries)" 0 "a denylisted tip is not enqueued"
+if grep -qx 'http://ping.test/deploy/fail' "$pings"; then
+  ok "a denylisted tip pings the deploy check's fail endpoint"
+else
+  bad "a denylisted tip pings the deploy check's fail endpoint" "$(cat "$pings")"
+fi
+check_eq "$(journal_events poll-denylisted)" 1 "the refusal is journaled"
+
+# --- an unseeded repository is not inferred ----------------------------------
+
+# Bootstrap is explicit in the design: with no state, the operator runs
+# `smortress-deploy bootstrap` once. A poll that enqueued anyway would ask the
+# receiver to verify a commit with no ancestor to check it against.
+reset_case
+rm -f "$state/state.json"
+run
+check_eq "$(queue_entries)" 0 "a repository with no recorded commit is not enqueued"
+check_eq "$(journal_events poll-unseeded)" 1 "the missing bootstrap is journaled"
+
+# --- the API is bounded and its failures are visible -------------------------
+
+reset_case
+printf '403\n' >"$FAKE_API_STATUS"
+if run; then bad "a rate-limited poll fails the unit"; else ok "a rate-limited poll fails the unit"; fi
+check_eq "$(queue_entries)" 0 "a rate-limited poll enqueues nothing"
+if grep -qx 'http://ping.test/deploy/fail' "$pings"; then
+  ok "a rate-limited poll pages, because an exhausted budget looks like a quiet host"
+else
+  bad "a rate-limited poll pages, because an exhausted budget looks like a quiet host" "$(cat "$pings")"
+fi
+if grep -q 'api.test' "$log"; then ok "the poll called the anonymous API"; else bad "the poll called the anonymous API"; fi
+
+reset_case
+printf 'network\n' >"$FAKE_API_STATUS"
+if run; then bad "an unreachable API fails the unit"; else ok "an unreachable API fails the unit"; fi
+check_eq "$(queue_entries)" 0 "an unreachable API enqueues nothing"
+check_eq "$(cat "$pings" 2>/dev/null)" '' "an unreachable API does not page: it is not the commit's fault"
+check_eq "$(journal_events poll-failed)" 1 "the failure is journaled"
+
+reset_case
+printf '500\n' >"$FAKE_API_STATUS"
+if run; then bad "a 500 from the API fails the unit"; else ok "a 500 from the API fails the unit"; fi
+check_eq "$(queue_entries)" 0 "a 500 from the API enqueues nothing"
+
+# Every call carries a deadline: a poll that could hang would keep the unit
+# active until the timer's next tick and hide the API from the next run.
+reset_case
+if grep -qE -- '--max-time' "$poll"; then ok "every API call is bounded"; else bad "every API call is bounded"; fi
+
+# --- the 120 s cache keeps a hand-run from spending the budget ---------------
+
+reset_case
+run
+calls_after_first=$(grep -c 'api.test' "$log" || true)
+run
+calls_after_second=$(grep -c 'api.test' "$log" || true)
+check_eq "$calls_after_first" 1 "the first poll calls the API once"
+check_eq "$calls_after_second" "$calls_after_first" "a second poll inside the cache window calls the API not at all"
+check_file "$DEPLOY_POLL_CACHE" "the poll keeps its own cache"
+
+# --- the poll decides nothing ------------------------------------------------
+
+reset_case
+before=$(cat "$state/state.json")
+run
+check_eq "$(cat "$state/state.json")" "$before" "the poll never writes the deployed state"
+check_eq "$(grep -c 'deploy-verify\|deploy-drain\|bootc' "$log" || true)" 0 \
+  "the poll runs no verifier, no drain and no bootc"
+if grep -qE 'state_record_verified|queue_pop' "$poll"; then
+  bad "the poll neither records a deployment nor removes a queue entry"
+else
+  ok "the poll neither records a deployment nor removes a queue entry"
+fi
+
+# --- a full queue does not grow ----------------------------------------------
+
+reset_case
+for i in $(seq 1 32); do
+  jq -cn --arg id "00000000-0000-4000-8000-$(printf '%012d' "$i")" --arg repo homelab-platform \
+    '{schema: 1, id: $id, repo: $repo, commit: "cccccccccccccccccccccccccccccccccccccccc",
+      queued_at: 1, source: "event"}' >"$queue/00000000-0000-4000-8000-$(printf '%012d' "$i").json"
+done
+run
+check_eq "$(queue_entries)" 32 "a full queue does not grow"
+check_eq "$(journal_events poll-queue-full)" 1 "the full queue is journaled"
+
+# --- both repositories are polled --------------------------------------------
+
+reset_case
+export DEPLOY_POLL_REPOS='homelab-platform homelab-apps'
+api_tip homelab-platform "$sha_ahead"
+seed_state homelab-platform "$sha_current"
+seed_state homelab-apps "$sha_current"
+run
+check_eq "$(queue_entries)" 2 "each repository with a new tip gets one request"
+check_eq "$(jq -r '.repo' "$queue"/*.json | sort | tr '\n' ' ')" 'homelab-apps homelab-platform ' \
+  "both repositories are enqueued"
+
+# --- the unit runs it hourly -------------------------------------------------
+
+timer=units/systemd/smortress-deploy-poll.timer
+service=units/systemd/smortress-deploy-poll.service
+if [[ -s $timer ]]; then ok "the poll timer ships"; else bad "the poll timer ships"; fi
+if [[ -s $service ]]; then ok "the poll service ships"; else bad "the poll service ships"; fi
+if grep -qE '^OnCalendar=\*-\*-\* [0-9*:]+$' "$timer" 2>/dev/null; then
+  ok "the poll runs on an hourly calendar"
+else
+  bad "the poll runs on an hourly calendar" "$(cat "$timer" 2>/dev/null)"
+fi
+if grep -qE '^ExecStart=/usr/libexec/deploy-poll$' "$service" 2>/dev/null; then
+  ok "the service runs the installed script"
+else
+  bad "the service runs the installed script" "$(cat "$service" 2>/dev/null)"
+fi
+if grep -qE '^TimeoutStartSec=' "$service" 2>/dev/null; then
+  ok "the poll is bounded"
+else
+  bad "the poll is bounded"
+fi
+if grep -qF 'smortress-deploy-poll.timer' image/Containerfile; then
+  ok "the image enables the poll timer"
+else
+  bad "the image enables the poll timer"
+fi
+
+printf '\n%d passed, %d failed\n' "$pass" "$fail"
+((fail == 0))

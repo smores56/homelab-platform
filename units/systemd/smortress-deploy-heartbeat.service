@@ -1,0 +1,34 @@
+[Unit]
+Description=Ping the deploy check when the receiver is alive and its queue is moving
+Requires=sops-decrypt.service
+After=sops-decrypt.service
+# Ordering only: the listener is Restart=always, so a beat that ran before it
+# started would page for a host that is one second into its boot. systemd starts
+# the simple service and returns, which is all this needs.
+After=smortress-deploy-listener.service
+After=systemd-tmpfiles-setup.service
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/deploy-heartbeat
+# The health probe is bounded to 5 s and the ping to 10 s; this is the net under a
+# run that hangs anyway, and it has to stay well inside the timer's own period.
+TimeoutStartSec=120
+UMask=0077
+User=root
+# Read-only apart from the journal line it appends: the heartbeat must not be able
+# to touch the queue it is judging.
+ProtectSystem=strict
+ReadWritePaths=/var/lib/homelab/deploy
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX

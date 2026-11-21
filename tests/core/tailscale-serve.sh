@@ -61,20 +61,37 @@ case $1 in
             reset)
                 printf '{}\n' >"$FAKE_STATUS" ;;
             *)
-                # A declaration ends in a target; `off` removes that path.
+                # A declaration ends in a target; `off` removes that path. A
+                # `--tcp` forward is not a Web handler: Serve records it under
+                # TCP, keyed by the port it listens on.
                 path=
                 target=
                 kind=Proxy
                 port=443
+                tcp=
                 for arg in "$@"; do
                     case $arg in
                         --set-path=*) path=${arg#--set-path=} ;;
                         --https=*) port=${arg#--https=} ;;
+                        --tcp=*) tcp=${arg#--tcp=} ;;
                         http://*) target=$arg ;;
+                        tcp://*) target=$arg ;;
                         /*) target=$arg; kind=Path ;;
                         off) target=off ;;
                     esac
                 done
+                if [[ -n $tcp ]]; then
+                    [[ ${FAKE_FAIL_TCP:-} == 1 ]] && exit 1
+                    if [[ $target != tcp://* ]]; then
+                        echo "fake tailscale: unparsed tcp forward: $*" >&2
+                        exit 2
+                    fi
+                    jq --arg key "$tcp" --arg target "${target#tcp://}" '
+                        .TCP //= {} | .TCP[$key] = {"TCPForward": $target}' \
+                        "$FAKE_STATUS" >"$FAKE_STATUS.next"
+                    mv "$FAKE_STATUS.next" "$FAKE_STATUS"
+                    exit 0
+                fi
                 path=${path:-/}
                 if [[ -z $target ]]; then
                     echo "fake tailscale: unparsed serve invocation: $*" >&2
@@ -177,6 +194,26 @@ serves() { # path target label
 serves host:443 / http://127.0.0.1:2283 '443 still fronts Immich'
 serves host:8443 / http://127.0.0.1:8083 '8443 still fronts OPDShelf'
 serves host:10000 / http://127.0.0.1:8384 '10000 still fronts Syncthing'
+
+# --- the deploy receiver's TCP forward is a core route -----------------------
+#
+# The CI notify job and the hourly poll are the only callers, and both must reach
+# the receiver on a host whose tenant plan is broken: the forward is declared with
+# the core routes, before anything that reads the plan, exactly once, and the
+# `/apps/` prune never touches it.
+
+tcp_forward() { jq -r '.TCP["8484"].TCPForward // empty' "$status" 2>/dev/null; }
+eq "$(tcp_forward)" 127.0.0.1:8484 'the receiver is forwarded on tcp/8484 to its loopback port'
+eq "$(grep -cF -- 'serve --bg --tcp=8484 tcp://127.0.0.1:8484' "$log")" 1 \
+    'the forward is declared exactly once'
+forward_line=$(grep -nF -- '--tcp=8484' "$log" | cut -d: -f1 || true)
+wallpapers_line=$(grep -nF -- '--set-path=/wallpapers' "$log" | cut -d: -f1 || true)
+if [[ -n $forward_line && -n $wallpapers_line ]] && ((forward_line < wallpapers_line)); then
+    ok 'the forward is declared with the core routes, before the plan-dependent routes'
+else
+    bad 'the forward is declared with the core routes, before the plan-dependent routes' \
+        "forward at '$forward_line', wallpapers at '$wallpapers_line'"
+fi
 
 # --- the two agent gateways own a fixed path each on 443 ----------------------
 
@@ -360,6 +397,12 @@ if [[ $(grep -c -- '--bg --https=' "$log") == 8 ]]; then
 else
     bad 'a rejected plan still declares the core routes and the wallpapers route' "$(cat "$log")"
 fi
+if grep -qF -- '--tcp=8484 tcp://127.0.0.1:8484' "$log"; then
+    ok 'a rejected plan still declares the receiver forward'
+else
+    bad 'a rejected plan still declares the receiver forward' "$(cat "$log")"
+fi
+eq "$(tcp_forward)" 127.0.0.1:8484 'a rejected plan leaves the receiver forward in place'
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 ((fail == 0))

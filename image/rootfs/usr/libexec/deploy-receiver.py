@@ -149,11 +149,14 @@ def journal(event: str, **fields: Any) -> None:
 
 
 def parse_secret(path: str) -> bytes | None:
-    """Read the one `value:` scalar sops-decrypt wrote.
+    """Read the one scalar sops-decrypt wrote.
 
-    `value`, not a nested document, so this needs no YAML parser and cannot be
-    confused by one: an empty or unquoted-empty scalar is a failed decrypt and
-    therefore no secret, never a wildcard.
+    Both `value` spellings are accepted: sops-decrypt writes the scalar alone (the
+    manifest says `value`, so the key is stripped), while a hand-staged file may
+    spell out `value: <scalar>`. A bare line is taken whole and a line with a colon
+    must be `value:`, so a YAML document with other keys is still not a secret.
+    There is no YAML parser here on purpose: an empty scalar is a failed decrypt
+    and therefore no secret, never a wildcard.
     """
     try:
         with open(path, "rb") as handle:
@@ -165,9 +168,12 @@ def parse_secret(path: str) -> bytes | None:
         if not line or line.startswith("#"):
             continue
         key, sep, value = line.partition(":")
-        if not sep or key.strip() != "value":
-            continue
-        value = value.strip()
+        if sep:
+            if key.strip() != "value":
+                continue
+            value = value.strip()
+        else:
+            value = line
         if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
             value = value[1:-1]
         return value.encode() if value else None

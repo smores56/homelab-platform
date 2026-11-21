@@ -270,6 +270,33 @@ else
   bad "/healthz answers 503 when the queue is unwritable" "$(tail -n 5 "$work/ro.log")"
 fi
 
+# sops-decrypt's `value` format writes the scalar alone, not `value: <scalar>`,
+# and every host gets its webhook secrets that way. A listener that only understood
+# `value:` would pass every fixture that spells the key out and refuse to start on
+# the real host, which is the deploy path down with no page.
+bare_secrets=$work/bare-secrets
+bare_state=$work/bare-state
+mkdir -p "$bare_secrets" "$bare_state/queue" "$bare_state/work"
+chmod 0700 "$bare_secrets" "$bare_state" "$bare_state/queue"
+printf '%s\n' "$secret" >"$bare_secrets/webhook-secret.yaml"
+printf '%s\n' "$secret_next" >"$bare_secrets/webhook-secret-next.yaml"
+bare_port=$(free_port)
+start_listener "$bare_state" "$bare_secrets" "$bare_port" "$work/bare.log"
+if wait_for "$bare_port" 200; then
+  ok "the listener starts from the bare scalar sops-decrypt writes"
+else
+  bad "the listener starts from the bare scalar sops-decrypt writes" "$(tail -n 5 "$work/bare.log")"
+fi
+bare_ts=$(date +%s)
+bare_body=$(body homelab-apps "$commit_ok" "$bare_ts" 0000aaaabbbbccccddddeeeeffff0009)
+bare_signature="sha256=$(printf '%s' "$bare_body" | hmac_hex "$secret")"
+printf '%s' "$bare_body" >"$work/bare-body"
+check_eq "$(curl -sS --max-time 20 -o /dev/null -w '%{http_code}' -X POST \
+  -H 'Content-Type: application/json' -H "X-Deploy-Signature: $bare_signature" \
+  -H "X-Deploy-Timestamp: $bare_ts" --data-binary "@$work/bare-body" \
+  "http://127.0.0.1:$bare_port/v1/deploy")" 202 \
+  "a request signed with the bare-scalar secret is queued"
+
 # No secret means no listener: an empty `value:` is a failed decrypt, and a
 # listener that started anyway would answer 202 to nothing.
 empty_secrets=$work/empty-secrets

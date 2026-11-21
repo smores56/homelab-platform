@@ -1,0 +1,41 @@
+[Unit]
+Description=Poll GitHub for a newer main and enqueue a deploy
+# The denylisted-tip page reads the decrypted ping URL, so the decrypt step has to
+# be finished, not merely started.
+Requires=sops-decrypt.service
+After=sops-decrypt.service
+After=network-online.target
+Wants=network-online.target
+After=systemd-tmpfiles-setup.service
+# A boot's catch-up run (Persistent=true) would otherwise poll against a state.json
+# the boot gate has not written yet, and enqueue a request for the deployment the
+# host is already running. After= only: a failed gate must not stop the poll.
+After=smortress-boot-gate.service
+# A wedged poll must not hold the shutdown path.
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/deploy-poll
+# One GitHub call per repository, each with its own 30 s deadline: ten minutes is
+# the net that stops a hung TLS read from keeping the unit active until the next
+# tick, which would hide the API from the run after it.
+TimeoutStartSec=600
+UMask=0077
+User=root
+# The poll writes one queue entry and its own cache under the state tree, and
+# nothing else: it takes no deploy lock, records no deployment and removes no
+# entry, so the drain remains the only writer of the queue's *decision*.
+ProtectSystem=strict
+ReadWritePaths=/var/lib/homelab/deploy
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX

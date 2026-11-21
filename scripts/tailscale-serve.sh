@@ -20,6 +20,9 @@
 # exactly what this declares.
 #
 # Nothing here is Funnel: Serve answers tailnet clients only.
+#
+# The deploy receiver gets one raw TCP forward (8484) rather than an HTTPS route:
+# the caller is a curl in a CI job that joins the tailnet for this one request.
 set -euo pipefail
 
 tailscale_bin=${TAILSCALE_BIN:-tailscale}
@@ -109,6 +112,16 @@ for https in "${!core_routes[@]}"; do
     fail "could not serve $backend on https/$https"
   fi
 done
+
+# The deploy receiver's forward. `serve --tcp` forwards raw TCP, because the caller
+# is a curl in a CI job and the receiver speaks plain HTTP on loopback; Serve
+# terminates the tailnet side, so the listener never binds a wildcard. It is
+# declared here with the core routes and before anything that reads the tenant
+# plan, so a broken plan cannot take the trigger path down with it -- and a `--tcp`
+# forward is not a Web handler, so the `/apps/` prune below never reaches it.
+if ! "$tailscale_bin" serve --bg --tcp=8484 tcp://127.0.0.1:8484; then
+  fail "could not forward tcp/8484 to the deploy receiver"
+fi
 
 for path in "${!core_path_routes[@]}"; do
   backend=http://127.0.0.1:${core_path_routes[$path]}
