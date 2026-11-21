@@ -52,12 +52,15 @@ ReadWritePaths=/var/lib/homelab/deploy
 ReadWritePaths=/var/lib/homelab/restic
 ReadWritePaths=-/var/lib/restic/ssd
 ReadWritePaths=-/var/lib/restic/hdd
-# The stage (T4) is a `bootc switch` and a reboot: bootc writes the grubenv, the
-# BLS entry and the ostree deployment it stages, so /boot and /sysroot/ostree are
-# the minimum below the read-only tree. `systemctl reboot` needs no path of its
-# own -- a read-only mount does not block a unix-socket connect.
+# The stage (T4) is a `bootc switch` and a reboot. bootc's first write is not a
+# file at all: `sysroot_is_read_only()` finds /sysroot read-only -- the normal
+# ostree arrangement -- and remounts it writable. ProtectSystem=strict leaves
+# /sysroot read-only, so that remount fails with EROFS and surfaces as
+# "Initializing storage: Read-only file system"; a writable /sysroot/ostree is not
+# enough, because the remount targets /sysroot itself. `systemctl reboot` needs no
+# path of its own -- a read-only mount does not block a unix-socket connect.
 ReadWritePaths=/boot
-ReadWritePaths=-/sysroot/ostree
+ReadWritePaths=/sysroot
 # bootc probes its SELinux install_t policy by writing a temporary file under
 # /tmp, and staging does the same under /var/tmp; PrivateTmp=yes keeps the first
 # private to this unit, so opening it back up gives bootc a scratch tree without

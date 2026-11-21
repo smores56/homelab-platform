@@ -61,6 +61,13 @@ image_repo_agrees() { # <pins.env> <stage script> <verifier>
 }
 check "the image repository agrees across the pins, the stage and the verifier" \
   image_repo_agrees image/pins.env scripts/deploy-platform.sh image/rootfs/usr/libexec/deploy-verify.py
+# bootc's first act in a mutation is to remount /sysroot writable; with
+# ProtectSystem=strict that remount is the failure unless the unit re-opens
+# /sysroot itself. `/sysroot/ostree` alone produced "Initializing storage:
+# Read-only file system" on every deploy.
+for unit in units/systemd/smortress-deploy.service units/systemd/smortress-boot-gate.service; do
+  check "$unit lets bootc remount /sysroot" grep -qxF 'ReadWritePaths=/sysroot' "$unit"
+done
 # The same assertion on a drifted copy: a check that only ever sees the tree it
 # was written for cannot fail for the reason it exists.
 repo_fixture=$(mktemp -d)

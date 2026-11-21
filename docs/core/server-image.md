@@ -372,6 +372,14 @@ signature are still verified before the switch, and the staged digest is still
 read back. A hand-run switch or upgrade bypasses only the descendancy check,
 which is why the receiver remains the authoritative path.
 
+The sandbox has to re-open `/sysroot` itself, not just `/sysroot/ostree`. bootc's
+first act is not a write to a file: `sysroot_is_read_only()` finds `/sysroot`
+mounted read-only -- the normal ostree arrangement -- and remounts it writable
+before it stages anything. Under `ProtectSystem=strict` that remount is what
+fails, and the whole deploy dies as `Initializing storage: Read-only file system`
+with nothing staged, on every attempt, while `/sysroot/ostree` sits writable and
+unused. The same applies to `bootc rollback --apply` in the boot gate.
+
 ### The boot gate
 
 `smortress-boot-gate.service` runs on every boot, `Before=boot-complete.target`

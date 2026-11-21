@@ -41,13 +41,15 @@ RuntimeDirectoryPreserve=yes
 # The gate writes the deploy records and the grubenv, and `bootc rollback --apply`
 # writes the ostree deployment it switches to. Nothing else is writable: a
 # compromised gate cannot rewrite a unit, a Quadlet or the tenant's data, and the
-# decrypted secrets under /run/smortress stay read-only. `/boot` and
-# `/sysroot/ostree` are the minimum a bootc mutation needs; `-` keeps the unit
-# startable where /sysroot is not a separate mount.
+# decrypted secrets under /run/smortress stay read-only. A bootc mutation needs
+# `/sysroot` itself, not just `/sysroot/ostree`: bootc remounts /sysroot writable
+# before it writes anything, and that remount is what ProtectSystem=strict turns
+# into "Initializing storage: Read-only file system". `bootc rollback --apply`
+# takes the same path as a switch.
 ProtectSystem=strict
 ReadWritePaths=/var/lib/homelab/deploy
 ReadWritePaths=/boot
-ReadWritePaths=-/sysroot/ostree
+ReadWritePaths=/sysroot
 # `bootc rollback --apply` runs the same SELinux install_t probe the switch does,
 # so the gate needs the same private scratch as the drain.
 ReadWritePaths=/tmp
