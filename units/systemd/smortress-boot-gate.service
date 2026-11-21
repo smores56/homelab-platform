@@ -75,7 +75,11 @@ ReadWritePaths=/run/user
 ProtectHome=read-only
 PrivateTmp=yes
 NoNewPrivileges=yes
-RestrictSUIDSGID=yes
+# No RestrictSUIDSGID: it makes tar's mode-restoring chmod on directories fail
+# with ENOSYS ("Cannot mkdir/open: Function not implemented"), which broke every
+# tenant apply. The unit runs as root and executes arbitrary tooling, so the
+# filter bought little beyond a false sense of containment.
+
 LockPersonality=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
