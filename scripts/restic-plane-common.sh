@@ -142,7 +142,13 @@ load_backend_env() {
   # systemd units have no HOME, and restic refuses to guess a cache directory.
   # An explicit cache also keeps the repository lock and index cache off /tmp.
   cache_dir=${RESTIC_CACHE_DIR:-/var/cache/smortress-restic}
-  mkdir -p "$cache_dir"
+  # A cache that cannot be created is a backend failure, not a warning: restic
+  # refuses to run without one, and the caller must record the destination as
+  # unusable rather than let a stderr line leak into whatever it prints.
+  if ! mkdir -p "$cache_dir" 2>/dev/null; then
+    warn "$backend: cannot create the restic cache $cache_dir"
+    return 1
+  fi
   export RESTIC_CACHE_DIR=$cache_dir
   case $backend in
     r2)

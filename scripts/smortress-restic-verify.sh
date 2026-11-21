@@ -317,6 +317,19 @@ local_report() {
   printf '%s\n' "$doc"
 }
 
+# The verifier is read-only and may run where /var/cache is not writable (a
+# test runner, a hand-run check as an unprivileged user). It gets its own cache
+# directory unless the caller named one, so a read-only query never depends on a
+# host path it does not own.
+if [[ -z ${RESTIC_CACHE_DIR:-} ]]; then
+  RESTIC_CACHE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/smortress-restic-cache.XXXXXX") || {
+    warn "cannot create a restic cache directory"
+    exit 4
+  }
+  export RESTIC_CACHE_DIR
+  trap 'rm -rf -- "$RESTIC_CACHE_DIR"' EXIT
+fi
+
 if [[ $mode == local ]]; then
   # The state tree is the join the aggregate mode uses; without it there is
   # nothing to read the units' path sets or attempt history from, and inventing

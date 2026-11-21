@@ -532,6 +532,28 @@ eq "$(jq -r '.hdd.usable' <<<"$out")" true "the HDD stays usable"
 eq "$(jq -r '.ssd.units.photos.fresh' <<<"$out")" false "no unit is fresh on an unusable repository"
 printf '36 25 8:1 / %s rw,relatime - ext4 /dev/sdb1 rw\n' "$repos/ssd" >>"$work/mountinfo"
 
+# A caller-named cache that cannot be created is a destination verdict, not a
+# crash and not a warning on the stream a JSON consumer parses. This is what a
+# GitHub runner exposed: /var/cache is unwritable there, and a stderr line merged
+# into the output turned every assertion into a jq parse error.
+reset_state
+seed_all_healthy
+out=$(env RESTIC_CACHE_DIR=/proc/smortress-restic-cache \
+  scripts/smortress-restic-verify.sh --local --json 2>"$log/cache-stderr")
+rc=$?
+eq "$rc" 0 "an uncreatable cache is a verdict, not a crash"
+if jq -e . >/dev/null 2>&1 <<<"$out"; then
+  ok "the verdict stays JSON without a cache"
+else
+  bad "the verdict stays JSON without a cache" "$out"
+fi
+eq "$(jq -r '.ssd.usable' <<<"$out")" false "an uncreatable cache makes the repository unusable"
+if grep -q 'cannot create the restic cache' "$log/cache-stderr"; then
+  ok "the uncreatable cache is named on stderr"
+else
+  bad "the uncreatable cache is named on stderr" "$(cat "$log/cache-stderr")"
+fi
+
 # Nothing to join against is the one thing the query cannot answer.
 reset_state
 rm -rf "${state:?}"
