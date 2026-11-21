@@ -269,6 +269,13 @@ check "no console break-glass row remains" lacks 'pam_succeed_if' "$pam_sudo"
 # stack runs: without the keep the module logs "SSH agent socket address not
 # configured" and every escalation falls back to the password (verified on the
 # host 2026-11-20). It is the only variable kept, and it is deliberate.
+# The base ships %sudo ALL=(ALL) NOPASSWD: ALL. NOPASSWD skips
+# pam_authenticate, so the touch, the password and the tally all stop applying;
+# the build deletes the file and the guard above refuses a regression.
+check "the build deletes the base's NOPASSWD grant" \
+  has 'rm -f /etc/sudoers.d/coreos-sudo-group' image/Containerfile
+check "the NOPASSWD guard still inspects the finished tree" \
+  has "grep -rhvE '^[[:space:]]*#' /etc/sudoers /etc/sudoers.d" image/Containerfile
 check "the agent socket is kept for pam_rssh" \
   has 'Defaults env_keep += "SSH_AUTH_SOCK"' image/rootfs/etc/sudoers.d/10-human-gate
 check "no other variable is kept across the sudo boundary" \
