@@ -101,6 +101,7 @@ export FAKE_FETCH_DIR=$fetch_dir
 export FAKE_SECRET_STORE=$secret_store
 export FAKE_SECRETS_JSON=$work/decrypted-secrets.json
 export FAKE_DF_MAP=$work/df-map
+export FAKE_FSTYPE_MAP=$work/fstype-map
 
 export DEPLOY_STATE_DIR=$state_dir
 export DEPLOY_LOCK_FILE=$work/deploy.lock
@@ -271,6 +272,20 @@ printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\n'
 printf '/dev/fake %s 0 %s 1%% %s\n' "$blocks" "$blocks" "$path"
 EOF
 
+# The root of an immutable host reports its own size as 100% full, so the space
+# guard has to know the filesystem type; this fake is how the suite can present
+# `/` as composefs and as an ordinary disk.
+cat >"$bin/findmnt" <<'EOF'
+#!/usr/bin/env bash
+path=${*: -1}
+fstype=ext4
+if [[ -f $FAKE_FSTYPE_MAP ]]; then
+  got=$(awk -v p="$path" '$1 == p { print $2 }' "$FAKE_FSTYPE_MAP")
+  [[ -n $got ]] && fstype=$got
+fi
+printf '%s\n' "$fstype"
+EOF
+
 cat >"$bin/bootc" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$FAKE_LOG/bootc-calls"
@@ -402,6 +417,7 @@ reset_case() {
   rm -rf "${APPS_HOME:?}" "${work:?}/var" "${work:?}/run" "${state_dir:?}" "${secret_store:?}" "${log:?}"
   mkdir -p "$APPS_HOME" "$work/run/user/1001" "$secret_store" "$log"
   : >"$FAKE_DF_MAP"
+  : >"$FAKE_FSTYPE_MAP"
   : >"$log/sequence"
   deploy_state_init || exit 1
   printf '%s\n' "$ping_url" >"$DEPLOY_PING_SECRET"
@@ -1020,6 +1036,39 @@ unset FAKE_SYSTEMCTL_FAIL_ONCE
 check_eq "$rc" 5 "the failing apply reverts" "$out"
 check_eq "$(jq -r '.future.added' "$state_dir/state.json")" by-a-newer-writer \
   "the revert restore keeps an unknown top-level key"
+
+# An immutable image root is not a place an apply writes: `df /` there is its own
+# 8 MB size, always 0 available, and treating that as a full disk refused every
+# apply on a host whose /var had 63G free.
+printf '0\n' >"$FAKE_DF_MAP"
+printf '/ 0\n' >"$FAKE_DF_MAP"
+printf '/ composefs\n' >"$FAKE_FSTYPE_MAP"
+reset_case
+printf '/ 0\n' >"$FAKE_DF_MAP"
+printf '/ composefs\n' >"$FAKE_FSTYPE_MAP"
+APPS_FREE_ROOT_PATH=/ APPS_FREE_VAR_PATH=/ run_apply "$c_v1"
+if grep -q 'below the' <<<"$out"; then
+  bad "an immutable root is not a space floor" "$out"
+else
+  ok "an immutable root is not a space floor"
+fi
+
+# The same zero free on an ordinary root is still refused.
+reset_case
+printf '/ 0\n' >"$FAKE_DF_MAP"
+printf '/ ext4\n' >"$FAKE_FSTYPE_MAP"
+APPS_FREE_ROOT_PATH=/ APPS_FREE_VAR_PATH=/ run_apply "$c_v1"
+if ((rc == 4)); then
+  ok "a full ordinary root refuses the apply"
+else
+  bad "a full ordinary root refuses the apply" "$out rc=$rc"
+fi
+if grep -q 'below the' <<<"$out"; then
+  ok "the refusal names the space floor"
+else
+  bad "the refusal names the space floor" "$out"
+fi
+
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 ((fail == 0))

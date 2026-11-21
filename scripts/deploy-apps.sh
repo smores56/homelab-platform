@@ -95,6 +95,7 @@ age_key=${SOPS_AGE_KEY_FILE:-${SMORTRESS_AGE_KEY:-/var/lib/homelab/age/keys.txt}
 sops_bin=${SOPS_BIN:-sops}
 curl_bin=${DEPLOY_CURL_BIN:-curl}
 df_bin=${APPS_DF_BIN:-df}
+findmnt_bin=${APPS_FINDMNT_BIN:-findmnt}
 tar_bin=${APPS_TAR_BIN:-tar}
 runuser_bin=${RUNUSER:-runuser}
 podman_bin=${APPS_PODMAN_BIN:-podman}
@@ -368,11 +369,25 @@ available_bytes() { # <path>
   printf '%s\n' "$((blocks * 1024))"
 }
 
+# An immutable image root always reports its own size as 100% full: on composefs,
+# erofs or squashfs nothing is ever written to `/`, so a space floor there says
+# nothing about the apply. Measured on smortress: `df /` on composefs is 8.3M with
+# 0 available, which refused every apply while /var had 63G.
+immutable_mount() { # <path>
+  local fstype
+  fstype=$(timeout --signal=TERM --kill-after=5 10 "$findmnt_bin" -no FSTYPE --target "$1" 2>/dev/null) || return 1
+  case $fstype in
+    composefs | erofs | squashfs | iso9660) return 0 ;;
+  esac
+  return 1
+}
+
 check_space() {
   local pair path need got
   for pair in "$home_path:$home_need" "$root_path:$root_need" "$var_path:$var_need"; do
     path=${pair%%:*}
     need=${pair##*:}
+    immutable_mount "$path" && continue
     if ! got=$(available_bytes "$path"); then
       warn "cannot read the free space on $path"
       return 1
