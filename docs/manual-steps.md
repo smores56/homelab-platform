@@ -129,10 +129,28 @@ third=$(pamu2fcfg -n -u smores)   # key 3, the spare
 printf '%s:%s:%s\n' "$first" "$second" "$third" >image/rootfs/etc/u2f_mappings
 ```
 
-Then commit the file and `bootc upgrade`: the running host keeps its current
-mapping until the new deployment boots, and `bootc rollback` restores the old
-one. Neither command needs root — `pamu2fcfg` only talks to the token. The
-`printf` is not decoration: `pamu2fcfg` ends its line without a newline, so
+Then commit the file and `bootc upgrade`; neither command needs root —
+`pamu2fcfg` only talks to the token. What arrives on the host depends on how the
+running `/etc/u2f_mappings` got there: one the image shipped is replaced with the
+deployment, and one this host wrote by hand is kept, because bootc's `/etc` merge
+preserves local modifications. Compare the deployment's copy before trusting the
+running one:
+
+```sh
+diff /usr/etc/u2f_mappings /etc/u2f_mappings
+sudo cp /usr/etc/u2f_mappings /etc/u2f_mappings && sudo chmod 644 /etc/u2f_mappings
+sudo -k; sudo true      # one touch, no PIN
+```
+
+A stale mapping fails the same silent way as everything else in this stack: the
+sudo prompt falls through to the password, or — when the old entry carries
+`+pin` — starts asking for the FIDO2 PIN that `pinverification=0` exists to keep
+out of sudo's reach. More `cue` lines than touches means `pam_u2f` is walking
+handles the key does not answer for, and each one costs libfido2's device
+timeout. `bootc rollback` brings the previous deployment's copy back the same
+way.
+
+The `printf` is not decoration: `pamu2fcfg` ends its line without a newline, so
 writing its output directly would give a one-credential file with no terminator
 and no room for an appended second credential.
 

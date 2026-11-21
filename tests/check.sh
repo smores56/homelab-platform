@@ -328,6 +328,16 @@ else
   bad "manual-steps.md carries the token enrolment commands"
 fi
 
+# /etc is a three-way merge, so a mapping this host wrote by hand survives an
+# upgrade and sudo silently keeps using the old credentials -- either straight
+# through to the password, or into the FIDO2 PIN prompt the rotation exists to
+# avoid.
+if grep -q 'diff /usr/etc/u2f_mappings /etc/u2f_mappings' docs/manual-steps.md; then
+  ok "manual-steps.md says to reconcile the runtime mapping after an upgrade"
+else
+  bad "manual-steps.md says to reconcile the runtime mapping after an upgrade"
+fi
+
 # --- escalation (sudo: touch, password as fallback) --------------------------
 
 # Another repository gates sudo on its own stack (design #767), so this laptop's
