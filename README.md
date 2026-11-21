@@ -11,19 +11,28 @@ The migration runbook is `docs/switch.md`.
 
 | File | Owns |
 | --- | --- |
-| `image/pins.env` | every external reference; the only file a base or NymVPN refresh edits |
+| `image/pins.env` | every external reference: the `FEDORA_VERSION` knob the base tag follows, and the NymVPN pin a refresh edits |
 | `image/Containerfile` | the derived image: one explicit package set, config copy, unit enables, `bootc container lint` |
 | `image/rootfs/` | files copied into `/`: greetd autologin, portal override, signature policy, the NymVPN unit and its polkit action, the `login` and `sudo` PAM stacks, and the FIDO2 mapping the `sudo` stack reads |
 | `image/cosign.pub` | the public half of the signing key shared with `homelab-platform` |
-| `scripts/refresh-pins.sh` | resolves the base digest and the NymVPN release; `--check` for the watcher, `--write` to pin |
+| `scripts/refresh-pins.sh` | resolves the NymVPN release and prints the base tag's current digest; `--check` for the watcher, `--write` to move the NymVPN pin |
 | `scripts/build-image.sh` | local build; never pushes or signs |
 | `docs/manual-steps.md` | the steps only a hand at the keyboard can do: token enrolment for the disk keyslot, the lock screen and sudo, and rotating the FIDO2 mapping |
 | `tests/check.sh` | static checks over the files above |
 
 ## Rules
 
-- The base is always digest-pinned. `scripts/build-image.sh` and the
-  Containerfile both refuse a tag.
+- The base tracks the `fedora-bootc` release tag (`FEDORA_VERSION=45` in
+  `image/pins.env`), not a digest. Quay garbage-collects the manifests behind
+  that tag within hours, so a pinned digest rots into `manifest unknown`: three
+  build failures in one day is what moved this repository off pinning. Each
+  build resolves the tag and records the result in the
+  `org.opencontainers.image.base.digest` label, so every published image still
+  says exactly which base it was built on. The trade is deliberate: two builds
+  of the same commit can differ in base packages, so the base is not
+  reproducible. What stands in for that is `tests/check.sh`, the cosign
+  signature on the image this repository builds, and `bootc rollback` on the
+  laptop.
 - No secrets, private keys, or per-machine state enter the image. The one
   carve-out is `/etc/u2f_mappings`: it is public credential data (a key handle
   and a public key per token, useless without the token itself, and bound to
@@ -41,23 +50,32 @@ The migration runbook is `docs/switch.md`.
 
 ## Rebuilds
 
-Nothing rebuilds on a schedule. A build happens when this repository changes.
-To move to a newer base or NymVPN release:
+Nothing rebuilds on a schedule. A build happens when this repository changes,
+and a change to `image/**` or `scripts/**` is what publishes a new image. The
+base needs no refresh step: the next build picks up whatever
+`fedora-bootc:${FEDORA_VERSION}` resolves to, and the digest it got is on the
+image.
+
+A NymVPN release is the one thing worth moving by hand:
 
 ```sh
-scripts/refresh-pins.sh --check   # is there a newer digest or release?
-scripts/refresh-pins.sh --write   # pin it
+scripts/refresh-pins.sh          # the base tag's current digest, informationally
+scripts/refresh-pins.sh --check  # is there a newer NymVPN release?
+scripts/refresh-pins.sh --write  # move that pin
 ```
 
 then commit the `image/pins.env` change. The scheduled watcher opens an issue
-when `--check` sees a newer digest or release.
+when `--check` sees a newer release; it has nothing to say about the base.
 
 ## Package sources
 
-The image installs from the Fedora 45 repositories configured in the pinned
-base. The base digest fixes the kernel, glibc, and systemd; packages added here
-resolve from Fedora 45 updates at build time, which is why a build only happens
-on a reviewed commit.
+The image installs from the Fedora 45 repositories configured in the base tag it
+builds from. Because the base is a tag, the kernel, glibc and systemd are
+whatever that tag resolved to at build time, and packages added here resolve
+from Fedora 45 updates at the same moment; the image's
+`org.opencontainers.image.base.digest` label and its
+`/usr/share/smorespro/package-manifest` are how a given build is identified
+after the fact.
 
 Two exceptions, both absent from Fedora:
 

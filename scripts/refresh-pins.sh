@@ -1,17 +1,21 @@
 #!/usr/bin/env bash
-# Resolve the moving upstream references behind image/pins.env: the Fedora bootc
-# base digest for the pinned Fedora release, and the newest stable NymVPN release
-# that carries a Linux core tarball. This is the only script allowed to consume
-# a moving tag; every other script and the Containerfile consume the pins.
+# Resolve the moving upstream references behind image/pins.env: the newest stable
+# NymVPN release that carries a Linux core tarball, and -- informationally -- the
+# digest the Fedora bootc base tag currently resolves to.
 #
-#   scripts/refresh-pins.sh          print the current base reference
-#   scripts/refresh-pins.sh --check  exit 0 if both pins are current, 1 if a
-#                                    newer base digest or NymVPN release exists,
-#                                    2 on error (CI watcher)
-#   scripts/refresh-pins.sh --write  rewrite image/pins.env
+#   scripts/refresh-pins.sh          print the base tag and its current digest
+#   scripts/refresh-pins.sh --check  exit 0 if the NymVPN pin is current, 1 if a
+#                                    newer release exists, 2 on error (CI watcher)
+#   scripts/refresh-pins.sh --write  rewrite the NymVPN pin in image/pins.env
 #
-# The base digest is the index digest, not a per-architecture manifest digest,
-# so the pin stays valid if the image is ever built for another architecture.
+# The base is not a pin, so nothing here moves it: image/pins.env carries the
+# fedora-bootc release tag, each build resolves it, and the digest it gets is
+# recorded on the image. That digest is printed and validated here only -- quay
+# garbage-collects it within hours, so writing it down is what used to rot the
+# build into `manifest unknown`. Drift is a NymVPN question alone.
+#
+# A tag is the multi-arch index, so its digest stays valid if the image is ever
+# built for another architecture.
 # The NymVPN hashes come from the release's own checksums.txt, which is what the
 # Containerfile verifies the tarball against: a release page that changes under
 # the pin breaks the build instead of slipping a binary in. Nym signs no Linux
@@ -48,23 +52,21 @@ done
 
 # --- base ------------------------------------------------------------------
 
-tag="quay.io/fedora/fedora-bootc:${FEDORA_VERSION}"
-if ! raw=$(skopeo inspect --raw "docker://$tag"); then
-  echo "refresh-pins.sh: cannot read $tag from the registry" >&2
+# Information only: the build resolves this same tag, so this is what it would
+# record. Nothing writes the result back into image/pins.env.
+tag=$BASE_IMAGE
+if [[ $tag != "quay.io/fedora/fedora-bootc:${FEDORA_VERSION}" ]]; then
+  echo "refresh-pins.sh: BASE_IMAGE is not the fedora-bootc:${FEDORA_VERSION} release tag: $tag" >&2
   exit 2
 fi
-if [[ -z $raw ]]; then
-  echo "refresh-pins.sh: registry returned an empty manifest for $tag" >&2
+if ! digest=$(skopeo inspect --format '{{.Digest}}' "docker://$tag"); then
+  echo "refresh-pins.sh: cannot resolve $tag to a digest" >&2
   exit 2
 fi
-digest="sha256:$(printf '%s' "$raw" | sha256sum | cut -d' ' -f1)"
 if [[ ! $digest =~ ^sha256:[0-9a-f]{64}$ ]]; then
-  echo "refresh-pins.sh: registry returned no usable digest for $tag" >&2
+  echo "refresh-pins.sh: registry returned no usable digest for $tag: $digest" >&2
   exit 2
 fi
-ref="quay.io/fedora/fedora-bootc@${digest}"
-
-# --- NymVPN ----------------------------------------------------------------
 
 # Some stable tags carry a F-Droid APK alone, and a prerelease is never a
 # candidate, so the assets decide: the newest release with a core tarball wins.
@@ -115,49 +117,40 @@ done
 # --- modes -----------------------------------------------------------------
 
 drift=0
-[[ $BASE_IMAGE != "$ref" ]] && drift=1
 [[ $NYM_VERSION != "$nym_latest" ]] && drift=1
 
 case $mode in
   print)
-    # stdout stays exactly the base reference; drift lives in --check's output.
-    printf '%s\n' "$ref"
+    printf '%s -> %s (recorded per build, not pinned)\n' "$tag" "$digest"
     ;;
   check)
+    # Drift is a NymVPN question: the base tag is always current by
+    # construction, so only a stale release may open the watcher's issue.
     if [[ $drift -eq 0 ]]; then
-      printf 'image/pins.env: current (%s, nym %s)\n' "$ref" "$NYM_VERSION"
+      printf 'image/pins.env: current (nym %s; base %s resolves to %s)\n' "$NYM_VERSION" "$tag" "$digest"
       exit 0
     fi
-    [[ $BASE_IMAGE != "$ref" ]] &&
-      printf 'image/pins.env: newer base digest available\n  pinned:  %s\n  current: %s\n' "$BASE_IMAGE" "$ref"
-    [[ $NYM_VERSION != "$nym_latest" ]] &&
-      printf 'image/pins.env: newer NymVPN release available\n  pinned:  %s\n  current: %s\n' "$NYM_VERSION" "$nym_latest"
+    printf 'image/pins.env: newer NymVPN release available\n  pinned:  %s\n  current: %s\n' "$NYM_VERSION" "$nym_latest"
     exit 1
     ;;
   write)
     if [[ $drift -eq 0 ]]; then
-      printf 'image/pins.env: unchanged (%s, nym %s)\n' "$ref" "$NYM_VERSION"
+      printf 'image/pins.env: unchanged (nym %s)\n' "$NYM_VERSION"
       exit 0
     fi
     # sed cannot create a line, so a pins.env missing a key would "succeed"
     # while writing nothing.
-    for key in BASE_IMAGE NYM_VERSION NYM_SHA256_AMD64 NYM_SHA256_ARM64; do
+    for key in NYM_VERSION NYM_SHA256_AMD64 NYM_SHA256_ARM64; do
       if ! grep -q "^${key}=" "$repo/image/pins.env"; then
         echo "refresh-pins.sh: image/pins.env has no ${key} line" >&2
         exit 2
       fi
     done
-    if [[ $BASE_IMAGE != "$ref" ]]; then
-      sed -i "s|^BASE_IMAGE=.*|BASE_IMAGE=$ref|" "$repo/image/pins.env"
-      printf 'image/pins.env: BASE_IMAGE=%s\n' "$ref"
-    fi
-    if [[ $NYM_VERSION != "$nym_latest" ]]; then
-      sed -i \
-        -e "s|^NYM_VERSION=.*|NYM_VERSION=$nym_latest|" \
-        -e "s|^NYM_SHA256_AMD64=.*|NYM_SHA256_AMD64=$nym_amd|" \
-        -e "s|^NYM_SHA256_ARM64=.*|NYM_SHA256_ARM64=$nym_arm|" \
-        "$repo/image/pins.env"
-      printf 'image/pins.env: NYM_VERSION=%s\n' "$nym_latest"
-    fi
+    sed -i \
+      -e "s|^NYM_VERSION=.*|NYM_VERSION=$nym_latest|" \
+      -e "s|^NYM_SHA256_AMD64=.*|NYM_SHA256_AMD64=$nym_amd|" \
+      -e "s|^NYM_SHA256_ARM64=.*|NYM_SHA256_ARM64=$nym_arm|" \
+      "$repo/image/pins.env"
+    printf 'image/pins.env: NYM_VERSION=%s\n' "$nym_latest"
     ;;
 esac

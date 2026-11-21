@@ -30,25 +30,38 @@ else
   pins=""
 fi
 
-if [[ $pins =~ ^[^[:space:]]+@sha256:[0-9a-f]{64}$ ]]; then
-  ok "BASE_IMAGE is digest-pinned"
+# The base is the moving release tag, not a digest: quay collects the manifests
+# behind that tag within hours, so a written-down digest rots into
+# `manifest unknown`. The build resolves the tag and records the digest in the
+# image's org.opencontainers.image.base.digest label instead.
+if [[ $pins =~ ^quay\.io/fedora/fedora-bootc:[0-9]+$ ]]; then
+  ok "BASE_IMAGE is the fedora-bootc release tag"
 else
-  bad "BASE_IMAGE is digest-pinned" "$pins"
+  bad "BASE_IMAGE is the fedora-bootc release tag" "$pins"
 fi
 
-if [[ ! $pins =~ :latest@ ]]; then
-  ok "BASE_IMAGE is not a latest tag"
+if [[ ! $pins =~ @sha256: && ! $pins =~ :latest$ ]]; then
+  ok "BASE_IMAGE is neither digest-pinned nor a latest tag"
 else
-  bad "BASE_IMAGE is not a latest tag" "$pins"
+  bad "BASE_IMAGE is neither digest-pinned nor a latest tag" "$pins"
+fi
+
+# FEDORA_VERSION is the knob; a tag that drifts from it would track a release
+# nobody chose.
+fedora_version=$(bash -c 'set -euo pipefail; source "$1"; printf "%s\n" "$FEDORA_VERSION"' _ image/pins.env 2>/dev/null)
+if [[ -n $fedora_version && $pins == "quay.io/fedora/fedora-bootc:${fedora_version}" ]]; then
+  ok "BASE_IMAGE tracks the FEDORA_VERSION release"
+else
+  bad "BASE_IMAGE tracks the FEDORA_VERSION release" "FEDORA_VERSION=${fedora_version:-none} BASE_IMAGE=$pins"
 fi
 
 # --- Containerfile ----------------------------------------------------------
 
 # shellcheck disable=SC2016 # the literal ${BASE_IMAGE} is what must appear
 if grep -qx 'FROM ${BASE_IMAGE}' image/Containerfile; then
-  ok "Containerfile builds from the pinned base argument"
+  ok "Containerfile builds from the base argument"
 else
-  bad "Containerfile builds from the pinned base argument"
+  bad "Containerfile builds from the base argument"
 fi
 
 if [[ $(grep -c '^FROM ' image/Containerfile) -eq 1 ]]; then
@@ -73,6 +86,47 @@ if ! grep -qE 'curl .*\| *(ba)?sh' image/Containerfile; then
   ok "Containerfile never pipes curl into a shell"
 else
   bad "Containerfile never pipes curl into a shell"
+fi
+
+if grep -qx 'ARG BASE_DIGEST' image/Containerfile; then
+  ok "the Containerfile takes the resolved base digest as a build arg"
+else
+  bad "the Containerfile takes the resolved base digest as a build arg" "without it the build has no digest to record"
+fi
+
+# The tag moves, so the labels are the only place a built image still says which
+# base it came from; an arg nobody passes would ship an empty digest.
+# shellcheck disable=SC2016 # the literal ${BASE_IMAGE} and ${BASE_DIGEST} must appear
+if grep -qF 'org.opencontainers.image.base.name="${BASE_IMAGE}"' image/Containerfile \
+    && grep -qF 'org.opencontainers.image.base.digest="${BASE_DIGEST}"' image/Containerfile; then
+  ok "the Containerfile labels its base name and digest"
+else
+  bad "the Containerfile labels its base name and digest"
+fi
+
+# A digest would pin a manifest quay collects within hours; latest would track a
+# release nobody chose.
+if grep -qF '*@sha256:*)' image/Containerfile \
+    && grep -qF 'quay.io/fedora/fedora-bootc:latest)' image/Containerfile; then
+  ok "the build refuses a base digest and a latest tag"
+else
+  bad "the build refuses a base digest and a latest tag"
+fi
+
+# Both the local build and the publish workflow resolve the tag themselves, so
+# both have to pass the result along.
+if grep -qF "skopeo inspect --format '{{.Digest}}' \"docker://\$BASE_IMAGE\"" scripts/build-image.sh \
+    && grep -qF -- '--build-arg "BASE_DIGEST=' scripts/build-image.sh; then
+  ok "build-image.sh resolves the base digest and passes it"
+else
+  bad "build-image.sh resolves the base digest and passes it"
+fi
+
+if grep -qF "skopeo inspect --format '{{.Digest}}' \"docker://\$BASE_IMAGE\"" .github/workflows/publish.yml \
+    && grep -qF -- '--build-arg "BASE_DIGEST=' .github/workflows/publish.yml; then
+  ok "publish.yml resolves the base digest and passes it"
+else
+  bad "publish.yml resolves the base digest and passes it"
 fi
 
 # --- signing ----------------------------------------------------------------

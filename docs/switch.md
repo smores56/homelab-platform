@@ -142,7 +142,14 @@ printf '' | gnome-keyring-daemon --unlock --components=secrets
   then `sudo systemctl reset-failed greetd && sudo systemctl start greetd`.
 - `niri-session` run by hand from the TTY starts the session for debugging.
 - `bootc rollback` returns to the previous deployment; the pinned Fedora
-  deployment is also selectable in the GRUB menu.
+  deployment is also selectable in the GRUB menu. Every upgrade can move the
+  base: `smorespro-image` tracks the `fedora-bootc:45` tag rather than a digest,
+  because quay collects the manifests behind that tag within hours and a pinned
+  digest fails the build outright. The price is that a new image may carry a
+  different kernel, glibc and systemd than the one you booted; check
+  `org.opencontainers.image.base.digest` with `podman inspect` if you need to
+  know which base a build used, and the rollback above is the answer to a base
+  that misbehaves.
 - If the network wedges right after a NymVPN change, `sudo systemctl stop
   nym-vpnd` restores routing and DNS; its config and state live in
   `/var/lib/nym-vpnd`, never in `/etc`, and a crash loop shows up in
