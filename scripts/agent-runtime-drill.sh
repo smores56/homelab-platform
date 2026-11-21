@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# The probe texts are single-quoted on purpose: the container shell expands
+# $1, this one must not. SC2016 is the rule that cannot see the difference.
+# shellcheck disable=SC2016
 # The operator drill for the agent layer's T6 runtime rows (SDLC #716).
 #
 # Seven rows of the T6 adversarial cutover matrix need smortress itself: the live

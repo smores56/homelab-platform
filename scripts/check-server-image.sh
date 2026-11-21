@@ -885,7 +885,10 @@ for program in deploy-poll deploy-heartbeat; do
   check "a unit runs the installed $program" has "/usr/libexec/$program" units/systemd
 done
 # deploy-apps has no unit of its own: the drain runs it for a queued apps request.
-check "the drain resolves the installed deploy-apps" has '/usr/libexec/deploy-apps' scripts/deploy-drain.sh
+# It reaches it through the library's one resolver now, so the assertion follows
+# the call, not a literal path that only the old inline probe carried.
+check "the drain resolves the installed deploy-apps" has 'deploy_resolve' scripts/deploy-drain.sh
+check "the resolver searches /usr/libexec" has '/usr/libexec' scripts/deploy-state.sh
 
 # The units the image starts at boot. The drain is the exception and is asserted
 # as such: it is a queue-triggered oneshot with no [Install] section, so enabling

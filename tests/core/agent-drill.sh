@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# The probe texts are matched as literals, so `$1` must stay unexpanded here.
+# shellcheck disable=SC2016
 # Offline checks for the agent runtime drill (SDLC #716, T6 of #702).
 #
 # The drill itself needs smortress: live namespaces, root-only secrets and a real
