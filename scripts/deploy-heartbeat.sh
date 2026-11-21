@@ -82,26 +82,11 @@ fi
 
 # The oldest request, not the count: a queue with one entry younger than a minute
 # is a deploy in flight, and a queue with one entry older than half an hour is a
-# drain that is not running.
+# drain that is not running. The scan is the state library's `queue_oldest`, so
+# the heartbeat and the drain agree on which files are entries.
 oldest_id=
 oldest_age=0
-now=$(date +%s)
-if [[ -d $deploy_queue_dir ]]; then
-  while IFS= read -r file; do
-    [[ -n $file ]] || continue
-    # An entry the drain cannot order is worse than an old one: the drain drops it
-    # on its next run, but until then it is a record nobody can read, so it counts
-    # as infinitely old rather than as fresh.
-    queued=$(jq -er '.queued_at | tonumber' "$file" 2>/dev/null) || queued=0
-    age=$((now - queued))
-    # A queued_at in the future is a clock that stepped; it is not an old request.
-    if ((age < 0)); then age=0; fi
-    if ((age >= oldest_age)); then
-      oldest_age=$age
-      oldest_id=$(basename -- "$file" .json)
-    fi
-  done < <(find "$deploy_queue_dir" -maxdepth 1 -type f -name '*.json' 2>/dev/null | sort)
-fi
+read -r oldest_age oldest_id < <(queue_oldest)
 
 if ((oldest_age > queue_max_age)); then
   fail_and_exit "deploy-heartbeat: queue entry $oldest_id is older than the ${queue_max_age}s limit (waited ${oldest_age}s)"

@@ -163,14 +163,17 @@ state_record_verified() {
     --arg index "$index" --arg manifest "$manifest" \
     '{repo:$repo,commit:$commit,indexDigest:$index,manifestDigest:$manifest}')" || return 1
   current=$(state_read 2>/dev/null) || current='{}'
+  # `$s + {...}` and not a fresh object: a top-level key this writer does not
+  # know -- added by another writer or a newer library -- must survive the
+  # round trip, or a downgrade silently drops a field the others still read.
   jq -c --arg repo "$repo" --arg commit "$commit" --arg index "$index" --arg manifest "$manifest" \
     --arg now "$(deploy_now)" '
       . as $s
-      | {schema: ($s.schema // 1),
+      | $s
+      + {schema: ($s.schema // 1),
          repos: (($s.repos // {}) | .[$repo] = ({commit: $commit}
            + (if $index == "" then {} else {indexDigest: $index} end)
            + (if $manifest == "" then {} else {manifestDigest: $manifest} end))),
-         apps: ($s.apps // {}),
          updated: $now}
     ' <<<"$current" | atomic_write "$deploy_state_file"
 }
@@ -336,14 +339,19 @@ cache_clear() {
   sync -- "$deploy_state_dir" 2>/dev/null || return 1
 }
 
-# resolve_tool <env override> <installed name> <checkout file>
+# deploy_resolve <env override> <installed name> <checkout file>
 #
-# $PATH is consulted first so a test can put a stand-in in front of an installed
+# The one tool-resolution rule: an explicit override, then a stand-in on $PATH,
+# then the image's /usr/libexec, then the file beside the calling script. $PATH
+# comes before /usr/libexec so a test can put a stand-in in front of an installed
 # helper without touching /usr/libexec; root's PATH does not contain /usr/libexec,
-# so on the host the installed name wins. This is the only copy: the platform gate
-# and the apps apply each carried one, and a fix to either would have missed the
-# other.
-resolve_tool() {
+# so on the host the installed name wins over the checkout sibling. Every tool a
+# deploy script runs -- apps-schema, deploy-verify.py, deploy-platform,
+# deploy-apps, smortress-restic-verify, smortress-restic-backup and
+# storage-layout -- goes through here. The state library itself cannot: a script
+# needs this function to exist before it can be sourced, so that one bootstrap
+# stays beside each script.
+deploy_resolve() {
   local override=${1:-} name=$2 sibling=$3 found
   if [[ -n $override ]]; then
     printf '%s\n' "$override"
@@ -383,8 +391,22 @@ clamp_timeout() {
 # requests that land in the same second have no order in either field: the file's
 # own nanosecond mtime is what says which one arrived last. Ordering those two by
 # uuid would let coalescing drop the newer commit and deploy the older one.
-queue_list() {
+#
+# The queue-directory contract, shared with the Python receiver (which cannot
+# source this file) and asserted by tests/deploy/receiver.sh: an entry is a
+# regular file directly inside $deploy_queue_dir whose name ends in `.json`.
+# Anything else -- a subdirectory, a temporary file, a non-JSON name -- is not an
+# entry. Each entry is one JSON object carrying schema, id, repo, commit,
+# queued_at (epoch seconds) and source. The listener writes that shape; the
+# drain, the poll and the heartbeat read only it. Changing the counting rule in
+# one language without the other would let the listener's cap drift from what
+# the drain sees.
+queue_entries() {
   [[ -d $deploy_queue_dir ]] || return 0
+  find "$deploy_queue_dir" -maxdepth 1 -type f -name '*.json' | sort
+}
+
+queue_list() {
   local file id queued written
   local -a rows=()
   while IFS= read -r file; do
@@ -395,7 +417,7 @@ queue_list() {
     queued=$(jq -er '.queued_at | tonumber' "$file" 2>/dev/null) || queued=0
     written=$(date -r "$file" +%s%N 2>/dev/null) || written=0
     rows+=("$queued $written $id")
-  done < <(find "$deploy_queue_dir" -maxdepth 1 -type f -name '*.json' | sort)
+  done < <(queue_entries)
   ((${#rows[@]})) || return 0
   printf '%s\n' "${rows[@]}" | sort -k1,1n -k2,2n -k3,3 | cut -d' ' -f3-
 }
@@ -452,8 +474,45 @@ queue_defer() {
 }
 
 queue_count() {
-  [[ -d $deploy_queue_dir ]] || { printf '0\n'; return 0; }
-  find "$deploy_queue_dir" -maxdepth 1 -type f -name '*.json' -printf '.' | wc -c | tr -d ' '
+  local count=0 _
+  while IFS= read -r _; do count=$((count + 1)); done < <(queue_entries)
+  printf '%s\n' "$count"
+}
+
+# queue_has <repo> <commit>: a request already in the queue is the same
+# decision, so the poll enqueues nothing for it and the drain sees one entry.
+queue_has() {
+  local file
+  while IFS= read -r file; do
+    [[ -n $file ]] || continue
+    if jq -e --arg repo "$1" --arg commit "$2" \
+      '.repo == $repo and .commit == $commit' "$file" >/dev/null 2>&1; then
+      return 0
+    fi
+  done < <(queue_entries)
+  return 1
+}
+
+# queue_oldest: print "<age> <id>" for the oldest entry, or "0" when the queue is
+# empty. The heartbeat pages on the age, never on the count: one entry younger
+# than a minute is a deploy in flight, and one entry older than the limit is a
+# drain that is not running. An unreadable entry counts as infinitely old -- the
+# drain drops it next run, but until then it is a record nobody can read -- and
+# a queued_at in the future is a clock that stepped, not an old request.
+queue_oldest() {
+  local file id queued age now oldest_age=0 oldest_id=''
+  now=$(date +%s)
+  while IFS= read -r file; do
+    [[ -n $file ]] || continue
+    queued=$(jq -er '.queued_at | tonumber' "$file" 2>/dev/null) || queued=0
+    age=$((now - queued))
+    ((age < 0)) && age=0
+    if ((age >= oldest_age)); then
+      oldest_age=$age
+      oldest_id=$(basename -- "$file" .json)
+    fi
+  done < <(queue_entries)
+  printf '%s %s\n' "$oldest_age" "$oldest_id"
 }
 
 queue_field() { # <id> <dotted.jq.path>

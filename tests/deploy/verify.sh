@@ -312,6 +312,15 @@ check_eq "$(jq -r 'select(.event=="state-verified") | .commit' "$state_dir/journ
 state_record_verified homelab-apps "$deployed" || bad "state_record_verified writes an apps record"
 check_eq "$(state_field repos.homelab-platform.commit)" "$deployed" \
   "a second repository keeps the first one's entry"
+# state.json has three writers and four readers, so a writer must not rebuild
+# the document from a fixed field list: a top-level key another writer owns has
+# to survive the round trip.
+jq -c '.future = {added: "by-a-newer-writer"}' "$state_dir/state.json" |
+  atomic_write "$state_dir/state.json"
+state_record_verified homelab-platform "$deployed" "$index_digest" "$manifest_digest" ||
+  bad "state_record_verified rewrites the record around the unknown key"
+check_eq "$(state_field 'future.added' 2>/dev/null)" by-a-newer-writer \
+  "state_record_verified keeps an unknown top-level key"
 if state_record_verified nonesuch "$deployed" >/dev/null 2>&1; then
   bad "state_record_verified refuses an unknown repository"
 else

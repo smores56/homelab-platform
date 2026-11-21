@@ -339,6 +339,34 @@ check_eq "$(post "$(body homelab-apps "$commit_ok" "$now" 0000aaaabbbbccccddddee
   "a full queue is refused"
 check_eq "$(queue_count)" 32 "a refused request grows no queue"
 
+# --- the queue-directory contract agrees across languages --------------------
+# The listener counts entries in Python and the drain in bash. The contract,
+# documented in scripts/deploy-state.sh, is one regular `.json` file directly
+# inside the queue: a directory or a non-JSON name is not an entry. Both readers
+# must agree on one fixture, or the listener's cap and the drain's view drift
+# apart -- the listener would refuse at 33 while the drain sees 32.
+fixture=$work/reader-fixture
+mkdir -p "$fixture/queue/nested.json"
+printf '{}\n' >"$fixture/queue/a.json"
+printf '{}\n' >"$fixture/queue/b.json"
+printf 'not an entry\n' >"$fixture/queue/notes.txt"
+bash_entries=$(DEPLOY_STATE_DIR=$fixture bash -c '
+  # shellcheck source=/dev/null
+  source "'"$lib"'"
+  queue_count
+')
+py_entries=$(DEPLOY_STATE_DIR=$fixture python3 - "$receiver" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("deploy_receiver", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+sys.modules["deploy_receiver"] = module
+spec.loader.exec_module(module)
+print(module.Receiver._queue_count())
+PY
+)
+check_eq "$bash_entries" 2 "the bash queue reader counts the two entries"
+check_eq "$py_entries" "$bash_entries" "the Python and bash queue readers agree on a fixture"
+
 # The nonce ring is the listener's own file, written under its own lock, and it
 # must never touch the drain's state.json.
 if jq -e '.nonces | length > 0' "$state_dir/nonces.json" >/dev/null 2>&1; then

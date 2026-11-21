@@ -352,10 +352,20 @@ class Receiver:
             ring[nonce] = int(time.time())
 
     # -- reads --------------------------------------------------------------
+    # The queue-directory contract documented in scripts/deploy-state.sh: one
+    # regular file directly inside QUEUE_DIR whose name ends in `.json`. A
+    # subdirectory called `x.json` is not an entry, so the cap here counts what
+    # the drain's `queue_entries` sees. tests/deploy/receiver.sh compares this
+    # reader with the bash one on a fixture.
     @staticmethod
     def _queue_count() -> int:
         try:
-            return len([name for name in os.listdir(QUEUE_DIR) if name.endswith(".json")])
+            with os.scandir(QUEUE_DIR) as entries:
+                return sum(
+                    1
+                    for entry in entries
+                    if entry.name.endswith(".json") and entry.is_file(follow_symlinks=False)
+                )
         except OSError:
             return 0
 
