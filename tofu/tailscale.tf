@@ -21,18 +21,6 @@ provider "tailscale" {}
 
 locals {
   tailnet_policy = {
-    # The host the rules name, resolved here rather than left to the API's
-    # device-name lookup: an explicit hosts entry is what the policy validator
-    # accepts in both rules and tests. The literal is the address the node holds
-    # once enrolled, and it is the whole route in: a reinstall that enrolls the
-    # node again can hand it a different address, and then dst =
-    # ["smortress:22"] names an address the host does not hold. Read the current
-    # one with `tailscale ip -4` on the host and update it here before the next
-    # apply.
-    hosts = {
-      smortress = "100.122.171.11"
-    }
-
     # An access rule only ever accepts; anything no rule accepts is dropped, so
     # the default is deny without a rule saying so.
     acls = [
@@ -41,21 +29,21 @@ locals {
         # for, and it is the only one that opens port 22 anywhere in the tailnet.
         action = "accept"
         src    = ["group:owner"]
-        dst    = ["smortress:22"]
+        dst    = ["tag:smortress:22"]
       },
       {
         # Serve publishes the applications as HTTPS on the host itself, on the
         # three ports it can give a root path to (scripts/tailscale-serve.sh).
         action = "accept"
         src    = ["group:owner"]
-        dst    = ["smortress:443", "smortress:8443", "smortress:10000"]
+        dst    = ["tag:smortress:443", "tag:smortress:8443", "tag:smortress:10000"]
       },
       {
         # Syncthing syncs between the laptops and the host. It is not HTTP, so
         # Serve cannot front it; the port is in the tailscale firewalld zone.
         action = "accept"
         src    = ["group:owner"]
-        dst    = ["smortress:22000"]
+        dst    = ["tag:smortress:22000"]
       },
     ]
 
@@ -85,19 +73,38 @@ locals {
     tests = [
       {
         src    = var.email
-        accept = ["smortress:22", "smortress:443", "smortress:8443", "smortress:10000", "smortress:22000"]
+        accept = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:10000", "tag:smortress:22000"]
       },
       {
         src  = "tag:untrusted"
-        deny = ["smortress:22", "smortress:443", "smortress:8443", "smortress:10000", "smortress:22000"]
+        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:10000", "tag:smortress:22000"]
       },
     ]
   }
 }
 
+# The host itself, tagged declaratively: a tag is the only stable name the
+# policy validator accepts (a bare hostname is "invalid address", and a hosts
+# alias pins the tailnet IP a reinstall would change). The data source resolves
+# the device by its short hostname.
+data "tailscale_device" "smortress" {
+  count    = var.tailnet == "" ? 0 : 1
+  hostname = "smortress"
+}
+
+resource "tailscale_device_tags" "smortress" {
+  count     = var.tailnet == "" ? 0 : 1
+  device_id = data.tailscale_device.smortress[0].node_id
+  tags      = ["tag:smortress"]
+}
+
 # gated: a checkout with no tailnet named plans nothing here
 resource "tailscale_acl" "this" {
   count = var.tailnet == "" ? 0 : 1
+
+  # The tag must exist before a rule names it, or the policy names a tag no
+  # device carries and the route closes in the same apply that opens it.
+  depends_on = [tailscale_device_tags.smortress]
 
   # This resource is the whole policy, not a patch: the provider refuses to
   # replace a policy it did not write unless that is said out loud, and the
