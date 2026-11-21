@@ -32,8 +32,12 @@ LIST_ID = "shortListAAA"
 
 
 def body_of(url: str) -> Mapping[str, Any]:
+    # Service calls carry their document in `_body`; element-list ranges are
+    # plain query parameters, which is the shape `calendarevent` takes.
     query = parse_qs(urlsplit(url).query)
-    return json.loads(query["_body"][0]) if "_body" in query else {}
+    if "_body" in query:
+        return json.loads(query["_body"][0])
+    return {key: values[0] for key, values in query.items()}
 
 
 def entry(marker: str) -> dict[str, Any]:
@@ -98,6 +102,10 @@ class PaginationTest(unittest.TestCase):
         self.assertEqual(str(api_module.PAGE_SIZE), requested["count"])
         self.assertEqual("200", requested["count"])
         self.assertEqual("false", requested["reverse"])
+        # Tuta's own client sends the range as query parameters; a `_body`
+        # document here is a 400 from the server, which is how the dumper failed
+        # on its first real run.
+        self.assertNotIn("_body=", transport.calls[0][1])
 
     def test_a_marker_that_comes_back_again_stops_the_walk(self) -> None:
         """A full page whose last id repeats the marker would loop forever."""

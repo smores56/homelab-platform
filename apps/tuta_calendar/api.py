@@ -364,12 +364,14 @@ class TutaApi:
     ) -> Sequence[Mapping[str, Any]]:
         """One page of ``calendarevent``, oldest first."""
 
-        page = self._get(
-            self._url("tutanota", "calendarevent", list_id),
-            app="tutanota",
-            token=access_token,
-            body={"start": start, "count": str(count or self.page_size), "reverse": "false"},
+        # A list range is query parameters, not a service call: Tuta's own
+        # client sends start/count/reverse in the query, and `?_body=` here is a
+        # 400 ("GET /rest/tutanota/calendarevent/<list> answered HTTP 400").
+        target = (
+            f"{self._url('tutanota', 'calendarevent', list_id)}"
+            f"?start={quote(start)}&count={count or self.page_size}&reverse=false"
         )
+        page = self._call("GET", target, app="tutanota", token=access_token)
         if isinstance(page, Mapping) or not isinstance(page, Sequence):
             raise PaginationError(
                 f"GET /rest/tutanota/calendarevent/{list_id} answered "
