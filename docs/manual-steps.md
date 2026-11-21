@@ -2358,9 +2358,124 @@ commands from the `~/repos/github.com/smores56/homelab-platform` checkout on
 ## 37. Core server image (T2): sign, install, verify, roll back
 
 This section creates the T2 signing key, publishes the derived image, installs
-smortress through the uCore auto-rebase path, stages the kit secrets and proves
-the failure boundaries. Run it once per image-generation change and once per
-scratch install.
+smortress through the uCore auto-rebase path, and proves the failure boundaries.
+Run it once per image-generation change and once per scratch install.
+
+No kit secret is staged for the install. `ignition/smortress.bu` carries neither
+a LUKS key nor a passphrase, `scripts/render-ignition.sh` decrypts nothing but
+the account hash, first-boot Ignition binds root to Clevis alone and creates `p5`
+unformatted, and `smortress-data-init.service` generates the data key on the
+host. Both offline recovery passphrases exist only after step 8.1: a host that
+skips it has no way in without Tang and the TPM.
+
+### Preflight: every precondition, with the command that proves it
+
+The install wipes the target. `coreos-installer install` rewrites the partition
+table and the first boot formats `p4` with `wipe_volume: true`, so whatever the
+980 held is gone at that boot. Each item below is a precondition plus the command
+that proves it; a line that does not print what it says it must stops the
+install instead of being worked around.
+
+P1, P3 and P5 run on the operator machine in the checkout; P2, P4 and P6 run on
+the Fedora CoreOS live media with the target attached. Step 2 writes
+`derived-image`, step 3 writes `disk` and `tang-thumbprint` and generates both
+passphrases, so the preflight runs twice: once before step 1, and again after
+step 3 — the second run is the one that gates step 5.
+
+1. **Tang advertises the key root is bound to, and the pinned thumbprint is that
+   key.** The effective URL is `ignition/operator/tang-url` when that file
+   exists, otherwise the template default.
+
+   ```sh
+   tang_url=$(cat ignition/operator/tang-url 2>/dev/null \
+     || printf '%s\n' http://10.0.0.193:7654)
+   curl -sS -m5 -o /tmp/tang-adv.json "$tang_url/adv"
+   served=$(jose fmt -j /tmp/tang-adv.json -g payload -y -o - \
+     | jose jwk thp -i - -a S256 \
+     | head -n1)
+   printf 'served: %s\npinned: %s\n' "$served" \
+     "$(cat ignition/operator/tang-thumbprint)"
+   rm -f /tmp/tang-adv.json
+   ```
+
+   Expected: `curl` exits 0 and writes a JSON advertisement, and the two
+   thumbprint lines are identical 43-character base64url strings. An empty
+   `tang-thumbprint` file is not a pass: the renderer refuses it in step 4.
+
+2. **The target's TPM2 is present and healthy.** The Clevis half of threshold 2
+   is bound at first boot and needs this TPM then; a TPM that answers here and
+   fails later lands on the console path under Failure paths.
+
+   ```sh
+   ls -l /dev/tpmrm0
+   cat /sys/class/tpm/tpm0/tpm_version_major
+   sudo systemd-cryptenroll --tpm2-device=list
+   ```
+
+   Expected: `/dev/tpmrm0` exists, the version major prints `2`, and the list
+   prints one `/dev/tpmrm0` row with a vendor string. When the live media has no
+   `systemd-cryptenroll`, the two `/dev` and sysfs lines are the check.
+
+3. **The offline kit is in hand with its named items.** The Bitwarden item
+   **homelab core recovery** and its printed copy carry the new 980 root LUKS
+   passphrase, the new 980 data LUKS passphrase, the cosign private key and its
+   password, the SOPS admin age identity and the smortress SSH host private key
+   (`docs/core/recovery-kit.md`). Only the age identity is provable from a shell:
+
+   ```sh
+   export SOPS_AGE_KEY_FILE=/path/to/admin-keys.txt   # the admin age identity
+   sops --decrypt --extract '["hash"]' secrets/server/smores-password-hash.yaml \
+     | cut -c1-3
+   ```
+
+   Expected: `$6$`. The password manager and the paper copy are a manual check:
+   the item exists, it is writable, and its printed rows are legible.
+
+4. **The target disk is the 980 and nothing else.** Size alone does not separate
+   it from the 970 — both are 1 TB class disks — so the model does.
+
+   ```sh
+   disk=$(cat ignition/operator/disk)
+   printf '%s\n' "$disk"
+   lsblk -dno MODEL,SIZE,TRAN "$disk"
+   lsblk -bno SIZE "$disk"
+   lsblk -rno MOUNTPOINTS "$disk" | grep -c .
+   ```
+
+   Expected: a `/dev/disk/by-id/nvme-...` path, a MODEL that contains `980`,
+   `931.5G`, `nvme`, `1000204886016` bytes, and `0` — nothing on the running
+   host is mounted from the disk that is about to be wiped. The 970 and the 5 TB
+   HDD are not install targets.
+
+5. **The image to install is a digest the committed public key signed.**
+
+   ```sh
+   cat ignition/operator/derived-image
+   grep -qE '@sha256:[0-9a-f]{64}$' ignition/operator/derived-image \
+     && echo digest-pinned
+   cosign verify --key image/cosign.pub "$(cat ignition/operator/derived-image)" \
+     >/dev/null && echo signature-verified
+   ```
+
+   Expected: `ghcr.io/smores56/homelab-platform/server@sha256:<64 hex>`, then
+   `digest-pinned` and `signature-verified`. This item needs registry access.
+
+6. **Console and network are in place for the first boots.** From the live media,
+   on the install network:
+
+   ```sh
+   ip -o link show | awk '$2 != "lo:" {print $2, $9}'
+   ip -4 route get 10.0.0.193
+   curl -sS -m5 -o /dev/null -w '%{http_code}\n' http://10.0.0.193:7654/adv
+   ```
+
+   Expected: the wired interface is `UP` with a DHCP address, the route to Tang
+   leaves through it, and the status is `200` — the same path dracut takes with
+   `ip=dhcp rd.neednet=1`. The monitor and keyboard on the target are a manual
+   check: the autorebase units write to the console (`StandardOutput=journal+console`)
+   and the console is the only way to enter a LUKS passphrase.
+
+### Install steps
 
 1. Create the cosign signing key. The private key and password go into the
    Bitwarden item **homelab core recovery**; only the public key is committed.
@@ -2378,9 +2493,18 @@ scratch install.
    printf '%s' "$COSIGN_PASSWORD" | gh secret set COSIGN_PASSWORD --env server-image
    ```
 
-   Record `COSIGN_PASSWORD` and attach `cosign.key` to the Bitwarden item. If
-   the key is rotated, re-sign every digest that is still deployed before
-   replacing `image/cosign.pub`.
+   Verification:
+
+   ```sh
+   test -s "$HOME/.config/smortress/cosign.key" && echo private-key-present
+   git ls-files --error-unmatch image/cosign.pub >/dev/null && echo pubkey-committed
+   gh secret list --env server-image
+   ```
+
+   Expected: `private-key-present`, `pubkey-committed`, and two rows,
+   `COSIGN_PASSWORD` and `COSIGN_PRIVATE_KEY`. Record `COSIGN_PASSWORD` and attach
+   `cosign.key` to the Bitwarden item. If the key is rotated, re-sign every digest
+   that is still deployed before replacing `image/cosign.pub`.
 
 2. Refresh the base pin, publish the image and pin its digest. `refresh-pins.sh
    --write` is the only step that reads the uCore tag; review the diff it makes.
@@ -2399,10 +2523,22 @@ scratch install.
    `render-ignition.sh` refuses anything that is not
    `<registry>/<repo>@sha256:<64 hex>`.
 
+   Verification:
+
+   ```sh
+   gh run list --workflow publish-server-image.yml --limit 1 \
+     --json conclusion --jq '.[0].conclusion'   # success
+   grep -qE '@sha256:[0-9a-f]{64}$' ignition/operator/derived-image \
+     && echo digest-pinned
+   ```
+
+   Expected: `success` and `digest-pinned`. The renderer in step 4 also refuses a
+   digest that equals the pinned base, so an unpublished image stops there.
+
 3. Stage the operator values. None of these files is committed
-   (`ignition/operator/` is gitignored), and the two recovery passphrases are
-   not staged for the renderer at all: no secret enters Ignition or the
-   installer media (design #701), so they go straight into the recovery kit.
+   (`ignition/operator/` is gitignored), and the two recovery passphrases are not
+   staged for the renderer at all: no secret enters Ignition or the installer
+   media (design #701), so they go straight into the recovery kit.
 
    ```sh
    install -d -m 0700 ignition/operator
@@ -2414,7 +2550,8 @@ scratch install.
      openssl rand -base64 48 \
        >/tmp/smortress-kit/data-recovery-passphrase
    )
-   curl -sf http://10.0.0.193:7654/adv >/tmp/tang-adv.json
+   curl -sf "$(cat ignition/operator/tang-url 2>/dev/null \
+     || printf '%s\n' http://10.0.0.193:7654)/adv" >/tmp/tang-adv.json
    jose fmt -j /tmp/tang-adv.json -g payload -y -o - \
      | jose jwk thp -i - -a S256 \
      | head -n1 >ignition/operator/tang-thumbprint
@@ -2438,6 +2575,21 @@ scratch install.
    must be the 931.5G 980's `/dev/disk/by-id` name; the 970 and the 5 TB HDD are
    not install targets.
 
+   Verification:
+
+   ```sh
+   ls -l ignition/operator/
+   git status --porcelain -- ignition/operator   # empty: the directory is gitignored
+   test ! -e /tmp/smortress-kit/root-recovery-passphrase \
+     && test ! -e /tmp/smortress-kit/data-recovery-passphrase \
+     && echo passphrases-off-this-machine
+   ```
+
+   Expected: `ssh_authorized_keys` at `0644`, `tang-thumbprint` at `0600`, `disk`
+   and `derived-image` present, no `git status` output, and
+   `passphrases-off-this-machine` — which is only true once both values are in the
+   kit. Then re-run preflight P4 and P5 against the files this step wrote.
+
 3.1 Check the `smores` account password ciphertext. It is not an operator file:
    the hash ships as ciphertext, because bootc never reconciles `/var` and a
    reinstall must not need anything the installer carried.
@@ -2451,6 +2603,9 @@ scratch install.
    A checkout already carries the ciphertext, so this is a check unless the
    password changes; the mint steps live in "Changing the smores account
    password" below.
+
+   Verification: the command prints the path, and
+   `head -1 secrets/server/smores-password-hash.yaml` prints `hash: ENC[`.
 
 4. Render and validate Ignition. No kit secret is in the result: root is bound
    to Clevis only and the data partition is left unformatted. It still carries
@@ -2471,8 +2626,81 @@ scratch install.
    name). Without an identity, `--check` warns and validates the template with a
    fixture hash; the install render refuses.
 
-5. Install from the Fedora CoreOS live ISO. Boot the amd64 live media, copy the
-   repository and the rendered file to it, and run:
+   Verification — the rendered config carries one Clevis-only LUKS device and no
+   key file:
+
+   ```sh
+   jq -r '.storage.luks | map(.name) | join(",")' ignition/smortress.ign
+   jq -r '.storage.luks | map(has("keyFile")) | join(",")' ignition/smortress.ign
+   jq -r '.storage.luks | map(.clevis.threshold) | join(",")' ignition/smortress.ign
+   stat -c '%a %n' ignition/smortress.ign
+   ```
+
+   Expected: `root`, `false`, `2`, and `600 ignition/smortress.ign`. A `true`, a
+   second device name or a threshold other than `2` means a secret or a weaker
+   binding entered the config: stop and fix the template, do not install.
+
+5. Write the live media, then install from it. The live media must be Fedora
+   CoreOS `live` from the same release as the pinned base, and the installer is
+   what refuses an Ignition spec it cannot write.
+
+   ```sh
+   iso=$(ls "$HOME"/Downloads/fedora-coreos-*-live.x86_64.iso | tail -n1)
+   expected=$(grep -oE '\b[0-9a-f]{64}\b' "${iso}.sha256" | head -n1)
+   test "$expected" = "$(sha256sum "$iso" | cut -d' ' -f1)" && echo iso-matches-published-sha256
+   lsblk -dno MODEL,SIZE,TRAN /dev/disk/by-id/usb-*
+   read -r media    # the /dev/disk/by-id/usb- path of the stick, never the 980
+   case "$media" in /dev/disk/by-id/usb-*) ;; *) echo "not a usb by-id path" >&2; exit 1 ;; esac
+   sudo dd if="$iso" of="$media" bs=4M status=progress oflag=direct
+   sudo head -c "$(stat -c %s "$iso")" "$media" | sha256sum
+   sha256sum "$iso"
+   ```
+
+   Expected: `iso-matches-published-sha256`, a MODEL and size that are the USB
+   stick, and two identical sha256 lines — the read-back hash is the write
+   verification, because `dd` writes a prefix of a block device and returns 0
+   whether or not the bytes landed. The release match is one comparison:
+
+   ```sh
+   podman run --rm "$(grep ^UCORE_IMAGE image/pins.env | cut -d= -f2)" \
+     cat /etc/os-release | grep ^VERSION_ID
+   # on the live media:
+   grep ^VERSION_ID /etc/os-release
+   ```
+
+   Expected: the same `VERSION_ID` on both sides.
+
+   Carry the checkout and the rendered file on a stick labelled `INSTALL`, and
+   from the live media compare the copy against the render:
+
+   ```sh
+   sudo mkdir -p /mnt/install
+   sudo mount -L INSTALL /mnt/install
+   cd /mnt/install/homelab-platform
+   sha256sum ignition/smortress.ign   # must equal the operator machine's value
+   test -s ignition/smortress.ign && echo config-on-media
+   ```
+
+   Expected: one hash equal to `sha256sum ignition/smortress.ign` on the operator
+   machine, and `config-on-media`. Serving the config instead is equivalent, and
+   the hash pin is what makes it equivalent:
+
+   ```sh
+   # on the operator machine, on the install network
+   python3 -m http.server 8000 --bind 10.0.0.2      # the operator machine's address
+   openssl dgst -sha512 -binary ignition/smortress.ign | base64 -w0
+   ```
+
+   ```sh
+   # on the live media
+   read -r pin    # paste the sha512- base64 value from the operator machine
+   sudo coreos-installer install "$(cat ignition/operator/disk)" \
+     --ignition-url http://10.0.0.2:8000/ignition/smortress.ign \
+     --ignition-hash "sha512-$pin" \
+     --append-karg ip=dhcp --append-karg rd.neednet=1
+   ```
+
+   Run the install from the live media, with the media copy of the checkout:
 
    ```sh
    sudo coreos-installer install "$(cat ignition/operator/disk)" \
@@ -2483,6 +2711,20 @@ scratch install.
 
    Remove the installation media. Two automatic reboots follow: the unsigned
    rebase and the signed rebase. Keep the network up.
+
+   Verification, after the installer exits 0:
+
+   ```sh
+   disk=$(cat ignition/operator/disk)
+   lsblk -o NAME,SIZE,PARTLABEL "$disk"
+   sudo blkid /dev/disk/by-partlabel/luks-root 2>/dev/null; echo "blkid exit $?"
+   ```
+
+   Expected: `p1` `BIOS-BOOT`, `p2` `EFI-SYSTEM`, `p3` `boot` and `p4` (the FCOS
+   root the installer wrote), and `blkid exit 2` — there is no `luks-root`
+   partition label yet and no `p5`, because both are first-boot Ignition's work.
+   Step 8 proves they appeared; an install that stops here is not a failed
+   install, it is an incomplete first boot.
 
 6. Prove the transition, then hand over to bootc.
 
@@ -2500,6 +2742,23 @@ scratch install.
    before `bootc switch`. `bootc rollback` reverts the OS deployment only; it
    does not undo `/var`, ZFS changes or database migrations.
 
+   Verification — both autorebase stages ran, in order, and neither unit can run
+   again:
+
+   ```sh
+   ls /etc/ucore-autorebase
+   systemctl is-enabled ucore-unsigned-autorebase.service \
+     ucore-signed-autorebase.service || true
+   digest=$(grep -oE 'sha256:[0-9a-f]{64}' ignition/operator/derived-image)
+   sudo rpm-ostree status | grep -qF "$digest" && echo booted-derived-digest
+   ```
+
+   Expected: `signed` and `unverified` (the two markers), `disabled` twice — the
+   units disable themselves in their last `ExecStart`, so `systemctl is-enabled`
+   exits non-zero and prints `disabled` — and `booted-derived-digest`. A missing
+   `unverified` marker means the first stage never ran and the second stage was
+   never eligible; see Failure paths.
+
 7. Verify the signature policy from a separate machine. The host enforces it
    through bootc; this command proves the committed public key matches the
    signed digest.
@@ -2509,23 +2768,48 @@ scratch install.
      --key image/cosign.pub "$(cat ignition/operator/derived-image)"
    ```
 
+   Verification: the command exits 0 and prints
+   `The following checks were performed on each of these signatures:` followed by
+   `The cosign claims were validated`. A non-zero exit means the digest is not
+   signed by `image/cosign.pub` — do not switch to it.
+
 8. Prove the two encrypted volumes exist as designed. Ignition bound root to
    Clevis only, and the first boot of the derived image formatted p5 from a key
    that never left the host.
 
    ```sh
    sudo clevis luks list -d /dev/disk/by-partlabel/root
-   sudo cryptsetup luksDump /dev/disk/by-partlabel/root | grep -cE '^[0-9]+: luks2'
+   sudo cryptsetup luksDump /dev/disk/by-partlabel/root \
+     | grep -cE '^[[:space:]]*[0-9]+: luks2'
    sudo cryptsetup status data
-   sudo cryptsetup luksDump /dev/disk/by-partlabel/luks-data | grep -cE '^[0-9]+: luks2'
+   sudo cryptsetup luksDump /dev/disk/by-partlabel/luks-data \
+     | grep -cE '^[[:space:]]*[0-9]+: luks2'
    stat -c '%a %U %n' /etc/luks/data
+   grep -n '^data[[:space:]]' /etc/crypttab
+   sudo journalctl -u smortress-data-init.service --no-pager \
+     | grep -c 'init-data-luks: formatted'
+   systemctl is-active smortress-data-init.service smortress-zpool.service
+   sudo zpool get -H -o value health smortress
+   zfs get -H -o value mounted smortress/raw/photos
+   findmnt -rn -o SOURCE,TARGET smortress/raw/photos
    ```
 
-   The Clevis list must show one `sss` binding with threshold 2. Both counts
-   print `1` before step 8.1 (root: the Clevis binding; data: the key file).
-   `cryptsetup status data` must name `/dev/disk/by-partlabel/luks-data`, and the
-   key file must be `400 root`. If the data device is missing, the formatting
-   oneshot failed: `sudo journalctl -u smortress-data-init.service -b`.
+   Expected, line by line: the Clevis list is one line starting `<slot>: sss`
+   with `"t":2` and both `tang` and `tpm2` pins; `1` keyslots on root (the Clevis
+   binding, and no Ignition key slot); `cryptsetup status data` is active, is
+   LUKS2 and names `/dev/disk/by-partlabel/luks-data`;
+   `1` keyslot on data (the host's key file); `400 root /etc/luks/data`;
+   `/etc/crypttab` carries
+   `data /dev/disk/by-partlabel/luks-data /etc/luks/data luks,discard,nofail`;
+   `1` — `init-data-luks` formatted the device exactly once, with
+   `init-data-luks: formatted /dev/disk/by-partlabel/luks-data with /etc/luks/data`
+   in the unit's history; `active` twice; `ONLINE`; `yes`; and
+   `smortress/raw/photos /var/srv/photos`.
+
+   Counts of `0`, a missing mapper, a `/etc/luks/data` that is not `400 root`, or
+   a pool that is not `ONLINE` are failures, not warnings: the device was
+   formatted and opened by `smortress-data-init.service` before the pool, and its
+   journal is `sudo journalctl -u smortress-data-init.service -b`.
 
 8.1 Add the offline recovery passphrases. This is the only step that gives the
    host a way in when Tang is unreachable and the TPM is gone; skipping it
@@ -2551,22 +2835,44 @@ scratch install.
    both Tang and the TPM, so run this while the host is still on the network it
    was installed on and its TPM is healthy.
 
-   Verify each passphrase by test-opening with it:
+   Verification, one test-open per volume plus the keyslot counts:
 
    ```sh
    sudo cryptsetup open --test-passphrase /dev/disk/by-partlabel/root
    sudo cryptsetup open --test-passphrase /dev/disk/by-partlabel/luks-data
-   sudo cryptsetup luksDump /dev/disk/by-partlabel/root | grep -cE '^[0-9]+: luks2'
-   sudo cryptsetup luksDump /dev/disk/by-partlabel/luks-data | grep -cE '^[0-9]+: luks2'
+   sudo cryptsetup luksDump /dev/disk/by-partlabel/root \
+     | grep -cE '^[[:space:]]*[0-9]+: luks2'
+   sudo cryptsetup luksDump /dev/disk/by-partlabel/luks-data \
+     | grep -cE '^[[:space:]]*[0-9]+: luks2'
    ```
 
    Each `open --test-passphrase` prompts once and exits 0 with no output when the
-   passphrase opens the slot; a wrong one exits non-zero. Both counts must now
-   print `2`: root is Clevis plus passphrase, data is key file plus passphrase.
-   Then prove console recovery: reboot with the wired NIC unplugged (Tang
-   unreachable, threshold 2 unmet), enter the root recovery passphrase at the
-   prompt, and confirm the system boots and the data LUKS opens from
-   `/etc/luks/data` without a second prompt.
+   passphrase opens the slot; a wrong one prints
+   `No key available with this passphrase.` and exits non-zero. Both counts must
+   now print `2`: root is Clevis plus passphrase, data is key file plus passphrase.
+
+   Then prove console recovery. Power off, unplug the wired NIC so Tang is
+   unreachable and the sss threshold cannot be met, and boot:
+
+   ```sh
+   sudo systemctl poweroff
+   ```
+
+   At the console, systemd asks for the root passphrase (`Please enter passphrase
+   for disk ...`). Enter the root recovery passphrase from the kit. The system
+   must boot and the data LUKS must open from `/etc/luks/data` without a second
+   prompt; confirm from the console session:
+
+   ```sh
+   sudo cryptsetup status data
+   sudo zpool get -H -o value health smortress
+   ```
+
+   Expected: `active` and `ONLINE`, with no prompt for the data device. This is a
+   console check: no SSH session proves the passphrase reached the boot prompt,
+   and the NIC has to be unplugged before the boot — dracut binds Clevis before
+   root is mounted, so what matters is the state at that moment. The same prompt
+   appears when the TPM is the missing half instead of Tang.
 
 8.2 Confirm the data key file stayed off `/boot`. `smortress-data-init.service`
    generates `/etc/luks/data` on the encrypted root; Dracut must not copy it
@@ -2576,15 +2882,15 @@ scratch install.
    sudo lsinitrd /boot/ostree/*/initramfs-*.img | grep -E '/etc/luks|/etc/crypttab' || true
    ```
 
-   `/etc/luks/data` may not appear, and no data `/etc/crypttab` entry may appear;
-   the root entry is Dracut's own and is expected. If `/etc/luks/data` does,
-   move the key to `/var/lib/homelab/luks-data`, point the data crypttab entry at
-   it with `noauto`, open it after root with
+   Verification: `/etc/luks/data` may not appear, and no data `/etc/crypttab`
+   entry may appear; the root entry is Dracut's own and is expected. If
+   `/etc/luks/data` does, move the key to `/var/lib/homelab/luks-data`, point the
+   data crypttab entry at it with `noauto`, open it after root with
    `sudo systemctl start systemd-cryptsetup@data.service` from a unit ordered
    before `smortress-zpool.service`, and recheck. Repeat the check after every
    kernel update.
 
- . "9. Stage the age identity" and prove the decrypt unit. The file at
+9. Stage the age identity and prove the decrypt unit. The file at
    `/var/lib/homelab/age/keys.txt` must be the unwrapped `AGE-SECRET-KEY-...`
    identity, not the passphrase-wrapped kit container.
 
@@ -2597,9 +2903,10 @@ scratch install.
    sudo cat /run/smortress/secrets/canary.yaml
    ```
 
-   The last command must print `canary: sops-decrypt-ok`. Remove the temporary
-   identity file. Then restart the Quadlets; they must start only after the
-   unit succeeds.
+   Verification: the last command must print `canary: sops-decrypt-ok`, and
+   `stat -c '%a %U' /var/lib/homelab/age/keys.txt` must print `600 root`. Remove
+   the temporary identity file. Then restart the Quadlets; they must start only
+   after the unit succeeds.
 
 10. Configure and open the HDD.
 
@@ -2618,14 +2925,18 @@ scratch install.
     ```
 
     The `luksAddKey` prompt accepts the existing HDD passphrase from the kit.
-    Remove the HDD and reboot once: boot must complete, the unit must log the
-    absence, and T3's freshness alert must be the only failure.
+    Verification: `ls -l /dev/mapper/luks-hdd` names a `dm-` device,
+    `stat -c '%a %U' /var/lib/homelab/keys/hdd.key` prints `600 root`, and
+    `systemctl is-active smortress-cryptsetup-hdd.service` prints `active`. Remove
+    the HDD and reboot once: boot must complete, the unit must log the absence,
+    and T3's freshness alert must be the only failure.
 
 11. Prove the network boundary.
 
     ```sh
     sudo tailscale up --ssh --hostname smortress
     sudo firewall-cmd --zone=bootstrap --list-all   # must show no interfaces
+    ```
 
     The enrollment unit needs the decrypted auth key, so a host enrolled by hand
     before the age identity exists has to close the window explicitly:
@@ -2634,18 +2945,15 @@ scratch install.
     sudo touch /var/lib/homelab/tailscale-enrolled
     sudo /usr/libexec/access-lockdown
     sudo firewall-cmd --get-active-zones
-    ```
-
-    The wired interface must no longer appear in a zone of its own; only
-    `tailscale0` (and the `drop` default) may remain.
-    sudo firewall-cmd --get-active-zones
     sudo firewall-cmd --zone=tailscale --list-all
     sudo ss -ltnp
     ```
 
-    `tailscale0` must be the only interface in the `tailscale` zone; the default
-    zone is `drop`. From a LAN host that is not on Tailscale, `ssh smores@<lan-ip>`
-    and every application port must fail. From a Tailscale peer they work.
+    Verification: `tailscale0` must be the only interface in the `tailscale` zone;
+    the default zone is `drop`, and the wired interface must no longer appear in a
+    zone of its own. From a LAN host that is not on Tailscale, `ssh
+    smores@<lan-ip>` and every application port must fail. From a Tailscale peer
+    they work.
 
 12. Prove per-group readiness isolates failures.
 
@@ -2657,15 +2965,16 @@ scratch install.
     sudo systemctl restart zfs-ready@photos.service
     ```
 
-    The middle restart must fail with `zfs-ready: nothing is mounted at
-    /srv/photos`; the last must succeed. A consumer of `photos` must be
-    down between the two, while `zfs-ready@books` and unrelated backups stay up.
+    Verification: the middle restart must fail with `zfs-ready: nothing is mounted
+    at /srv/photos`; the last must succeed. A consumer of `photos` must be down
+    between the two, while `zfs-ready@books` and unrelated backups stay up.
 
 13. Update the kit and run the drill. Record the cosign key/password, the root
     and data recovery passphrases, the HDD passphrase and the age identity in
     the Bitwarden item and on the paper copy; run the drill in
     `docs/core/recovery-kit.md` with only kit material. A row without the drill
-    is not a kit item.
+    is not a kit item. Verification: the drill's restore is the check, and the
+    row's date is recorded in that document.
 
 14. Repeat steps 5–12 on the scratch disk before the production wipe. Record
     the `bootc rollback` output and the two reboot-stage journals in #705.
@@ -2699,6 +3008,191 @@ scratch install.
     a rollback, switch back to the digest you trust. Confirm the booted
     deployment with `rpm-ostree status`; `bootc rollback` undoes the OS
     deployment only, not `/var`, ZFS changes or database migrations.
+
+### Failure paths
+
+Every failed verification above means the same thing: stop and read the state,
+do not continue to the next step and do not improvise a workaround. What each
+one means and the next command to run:
+
+- **P1 fails (Tang unreachable, or the thumbprint differs).** `curl` timing out
+  means dracut will not reach Tang either, and a different thumbprint means the
+  pinned value is not the key this Tang serves. Do not install: fix the network
+  or the Tang deployment, re-derive the thumbprint with step 3, re-run P1. A host
+  installed anyway formats root with a Clevis binding it can never open and has
+  no passphrase slot — that is a reinstall, not a repair.
+- **P2 fails (no TPM, or `tpm_version_major` is 1).** Threshold 2 can never be
+  met on this board. The install still boots, but the only way in is the console
+  prompt step 8.1 creates: before it, nothing unlocks root when Tang or the TPM is
+  unavailable. Abort and fix the board (TPM disabled in firmware, cleared
+  ownership), then re-run the install.
+- **P4 fails (wrong disk).** The install wipes whatever `/dev/disk/by-id` path
+  `ignition/operator/disk` names. Rewrite the file with the 980's path, re-run
+  P4, and re-render in step 4 — the rendered config pins the disk.
+- **P5 fails (unsigned digest).** Stop before step 5. `cosign verify` exiting
+  non-zero means the digest is not signed by `image/cosign.pub`; re-publish
+  (`gh run list --workflow publish-server-image.yml --limit 1`) or restore the
+  signing key from the kit before pinning a new digest.
+- **Step 4 shows `keyFile` or a second LUKS device.** A secret entered the
+  config. Nothing is installed yet: fix `ignition/smortress.bu`, re-run
+  `tests/core/ignition-boundary.sh` and re-render.
+- **Step 5 verification shows no `p4`, or `blkid` exits 0 on `luks-root`.** The
+  installer did not write the layout. Re-run `coreos-installer install` from the
+  live media; if it fails again, the media or the target disk is the problem and
+  the disk needs a `wipefs -a` from the live media before another attempt.
+- **Step 6 has no `/etc/ucore-autorebase/unverified` marker.** The unsigned
+  rebase never ran, so the signed stage was never eligible — usually no network
+  at first boot. The unit disables itself only in its last `ExecStart`, so it is
+  still enabled:
+
+  ```sh
+  sudo journalctl -b -u ucore-unsigned-autorebase.service --no-pager
+  sudo systemctl restart ucore-unsigned-autorebase.service
+  ```
+
+  A missing `signed` marker with `unverified` present is the same failure one
+  stage later:
+
+  ```sh
+  sudo journalctl -b -u ucore-signed-autorebase.service --no-pager
+  sudo systemctl restart ucore-signed-autorebase.service
+  ```
+
+  Both restart commands end in `systemctl reboot`; the marker is what keeps a
+  completed stage from running twice.
+- **Step 6 boots the wrong reference.** `rpm-ostree status` without the derived
+  digest means the rebase never completed, and a reboot on its own boots whatever
+  deployment is default: the missing-marker path above is the fix. Once both
+  markers exist, the way forward is
+  `sudo bootc switch --enforce-container-sigpolicy "$(cat ignition/operator/derived-image)"`.
+- **The boot stops at the root passphrase prompt and accepts nothing.** Root has
+  no passphrase slot and no Clevis binding that can be satisfied, so nothing on
+  the host can open the volume: reinstall from the media, it is not a repair. Do
+  not wipe before reading the header from the live media, in case Tang and the
+  TPM are healthy and the binding is the problem:
+
+  ```sh
+  sudo cryptsetup luksDump /dev/disk/by-partlabel/root | sed -n '/^Keyslots:/,/^Tokens:/p'
+  sudo clevis luks list -d /dev/disk/by-partlabel/root
+  ```
+- **Step 8 shows more than one keyslot on root.** A slot Ignition was supposed to
+  delete survived. Continue only if a Clevis slot is listed, and record the extra
+  slot in #705, because step 8.1's counts then come out higher than `2`:
+
+  ```sh
+  sudo cryptsetup luksDump /dev/disk/by-partlabel/root | sed -n '/^Keyslots:/,/^Tokens:/p'
+  ```
+- **Step 8 shows the Clevis binding but no data mapper, or `/etc/luks/data`
+  missing.** The data oneshot failed and the pool unit failed with it. The unit is
+  idempotent, so restarting it is the fix path:
+
+  ```sh
+  sudo journalctl -b -u smortress-data-init.service --no-pager
+  sudo systemctl restart smortress-data-init.service
+  sudo systemctl restart smortress-zpool.service
+  sudo cryptsetup status data
+  sudo zpool get -H -o value health smortress
+  ```
+
+  A missing `/dev/disk/by-partlabel/luks-data` is the installer, not the unit:
+  reinstall.
+- **Step 8.1's `clevis luks pass` fails.** It needs Tang *and* the TPM at the
+  same time; either one failing means the Clevis keyslot cannot be recovered, and
+  without it no passphrase can be added. Check both:
+
+  ```sh
+  curl -sS -m5 -o /dev/null -w '%{http_code}\n' http://10.0.0.193:7654/adv
+  sudo systemd-cryptenroll --tpm2-device=list
+  ```
+
+  If either fails, the host has **no offline recovery** and the only paths in are
+  a working Tang+TPM at boot or a reinstall. Clevis failure at boot means console
+  recovery is the only path — and it exists only if step 8.1 completed. Without a
+  passphrase slot there is no console prompt, so what was written to the new pool
+  since the install is gone — T3 has not initialised a repository yet. Reinstall
+  from the media; the T0 kit still holds the legacy data, not this pool.
+- **A wrong passphrase at `open --test-passphrase`.** `No key available with this
+  passphrase.` means the value in the kit is not the one in the slot — usually a
+  copy error or the wrong kit row. Re-copy from the kit, retry; if it still fails,
+  add the value again while Tang and the TPM are healthy.
+
+  ```sh
+  slot=$(sudo clevis luks list -d /dev/disk/by-partlabel/root | awk -F: 'NR==1 {print $1}')
+  sudo sh -c "clevis luks pass -d /dev/disk/by-partlabel/root -s $slot >/run/root-clevis.key && chmod 0400 /run/root-clevis.key"
+  sudo cryptsetup luksAddKey --key-file /run/root-clevis.key /dev/disk/by-partlabel/root
+  sudo shred -u /run/root-clevis.key
+  sudo cryptsetup luksAddKey --key-file /etc/luks/data /dev/disk/by-partlabel/luks-data
+  ```
+- **Step 8.1 skipped, or abandoned partway.** Do not proceed quietly: the host
+  has no offline recovery and T2's evidence is incomplete. Record the hole with
+  the observed keyslot counts and close it in the next window while Tang and the
+  TPM are both healthy — the window closes when either dies:
+
+  ```sh
+  sudo cryptsetup luksDump /dev/disk/by-partlabel/root | sed -n '/^Keyslots:/,/^Tokens:/p'
+  sudo cryptsetup luksDump /dev/disk/by-partlabel/luks-data | sed -n '/^Keyslots:/,/^Tokens:/p'
+  gh issue comment 705 --repo smores56/homelab-platform \
+    --body 'known-open: smortress root and data LUKS have Clevis/keyfile slots only; no offline recovery passphrase. Close in section 37 step 8.1.'
+  ```
+- **Step 8.2 shows `/etc/luks/data` in the initramfs.** The key is on the
+  unencrypted `/boot`, which is the at-rest bypass that step exists to catch. Apply
+  the remediation in that step before anything else, then recheck — and keep the
+  old initramfs until the new one passes.
+
+### Rollback
+
+What is undoable and what is not, by stage. The 970 rollback disk is not touched
+by any of this and stays the way back to the current production host.
+
+- **Nothing written yet (preflight or step 4 failed).** Nothing to roll back. The
+  rendered config is a file: `rm ignition/smortress.ign`.
+- **Install written, first boot not completed.** Boot the live media again and
+  re-run step 5 with the previous signed digest in
+  `ignition/operator/derived-image`. The disk is wiped a second time; whatever the
+  980 held is gone either way.
+- **Both autorebase stages done, step 8.1 not done.** The OS deployment is
+  revertible, the disk is not: a rollback boots an older deployment against the
+  new `/var` and the new pool, and it cannot bring back the disk that was wiped.
+
+  ```sh
+  sudo bootc rollback
+  sudo systemctl reboot
+  sudo rpm-ostree status
+  ```
+
+  `bootc rollback` leaves the reference alone, so the next `bootc upgrade`
+  re-stages the build you just left. After a rollback, switch explicitly to the
+  digest you intend to stay on — it must still be signed by `image/cosign.pub`:
+
+  ```sh
+  sudo bootc switch --enforce-container-sigpolicy \
+    "ghcr.io/smores56/homelab-platform/server@sha256:<digest of the build to return to>"
+  sudo systemctl reboot
+  ```
+
+- **After step 8.1, before T3 has a backup.** Roll back the OS as above; the LUKS
+  headers keep both passphrases, so the data stays openable with the kit. There is
+  no data rollback: nothing has backed up `p5` yet.
+
+Unrecoverable, in every case:
+
+- Everything the 980 held before the install. `wipe_volume: true` destroys the old
+  root LUKS container, so the T0 kit's "980 root LUKS passphrase (current
+  install)" row opens nothing after that boot.
+- `/etc/luks/data` if it is lost before step 8.1. The data container has no other
+  key, so the pool on `p5` cannot be opened again, and a passphrase added later
+  does not help.
+- ZFS dataset content written after the install until T3 initialises the
+  repositories. `bootc rollback` does not touch `/var` or the pool.
+- Anything shredded in step 3. Once the passphrase files are gone, the kit is the
+  only copy.
+
+Before reinstalling over a host that still boots, export the pool so the next
+install does not meet a half-imported one:
+
+```sh
+sudo zpool export smortress
+```
 
 ### Changing the smores account password
 
