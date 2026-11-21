@@ -26,9 +26,12 @@ locals {
   }
 
   # The two names the public edge serves (design #725). They stay on the cluster
-  # tunnel until `edge_ipv4` is set, because Cloudflare refuses a second record
-  # at a name: the apply that creates the grey-cloud A must retire the proxied
-  # CNAME in the same plan, or neither can be applied at all.
+  # tunnel until `edge_ipv4` is set. The plan then holds a destroy and a create
+  # at the same name, which OpenTofu cannot order against each other and
+  # Cloudflare refuses to hold at once, so the cutover is applied in two steps
+  # (docs/core/public-edge.md, "DNS and the cutover"): the cluster records first
+  # with -target, the A records after. The comments here describe the desired
+  # state, not a race-free apply.
   edge_hosts     = ["photos", "opds"]
   edge_dns_hosts = var.edge_ipv4 == "" ? [] : local.edge_hosts
 

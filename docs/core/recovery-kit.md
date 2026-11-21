@@ -39,6 +39,7 @@ needs `pg_restore`.
 | R2 read-only recovery token | Backrest's only credential; cannot delete offsite data | T4 | — |
 | Backrest login | recovery UI at `recovery.sammohr.dev` (replaces the static letter). No Cloudflare account or login: the URL opens in any browser and the password is the only credential | T4 | — |
 | RackNerd ctrl login + 2FA recovery codes | the only way to reinstall the edge VPS or open its console; without them a dead edge is a support ticket | T1 | — |
+| Tailscale admin login + 2FA recovery codes | a reinstall destroys the edge's node identity, and rejoining needs a new preauthorized `tag:vps` key minted in that console | T1 | — |
 | Edge SSH host private key | pins the VPS identity across a reinstall; `provision/edge/bootstrap.sh` installs it when `EDGE_HOST_KEY` names it | T1 | — |
 | Edge Caddy data directory | `/var/lib/caddy/.local/share/caddy`: the ACME account key and the two certificates, so a rebuild re-issues nothing (`docs/core/public-edge.md`) | T1 | — |
 | This runbook | printed `docs/core/` set: gate, kit, backrest, public edge, manual steps | T0 | — |

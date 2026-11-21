@@ -14,6 +14,7 @@ the shape, the failure modes and the rebuild.
 | --- | --- |
 | Provider | RackNerd, 4 GB KVM VPS (Black Friday 2026), New York |
 | Resources | 4 vCPU, 4 GB RAM, 60 GB SSD, 10 TB transfer/month at 1 Gbps |
+| OS | Ubuntu 24.04, whose `caddy` package is 2.7; jammy's 2.4 cannot parse the TLS options |
 | Address | one IPv4; IPv6 is a support ticket and was not requested |
 | Price | $47.98/year, lifetime recurring |
 | Control plane | RackNerd `ctrl`: reboot, OS reinstall, HTML5 VNC, optional network firewall |
@@ -69,11 +70,26 @@ fail unattended.
 gated on `var.edge_ipv4`. While it is empty the names stay proxied CNAMEs to the
 cluster tunnel and nothing about the edge is public.
 
-Setting it is one atomic apply: the same plan removes both names from
-`local.cluster_hosts` and creates the `A` records, because Cloudflare refuses a
-second record at a name. That apply is the cutover, and it waits on #709's
-retirement gate: it changes which Immich is authoritative, which is a data
-decision, not a DNS one.
+The plan for a non-empty `edge_ipv4` holds a destroy (the proxied CNAME) and a
+create (the grey-cloud `A`) at the same name. OpenTofu cannot order one before
+the other, and Cloudflare refuses two records at a name, so the cutover is
+applied in two steps, cluster records first:
+
+```sh
+tofu -chdir=tofu apply -target='cloudflare_dns_record.cluster["photos"]' \
+  -target='cloudflare_dns_record.cluster["opds"]'
+tofu -chdir=tofu apply
+```
+
+Between the two steps the names fall through to the wildcard, which is the host
+tunnel behind the Access deny: refused, not served. That window is seconds, and
+it is the only one; a single apply would instead fail on the second record and
+leave exactly the same window with a red apply.
+
+The cutover waits on #709's retirement gate: it changes which Immich is
+authoritative, which is a data decision, not a DNS one. Rollback is the same
+two steps in reverse — destroy the `A` records with `-target`, then set
+`edge_ipv4 = ""` and apply to get the CNAMEs back.
 
 Before the cutover, the whole probe runs against the box without touching the
 zone:
@@ -108,12 +124,15 @@ photo allowance, and a null-route would then take both roles down at once.
 A reinstall erases the disk; there is no snapshot to fall back to. The drill is
 the rebuild, run once and timed before the cutover:
 
-1. Confirm the kit has the ctrl login with its 2FA recovery codes, the SSH host
-   key, and Caddy's data directory.
-2. In the ctrl panel, reinstall the Ubuntu template. Note whether the IPv4
+1. Confirm the kit has the ctrl login with its 2FA recovery codes, the Tailscale
+   admin login with its 2FA recovery codes, the SSH host key and Caddy's data
+   directory. The reinstall destroys the node identity, so a new preauthorized
+   `tag:vps` key has to be minted in the Tailscale console (`§50.2`); without
+   that login the box never rejoins.
+2. In the ctrl panel, reinstall the Ubuntu 24.04 template. Note whether the IPv4
    changed.
 3. From the HTML5 console, re-run `provision/edge/bootstrap.sh` with a fresh
-   `tag:vps` key (`docs/manual-steps.md` §50.1).
+   `tag:vps` key (`docs/manual-steps.md` §50.2).
 4. Reconnect over the tailnet, run `provision/edge/verify.sh`, then
    `scripts/verify-public-edge.sh` with `EDGE_IP`.
 5. If the IPv4 changed, update `edge_ipv4` and apply; otherwise nothing to do.

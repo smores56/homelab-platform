@@ -507,8 +507,8 @@ mapping file.
 
 | Application | Direct listener | Tailnet URL |
 | --- | --- | --- |
-| Immich | `127.0.0.1:2283` | `https://smortress.<tailnet>.ts.net/` |
-| OPDShelf | `127.0.0.1:8083` | `https://smortress.<tailnet>.ts.net:8443/` |
+| Immich | `127.0.0.1:2283` | `https://smortress.<tailnet>.ts.net/` and, for the edge only, `https://smortress.<tailnet>.ts.net:8446/` |
+| OPDShelf | `127.0.0.1:8083` | `https://smortress.<tailnet>.ts.net:8443/` and, for the edge only, `https://smortress.<tailnet>.ts.net:8447/` |
 | Syncthing GUI | `127.0.0.1:8384` | `https://smortress.<tailnet>.ts.net:10000/` |
 | Wallpapers | `/srv/wallpapers` (static files) | `https://smortress.<tailnet>.ts.net/wallpapers/` |
 | Personal agent gateway | `127.0.0.1:18001` | `https://smortress.<tailnet>.ts.net/apps/agent-local/v1` |
@@ -527,10 +527,16 @@ entries in `core_routes` (8444 and 8445) instead. A tenant
 plan that claims either path is refused whole, and the stale-route pruning skips
 both, so a run without a plan cannot delete them.
 
-`smortress-tailscale-serve.service` re-declares these six routes at every boot.
+The two edge ports are a third kind: not for people, but for `tag:vps` only
+(`tofu/tailscale.tf`), because the public names proxy to a dedicated port each
+and never to 443 — 443 also carries the agent paths and `/wallpapers`
+(`docs/core/public-edge.md`).
+
+`smortress-tailscale-serve.service` re-declares every route at every boot.
 Serve state lives in tailscaled's state file, which is not a dataset and
 not worth backing up; re-applying the same route is idempotent. Nothing here is
-Funnel, and no public hostname serves an application.
+Funnel, and after #725's cutover the only public hostnames are Caddy's on the
+edge, not Serve's.
 
 `/wallpapers` is the fourth route and the only one with no application behind
 it: `/srv/wallpapers` is the `raw/wallpapers` dataset, one directory of image

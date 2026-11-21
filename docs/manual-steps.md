@@ -3864,12 +3864,12 @@ sudo systemctl start smortress-tailscale-serve.service
 tailscale serve status
 ```
 
-The status output must show seven routes: 443 to `http://127.0.0.1:2283`
-(Immich), 8443 to `http://127.0.0.1:8083` (OPDShelf), 10000 to
-`http://127.0.0.1:8384` (Syncthing GUI), 8444 and 8445 to the two agent web
-UIs, 8446 to `http://127.0.0.1:2283` and 8447 to `http://127.0.0.1:8083` for
-the public edge (`§50.6`), and `/wallpapers/` on 443 to the directory
-`/srv/wallpapers`. The wallpaper route is the only one with no application
+The status output must show eight routes — seven HTTPS proxies and the
+wallpapers path: 443 to `http://127.0.0.1:2283` (Immich), 8443 to
+`http://127.0.0.1:8083` (OPDShelf), 10000 to `http://127.0.0.1:8384` (Syncthing
+GUI), 8444 and 8445 to the two agent web UIs, 8446 to `http://127.0.0.1:2283`
+and 8447 to `http://127.0.0.1:8083` for the public edge (`§50.6`), and
+`/wallpapers/` on 443 to the directory `/srv/wallpapers`. The wallpaper route is the only one with no application
 behind it: Serve publishes the wallpaper dataset as static files, and the path
 shows a `Path` target where the others show a `Proxy`. Nothing here is Funnel.
 
@@ -6803,7 +6803,8 @@ Evidence: the apply output, and the policy tests refusing any widening.
 In the Tailscale admin console: **Settings → Keys → Generate auth key**, tag
 `tag:vps`, preauthorized, 1-day expiry, reusable off. Do not store it anywhere;
 it is used once, in `§50.4`, and the node's key expiry is off because it is
-tagged.
+tagged. A reinstall has to mint a new one, which is why the admin login and its
+2FA recovery codes are recovery-kit rows (`docs/core/recovery-kit.md`).
 
 ### 50.3 Panel firewall
 
@@ -6819,11 +6820,19 @@ Console/VNC bypasses this firewall, so a wrong rule cannot lock the box out.
 
 ### 50.4 Deploy and join from the console
 
-Deploy the Ubuntu template in New York, note the IPv4 in
-`docs/core/public-edge.md`, and from the HTML5 console:
+Deploy the **Ubuntu 24.04** template in New York (jammy's Caddy 2.4 cannot
+parse the TLS options in `provision/edge/Caddyfile`), note the IPv4 in
+`docs/core/public-edge.md`, and from the HTML5 console install Tailscale from
+its signed repository, as `bootstrap.sh` does — not `curl | sh`:
 
 ```sh
-curl -fsSL https://tailscale.com/install.sh | sh
+. /etc/os-release
+install -d -m 0755 /usr/share/keyrings
+curl -fsSL "https://pkgs.tailscale.com/stable/ubuntu/$VERSION_CODENAME.noarmor.gpg" \
+  -o /usr/share/keyrings/tailscale-archive-keyring.gpg
+curl -fsSL "https://pkgs.tailscale.com/stable/ubuntu/$VERSION_CODENAME.tailscale-keyring.list" \
+  -o /etc/apt/sources.list.d/tailscale.list
+apt-get update -qq && apt-get install -y tailscale
 tailscale up --auth-key 'tskey-auth-…' --advertise-tags=tag:vps \
   --hostname=edge --accept-routes=false
 tailscale status
@@ -6895,20 +6904,32 @@ tofu -chdir=tofu plan -no-color
 ```
 
 Expected: the two proxied CNAMEs removed and two grey-cloud `A` records with
-`ttl = 300` created, in one plan. Nothing else.
+`ttl = 300` created. Nothing else.
+
+Cloudflare refuses two records at one name and OpenTofu cannot order a destroy
+before a create, so take the CNAMEs out first, alone:
 
 ```sh
+tofu -chdir=tofu apply -no-color \
+  -target='cloudflare_dns_record.cluster["photos"]' \
+  -target='cloudflare_dns_record.cluster["opds"]'
 tofu -chdir=tofu apply -no-color
 scripts/verify-public-edge.sh
 ```
 
-Rollback is the same edit with `edge_ipv4 = ""`: the `A` records go, and both
-names return to the cluster tunnel.
+Between those two applies the names fall through to the wildcard (the host
+tunnel behind the Access deny), which is the only window either order has.
+
+Rollback is the same two steps in reverse: destroy the `A` records with
+`-target='cloudflare_dns_record.edge["photos"]'` and
+`-target='cloudflare_dns_record.edge["opds"]'`, then set `edge_ipv4 = ""` and
+apply to get the CNAMEs back.
 
 ### 50.9 The rebuild drill, timed
 
 Destroy nothing on the first attempt: reinstall the template from the panel on
-the real box, then repeat `§50.3`–`§50.7`. The kit rows (`§5`,
+the real box, then repeat `§50.2`–`§50.7` (the reinstall destroyed the node
+identity, so the key is new too). The kit rows (`§5`,
 `docs/core/recovery-kit.md`) must already hold the ctrl login with its 2FA
 recovery codes, the edge SSH host key and Caddy's data directory. Record the
 elapsed time and the panel bandwidth graph in the issue; if the rebuild is not

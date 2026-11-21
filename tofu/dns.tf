@@ -28,8 +28,12 @@ resource "cloudflare_dns_record" "cluster" {
 # proxied-record value and is rejected on a record Cloudflare does not proxy.
 #
 # The set is empty until `edge_ipv4` is set, so this resource is declared now
-# and applied at the cutover, in the same plan that takes both names off the
-# cluster tunnel (tofu/cluster.tf, `edge_dns_hosts`).
+# and applied at the cutover. It is applied in a second step after the cluster
+# records are gone (tofu/cluster.tf, `edge_dns_hosts`): Cloudflare refuses two
+# records at one name, and OpenTofu cannot order a destroy before a create.
+#
+# `edge_ipv4` has to stay a plan-known literal: wiring it to a resource or data
+# source makes the for_each unknown at plan time and the plan fails.
 resource "cloudflare_dns_record" "edge" {
   for_each = toset(local.edge_dns_hosts)
 
