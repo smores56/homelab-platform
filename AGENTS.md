@@ -39,7 +39,8 @@ Run the formatters only where the repository defines them; this repo has no
 formatter beyond `tofu fmt -check -recursive tofu`.
 
 `git config core.hooksPath .githooks` installs the pre-push gate, which runs
-`scripts/check-all.sh --changed`.
+`scripts/check-all.sh --changed`. Groups need the tools CI installs: on a
+fresh host run `scripts/install-ci-tools.sh ~/.local/bin` and put it on PATH.
 
 ## Cluster conventions
 

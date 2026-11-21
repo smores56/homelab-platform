@@ -57,7 +57,7 @@ broker|python3 -m unittest discover -s apps/broker/tests -t apps/broker|apps/bro
 agent-control|tests/agent-control/check.sh|tests/agent-control/*,apps/agent-control/*
 webhook|python3 -m unittest discover -s apps/webhook/tests -t apps/webhook|apps/webhook/*
 agent-proxy|python3 -m unittest discover -s apps/agent_proxy/tests -t apps/agent_proxy|apps/agent_proxy/*
-agent-facade|python3 -m unittest discover -s apps/agent_facade/tests -t apps/agent_facade|apps/agent_facade/*
+agent-facade|python3 -m unittest discover -s apps/agent_facade/tests -t apps|apps/agent_facade/*
 nanobot|python3 -m py_compile images/nanobot/render.py && python3 -m unittest discover -s tests/nanobot-image -t tests/nanobot-image && bash -n images/nanobot/entrypoint.sh|images/nanobot/*,tests/nanobot-image/*
 backrest|npm ci --prefix backrest && npm --prefix backrest run typecheck && npm --prefix backrest test && tests/backrest/check.sh|backrest/*
 tofu-check|tests/tofu/check.sh|tests/tofu/*,tofu/*
@@ -70,7 +70,7 @@ backup|tests/backup/check.sh|tests/backup/*
 observability|tests/observability/check.sh|tests/observability/*
 digest|tests/digest/check.sh|tests/digest/*
 data-plane|tests/data-plane/check.sh|tests/data-plane/*,apps/data_plane/*
-tuta-calendar|tests/tuta-calendar/check.sh|tests/tuta-calendar/*
+tuta-calendar|venv="${XDG_CACHE_HOME:-$HOME/.cache}/check-all/tuta-calendar"; if [ ! -x "$venv/bin/python" ]; then python3 -m venv "$venv" && "$venv/bin/pip" install -q --disable-pip-version-check -r images/tuta-calendar/requirements.lock; fi; PATH="$venv/bin:$PATH" tests/tuta-calendar/check.sh|tests/tuta-calendar/*
 agent-egress|tests/agent-egress/check.sh|tests/agent-egress/*
 brave|tests/brave/check.sh|tests/brave/*
 lint|yamllint . && actionlint . && shellcheck scripts/*.sh tests/policies/*.sh tests/tofu/*.sh tests/access/*.sh tests/backup/*.sh tests/digest/*.sh tests/observability/*.sh tests/agent-control/*.sh tests/tuta-calendar/*.sh tests/agent-egress/*.sh tests/brave/*.sh clusters/homelab/flux-system/bootstrap.sh clusters/homelab/platform/backup/*.sh provision/*/*.sh tests/provision/*.sh scripts/core/*.sh tests/core/*.sh backrest/scripts/*.sh backrest/container/entrypoint.sh tests/backrest/*.sh tests/apps/*.sh tests/deploy/*.sh tests/check-all/*.sh .githooks/* && scripts/check-action-pins.sh && scripts/check-pr-secret-boundary.sh && scripts/check-codeowners.sh && git diff --check "${BASE:-origin/main}"|.github/*,CODEOWNERS,scripts/*,clusters/*,tests/*,provision/*,backrest/*,.githooks/*
