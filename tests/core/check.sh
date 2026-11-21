@@ -140,6 +140,17 @@ else
   fail 'restic plane checks'
 fi
 
+# The agent recovery groups have their own harness: it breaks the tree ten ways
+# (a dropped group, a general unit carrying personal data, a cross-authority
+# mount, a missing destination, skipped retention, a drill over live state) and
+# requires the finding that names each, then proves the real tree clean.
+checks=$((checks + 1))
+if tests/core/agent-recovery.sh; then
+  pass 'agent recovery checks'
+else
+  fail 'agent recovery checks'
+fi
+
 # The operator's ACL grant has its own harness: it stubs getent, setfacl and
 # getfacl to prove the account is resolved, the specification names the operator
 # and uid/gid 1000 in both the access and the default entries, and --check
