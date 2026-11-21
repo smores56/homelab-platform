@@ -474,8 +474,15 @@ cmd_stage() {
       return 4
     }
     record_clear held || warn "cannot clear the satisfied hold record"
+    # Record the reference that matched, not just the digest: with the host
+    # tracking a tag, "which spec did the verifier's digest come from" is the
+    # question an operator asks when a deploy records without a reboot.
+    booted_ref=$(timeout --signal=TERM --kill-after=10 "$(clamp_timeout "$stage_status_timeout")" \
+      "$bootc_bin" status --booted --json 2>/dev/null |
+      jq -er '.status.booted.image.image // empty' 2>/dev/null) || booted_ref=''
     journal_append stage-already-booted "$(jq -nc --arg commit "$commit" --arg digest "$index" \
-      '{commit:$commit,digest:$digest}')" || warn "cannot journal the already-booted image"
+      --arg reference "$booted_ref" '{commit:$commit,digest:$digest,reference:$reference}')" ||
+      warn "cannot journal the already-booted image"
     say "already running $commit; recorded without a reboot"
     return 6
   fi
