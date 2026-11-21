@@ -266,7 +266,7 @@ jobs:
             clusters/homelab/platform/backup/*.sh provision/*/*.sh tests/provision/*.sh \
             scripts/core/*.sh tests/core/*.sh \
             backrest/scripts/*.sh backrest/container/entrypoint.sh tests/backrest/*.sh \
-            tests/apps/*.sh
+            tests/apps/*.sh tests/deploy/*.sh
       - name: provision static checks
         run: tests/provision/check.sh
       - name: core gate static checks
@@ -289,6 +289,10 @@ jobs:
         run: tests/apps/quota.sh
       - name: apps ingress tests
         run: tests/apps/ingress.sh
+      - name: deploy state tests
+        run: tests/deploy/state.sh
+      - name: deploy receiver tests
+        run: tests/deploy/receiver.sh
 
   action-pins:
     name: action SHA pins

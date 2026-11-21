@@ -1,0 +1,39 @@
+[Unit]
+Description=Drain the deploy queue
+# The drain reads the decrypted secrets (deploy ping URL, webhook secret) and
+# writes state.json, so it needs the decrypt step finished, not just started.
+Requires=sops-decrypt.service
+After=sops-decrypt.service
+# The state tree and the queue are tmpfiles' to create; ordering after the setup
+# step keeps the first drain of a boot from finding no directory at all.
+After=systemd-tmpfiles-setup.service
+After=network-online.target
+# A wedged drain must not hold the shutdown path.
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/deploy-drain
+# The whole-drain bound. Every individual external command has its own deadline
+# (T2 onward); this is the net that stops one that hangs anyway from leaving the
+# unit active for ever with the deploy lock held.
+TimeoutStartSec=7200
+UMask=0077
+User=root
+
+# state.json, the queue and the journal are the only writes. The lock lives in
+# /run, which protectsystem=strict also covers, so it is listed too. T2 onward
+# widens this for the work tree, the apps plan and the ostree stage -- each one
+# added here with the step that needs it, never as a blanket exception.
+ProtectSystem=strict
+ReadWritePaths=/var/lib/homelab/deploy
+ReadWritePaths=/run/smortress
+ProtectHome=read-only
+PrivateTmp=yes
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes

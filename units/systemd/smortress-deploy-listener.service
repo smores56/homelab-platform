@@ -1,0 +1,41 @@
+[Unit]
+Description=Deploy receiver on the tailnet (127.0.0.1:8484)
+# The webhook secret is decrypted into /run/smortress/secrets by this unit; a
+# listener that started first would refuse to start for ever, so require it
+# rather than merely order after it.
+Requires=sops-decrypt.service
+After=sops-decrypt.service
+After=network.target
+# The receiver writes nothing outside its own state tree, but sops-decrypt owns
+# /run/smortress and creates it at boot.
+After=systemd-tmpfiles-setup.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/libexec/deploy-receiver.py
+Restart=always
+RestartSec=5
+# The listener is the only process that answers the tailnet, so a wedged one is
+# invisible: the heartbeat timer (T7) pages on a missing /healthz.
+UMask=0077
+User=root
+
+# The queue is the only writable path. Everything the listener reads (the
+# decrypted secrets under /run, its program under /usr) stays read-only, and a
+# compromised listener cannot rewrite a unit, a Quadlet or a boot file.
+ProtectSystem=strict
+ReadWritePaths=/var/lib/homelab/deploy
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET
+RestrictNamespaces=yes
+
+[Install]
+WantedBy=multi-user.target
