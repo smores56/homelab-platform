@@ -62,34 +62,25 @@ main-gated environment secrets), and the ruleset in item 3.
    on a logical host goes into one token request, so a repository that is in
    `broker.json` but not in the installation fails the whole host with a 422:
    add it to the installation first.
-3. Contain the identity to `agent/**`: Settings -> Rules -> Rulesets -> New
-   branch ruleset:
-   - Target branches: **Include all branches**, exclude by pattern `agent/*`.
-     Agent branches are exactly one segment (`agent/<slug>`): measured
-     2026-11-12, a nested `agent/nested/probe` was refused even with the
-     exclude written as `agent/**`, so do not assume `**` crosses `/` here.
-     An **empty include** is inert: the ruleset is listed and
-     `GET /rules/branches/...` reports its rules, but pushes are not blocked —
-     verified live, so set the include explicitly.
-   - Rules: Restrict creations, Restrict updates, Restrict deletions.
-   - Bypass list: Repository admins (the human); leave the app out.
-   Branch protection on `main` (step 5) requires a PR, passing checks, and a
-   Code Owners review, so the app can neither merge nor force-push and a
-   `.github/` or `*.tf` change needs a human review. Do not rely on the
-   description: read the API's view back:
-   `gh api repos/smores56/homelab-platform/rulesets --jq '.[] | select(.target=="branch") | .id'`,
-   then that id's `conditions.ref_name` (`include ["~ALL"]`,
-   `exclude ["agent/**"]`), `rules[].type` (`creation`, `update`, `deletion`)
-   and `bypass_actors`. The acceptance script also probes both refusals live
-   (a push outside `agent/**` and a push touching `.github/workflows/`), so a
-   silently removed control fails the run instead of waiting for an incident.
-   The same two rulesets must exist on `nix-config` and `kanbei`, where the
-   branch gate is named `agent-gating`: the broker's `github-agent-push` host
-   can write `contents` on both, so the rulesets, not the token, are what keep
-   the app off `main` and off every branch outside `agent/**`. The same gate
-   applies to `sdlc`, which is also private and agent-maintained: without an
-   `agent/**`-only ruleset, the `github-sdlc-git` host's `contents: write` could
-   reach `main`.
+3. Branch containment is the `main` ruleset, not an `agent/**` ruleset. The
+   requirement for a ruleset that confines the identity to `agent/*` was dropped
+   on 2026-11-21: the machine user may push any non-default branch, and what
+   bounds it is that `main` requires a pull request with an approving review for
+   every account except the owner, with deletion and force-push blocked.
+   `nix-config` and `kanbei` are archived and out of scope; their
+   `github-agent-push` / `github-agent` broker hosts are historical and go when
+   the broker config next changes.
+   What still has to be true, and is worth reading back from the API:
+   - `main` blocks deletion and force-push, requires a pull request, and requires
+     the named status checks — `tofu plan` on `homelab-platform`, `apps-schema`
+     on `homelab-apps`.
+   - The app holds **Workflows: No access**, so a push touching
+     `.github/workflows/**` is refused by GitHub itself
+     (`refusing to allow a GitHub App to create or update workflow ... without
+     workflows permission`, verified 2026-11-12). That refusal is independent of
+     any ruleset and must stay verified in the acceptance run.
+   - Read the rulesets back rather than trusting the description:
+     `gh api repos/smores56/<repo>/rulesets --jq '.[] | "\(.id) \(.name) \(.conditions.ref_name.include)"'`.
 4. The mirror's `github-backup-read-pat` (step 22) is not the agent's identity;
    it stays an operator-owned fine-grained PAT.
 
@@ -4145,32 +4136,56 @@ so a rotated gateway key lands with the next reboot -- the container reads
 
 ### 40.8 Fetch the pinned model into the model dataset
 
-The model is not in any backup: 4.7 GiB of a blob that a checksum re-derives. It
+The model is not in any backup: 16.5 GiB of a blob that a checksum re-derives. It
 is fetched once into `state/agent-model`, which the pool unit must have created and
 mounted first.
+
+The weight file is `AtomicChat/Inkling-2-Mini-GGUF`, a GGUF conversion of
+Thinking Machines' `thinkingmachines/Inkling-2-Mini` (26.4B MoE, 3.4B active, 1M
+context, Apache-2.0). `AD-Q4_K` is the quant the unit pins: the base repository's
+own table puts it at KLD 0.0080 / top-1 96.3% against BF16. The *Uncensored*
+variant in the neighbouring repository is deliberately not used: it costs fidelity
+(0.0115 / 95.6% at the same quant) and buys nothing for a typed-tool agent, while
+the personal profile reads attacker-influenced mail and calendar text. The
+`mmproj` vision projector is not fetched either -- the deployment is text-only
+until something asks for images.
 
 ```sh
 sudo zfs get -H -o value mounted smortress/state/agent-model
 sudo chown 1000:1000 /var/lib/agent/model
-sudo curl -fL --retry 3 --continue-at -   -o /var/lib/agent/model/Qwen2.5-7B-Instruct-Q4_K_M.gguf.part \
-  'https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/resolve/main/Qwen2.5-7B-Instruct-Q4_K_M.gguf?download=true'
+sudo curl -fL --retry 3 --continue-at - -o /var/lib/agent/model/Inkling-2-Mini-AD-Q4_K.gguf.part \
+  'https://huggingface.co/AtomicChat/Inkling-2-Mini-GGUF/resolve/main/Inkling-2-Mini-AD-Q4_K.gguf?download=true'
 ```
 
 Verify before it is used. The size and the checksum are the pin; a partial or
 re-encoded download fails here, not inside llama.cpp:
 
 ```sh
-echo '65b8fcd92af6b4fefa935c625d1ac27ea29dcb6ee14589c55a8f115ceaaa1423  /var/lib/agent/model/Qwen2.5-7B-Instruct-Q4_K_M.gguf.part' \
+echo '2bfc233e10925297cc79dffce5d9be4f2a2b43e499ea6a1bf03b9242867dce9e  /var/lib/agent/model/Inkling-2-Mini-AD-Q4_K.gguf.part' \
   | sudo sha256sum -c -
-sudo stat -c '%s' /var/lib/agent/model/Qwen2.5-7B-Instruct-Q4_K_M.gguf.part   # 4683074240
-sudo mv /var/lib/agent/model/Qwen2.5-7B-Instruct-Q4_K_M.gguf.part \
-        /var/lib/agent/model/Qwen2.5-7B-Instruct-Q4_K_M.gguf
-sudo chown 1000:1000 /var/lib/agent/model/Qwen2.5-7B-Instruct-Q4_K_M.gguf
+sudo stat -c '%s' /var/lib/agent/model/Inkling-2-Mini-AD-Q4_K.gguf.part   # 16525559776
+sudo mv /var/lib/agent/model/Inkling-2-Mini-AD-Q4_K.gguf.part \
+        /var/lib/agent/model/Inkling-2-Mini-AD-Q4_K.gguf
+sudo chown 1000:1000 /var/lib/agent/model/Inkling-2-Mini-AD-Q4_K.gguf
 ```
 
 The name matters: `units/quadlet/agent-model.container` starts the server with
-`-m /models/Qwen2.5-7B-Instruct-Q4_K_M.gguf`. A different file name needs that
-unit changed as well, which is an image change.
+`-m /models/Inkling-2-Mini-AD-Q4_K.gguf`. A different file name needs that unit
+changed as well, which is an image change. The previous model
+(`Qwen2.5-7B-Instruct-Q4_K_M.gguf`) is dead weight once the new one loads; it lives
+in no backup unit, so removing it is just disk:
+
+```sh
+sudo rm -f /var/lib/agent/model/Qwen2.5-7B-Instruct-Q4_K_M.gguf
+```
+
+The server's flags are one decision and are measured, not guessed: `-c 196608
+--parallel 3` gives three 65,536-token slots (the config's `context_length` is
+one slot), `-ub 128` keeps the prompt graph small enough to allocate, and
+`-fa on -ctk q8_0 -ctv q8_0` halve the KV cache while flash attention keeps the
+attention graph flat. 20,834 MiB resident of 24,576 at 57 tok/s generation is what
+that buys; a fourth slot, the default micro-batch, or an fp16 cache each push the
+load back over the card.
 
 ### 40.9 Validate the units and check the three listeners
 
@@ -6591,3 +6606,164 @@ overwrite an existing record, refuses a repository the receiver does not deploy,
 and journals `bootstrap-recorded`. It is not a way to make a hand-run
 `bootc switch` look deployed (see `docs/core/server-image.md`, "What a hand-run
 switch still gives up").
+
+### 40.18 Run the agent runtime drill
+
+Three rows of the T6 cutover matrix behind #716 cannot be answered by a tree:
+the live mount namespaces, the root-only secrets, and a cold restore of an agent
+dataset from a real destination. `scripts/agent-runtime-drill.sh` runs them as
+root from a checkout and prints one PASS/FAIL line per observation.
+
+It prints secret names and file modes, never a value; it writes only under
+`/var/tmp/agent-drill` (or `SMORTRESS_AGENT_DRILL_ROOT`); and it stops nothing, so
+the fencing below is yours. Rehearse the whole plan first — `--dry-run` prints
+every command and executes none, and it is the only mode that runs unprivileged:
+
+```sh
+scripts/agent-runtime-drill.sh --dry-run mounts
+scripts/agent-runtime-drill.sh --dry-run credentials
+scripts/agent-runtime-drill.sh --dry-run restore agent-local --backend all
+```
+
+Anything else without `sudo` exits 1 and names the privilege it needs.
+
+**Fencing, before any restore.** A restore into a dataset a live process is
+writing into proves nothing, and the drill cannot stop that process. Stop every
+writer of both agent datasets, including the one-shot collectors and their
+timers, and give the running browser collector time to finish:
+
+```sh
+sudo systemctl stop smortress-agent-collect-finance.timer \
+  smortress-agent-collect-calendar.timer smortress-agent-collect-brave.path \
+  smortress-agent-collect-brave.timer
+sudo systemctl stop smortress-agent-mail-stream.service agent-tmail.service \
+  agent-brave.service syncthing.service
+sudo systemctl stop agent-webui-personal.service agent-webui-general.service \
+  agent-facade-personal.service agent-facade-general.service \
+  agent-local.service agent-general.service agent-proxy.service
+sudo systemctl is-active agent-local.service agent-general.service  # inactive
+```
+
+**Hostile mount probe (#716 row 5).**
+
+```sh
+sudo scripts/agent-runtime-drill.sh mounts
+```
+
+Five PASS lines, one per path, each carrying the error the namespace answered as
+uid 0 and as uid 1000:
+
+```
+PASS smortress-agent-general /var/srv/repo-archive
+     uid 0: absent: no such path in this namespace; uid 1000: absent: no such path in this namespace
+```
+
+A `FAIL` line is the finding, not a nuisance: `present and listable` means the
+mount exists in the namespace and the boundary is only a permission, and
+`present but not listable` means it exists at all. Either one means a Quadlet
+gained a `Volume=` it must not have; `tests/core/agent-recovery.sh` names the
+class of mistake (`agent-mount-cross`). `SKIP <container> is not running` means
+the probe had nothing to exec into — start the gateway and rerun.
+
+**Credential blast radius (#716 row 6).**
+
+```sh
+sudo scripts/agent-runtime-drill.sh credentials
+```
+
+The good shape, all of it `PASS`:
+
+```
+PASS restic-password is staged root-only
+     root-only 400
+PASS smortress-agent-general cannot read restic-password
+     uid 0: absent: no such path in this namespace; uid 1000: absent: no such path in this namespace
+...
+PASS no agent unit names a plane secret
+     19 unit definitions
+```
+
+`readable` on any line is the finding: a container that can read
+`/run/smortress/secrets/restic-password.yaml`, `/run/smortress/secrets/r2-credentials.yaml`
+or `/var/lib/homelab/age/keys.txt` can destroy every recovery point, including
+the ones it cannot reach over the network. `present but not readable` still
+fails, because a mount source that should not be there is one permission
+mistake from readable. The oneshot collectors (`smortress-agent-collect-*`,
+`smortress-agent-mail-stream`, `smortress-agent-brave-snapshot|seed`) exit between
+runs, so their containers print `SKIP` and the closing `no agent unit names a
+plane secret` line carries their half: it reads every
+`units/quadlet/agent-*.container` and `units/systemd/smortress-agent-*.service`
+for those three paths. A `FAIL … is staged root-only` line means the host copy is
+wrong (not root-owned, or not 0400) and the probes proved nothing.
+
+**Cold restore of an agent dataset (#716 row 1).** One subcommand per group and
+destination; `--backend all` walks `ssd`, `hdd` and `r2` with one target each.
+
+```sh
+sudo scripts/agent-runtime-drill.sh restore agent-local --backend ssd
+sudo scripts/agent-runtime-drill.sh restore agent-general --backend ssd
+sudo scripts/agent-runtime-drill.sh restore agent-local --backend all
+sudo scripts/agent-runtime-drill.sh restore agent-general --backend all
+```
+
+It calls `/usr/libexec/smortress-restic-restore-drill` (the verified snapshot
+only), which lands the tree at
+`<target>/var/lib/agent/<side>/.zfs/snapshot/<backend>`, then checks it:
+
+- gateway state: `.env` (with an `API_SERVER_KEY=` line, printed as a name and
+  never a value), `webui.env` (`HERMES_WEBUI_PASSWORD=`), `config.yaml`;
+- `webui/`, `webui/state` non-empty (the chats) and `webui/workspace`;
+- facade memory: `memory/local` on the personal side, `memory/external` on the
+  general one, with at least one record;
+- collector data, personal side only: `quarantine/` non-empty and at least one
+  `replica/<source>/published/<gen>/manifest.json`; the general tree must carry
+  no generation at all;
+- ownership: no uid outside `0`/`1000` came out of the archive, then the
+  documented `chown -R 1000:1000`, then uid 1000 can write `memory`, `webui` and
+  (personal) `quarantine`, `replica`, `index`;
+- the FTS index rebuilt from the restored records as uid 1000, reporting how many
+  records it indexed (`1 of 1 records indexed`); a missing index is not a lost
+  record — `apps/agent_facade/memory.py` rebuilds it — but a zero count with
+  records on disk is a finding;
+- a second restore into the same target, which the helper refuses with
+  `refusing to mix a drill into old data`.
+
+The good shape ends `0 failed`; the run prints `<n> passed, <n> failed, <n>
+skipped`. A `FAIL … restores` line carries the helper's own reason (no verified
+snapshot, no room on the target filesystem, repository not configured) and the
+remaining checks for that backend are skipped: a drill is only evidence once the
+contents were checked. A `FAIL …: restore target <dir> inside the live dataset
+<key>` line means `--target` names a path under a mounted dataset, which is the
+one thing a drill must never write into; pick a target under `/var/tmp`.
+`SKIP restored hledger projection is present` is expected before the finance
+collector's first run, because that journal is derived.
+
+The restored tree is throwaway and stays behind: compare a known file, then
+
+```sh
+sudo rm -rf /var/tmp/agent-drill
+```
+
+Start the writers again in the order section 40.9 gives, then section 40.9's
+listener checks:
+
+```sh
+sudo systemctl start agent-model.service agent-facade-personal.service \
+  agent-local.service agent-general.service agent-proxy.service \
+  agent-webui-personal.service agent-webui-general.service \
+  agent-facade-general.service
+sudo systemctl start agent-tmail.service smortress-agent-mail-stream.service \
+  syncthing.service
+sudo systemctl start smortress-agent-collect-finance.timer \
+  smortress-agent-collect-calendar.timer smortress-agent-collect-brave.path \
+  smortress-agent-collect-brave.timer
+```
+
+The static half of these rows needs no host. `tests/core/agent-recovery.sh` is
+run by CI and asserts what the tree can prove (per-unit datasets, retention and
+readiness on every destination, the mount table, the target rules);
+`tests/core/agent-drill.sh` asserts this drill itself and runs in the same
+checkout: it parses and refuses non-root, `--help` lists the three subcommands,
+`--dry-run` executes no `podman` or `restic` command under a recording `PATH`
+shim, and every probe script is a constant with the path passed as a positional
+argument.

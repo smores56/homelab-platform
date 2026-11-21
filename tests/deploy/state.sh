@@ -287,6 +287,36 @@ else
 fi
 check_eq "$(queue_field "$id_a" attempts 2>/dev/null)" 2 "each deferral counts an attempt"
 
+# --- the queue-directory contract, shared with the Python receiver ------------
+# Count regular `.json` files one level deep and nothing else: a directory or a
+# non-JSON name is not a queued request. tests/deploy/receiver.sh asserts the
+# Python listener's count agrees on the same fixture.
+mkdir -p "$DEPLOY_STATE_DIR/queue/not-an-entry.json"
+: >"$DEPLOY_STATE_DIR/queue/entry.txt"
+check_eq "$(queue_count)" 2 "queue_count ignores a directory and a non-json file"
+rm -rf "${DEPLOY_STATE_DIR:?}/queue/not-an-entry.json" "${DEPLOY_STATE_DIR:?}/queue/entry.txt"
+if queue_has homelab-platform 1111111111111111111111111111111111111111; then
+  ok "queue_has finds a queued revision"
+else
+  bad "queue_has finds a queued revision"
+fi
+if queue_has homelab-platform 2222222222222222222222222222222222222222; then
+  bad "queue_has refuses a revision that is not queued"
+else
+  ok "queue_has refuses a revision that is not queued"
+fi
+read -r oldest_age oldest_id < <(queue_oldest)
+check_eq "$oldest_id" "$id_e" "queue_oldest names the oldest entry"
+# An entry nobody can read is a record the drain must reach, so it counts as
+# infinitely old rather than as fresh.
+printf 'not json\n' | atomic_write "$DEPLOY_STATE_DIR/queue/unreadable.json"
+read -r _ oldest_id < <(queue_oldest)
+check_eq "$oldest_id" unreadable "queue_oldest treats an unreadable entry as oldest"
+rm -f "$DEPLOY_STATE_DIR/queue/unreadable.json"
+for entry in "$DEPLOY_STATE_DIR"/queue/*.json; do rm -f "$entry"; done
+read -r oldest_age oldest_id < <(queue_oldest)
+check_eq "$oldest_age $oldest_id" "0 " "queue_oldest reports an empty queue as age 0"
+
 # --- timers and caches ------------------------------------------------------
 # `timeout 0` is no limit at all, so a zeroed knob or an exhausted budget must
 # still reach the child as a one-second bound.
@@ -698,16 +728,45 @@ else
   bad "the library creates the lock's directory when no unit has"
 fi
 
-# The three helpers that resolve an installed program are one function: the gate
-# and the apps apply each carried a copy, so a fix to either missed the other.
-check_eq "$(grep -c '^resolve_tool()' scripts/*.sh | awk -F: '{ sum += $2 } END { print sum }')" 1 \
-  "resolve_tool has one definition"
+# Every tool a deploy script runs -- apps-schema, deploy-verify.py,
+# deploy-platform, deploy-apps, smortress-restic-verify, smortress-restic-backup
+# and storage-layout -- resolves through one function. The gate and the apps
+# apply each carried a copy, and the drain carried three inline blocks with a
+# different order; a fix to one missed the others.
+check_eq "$(grep -c '^deploy_resolve()' scripts/*.sh | awk -F: '{ sum += $2 } END { print sum }')" 1 \
+  "deploy_resolve has one definition"
+check_eq "$(grep -c '^resolve_tool()' scripts/*.sh | awk -F: '{ sum += $2 } END { print sum }')" 0 \
+  "the per-script resolver copies are gone"
+# The drain and the gate must not carry an inline `/usr/libexec` probe for a
+# tool; only the state-library bootstrap may name that path in those scripts.
+for script in scripts/deploy-drain.sh scripts/deploy-platform.sh scripts/deploy-apps.sh; do
+  if grep -qE 'if \[\[ -[xr] /usr/libexec/(deploy-|apps-schema|smortress-restic|storage-layout)' "$script"; then
+    bad "$(basename -- "$script") resolves a tool inline"
+  else
+    ok "$(basename -- "$script") resolves tools through deploy_resolve"
+  fi
+done
 check_eq "$(DEPLOY_STATE_DIR=$DEPLOY_STATE_DIR bash -c '
   export DEPLOY_STATE_DIR
   # shellcheck source=/dev/null
   source "'"$lib"'"
-  resolve_tool overridden apps-schema /nowhere/apps-schema.py
-')" overridden "resolve_tool keeps its environment override"
+  deploy_resolve overridden apps-schema /nowhere/apps-schema.py
+')" overridden "deploy_resolve keeps its environment override"
+mkdir -p "$work/tools"
+printf '#!/usr/bin/env bash\n' >"$work/tools/apps-schema"
+chmod 0755 "$work/tools/apps-schema"
+check_eq "$(DEPLOY_STATE_DIR=$DEPLOY_STATE_DIR PATH=$work/tools:$PATH bash -c '
+  export DEPLOY_STATE_DIR PATH
+  # shellcheck source=/dev/null
+  source "'"$lib"'"
+  deploy_resolve "" apps-schema /nowhere/apps-schema.py
+')" "$work/tools/apps-schema" "deploy_resolve prefers a PATH stand-in over the sibling"
+check_eq "$(DEPLOY_STATE_DIR=$DEPLOY_STATE_DIR PATH=/usr/bin:/bin bash -c '
+  export DEPLOY_STATE_DIR PATH
+  # shellcheck source=/dev/null
+  source "'"$lib"'"
+  deploy_resolve "" no-such-tool-812 /nowhere/no-such-tool-812
+')" /nowhere/no-such-tool-812 "deploy_resolve falls back to the checkout sibling"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 ((fail == 0))

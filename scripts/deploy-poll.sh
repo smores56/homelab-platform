@@ -161,19 +161,9 @@ github_tip() { # <repo>; prints the tip sha
 
 # -- the queue is the only thing this program writes ------------------------
 
-# A request already in the queue is the same decision: the drain will handle it,
-# and a second entry for the same commit would drain the same revision twice.
-queue_has() { # <repo> <commit>
-  local file
-  while IFS= read -r file; do
-    [[ -n $file ]] || continue
-    if jq -e --arg repo "$1" --arg commit "$2" \
-      '.repo == $repo and .commit == $commit' "$file" >/dev/null 2>&1; then
-      return 0
-    fi
-  done < <(find "$deploy_queue_dir" -maxdepth 1 -type f -name '*.json' 2>/dev/null | sort)
-  return 1
-}
+# `queue_has` is the state library's, so the poll and the drain agree on what an
+# entry is and what revision it names. A second entry for the same commit would
+# drain the same revision twice.
 
 poll_enqueue() { # <repo> <commit>
   local id

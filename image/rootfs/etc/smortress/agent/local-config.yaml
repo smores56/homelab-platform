@@ -6,9 +6,11 @@
 # No api_key: the pinned llama.cpp server authenticates nothing, and the only peer
 # on agent-local.network is this gateway.
 #
-# context_length must equal the `-c` in units/quadlet/agent-model.container. The
-# runtime refuses a model under 64,000 tokens, and llama.cpp is told to serve
-# 65,536 so that the pin is honest rather than a number copied from a default.
+# context_length is ONE slot's window, not the server's total: the runtime
+# refuses a model under 64,000 tokens, and units/quadlet/agent-model.container
+# passes `-c 196608 --parallel 3`, which llama.cpp divides into three 65,536-token
+# slots. Changing one side without the other either starves a conversation or
+# silently shrinks every slot.
 model:
   provider: custom
   base_url: http://smortress-agent-model:8080/v1

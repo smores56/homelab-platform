@@ -21,13 +21,14 @@ cd "$root" || exit 1
 
 poll=scripts/deploy-poll.sh
 lib=scripts/deploy-state.sh
-for file in "$poll" "$lib"; do
+verify=image/rootfs/usr/libexec/deploy-verify.py
+for file in "$poll" "$lib" "$verify"; do
   [[ -r $file ]] || {
     printf 'FAIL %s is missing\n' "$file" >&2
     exit 1
   }
 done
-for tool in jq curl; do
+for tool in jq curl python3; do
   command -v "$tool" >/dev/null || {
     printf 'FAIL %s is required\n' "$tool" >&2
     exit 1
@@ -120,7 +121,7 @@ export DEPLOY_STATE_DIR=$state
 export DEPLOY_LOCK_FILE=$work/deploy.lock
 export DEPLOY_PING_SECRET=$work/deploy-ping-url.yaml
 export DEPLOY_GITHUB_API=http://api.test
-export DEPLOY_POLL_CACHE=$work/poll-cache.json
+export DEPLOY_POLL_CACHE=$state/poll-cache.json
 export DEPLOY_POLL_REPOS=homelab-apps
 printf 'http://ping.test/deploy\n' >"$DEPLOY_PING_SECRET"
 
@@ -292,6 +293,46 @@ check_eq "$(jq -r '.entries | has("http://api.test/repos/smores56/homelab-apps/g
 check_eq "$(grep -c 'homelab-platform/git/ref' "$log" || true)" 1 \
   "the dropped entry is the only one fetched again"
 export DEPLOY_POLL_REPOS=homelab-apps
+
+# --- one reset invalidates both readers --------------------------------------
+# The verifier and the poll keep the same 120 s cache schema in two files, one
+# per writer (the poll runs outside the deploy lock, so a shared file would lose
+# one of the two). A reset that cleared only one would leave the other serving
+# the stale tip the caller tried to forget, so cache_clear drops both and both
+# readers observe it.
+verify_cache_get() { # <url>
+  python3 - "$verify" "$state/cache.json" "$1" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("deploy_verify", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+sys.modules["deploy_verify"] = module
+spec.loader.exec_module(module)
+print("miss" if module.Cache(sys.argv[2]).get(sys.argv[3]) is None else "hit")
+PY
+}
+
+reset_case
+rm -f "$state/cache.json"
+cache_url=http://api.test/repos/smores56/homelab-apps/git/ref/heads/main
+run
+check_eq "$(verify_cache_get "$cache_url")" miss "the verifier reader starts cold"
+python3 - "$state/cache.json" "$cache_url" "$sha_ahead" <<'PY'
+import json, sys, time
+with open(sys.argv[1], "w", encoding="utf-8") as handle:
+    json.dump({"schema": 1, "entries": {sys.argv[2]: {
+        "at": int(time.time()), "value": {"object": {"sha": sys.argv[3]}}}}}, handle)
+PY
+check_eq "$(verify_cache_get "$cache_url")" hit "the verifier reader sees a fresh entry"
+calls_before=$(grep -c 'api.test' "$log" || true)
+run
+check_eq "$(grep -c 'api.test' "$log" || true)" "$calls_before" \
+  "the poll reader sees the same fresh entry"
+DEPLOY_STATE_DIR=$state bash -c 'source "'"$lib"'"; cache_clear'
+check_eq "$(verify_cache_get "$cache_url")" miss "a reset invalidates the verifier reader"
+: >"$log"
+run
+check_eq "$(grep -c 'homelab-apps/git/ref' "$log" || true)" 1 \
+  "a reset invalidates the poll reader"
 
 # --- the poll decides nothing ------------------------------------------------
 

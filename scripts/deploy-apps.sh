@@ -78,8 +78,8 @@ fi
 source "$state_lib"
 
 # The renderer is the image's `apps-schema`, resolved by the state library's
-# `resolve_tool` (the same rule the platform gate uses).
-schema_bin=$(resolve_tool "${APPS_SCHEMA:-}" apps-schema "$self_dir/apps-schema.py")
+# `deploy_resolve` (the same rule the platform gate uses).
+schema_bin=$(deploy_resolve "${APPS_SCHEMA:-}" apps-schema "$self_dir/apps-schema.py")
 
 apps_user=${APPS_USER:-apps}
 apps_home=${APPS_HOME:-/var/home/apps}
@@ -567,9 +567,12 @@ build_apps_state() {
 state_apps_write() { # <apps table>
   local current
   current=$(state_read 2>/dev/null) || current='{}'
+  # `$s + {...}` and not a fresh object: the unknown top-level keys another
+  # writer owns must survive this one, or a downgrade drops a field the readers
+  # still expect.
   jq -c --argjson apps "$1" --arg now "$(deploy_now)" '
     . as $s
-    | {schema: ($s.schema // 1), repos: ($s.repos // {}), apps: $apps, updated: $now}
+    | $s + {schema: ($s.schema // 1), apps: $apps, updated: $now}
   ' <<<"$current" | atomic_write "$deploy_state_file"
 }
 

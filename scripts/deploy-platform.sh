@@ -64,22 +64,16 @@ fi
 source "$state_lib"
 
 # The gate's two helpers are the plane's, installed by the same loop and resolved
-# by the state library's one `resolve_tool`.
-verify_bin=$(resolve_tool "${DEPLOY_GATE_VERIFY_BIN:-}" smortress-restic-verify \
+# by the state library's one `deploy_resolve`.
+verify_bin=$(deploy_resolve "${DEPLOY_GATE_VERIFY_BIN:-}" smortress-restic-verify \
   "$self_dir/smortress-restic-verify.sh")
-backup_bin=$(resolve_tool "${DEPLOY_BACKUP_BIN:-}" smortress-restic-backup \
+backup_bin=$(deploy_resolve "${DEPLOY_BACKUP_BIN:-}" smortress-restic-backup \
   "$self_dir/smortress-restic-backup.sh")
 
 # The restore units are the storage table's, not the verifier payload's: a
-# payload that reported no units would otherwise gate nothing and pass.
-layout=${STORAGE_LAYOUT:-}
-if [[ -z $layout ]]; then
-  if [[ -r /usr/libexec/storage-layout ]]; then
-    layout=/usr/libexec/storage-layout
-  else
-    layout=$self_dir/storage-layout.sh
-  fi
-fi
+# payload that reported no units would otherwise gate nothing and pass. Sourced
+# from the same resolver as the two helpers above.
+layout=$(deploy_resolve "${STORAGE_LAYOUT:-}" storage-layout "$self_dir/storage-layout.sh")
 [[ -r $layout ]] || {
   printf 'deploy-platform: no storage layout at %s\n' "$layout" >&2
   exit 1
@@ -480,8 +474,15 @@ cmd_stage() {
       return 4
     }
     record_clear held || warn "cannot clear the satisfied hold record"
+    # Record the reference that matched, not just the digest: with the host
+    # tracking a tag, "which spec did the verifier's digest come from" is the
+    # question an operator asks when a deploy records without a reboot.
+    booted_ref=$(timeout --signal=TERM --kill-after=10 "$(clamp_timeout "$stage_status_timeout")" \
+      "$bootc_bin" status --booted --json 2>/dev/null |
+      jq -er '.status.booted.image.image // empty' 2>/dev/null) || booted_ref=''
     journal_append stage-already-booted "$(jq -nc --arg commit "$commit" --arg digest "$index" \
-      '{commit:$commit,digest:$digest}')" || warn "cannot journal the already-booted image"
+      --arg reference "$booted_ref" '{commit:$commit,digest:$digest,reference:$reference}')" ||
+      warn "cannot journal the already-booted image"
     say "already running $commit; recorded without a reboot"
     return 6
   fi

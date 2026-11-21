@@ -1000,5 +1000,26 @@ check_eq "$(tail -n 1 "$log/notify-urls")" "$ping_url/fail" \
   "the refused restore pages the deploy check"
 check_file "$state_dir/apply.json" "the refused revert keeps the record"
 
+# --- 16. state.json keeps a top-level key it does not know -------------------
+# state.json has three writers -- the library's state_record_verified, the apps
+# apply's state_apps_write and the revert restore -- and four readers. A field a
+# newer writer added must survive a round trip through each, or a downgrade
+# silently drops it while the readers still expect it.
+reset_case
+run_apply "$c_v1"
+jq -c '.future = {added: "by-a-newer-writer"}' "$state_dir/state.json" |
+  atomic_write "$state_dir/state.json"
+run_apply "$c_v2"
+check_eq "$rc" 0 "the apply after the unknown key succeeds" "$out"
+check_eq "$(jq -r '.future.added' "$state_dir/state.json")" by-a-newer-writer \
+  "the apps writer and state_record_verified keep an unknown top-level key"
+set_secrets "$secrets_v1b"
+export FAKE_SYSTEMCTL_FAIL_ONCE='restart alpha.service'
+run_apply "$c_v1"
+unset FAKE_SYSTEMCTL_FAIL_ONCE
+check_eq "$rc" 5 "the failing apply reverts" "$out"
+check_eq "$(jq -r '.future.added' "$state_dir/state.json")" by-a-newer-writer \
+  "the revert restore keeps an unknown top-level key"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 ((fail == 0))
