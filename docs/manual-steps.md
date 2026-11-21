@@ -4546,15 +4546,20 @@ spare must be enrolled too.
    public line identifiable in step 2.
 
    ```sh
-   ssh-keygen -t ed25519-sk -O resident -C "smores-sudo-$(date +%F)" \
-     -f ~/.ssh/id_smortress_sudo
+   ssh-keygen -t ed25519-sk -O resident -C "smores-sudo-key1" \
+     -f ~/.ssh/id_smortress_sudo_1
    # touch the key when it blinks
    ```
 
-   Give each key a distinct `-C` (`smores-sudo-1-`, `-2-`, `-3-`) and write the
-   serial that `ykman info` prints next to the physical label. The comment is
-   what makes the committed public line identifiable later, and the serial is
-   what makes "which key is this" answerable once three of them are in a drawer.
+   One file per key, because each resident credential is its own handle and
+   `ssh-keygen` refuses to overwrite an existing `-f` path: the second key needs
+   `id_smortress_sudo_2`, the spare `_3`. The suffix matches the `-C`
+   (`smores-sudo-key1`, `-key2`, `-key3`), which is what makes the committed
+   public line identifiable later, and every client's loader adds each
+   `~/.ssh/id_smortress_sudo*` file, so a spare key or a replaced laptop needs no
+   renaming. Write the serial that `ykman info` prints next to the physical
+   label: that is the only record that makes "which key is this" answerable once
+   three of them are in a drawer.
 
    `-O resident` is what lets the credential live on the key rather than in the
    handle file, so a replacement laptop fetches it back rather than minting a
@@ -4576,7 +4581,7 @@ spare must be enrolled too.
    lines land.
 
    ```sh
-   cat ~/.ssh/id_smortress_sudo.pub >>      image/rootfs/etc/ssh/sudo_authorized_keys
+   cat ~/.ssh/id_smortress_sudo_*.pub >>    image/rootfs/etc/ssh/sudo_authorized_keys
    scripts/check-server-image.sh     # refuses anything but sk lines, no no-touch-required
    ```
 
@@ -4591,10 +4596,15 @@ spare must be enrolled too.
    sudo systemctl reboot
    ```
 
-   The loader unit runs at boot; a module already at the shipped digest is left
-   alone, so the **first** boot after an image that changed the `.cil` is the one
-   that reloads it. The digest is compared against the stamp file in `/var`,
-   which bootc never reconciles, and that is exactly the case this covers.
+   `sudo_authorized_keys` is image content under `/etc`, so it arrives with the
+   deployment; nothing loads, labels or enables it. The one way it does *not*
+   arrive is a hand edit: bootc's `/etc` merge keeps a locally modified file, so
+   a host can boot an upgraded image and still read the older set of lines.
+   Compare the deployment's copy and re-apply it when the two differ:
+
+   ```sh
+   sudo diff /usr/etc/ssh/sudo_authorized_keys /etc/ssh/sudo_authorized_keys
+   ```
 
 4. Prove the tap, then prove the fallback. `sudo -k` clears the per-TTY ticket
    the previous attempt left behind, and `-A` is what forwards the agent:
@@ -4637,7 +4647,7 @@ spare must be enrolled too.
    ```sh
    ssh -A -t smortress 'sudo -k; sudo true'      # agent forwarded, sudo credential loaded
    # expect: the touch credential signs
-   ssh -o IdentitiesOnly=yes -i ~/.ssh/id_smortress_sudo smortress true
+   ssh -o IdentitiesOnly=yes -i ~/.ssh/id_smortress_sudo_1 smortress true
    # expect: refused, no matching key in authorized_keys.d/smores
    ```
 
@@ -4720,8 +4730,11 @@ spare must be enrolled too.
   it unpatched: Ctrl-C during a touch wait leaves the signature request pending
   on the client until it times out, rather than withdrawing it. It affects the
   client's agent, not the server;
-- Apple's ssh and its launchd agent cannot hold `sk-` keys, so the work Mac uses
-  the password fallback until T11.
+- the work Mac's OpenSSH holds no `sk` handle without a FIDO provider, so its
+  shells export `SSH_SK_PROVIDER=/usr/lib/ssh-keychain.dylib` and the bootstrap
+  adds every `~/.ssh/id_smortress_sudo*` handle to the agent. Until that has run
+  once after a reboot the Mac takes the password, which is the fallback working
+  as designed rather than a fault.
 
 ## 45. Tailnet policy and enrollment key (design #767, T1)
 
