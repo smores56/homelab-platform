@@ -2796,11 +2796,13 @@ or reformats them.
    sops secrets/server/r2-credentials.yaml
    ```
 
-   Replace both values and save. Publish and deploy per section 37 step 2
-   (`sudo bootc upgrade`) so `/run` carries the
-   new key; a token rotated without a deployment leaves the old key in use
-   until the next boot. Do not create a second credentials file, and do not
-   touch the legacy migration bucket.
+   Replace both values and save. Publish, then deploy per section 37 step 15 so
+   `/run` carries the new key. The deployment reference is a digest, so `sudo
+   bootc upgrade` alone re-checks the build already running and moves nothing:
+   switch to the published digest, and take `bootc upgrade` only on a host
+   following `:latest`. A token rotated without a deployment leaves the old key
+   in use until the next boot. Do not create a second credentials file, and do
+   not touch the legacy migration bucket.
 
 3. Create the Healthchecks.io check and commit its ping URL. In the
    Healthchecks.io dashboard create one check named `smortress restic
@@ -2823,9 +2825,10 @@ or reformats them.
    healthchecks.yaml       root  root  0400
    ```
 
-   Publish the image with section 37 step 2 and deploy it with
-   `sudo bootc upgrade`. The URL is a capability:
-   never commit it plaintext, and treat a leaked URL as a rotated check.
+   Publish the image, then deploy it per section 37 step 15: switch to the
+   published digest, since `sudo bootc upgrade` moves a host only if it follows
+   `:latest`. The URL is a capability: never commit it plaintext, and treat a
+   leaked URL as a rotated check.
 
 4. Prove decryption, then initialise. `restic-init` never re-initialises an
    existing repository and refuses to create one under an unmounted mountpoint.
@@ -4562,9 +4565,8 @@ lifecycle blocks were deleted with the resources, so this is a plain destroy: no
    pointed at, so there is no state entry for the tunnel itself and nothing can
    delete it for you. With the ingress gone it has no rules and no connector;
    remove it in Zero Trust → Networks → Tunnels. Its connector token goes with
-   it; the host's ciphertext leaves with the next `bootc upgrade` (section 37
-   step 2), and until then it decrypts into `/run` for a unit that no longer
-   exists.
+   it; the host's ciphertext leaves with the next deployment (section 37 step
+   15), and until then it decrypts into `/run` for a unit that no longer exists.
 
 4. Prove the route is gone:
 
@@ -4608,11 +4610,17 @@ rollback is deleted (section 41). Firewalld admits `ssh` on `tailscale0` alone, 
 a LAN address never gets in, and a host whose tailnet policy does not admit the
 laptop is reachable only from the console.
 
-1. Deploy the image (section 37 step 2) and reboot:
+1. Deploy the image (section 37 step 15) and reboot. The deployment reference is
+   a digest, so `bootc upgrade` re-checks the build already running and moves
+   nothing: switch to the digest the publish produced, or take `bootc upgrade`
+   instead on a host following `:latest`.
 
    ```sh
-   sudo bootc upgrade
+   sudo bootc switch --enforce-container-sigpolicy \
+     "ghcr.io/smores56/homelab-platform/server@sha256:<digest from the run summary>"
    sudo systemctl reboot
+   # on a host following :latest, from then on:
+   #   sudo bootc upgrade && sudo systemctl reboot
    ```
 
 2. Prove the listener. One wildcard socket per family, no address-specific one:
@@ -4714,11 +4722,17 @@ tailnet, and the `tailscale` zone already accepts `ssh` for OpenSSH.
    (section 45). This section removes Tailscale SSH from the picture, and a host
    with no other route is reachable only from the console.
 
-2. Deploy the image (section 37 step 2) and reboot:
+2. Deploy the image (section 37 step 15) and reboot. The deployment reference is
+   a digest, so `bootc upgrade` re-checks the build already running and moves
+   nothing: switch to the digest the publish produced, or take `bootc upgrade`
+   instead on a host following `:latest`.
 
    ```sh
-   sudo bootc upgrade
+   sudo bootc switch --enforce-container-sigpolicy \
+     "ghcr.io/smores56/homelab-platform/server@sha256:<digest from the run summary>"
    sudo systemctl reboot
+   # on a host following :latest, from then on:
+   #   sudo bootc upgrade && sudo systemctl reboot
    ```
 
 3. Prove the preference and the unit:
@@ -4846,11 +4860,17 @@ spare must be enrolled too.
    public halves are declarative, so a spare key is admitted by `bootc upgrade`
    and revoked by deleting its line.
 
-3. Deploy the image (section 37 step 2) and reboot:
+3. Deploy the image (section 37 step 15) and reboot. The deployment reference is
+   a digest, so `bootc upgrade` re-checks the build already running and moves
+   nothing: switch to the digest the publish produced, or take `bootc upgrade`
+   instead on a host following `:latest`.
 
    ```sh
-   sudo bootc upgrade
+   sudo bootc switch --enforce-container-sigpolicy \
+     "ghcr.io/smores56/homelab-platform/server@sha256:<digest from the run summary>"
    sudo systemctl reboot
+   # on a host following :latest, from then on:
+   #   sudo bootc upgrade && sudo systemctl reboot
    ```
 
    `sudo_authorized_keys` is image content under `/etc`, so it arrives with the
