@@ -3,10 +3,12 @@
 #
 # The listener is the only thing on the tailnet side of the deploy path, so the
 # whole contract is driven here against a real process on a loopback port: the
-# HMAC over the exact bytes, the timestamp skew, the nonce ring, the repository
-# allowlist, the body cap, the queue cap, the denylist, the already-deployed
-# answer, the atomic queue write, the listener-only nonce file and the refusal
-# to start without a secret. No root, no network, no bootc.
+# HMAC over the exact bytes, the skew of the signed body's `ts`, the nonce ring,
+# the repository allowlist, the body cap, the queue cap, the denylist, the
+# already-deployed answer, the atomic queue write, the listener-only nonce file,
+# the admission cap, the in-memory refusal tally (and that a refusal writes no
+# journal line), and the refusal to start without a secret. No root, no network,
+# no bootc.
 #
 #   tests/deploy/receiver.sh
 set -uo pipefail
@@ -119,20 +121,25 @@ body() { # repo commit ts nonce
   jq -nc --arg repo "$1" --arg commit "$2" --argjson ts "$3" --arg nonce "$4" \
     '{repo:$repo,commit:$commit,ts:$ts,nonce:$nonce}'
 }
-post_raw() { # <body> <signature> <timestamp>
-  local payload=$1 signature=$2 ts=$3 file
+# No timestamp header: the receiver reads the skew from the signed body's `ts`,
+# so an extra header would be an unsigned second answer it has to ignore.
+post_raw() { # <body> <signature> [<extra header>...]
+  local payload=$1 signature=$2 file extra
+  shift 2
+  local -a headers=(--header 'Content-Type: application/json')
+  if [[ -n $signature ]]; then headers+=(--header "X-Deploy-Signature: $signature"); fi
+  for extra in "$@"; do headers+=(--header "$extra"); done
   file=$(mktemp "$work/body.XXXXXX")
   printf '%s' "$payload" >"$file"
   curl -sS --max-time 20 -o "$work/response" -w '%{http_code}' -X POST \
-    -H 'Content-Type: application/json' \
-    -H "X-Deploy-Signature: $signature" -H "X-Deploy-Timestamp: $ts" \
-    --data-binary "@$file" "$base/v1/deploy"
+    "${headers[@]}" --data-binary "@$file" "$base/v1/deploy"
   rm -f "$file"
 }
-post() { # <body> <secret> [<timestamp>]
-  local payload=$1 secret=$2 ts=${3:-$(date +%s)} signature
+post() { # <body> <secret> [<extra header>...]
+  local payload=$1 secret=$2 signature
+  shift 2
   signature="sha256=$(printf '%s' "$payload" | hmac_hex "$secret")"
-  post_raw "$payload" "$signature" "$ts"
+  post_raw "$payload" "$signature" "$@"
 }
 
 commit_ok=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
@@ -159,18 +166,30 @@ fi
 check_eq "$(find "$state_dir/queue" -name '*.tmp' -o -name '.*' | wc -l)" 0 \
   "the queue write leaves no temp file behind"
 
+journal_before=$(sha256sum "$state_dir/journal.jsonl" 2>/dev/null || printf 'absent\n')
 check_eq "$(post "$accepted" "${secret}wrong")" 401 "a bad HMAC is refused"
-check_eq "$(post_raw "$accepted" '' "$now")" 401 "a missing signature is refused"
-check_eq "$(post_raw "$accepted" 'sha256=nothex' "$now")" 401 "a malformed signature is refused"
-check_eq "$(post "$accepted" "$secret" $((now - 400)))" 401 "a stale timestamp is refused"
-check_eq "$(post "$accepted" "$secret" $((now + 400)))" 401 "a future timestamp is refused"
-check_eq "$(post "$accepted" "$secret")" 401 "a replayed nonce is refused"
-if jq -e 'select(.event == "deploy-rejected" and .reason == "replayed-nonce")' \
-  "$state_dir/journal.jsonl" >/dev/null 2>&1; then
-  ok "a refusal is journaled with its reason"
+check_eq "$(post_raw "$accepted" '')" 401 "a missing signature is refused"
+check_eq "$(post_raw "$accepted" 'sha256=nothex')" 401 "a malformed signature is refused"
+stale=$(body homelab-platform "$commit_ok" $((now - 400)) "$nonce_ok")
+future=$(body homelab-platform "$commit_ok" $((now + 400)) "$nonce_ok")
+check_eq "$(post "$stale" "$secret")" 401 "a stale body timestamp is refused"
+check_eq "$(post "$future" "$secret")" 401 "a future body timestamp is refused"
+# A header that disagreed with the body is not read at all: the signed `ts` is
+# the only clock, so a stale body stays refused however fresh the header claims
+# to be, and a fresh body is queued however stale the header claims to be.
+check_eq "$(post "$stale" "$secret" "X-Deploy-Timestamp: $now")" 401 \
+  "a fresh timestamp header does not rescue a stale body"
+check_eq "$(sha256sum "$state_dir/journal.jsonl" 2>/dev/null || printf 'absent\n')" \
+  "$journal_before" "refused requests write no journal line"
+# The refusal is still observable: it is counted in memory and reported by
+# /healthz, so an fsync per unauthenticated attempt is not the price of seeing it.
+tally=$(curl -sS --max-time 5 "$base/healthz" | jq -r '.rejected["bad-signature"] // 0')
+if [[ $tally =~ ^[0-9]+$ ]] && ((tally >= 2)); then
+  ok "/healthz counts the refusals instead of journaling them"
 else
-  bad "a refusal is journaled with its reason" "$(cat "$state_dir/journal.jsonl" 2>&1)"
+  bad "/healthz counts the refusals instead of journaling them" "$(curl -sS "$base/healthz")"
 fi
+check_eq "$(post "$accepted" "$secret")" 401 "a replayed nonce is refused"
 
 replay_nonce=0000aaaabbbbccccddddeeeeffff0002
 check_eq "$(post '{"repo": ' "$secret")" 400 "a malformed body is refused"
@@ -193,6 +212,14 @@ denied=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 denylist_add commit "$denied" 'failed the boot gate'
 check_eq "$(post "$(body homelab-platform "$denied" "$now" 0000aaaabbbbccccddddeeeeffff0004)" "$secret")" 409 \
   "a denylisted commit is refused"
+# A refusal only a caller holding the secret can reach keeps its journal line:
+# it names a commit a gate rejected, which is what an operator reads afterwards.
+if jq -e 'select(.event == "deploy-rejected" and .reason == "denylisted-commit")' \
+  "$state_dir/journal.jsonl" >/dev/null 2>&1; then
+  ok "an authorized refusal is journaled with its reason"
+else
+  bad "an authorized refusal is journaled with its reason" "$(cat "$state_dir/journal.jsonl" 2>&1)"
+fi
 
 # An already-deployed commit answers 200 and queues nothing: the caller learns
 # the request was a no-op instead of waiting for a deploy that will not happen.
@@ -218,8 +245,85 @@ head -c 65537 /dev/zero | tr '\0' 'a' >"$big"
 big_signature="sha256=$(hmac_hex "$secret" <"$big")"
 check_eq "$(curl -sS --max-time 20 -o /dev/null -w '%{http_code}' -X POST \
   -H 'Content-Type: application/json' -H 'Expect:' \
-  -H "X-Deploy-Signature: $big_signature" -H "X-Deploy-Timestamp: $now" \
+  -H "X-Deploy-Signature: $big_signature" \
   --data-binary "@$big" "$base/v1/deploy")" 413 "an oversize body is refused"
+
+# --- admission: a refusal costs no lock and no disk write -------------------
+# The lock serializes "nonce unseen -> queue it", so a request that will be
+# refused must never take it: one authenticated request is answered while twenty
+# unauthenticated ones are in flight, and none of the twenty appends a journal
+# line (each line is an fsync an unauthenticated caller could then ask for).
+burst_before=$(wc -l <"$state_dir/journal.jsonl")
+burst_pids=()
+for _ in $(seq 1 20); do
+  (post "$accepted" "${secret}wrong" >/dev/null 2>&1) &
+  burst_pids+=("$!")
+done
+burst_code=$(post "$(body homelab-apps "$commit_ok" "$now" 0000aaaabbbbccccddddeeeeffff0010)" "$secret")
+wait "${burst_pids[@]}" 2>/dev/null
+check_eq "$burst_code" 202 "a valid request is answered while refusals are in flight"
+# One line for the request that was queued, nothing for the twenty that were
+# refused: the difference is what an unauthenticated caller can make the
+# receiver write.
+check_eq "$(($(wc -l <"$state_dir/journal.jsonl") - burst_before))" 1 \
+  "a burst of refusals writes only the queued request's line"
+if jq -e 'select(.event == "deploy-rejected" and .reason == "bad-signature")' \
+  "$state_dir/journal.jsonl" >/dev/null 2>&1; then
+  bad "a refused signature is never journaled" \
+    "$(jq -c 'select(.event == "deploy-rejected")' "$state_dir/journal.jsonl" | head -n 3)"
+else
+  ok "a refused signature is never journaled"
+fi
+
+# --- the concurrency cap ----------------------------------------------------
+# A sender that connects and stalls holds a read slot for at most the read
+# timeout; past the cap the answer is immediate, so a flood costs the listener a
+# short-lived thread per connection instead of an unbounded body buffer.
+stall() { # <port> <seconds>; sets stall_pid
+  python3 - "$1" "$2" <<'PYSTALL' &
+import socket
+import sys
+import time
+
+sock = socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=5)
+sock.sendall(b"POST /v1/deploy HTTP/1.1\r\nHost: flood\r\nContent-Length: 64\r\n\r\n")
+time.sleep(float(sys.argv[2]))
+sock.close()
+PYSTALL
+  stall_pid=$!
+}
+flood_port=$(free_port)
+DEPLOY_MAX_CONCURRENCY=2 start_listener "$state_dir" "$secrets_dir" "$flood_port" "$work/flood.log"
+flood_base=http://127.0.0.1:$flood_port
+if wait_for "$flood_port" 200; then
+  ok "/healthz answers on the capped listener before any slot is taken"
+else
+  bad "/healthz answers on the capped listener before any slot is taken" "$(tail -n 5 "$work/flood.log")"
+fi
+flood_signature="sha256=$(printf '%s' "$accepted" | hmac_hex "${secret}bad")"
+flood_code() {
+  curl -sS --max-time 5 -o /dev/null -w '%{http_code}' -X POST \
+    -H 'Content-Type: application/json' -H "X-Deploy-Signature: $flood_signature" \
+    --data-binary "@$work/flood-body" "$flood_base/v1/deploy"
+}
+printf '%s' "$accepted" >"$work/flood-body"
+stall "$flood_port" 6
+flood_one=$stall_pid
+stall "$flood_port" 6
+flood_two=$stall_pid
+flooded=
+for _ in $(seq 1 60); do
+  flooded=$(flood_code)
+  [[ $flooded == 503 ]] && break
+  sleep 0.1
+done
+check_eq "$flooded" 503 "a request past the concurrency cap is refused at once"
+# The dead-man asks /healthz, so it must not queue behind a saturated listener.
+check_eq "$(curl -sS --max-time 5 -o /dev/null -w '%{http_code}' "$flood_base/healthz")" 200 \
+  "/healthz answers while every read slot is taken"
+wait "$flood_one" "$flood_two" 2>/dev/null
+check_eq "$(post "$(body homelab-apps "$commit_ok" "$now" 0000aaaabbbbccccddddeeeeffff0011)" "$secret")" 202 \
+  "the slots are released when the stalled senders give up"
 
 # Queue cap: the listener must not grow the backlog past what the drain can
 # answer; over the cap it refuses instead of queueing.
@@ -293,7 +397,7 @@ bare_signature="sha256=$(printf '%s' "$bare_body" | hmac_hex "$secret")"
 printf '%s' "$bare_body" >"$work/bare-body"
 check_eq "$(curl -sS --max-time 20 -o /dev/null -w '%{http_code}' -X POST \
   -H 'Content-Type: application/json' -H "X-Deploy-Signature: $bare_signature" \
-  -H "X-Deploy-Timestamp: $bare_ts" --data-binary "@$work/bare-body" \
+  --data-binary "@$work/bare-body" \
   "http://127.0.0.1:$bare_port/v1/deploy")" 202 \
   "a request signed with the bare-scalar secret is queued"
 

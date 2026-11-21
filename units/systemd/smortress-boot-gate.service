@@ -31,15 +31,21 @@ ExecStart=/usr/libexec/smortress-boot-gate
 TimeoutStartSec=2700
 UMask=0077
 User=root
+# The deploy lock's own directory, never /run/smortress: the gate takes the same
+# lock the drain does, and the secrets must stay read-only. Preserve=yes so a
+# hand-run command's lock inode survives this oneshot's own cleanup.
+RuntimeDirectory=smortress-deploy
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
 
-# The gate writes the deploy records, the deploy lock and the grubenv, and
-# `bootc rollback --apply` writes the ostree deployment it switches to. Nothing
-# else is writable: a compromised gate cannot rewrite a unit, a Quadlet or the
-# tenant's data. `/boot` and `/sysroot/ostree` are the minimum a bootc mutation
-# needs; `-` keeps the unit startable where /sysroot is not a separate mount.
+# The gate writes the deploy records and the grubenv, and `bootc rollback --apply`
+# writes the ostree deployment it switches to. Nothing else is writable: a
+# compromised gate cannot rewrite a unit, a Quadlet or the tenant's data, and the
+# decrypted secrets under /run/smortress stay read-only. `/boot` and
+# `/sysroot/ostree` are the minimum a bootc mutation needs; `-` keeps the unit
+# startable where /sysroot is not a separate mount.
 ProtectSystem=strict
 ReadWritePaths=/var/lib/homelab/deploy
-ReadWritePaths=/run/smortress
 ReadWritePaths=/boot
 ReadWritePaths=-/sysroot/ostree
 # A gate on a boot after an interrupted apps apply reverts it through

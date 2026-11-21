@@ -44,6 +44,34 @@ else
   ok "base image is neither :latest nor digest-pinned"
 fi
 if [[ -n ${IMAGE_REPO:-} ]]; then ok "image repository is set"; else bad "image repository is set"; fi
+# One repository string in three places: the pins, the `bootc switch` reference
+# and the verifier's registry scope. A rename that misses one leaves a host that
+# resolves a digest in a repository it then cannot switch to.
+image_repo_agrees() { # <pins.env> <stage script> <verifier>
+  local pins=$1 stage=$2 verify=$3 repo bare
+  repo=$(sed -nE 's/^IMAGE_REPO=//p' "$pins" | head -n 1)
+  repo=${repo%\"}; repo=${repo#\"}; repo=${repo%\'}; repo=${repo#\'}
+  [[ -n $repo ]] || return 1
+  # The verifier names the repository below its registry host: it builds the API
+  # path from its own REGISTRY constant.
+  bare=${repo#*/}
+  grep -qF -- "$repo" "$stage" || return 1
+  grep -qF -- "IMAGE_REPO = \"$bare\"" "$verify"
+}
+check "the image repository agrees across the pins, the stage and the verifier" \
+  image_repo_agrees image/pins.env scripts/deploy-platform.sh image/rootfs/usr/libexec/deploy-verify.py
+# The same assertion on a drifted copy: a check that only ever sees the tree it
+# was written for cannot fail for the reason it exists.
+repo_fixture=$(mktemp -d)
+sed -E 's|^IMAGE_REPO=.*$|IMAGE_REPO=ghcr.io/example/other/server|' image/pins.env \
+  >"$repo_fixture/pins.env"
+if image_repo_agrees "$repo_fixture/pins.env" scripts/deploy-platform.sh \
+  image/rootfs/usr/libexec/deploy-verify.py; then
+  bad "a drifted image repository is refused"
+else
+  ok "a drifted image repository is refused"
+fi
+rm -rf "$repo_fixture"
 for pin in SOPS_SHA256 AGE_SHA256 RESTIC_SHA256 BUTANE_SHA256 COSIGN_SHA256; do
   if [[ ${!pin} =~ ^[0-9a-f]{64}$ ]]; then ok "$pin format"; else bad "$pin format"; fi
 done
@@ -789,10 +817,34 @@ check "the drain can write the boot it stages" \
 # image did not have. A program is installed by one of the three deliveries: the
 # rootfs copy, an explicit `/usr/libexec/<name>` destination, or the `.sh` loop --
 # except the operator CLI, which is staged under the name the runbook uses.
+# A comment that names a retired helper is not a dependency on it; a directive or
+# a command that names one is. The derivation is a function so the fixture check
+# below can hold both halves: the comment passes, the reference still fails.
+libexec_programs() { # <paths...>
+  grep -rnE --exclude=check-server-image.sh \
+    '/usr/libexec/[A-Za-z0-9._-]*[A-Za-z0-9_-]' "$@" |
+    awk '{ line = $0; sub(/^([^:]*:)?[0-9]+:/, "", line); if (line !~ /^[[:space:]]*#/) print line }' |
+    grep -oE '/usr/libexec/[A-Za-z0-9._-]*[A-Za-z0-9_-]' | sed 's|.*/||' | sort -u
+}
+program_fixture=$(mktemp -d)
+printf '# /usr/libexec/ghost-helper was retired with the old plane\n' \
+  >"$program_fixture/comment.txt"
+if [[ -n $(libexec_programs "$program_fixture/comment.txt") ]]; then
+  bad "a comment naming /usr/libexec/<name> is not a dependency" \
+    "$(libexec_programs "$program_fixture/comment.txt")"
+else
+  ok "a comment naming /usr/libexec/<name> is not a dependency"
+fi
+printf 'ExecStart=/usr/libexec/ghost-helper\n' >"$program_fixture/code.txt"
+if [[ $(libexec_programs "$program_fixture/code.txt") == ghost-helper ]]; then
+  ok "a real /usr/libexec/<name> reference is still a dependency"
+else
+  bad "a real /usr/libexec/<name> reference is still a dependency" \
+    "$(libexec_programs "$program_fixture/code.txt")"
+fi
+rm -rf "$program_fixture"
 # shellcheck disable=SC2013  # the derived names are paths and contain no blanks
-for program in $(grep -rhoE --exclude=check-server-image.sh \
-  '/usr/libexec/[A-Za-z0-9._-]*[A-Za-z0-9_-]' units image/rootfs scripts/*.sh |
-  sed 's|.*/||' | sort -u); do
+for program in $(libexec_programs units image/rootfs scripts/*.sh); do
   if [[ -f image/rootfs/usr/libexec/$program ]]; then
     check "the image ships /usr/libexec/$program" test -x "image/rootfs/usr/libexec/$program"
   elif [[ $program == smortress-deploy ]]; then
@@ -805,10 +857,14 @@ for program in $(grep -rhoE --exclude=check-server-image.sh \
   fi
 done
 # `COPY` preserves the mode, so a rootfs program committed non-executable is a
-# unit that fails with 203/EXEC at the first boot rather than at review time.
-for program in deploy-receiver.py deploy-verify.py; do
-  check "the rootfs commits $program executable" \
-    test "$(git ls-files -s "image/rootfs/usr/libexec/$program" | cut -d' ' -f1)" = 100755
+# unit that fails with 203/EXEC at the first boot rather than at review time. The
+# same holds for every shell helper: the install loop strips the `.sh` and the
+# unit runs the result, which is how smortress-boot-gate.sh shipped 100644 and
+# would have failed the boot gate with 203/EXEC on the first boot after a deploy.
+for program in image/rootfs/usr/libexec/deploy-receiver.py \
+  image/rootfs/usr/libexec/deploy-verify.py scripts/*.sh; do
+  check "$program is committed executable" \
+    test "$(git ls-files -s "$program" | cut -d' ' -f1)" = 100755
 done
 check "the loop installs every staged helper 0755" \
   has 'install -m 0755 "$f" "/usr/libexec/$(basename "${f%.sh}")"' image/Containerfile
@@ -909,17 +965,59 @@ check "a panic reboots" has 'kernel.panic=10' image/rootfs/etc/sysctl.d/10-panic
 # The feature installs no distribution package: graph and signature questions are
 # answered by the GitHub API and bootc's own policy, so the only dnf run in the
 # build is the discarded sudo-build stage.
-final_stage=$(grep -nE '^FROM \$\{BASE_IMAGE\}$' image/Containerfile | cut -d: -f1)
-if [[ -z $final_stage ]] || awk -v start="$final_stage" 'NR > start && /dnf/' image/Containerfile |
-  grep -q .; then
-  bad "the runtime stage installs no distribution package"
+# The last `FROM ${BASE_IMAGE}` is the image, and it may be named (`AS runtime`);
+# the earlier one is a discarded build stage, so taking the first match -- or
+# refusing to match a named stage -- looks for a package install in the wrong half
+# of the file, or fails a correct edit.
+runtime_stage_is_clean() { # <containerfile>
+  local line
+  line=$(grep -nE '^FROM \$\{BASE_IMAGE\}([[:space:]]+AS[[:space:]]+[A-Za-z0-9_.-]+)?[[:space:]]*$' "$1" |
+    tail -n 1 | cut -d: -f1)
+  [[ -n $line ]] || return 1
+  ! awk -v start="$line" 'NR > start && /dnf/' "$1" | grep -q .
+}
+check "the runtime stage installs no distribution package" \
+  runtime_stage_is_clean image/Containerfile
+stage_fixture=$(mktemp -d)
+printf 'FROM ${BASE_IMAGE} AS sudo-build\nRUN dnf install -y git\nFROM ${BASE_IMAGE} AS runtime\nCOPY image/rootfs/ /\n' \
+  >"$stage_fixture/Containerfile"
+if runtime_stage_is_clean "$stage_fixture/Containerfile"; then
+  ok "a named final stage is still the runtime stage"
 else
-  ok "the runtime stage installs no distribution package"
+  bad "a named final stage is still the runtime stage"
 fi
+printf 'RUN dnf install -y git\n' >>"$stage_fixture/Containerfile"
+if runtime_stage_is_clean "$stage_fixture/Containerfile"; then
+  bad "a package install in the runtime stage is still refused"
+else
+  ok "a package install in the runtime stage is still refused"
+fi
+rm -rf "$stage_fixture"
 
 # A deploy change that does not rebuild the image ships a commit whose host code
 # is the previous build's, because the image is the only delivery. Every file the
-# receiver ships must therefore sit under a publish path filter.
+# receiver ships must therefore sit under a publish path filter. The entry may be
+# quoted, single-quoted or bare -- the YAML quoting is not the assertion, the
+# coverage is -- so the match is on the glob, not on one spelling of it.
+publish_covers() { # <workflow> <top-level dir>
+  grep -qE "^[[:space:]]*-[[:space:]]*[\"']?$2/\\*\\*[\"']?[[:space:]]*$" "$1"
+}
+path_fixture=$(mktemp -d)
+for entry in '"scripts/**"' "'scripts/**'" 'scripts/**'; do
+  printf '    paths:\n      - %s\n' "$entry" >"$path_fixture/workflow.yml"
+  if publish_covers "$path_fixture/workflow.yml" scripts; then
+    ok "the path filter accepts the entry $entry"
+  else
+    bad "the path filter accepts the entry $entry"
+  fi
+done
+printf '    paths:\n      - "scripts/deploy-*.sh"\n' >"$path_fixture/workflow.yml"
+if publish_covers "$path_fixture/workflow.yml" scripts; then
+  bad "a partial path entry does not cover the directory"
+else
+  ok "a partial path entry does not cover the directory"
+fi
+rm -rf "$path_fixture"
 publish=.github/workflows/publish-server-image.yml
 deploy_files=()
 while IFS= read -r file; do deploy_files+=("$file"); done < <(
@@ -936,7 +1034,7 @@ for file in "${deploy_files[@]}"; do
     unpublished+="$file(missing) "
     continue
   fi
-  grep -qF "\"${file%%/*}/**\"" "$publish" || unpublished+="$file "
+  publish_covers "$publish" "${file%%/*}" || unpublished+="$file "
 done
 if [[ -n $unpublished ]]; then
   bad "every file the receiver ships rebuilds the image: $unpublished"
@@ -1119,7 +1217,7 @@ copied=$(awk '/^COPY / { for (i = 2; i <= NF; i++) print $i }' image/Containerfi
   grep -v '^--' | grep / | cut -d/ -f1 | sort -u)
 for directory in $copied; do
   check "the publish workflow rebuilds on ${directory}/ changes" \
-    grep -qF "\"${directory}/**\"" .github/workflows/publish-server-image.yml
+    publish_covers .github/workflows/publish-server-image.yml "$directory"
 done
 
 # Repository-wide CI rules that new files must not evade.

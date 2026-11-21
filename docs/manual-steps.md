@@ -6276,6 +6276,19 @@ done
 
 There are still no repository-level secrets (48.4).
 
+**Accepted residual.** The client below carries `devices` write as well as
+`auth_keys`, and the two cannot be separated: `auth_keys` mints the ephemeral
+preauthorized key, and applying `tag:deploy` to the node it created is a device
+write. The impact is that a compromised notify job — or anything that reads the
+two secrets on a runner — can re-tag or delete the `smortress` device itself, not
+merely its own ephemeral node: the host then leaves the tailnet until the admin
+client from section 45 re-tags it, and while it is retagged the ACL that admits
+`tag:deploy` on port 8484 admits a node the attacker controls. What bounds it is
+scope, not the scope of that write: the client is `auth_keys`-only plus this one
+write, the ACL admits the tag on one port, and nothing else in the tailnet is
+readable with it. The alternative — a static auth key in the Environment — trades
+this write for a key that never expires, which is worse.
+
 ### 49.2 Create the tailnet client that carries `tag:deploy`
 
 The notify job joins the tailnet as an ephemeral node tagged `tag:deploy`, and
@@ -6412,13 +6425,19 @@ sudo /usr/libexec/smortress-deploy status | jq .
 # {"schema":1,
 #  "repos":{"homelab-platform":{"commit":"…","indexDigest":"sha256:…","manifestDigest":"sha256:…"},
 #           "homelab-apps":{"commit":"…"}},
+#  "apps":{"unitsHash":"…","secretsHash":"…",
+#          "apps":{"<name>":{"unit":"<sha256 of the installed unit>","secrets":"<sha256 of the names and values>"}}},
 #  "updated":"…",
 #  "held":null,
 #  "pending":null,
 #  "denylist":{"commits":{},"digests":{}}}
 
 sudo curl -sS http://127.0.0.1:8484/healthz
-# expect: {"status":"ok"}
+# expect: {"status":"ok","rejected":{}}
+# "rejected" is the listener's in-memory tally of what it refused, by reason
+# (bad-signature, stale-timestamp, replayed-nonce, listener-busy, ...). Those
+# refusals are not journaled -- a journal line is an fsync, and the port takes
+# them from anyone on the tailnet -- so this is where a stream of them shows.
 ```
 
 `state.json` records what is running. `pending.json` exists only between a staged
@@ -6435,7 +6454,9 @@ sudo tail -n 20 /var/lib/homelab/deploy/journal.jsonl | jq -c .
 #   deploy-held, gate-released, gate-released-by-operator, gate-green
 #   stage-digest-mismatch, boot-gate-green, boot-gate-failed, rolled-back-by-bootloader
 #   apps-start, apps-pulled, apps-rejected, apps-applied, apps-quota-applied,
-#   apps-reverted, apps-failed, apps-serve-failed
+#   apps-reverted, apps-failed, apps-serve-failed,
+#   apps-name-refused (a name the schema forbids reached a unit sink),
+#   apps-work-kept (a work tree the sweep would not remove)
 #   denylist-cleared, bootstrap-recorded, poll-denylisted, notify-sent, notify-failed
 sudo journalctl -u smortress-deploy-listener.service -u smortress-deploy.service \
   -u smortress-boot-gate.service --no-pager -n 50

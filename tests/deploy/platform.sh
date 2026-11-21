@@ -127,10 +127,22 @@ jq --arg b "$backend" --arg u "$unit" \
   "$STUB_VERIFY_DOC" >"$STUB_VERIFY_DOC.tmp" && mv "$STUB_VERIFY_DOC.tmp" "$STUB_VERIFY_DOC"
 EOF
 
+# deploy_notify hands the URL over as a curl config on stdin so it never appears
+# in argv; the stub reads it from there when no argument names one.
 cat >"$bin/curl" <<'EOF'
 #!/usr/bin/env bash
-url=""
-for a in "$@"; do url=$a; done
+url=
+while (($#)); do
+  case $1 in
+    --config) shift 2 ;;
+    --max-time | --retry | --connect-timeout) shift 2 ;;
+    -*) shift ;;
+    *) url=$1; shift ;;
+  esac
+done
+if [[ -z $url ]]; then
+  url=$(sed -n 's/^url = "\(.*\)"$/\1/p' | head -n 1)
+fi
 printf '%s\n' "$url" >>"$STUB_LOG/curl-urls"
 exit "${STUB_CURL_EXIT:-0}"
 EOF
@@ -387,7 +399,10 @@ fi
 # --- 9. the operator's status view -----------------------------------------
 reset_gate
 printf '%s' "$(jq -nc --arg c "$commit" --arg i "$digest_index" \
-  '{schema:1,repos:{"homelab-platform":{commit:$c,indexDigest:$i}},apps:{},updated:"2026-11-20T00:00:00Z"}')" |
+  '{schema:1,
+    repos:{"homelab-platform":{commit:$c,indexDigest:$i}},
+    apps:{unitsHash:"u",secretsHash:"s",apps:{alpha:{unit:"unit-hash",secrets:"secret-hash"}}},
+    updated:"2026-11-20T00:00:00Z"}')" |
   atomic_write "$state_dir/state.json"
 seed_held "$digest_index" true
 jq -nc --arg d "$other_index" '{schema:1,commits:{},digests:{($d):{reason:"boot-gate",at:"2026-11-20T01:00:00Z"}}}' |
@@ -403,6 +418,11 @@ check_json "$status" '.pending.phase' staged "status reports the pending record"
 check_json "$status" ".denylist.digests[\"$other_index\"].reason" boot-gate \
   "status reports the denylist"
 check_json "$status" '.denylist.commits | type' object "status reports both denylist tables"
+# The apps table is what the next apply diffs against and what an operator reads
+# to see which app runs which unit and secret revision; a status without it hides
+# the half of the host an apps deploy owns.
+check_json "$status" '.apps.apps.alpha.unit' unit-hash "status reports the apps table"
+check_json "$status" '.apps.unitsHash' u "status reports the whole-set unit hash"
 pending_clear
 
 # --- 10. the denylist is cleared by hand ------------------------------------

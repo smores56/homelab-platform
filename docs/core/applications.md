@@ -26,6 +26,13 @@ this: Immich, Valkey, OPDShelf and Syncthing publish no cosign signature, and
 adding `insecureAcceptAnything` for them would delete the boundary to make a pull
 succeed.
 
+That boundary covers the Quadlets this repository ships. It does not cover the
+unprivileged `homelab-apps` tenant: its units name
+`--signature-policy=/usr/share/smortress/apps-policy.json`, and that policy is
+`insecureAcceptAnything`, so a tenant image is never signature-checked — the
+digest pin in its schema and the reviewed commit are what bound it
+(`docs/core/apps-tenant.md`).
+
 `scripts/app-images.sh` is the single pin table. Two kinds of row live in it.
 
 A row whose reference is an upstream image is copied by

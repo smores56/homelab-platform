@@ -18,8 +18,12 @@
 
 deploy_state_dir=${DEPLOY_STATE_DIR:-/var/lib/homelab/deploy}
 # /run is tmpfs: a lock there cannot survive as a stale file across a reboot, and
-# the drain unit and a hand-run drain must serialize on the same inode.
-deploy_lock_file=${DEPLOY_LOCK_FILE:-/run/smortress/deploy.lock}
+# the drain unit and a hand-run drain must serialize on the same inode. Its own
+# directory and not /run/smortress: that tree holds the decrypted secrets, and a
+# writable lock file inside it would be a write capability the units would have
+# to grant over the ciphertexts' own directory. `RuntimeDirectory=smortress-deploy`
+# is what creates this one.
+deploy_lock_file=${DEPLOY_LOCK_FILE:-/run/smortress-deploy/deploy.lock}
 deploy_lock_wait=${DEPLOY_LOCK_WAIT:-3600}
 deploy_journal_max=${DEPLOY_JOURNAL_MAX_BYTES:-5242880}
 
@@ -37,6 +41,11 @@ deploy_queue_dir=$deploy_state_dir/queue
 deploy_work_dir=$deploy_state_dir/work
 
 deploy_lock_fd=
+
+# The schema every state document this library writes carries (the `// 1` in the
+# writers below). A saved state.json of another schema is not this code's truth,
+# so the apps revert refuses to restore one that disagrees with this value.
+deploy_state_schema=1
 
 deploy_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
@@ -211,6 +220,17 @@ deploy_ping_secret=${DEPLOY_PING_SECRET:-/run/smortress/secrets/deploy-ping-url.
 deploy_notify_timeout=${DEPLOY_NOTIFY_TIMEOUT:-10}
 deploy_curl_bin=${DEPLOY_CURL_BIN:-curl}
 
+# curl_config_url <url>: a curl config document on stdout.
+#
+# `url = "<value>"` is curl's own long option in config form; the quoting is
+# escaped so a value carrying a quote or a backslash stays one string.
+curl_config_url() { # <url>
+  local url=$1
+  url=${url//\\/\\\\}
+  url=${url//\"/\\\"}
+  printf 'url = "%s"\n' "$url"
+}
+
 deploy_notify() {
   local kind=$1 reason=${2:-} url
   case $kind in
@@ -227,8 +247,10 @@ deploy_notify() {
     return 0
   fi
   if [[ $kind == fail ]]; then url=${url%/}/fail; fi
-  if ! "$deploy_curl_bin" --fail --silent --show-error --max-time "$deploy_notify_timeout" \
-    "$url" >/dev/null 2>&1; then
+  # The URL is the capability to keep the check green, and argv is world-readable
+  # (/proc/<pid>/cmdline, `ps`): it goes to curl as a config on stdin instead.
+  if ! curl_config_url "$url" | "$deploy_curl_bin" --fail --silent --show-error \
+    --max-time "$deploy_notify_timeout" --config - >/dev/null 2>&1; then
     journal_append notify-failed "$(jq -nc --arg kind "$kind" --arg reason "${reason:-}" \
       '{kind:$kind,reason:$reason}')" || true
     return 1
@@ -312,6 +334,30 @@ denylist_remove() {
 cache_clear() {
   rm -f -- "$deploy_cache_file" "$deploy_poll_cache_file" || return 1
   sync -- "$deploy_state_dir" 2>/dev/null || return 1
+}
+
+# resolve_tool <env override> <installed name> <checkout file>
+#
+# $PATH is consulted first so a test can put a stand-in in front of an installed
+# helper without touching /usr/libexec; root's PATH does not contain /usr/libexec,
+# so on the host the installed name wins. This is the only copy: the platform gate
+# and the apps apply each carried one, and a fix to either would have missed the
+# other.
+resolve_tool() {
+  local override=${1:-} name=$2 sibling=$3 found
+  if [[ -n $override ]]; then
+    printf '%s\n' "$override"
+    return 0
+  fi
+  if found=$(command -v "$name" 2>/dev/null); then
+    printf '%s\n' "$found"
+    return 0
+  fi
+  if [[ -x /usr/libexec/$name ]]; then
+    printf '%s\n' "/usr/libexec/$name"
+    return 0
+  fi
+  printf '%s\n' "$sibling"
 }
 
 # clamp_timeout <seconds>
@@ -444,6 +490,10 @@ deploy_lock_acquire() { # [<seconds>]
   if [[ -n $deploy_lock_fd ]]; then
     return 0
   fi
+  # The unit's RuntimeDirectory creates this on the host; a hand-run command and
+  # a test have no unit, and a missing directory would make every one of them
+  # report "another drain holds the lock" instead of taking it.
+  install -d -m 0700 "$(dirname -- "$deploy_lock_file")" 2>/dev/null || true
   exec {deploy_lock_fd}>"$deploy_lock_file" || {
     deploy_lock_fd=
     return 1

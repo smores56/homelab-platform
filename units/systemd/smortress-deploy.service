@@ -28,21 +28,27 @@ ExecStart=/usr/libexec/deploy-drain
 TimeoutStartSec=12600
 UMask=0077
 User=root
+# The deploy lock's own directory, outside /run/smortress -- that tree holds the
+# decrypted secrets and must stay read-only to every deploy unit. Preserve=yes
+# because a oneshot's runtime directory is removed when it exits, and a hand-run
+# `smortress-deploy bootstrap` holding the lock must not have its inode unlinked
+# by the drain finishing behind it: two writers would then agree on nothing.
+RuntimeDirectory=smortress-deploy
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
 # The snapshot gate (T3) runs the Restic driver as a child, and that driver keeps
 # its cache here; the CacheDirectory makes the directory exist and writable in
 # the unit's namespace, which ProtectSystem=strict would otherwise not give it.
 CacheDirectory=smortress-restic
 Environment=RESTIC_CACHE_DIR=/var/cache/smortress-restic
 
-# state.json, the queue and the journal are the drain's own writes. The lock
-# lives in /run, which protectsystem=strict also covers, so it is listed too.
+# state.json, the queue and the journal are the drain's own writes.
 # The snapshot gate (T3) adds the plane's state tree and the two local
 # repositories: it backs a stale restore unit up before a platform reboot. The
 # `-` prefix keeps the unit startable when the 970 is absent -- the gate falls
 # back to the HDD, which is the whole reason the mount is `nofail`.
 ProtectSystem=strict
 ReadWritePaths=/var/lib/homelab/deploy
-ReadWritePaths=/run/smortress
 ReadWritePaths=/var/lib/homelab/restic
 ReadWritePaths=-/var/lib/restic/ssd
 ReadWritePaths=-/var/lib/restic/hdd

@@ -3,10 +3,15 @@
 
 A final publish job posts one signed request and gets an id back; everything
 after that is host-side. The listener therefore does the cheapest possible
-thing correctly: authenticate the exact bytes, bound the timestamp, refuse a
-replay, allowlist the repository, refuse a denylisted commit, and put one file
-in the queue atomically. It resolves no tag, checks no signature and writes no
-state -- a request that fails any check changes nothing.
+thing correctly: authenticate the exact bytes, bound the timestamp of those
+bytes, refuse a replay, allowlist the repository, refuse a denylisted commit,
+and put one file in the queue atomically. It resolves no tag, checks no
+signature and writes no state -- a request that fails any check changes nothing.
+
+Nothing an unauthenticated caller can trigger may cost the listener disk I/O or
+the lock a valid request needs: every check that does not need the secret runs
+before the lock, and a refusal is counted in memory (`/healthz` reports it)
+instead of appended to the journal.
 
 Two files are written here and nowhere else: `nonces.json` and `listener.lock`.
 The drain writes `state.json` while the listener may be running, so a second
@@ -55,6 +60,11 @@ MAX_BODY_BYTES = 64 * 1024
 READ_TIMEOUT = 10
 SKEW_SECONDS = 300
 QUEUE_CAP = 32
+# Requests being read at once. A slot is taken before the first body byte, so a
+# caller that connects and stalls (or a flood of them) costs a slot for at most
+# READ_TIMEOUT; past the cap the answer is immediate rather than queued, because
+# a listener that buffers unbounded request bodies is the one that dies first.
+MAX_CONCURRENCY = int(os.environ.get("DEPLOY_MAX_CONCURRENCY", "32"))
 # The ring only has to outlive the skew window; a wider TTL keeps two clocks
 # that disagree by minutes from reopening a replay.
 NONCE_TTL = 3600
@@ -250,14 +260,75 @@ class Response:
     payload: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class Request:
+    """What a signed body asks for, once every check that needs no lock passed."""
+
+    repo: str
+    commit: str
+    nonce: str
+
+
+class RejectionTally:
+    """A bounded, in-memory count of everything the listener refused.
+
+    A journal line is an fsync, and every refusal below the signature check is
+    reachable by anyone who can open the port: writing one per attempt lets an
+    unauthenticated caller drive disk I/O at will and is the cheap half of a
+    denial of service. The tally is capped both in keys and in total so a flood
+    of distinct reasons cannot grow the process either; `/healthz` reports it,
+    which is what the operator needs (a listener answering nothing but 401s
+    looks healthy otherwise).
+    """
+
+    MAX_KEYS = 32
+    MAX_TOTAL = 100_000
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._counts: dict[str, int] = {}
+        self._total = 0
+        self._dropped = 0
+
+    def add(self, reason: str) -> None:
+        with self._lock:
+            if self._total >= self.MAX_TOTAL:
+                self._dropped += 1
+                return
+            self._total += 1
+            if reason in self._counts or len(self._counts) < self.MAX_KEYS:
+                self._counts[reason] = self._counts.get(reason, 0) + 1
+            else:
+                self._counts["other"] = self._counts.get("other", 0) + 1
+
+    def snapshot(self) -> dict[str, int]:
+        with self._lock:
+            counts = dict(self._counts)
+            if self._dropped:
+                counts["dropped"] = self._dropped
+            return counts
+
+
 class Receiver:
-    """The contract as a function of (body, signature, timestamp)."""
+    """The contract as a function of the signed body."""
 
     def __init__(self, secrets: list[bytes]) -> None:
         self._secrets = secrets
         # ThreadingHTTPServer would otherwise let two requests race in the
-        # "nonce unseen -> queue it" window.
+        # "nonce unseen -> queue it" window. It is taken only after the request
+        # is authenticated and shaped: a refusal must never wait on, or hold up,
+        # the lock a valid request needs.
         self._lock = threading.Lock()
+        self._slots = threading.BoundedSemaphore(MAX_CONCURRENCY)
+        self._rejections = RejectionTally()
+
+    # -- admission ----------------------------------------------------------
+    def admit(self) -> bool:
+        """One of the bounded read slots, or False when the cap is reached."""
+        return self._slots.acquire(blocking=False)
+
+    def release(self) -> None:
+        self._slots.release()
 
     # -- authentication -----------------------------------------------------
     def _signed(self, body: bytes, signature: str | None) -> bool:
@@ -317,46 +388,90 @@ class Receiver:
     # -- answers ------------------------------------------------------------
     def health(self) -> Response:
         # The queue is the health signal: a listener that answers 200 while it
-        # cannot accept a request is the one failure nobody notices.
+        # cannot accept a request is the one failure nobody notices. The tally
+        # rides beside it, because a listener whose traffic is all refusals
+        # would otherwise look like a healthy receiver nobody is deploying to.
+        rejected = self._rejections.snapshot()
         if self._secrets and self._queue_writable():
-            return Response(200, {"status": "ok"})
-        return Response(503, {"status": "unhealthy", "reason": "queue-unavailable"})
+            return Response(200, {"status": "ok", "rejected": rejected})
+        return Response(
+            503, {"status": "unhealthy", "reason": "queue-unavailable", "rejected": rejected}
+        )
+
+    def busy(self) -> Response:
+        """The answer when every read slot is taken (the caller should retry)."""
+        self._rejections.add("listener-busy")
+        log(f"listener-busy ({MAX_CONCURRENCY} slots taken)")
+        return Response(503, {"status": "rejected", "reason": "listener-busy"})
+
+    def bad_body(self, status: int) -> Response:
+        self._rejections.add("bad-body")
+        log(f"bad-body ({status})")
+        return Response(status, {"status": "rejected", "reason": "bad-body"})
+
+    def _refuse(self, status: int, reason: str, **fields: Any) -> Response:
+        """A refusal the caller's own request caused, counted and not journaled.
+
+        Reachable without the secret, so the record is the in-memory tally that
+        `/healthz` reports: an fsynced journal line per attempt is disk I/O an
+        unauthenticated caller could ask for, at whatever rate it likes.
+        """
+        self._rejections.add(reason)
+        log(f"{reason} ({status}) {' '.join(f'{k}={v}' for k, v in fields.items())}".strip())
+        return Response(status, {"status": "rejected", "reason": reason})
 
     def _reject(self, status: int, reason: str, **fields: Any) -> Response:
+        """A refusal only a caller holding the secret can reach: journaled.
+
+        Nothing here is attacker-reachable at will -- a denylisted commit and a
+        full queue both take a valid HMAC -- so the durable record stays.
+        """
         journal("deploy-rejected", status=status, reason=reason, **fields)
         log(f"{reason} ({status}) {' '.join(f'{k}={v}' for k, v in fields.items())}".strip())
         return Response(status, {"status": "rejected", "reason": reason})
 
-    def deploy(self, body: bytes, signature: str | None, timestamp: str | None) -> Response:
+    def _parse(self, body: bytes) -> Request | Response:
+        """Shape, signed timestamp and nonce, or the refusal naming what is wrong.
+
+        `ts` comes from the body and nowhere else: it is the value the HMAC
+        covers, so a header that disagreed with it could only be a request to
+        read one clock and verify another.
+        """
+        try:
+            payload = json.loads(body)
+        except ValueError:
+            return self._refuse(400, "malformed-json")
+        if not isinstance(payload, dict):
+            return self._refuse(400, "malformed-json")
+
+        repo = payload.get("repo")
+        commit = payload.get("commit")
+        nonce = payload.get("nonce")
+        if not isinstance(repo, str) or repo not in REPOS:
+            return self._refuse(400, "unsupported-repo", repo=str(repo))
+        if not isinstance(commit, str) or not COMMIT_RE.match(commit):
+            return self._refuse(400, "invalid-commit", repo=repo)
+        if not isinstance(nonce, str) or not NONCE_RE.match(nonce):
+            return self._refuse(400, "invalid-nonce", repo=repo)
+        try:
+            ts = int(payload["ts"])
+        except (KeyError, TypeError, ValueError):
+            return self._refuse(400, "invalid-timestamp", repo=repo)
+        skew = int(time.time()) - ts
+        if abs(skew) > SKEW_SECONDS:
+            return self._refuse(401, "stale-timestamp", repo=repo, skew=skew)
+        return Request(repo=repo, commit=commit, nonce=nonce)
+
+    def deploy(self, body: bytes, signature: str | None) -> Response:
+        """The contract, with every lock-free check ahead of the lock."""
+        if not self._signed(body, signature):
+            return self._refuse(401, "bad-signature")
+        parsed = self._parse(body)
+        if isinstance(parsed, Response):
+            return parsed
+        repo, commit, nonce = parsed.repo, parsed.commit, parsed.nonce
+
         with self._lock:
-            if not self._signed(body, signature):
-                return self._reject(401, "bad-signature")
-            try:
-                payload = json.loads(body)
-            except ValueError:
-                return self._reject(400, "malformed-json")
-            if not isinstance(payload, dict):
-                return self._reject(400, "malformed-json")
-
-            repo = payload.get("repo")
-            commit = payload.get("commit")
-            nonce = payload.get("nonce")
-            if not isinstance(repo, str) or repo not in REPOS:
-                return self._reject(400, "unsupported-repo", repo=str(repo))
-            if not isinstance(commit, str) or not COMMIT_RE.match(commit):
-                return self._reject(400, "invalid-commit", repo=repo)
-            if not isinstance(nonce, str) or not NONCE_RE.match(nonce):
-                return self._reject(400, "invalid-nonce", repo=repo)
-
-            raw_ts: Any = timestamp if timestamp not in (None, "") else payload.get("ts")
-            try:
-                ts = int(raw_ts)
-            except (TypeError, ValueError):
-                return self._reject(400, "invalid-timestamp", repo=repo)
-            skew = int(time.time()) - ts
-            if abs(skew) > SKEW_SECONDS:
-                return self._reject(401, "stale-timestamp", repo=repo, skew=skew)
-
             try:
                 replayed = self._nonce_seen(nonce)
             except OSError as exc:
@@ -366,7 +481,7 @@ class Receiver:
                 journal("queue-failed", repo=repo, commit=commit, error=str(exc))
                 return Response(503, {"status": "error", "reason": "nonce-ring-unavailable"})
             if replayed:
-                return self._reject(401, "replayed-nonce", repo=repo)
+                return self._refuse(401, "replayed-nonce", repo=repo)
             if self._denylisted(commit):
                 return self._reject(409, "denylisted-commit", repo=repo, commit=commit)
             if self._deployed_commit(repo) == commit:
@@ -452,17 +567,21 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.split("?", 1)[0] != "/v1/deploy":
             self._send(Response(404, {"status": "error", "reason": "not-found"}))
             return
-        body, error = self._read_body()
-        if body is None:
-            self._send(Response(error, {"status": "rejected", "reason": "bad-body"}))
+        # The slot comes before the first body byte: over the cap the answer is
+        # immediate, so a flood costs one short-lived thread per connection
+        # instead of one stalled read per request. `/healthz` takes no slot --
+        # the dead-man has to be able to ask while the listener is saturated.
+        if not RECEIVER.admit():
+            self._send(RECEIVER.busy())
             return
-        self._send(
-            RECEIVER.deploy(
-                body,
-                self.headers.get("X-Deploy-Signature"),
-                self.headers.get("X-Deploy-Timestamp"),
-            )
-        )
+        try:
+            body, error = self._read_body()
+            if body is None:
+                self._send(RECEIVER.bad_body(error))
+                return
+            self._send(RECEIVER.deploy(body, self.headers.get("X-Deploy-Signature")))
+        finally:
+            RECEIVER.release()
 
     def _read_body(self) -> tuple[bytes | None, int]:
         raw = self.headers.get("Content-Length")

@@ -241,10 +241,21 @@ printf '%s\n' "$*" >>"$STUB_LOG/mountpoint-calls"
 exit 0
 EOF
 
+# deploy_notify hands the URL over as a curl config on stdin, never in argv.
 cat >"$bin/curl" <<'EOF'
 #!/usr/bin/env bash
 url=
-for a in "$@"; do url=$a; done
+while (($#)); do
+  case $1 in
+    --config) shift 2 ;;
+    --max-time | --retry | --connect-timeout) shift 2 ;;
+    -*) shift ;;
+    *) url=$1; shift ;;
+  esac
+done
+if [[ -z $url ]]; then
+  url=$(sed -n 's/^url = "\(.*\)"$/\1/p' | head -n 1)
+fi
 printf '%s\n' "$url" >>"$STUB_LOG/curl-urls"
 exit 0
 EOF

@@ -134,6 +134,7 @@ cmd_status() {
     --argjson denylist "$(denylist_read)" '
     {schema: 1,
      repos: ($state.repos // {}),
+     apps: ($state.apps // {}),
      updated: ($state.updated // null),
      held: $held,
      pending: $pending,

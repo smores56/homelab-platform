@@ -71,26 +71,8 @@ fi
 # shellcheck source=/dev/null
 source "$state_lib"
 
-# $PATH is consulted first so a test can put a stand-in in front of an installed
-# tool without touching /usr/libexec; root's PATH does not contain /usr/libexec,
-# so on the host the installed name wins.
-resolve_tool() { # <env override> <installed name> <checkout file>
-  local override=${1:-} name=$2 sibling=$3 found
-  if [[ -n $override ]]; then
-    printf '%s\n' "$override"
-    return 0
-  fi
-  if found=$(command -v "$name" 2>/dev/null); then
-    printf '%s\n' "$found"
-    return 0
-  fi
-  if [[ -x /usr/libexec/$name ]]; then
-    printf '%s\n' "/usr/libexec/$name"
-    return 0
-  fi
-  printf '%s\n' "$sibling"
-}
-
+# The renderer is the image's `apps-schema`, resolved by the state library's
+# `resolve_tool` (the same rule the platform gate uses).
 schema_bin=$(resolve_tool "${APPS_SCHEMA:-}" apps-schema "$self_dir/apps-schema.py")
 
 apps_user=${APPS_USER:-apps}
@@ -298,18 +280,32 @@ sweep_grace=${APPS_SWEEP_GRACE_MINUTES:-1440}
 
 # Only a path this script minted is ever removed: apply.json is a file an operator
 # can edit, and `rm -rf "$(jq -r .work apply.json)"` on a wrong path is how a
-# state directory becomes a catastrophe.
+# state directory becomes a catastrophe. The shape is therefore checked on the
+# canonical path, not on the string: `realpath -e` resolves `..` and symlinks
+# first, so `<work>/apps-<sha>` cannot name anything but itself, and only a
+# 40-hex commit's own tree -- never `apps-*` -- is one of ours.
 cleanup_work() { # <dir>
-  local dir=${1:-}
+  local dir=${1:-} real parent work_real base
   [[ -n $dir ]] || return 0
-  case $dir in
-    "$deploy_work_dir"/apps-*) ;;
-    *)
-      warn "refusing to remove $dir: not a work tree of this deploy"
-      return 1
-      ;;
-  esac
-  rm -rf -- "$dir" || return 1
+  # A tree that is not there is the state the caller asked for: the apply calls
+  # this before it creates one, and a committed apply has already removed it.
+  if [[ -L $dir && ! -e $dir ]]; then
+    warn "refusing to remove $dir: it is a symlink to nothing"
+    return 1
+  fi
+  [[ -e $dir ]] || return 0
+  if ! real=$(realpath -e -- "$dir" 2>/dev/null); then
+    warn "refusing to remove $dir: it does not resolve to a directory"
+    return 1
+  fi
+  work_real=$(realpath -e -- "$deploy_work_dir" 2>/dev/null) || work_real=""
+  parent=$(dirname -- "$real")
+  base=$(basename -- "$real")
+  if [[ -z $work_real || $parent != "$work_real" || ! $base =~ ^apps-[0-9a-f]{40}$ ]]; then
+    warn "refusing to remove $dir: not a work tree of this deploy"
+    return 1
+  fi
+  rm -rf -- "$real" || return 1
   sync -- "$deploy_work_dir" 2>/dev/null || true
   return 0
 }
@@ -403,6 +399,44 @@ plan_units() { # <render dir> -> one unit basename per line
 
 app_unit() { printf '%s.container\n' "$1"; }
 app_service() { printf '%s.service\n' "$1"; }
+
+# The schema's APP_NAME, verbatim from scripts/apps-schema.py. A name becomes a
+# unit instance (`smortress-app-ingress@<name>`, `<name>.service`), a file in the
+# tenant's unit directory and a Serve path, so a plan outside it is one this
+# script refuses to act on -- the renderer never emits one, but the sets guarded
+# below are state, not render output: the previous unit set is files found in the
+# tenant's own home and `apply.json` is a document an operator can edit.
+app_name_ok() { # <name>
+  [[ $1 =~ ^[a-z]([a-z0-9-]{0,29}[a-z0-9])?$ ]]
+}
+
+# A unit file this platform writes: `<app>.container` for a schema-valid name, or
+# the internal network it renders while an egress-none app exists.
+unit_name_ok() { # <basename>
+  case $1 in
+    smortress-apps.network) return 0 ;;
+    *.container) app_name_ok "${1%.container}" ;;
+    *) return 1 ;;
+  esac
+}
+
+refuse_name() { # <name> <sink> <what>
+  journal_append apps-name-refused "$(jq -nc --arg name "$1" --arg sink "$2" \
+    '{name:$name,sink:$sink}')" || warn "cannot journal the refused name"
+  warn "refusing the $3 '$1' for $2: it is not a name this deploy writes"
+}
+
+require_app_name() { # <name> <sink>
+  app_name_ok "$1" && return 0
+  refuse_name "$1" "$2" "app name"
+  return 1
+}
+
+require_unit_name() { # <basename> <sink>
+  unit_name_ok "$1" && return 0
+  refuse_name "$1" "$2" "unit name"
+  return 1
+}
 
 in_list() { # <needle> <haystack...>
   local needle=$1 item
@@ -624,6 +658,7 @@ install_units() {
   local unit
   tenant mkdir -p -- "$apps_unit_dir" || return 1
   for unit in "${intended_units[@]}"; do
+    require_unit_name "$unit" install-unit || return 1
     tenant_install "$work/render.next/$unit" "$apps_unit_dir/$unit" || return 1
   done
   return 0
@@ -632,6 +667,10 @@ install_units() {
 remove_departed_units() {
   local name
   for name in "${departed_apps[@]}"; do
+    # The name is a file this apply found in the tenant's own home, and it becomes
+    # a path under it: anything but `<app>.container` is refused, journaled, and
+    # stops the apply before the file is touched.
+    require_app_name "$name" remove-departed-unit || return 1
     tenant_remove "$apps_unit_dir/$(app_unit "$name")" || return 1
   done
   # The internal network unit goes when nothing needs it any more: render emits it
@@ -673,6 +712,7 @@ remove_departed_secrets() {
 start_new_apps() {
   local name
   for name in "${new_apps[@]}"; do
+    require_app_name "$name" start-app || return 1
     user_ctl start "$(app_service "$name")" || return 1
   done
   return 0
@@ -681,6 +721,7 @@ start_new_apps() {
 restart_changed_apps() {
   local name
   for name in "${changed_apps[@]}"; do
+    require_app_name "$name" restart-app || return 1
     user_ctl restart "$(app_service "$name")" || return 1
   done
   return 0
@@ -689,6 +730,7 @@ restart_changed_apps() {
 stop_departed_apps() {
   local name
   for name in "${departed_apps[@]}"; do
+    require_app_name "$name" stop-app || return 1
     user_ctl stop "$(app_service "$name")" || return 1
   done
   return 0
@@ -698,13 +740,19 @@ stop_departed_apps() {
 # the container port it forwards to, so it follows its app by name.
 apply_ingress() {
   local name
+  # Every name here becomes a root `systemctl` instance. The guard is what keeps
+  # a forged one -- a departed unit file the tenant planted, a name from an edited
+  # plan -- from ever reaching that command line.
   for name in "${new_apps[@]}"; do
+    require_app_name "$name" ingress-start || return 1
     system_ctl start "$ingress_template$name" || return 1
   done
   for name in "${changed_apps[@]}"; do
+    require_app_name "$name" ingress-restart || return 1
     system_ctl restart "$ingress_template$name" || return 1
   done
   for name in "${departed_apps[@]}"; do
+    require_app_name "$name" ingress-stop || return 1
     system_ctl stop "$ingress_template$name" || return 1
   done
   return 0
@@ -755,7 +803,7 @@ restart_serve() { # <reason>
 # the units and the plan are written from the saved tree, so a second run after a
 # crash in the middle of a revert finishes the same work.
 revert_apply() {
-  local doc phase dir render_prev rc=0 pname path name current
+  local doc phase dir render_prev rc=0 pname path name current saved_schema
   local -a previous=() intended=() saved=()
   doc=$(apply_read) || {
     warn "cannot read $deploy_state_dir/apply.json"
@@ -790,12 +838,22 @@ revert_apply() {
   fi
 
   # 1. The previous units back, and away with the ones the failed apply added.
+  # apply.json names these files and an operator can edit it, so each one is
+  # checked against the shape this deploy writes before it becomes a path.
   for name in "${previous[@]}"; do
     [[ -f $render_prev/$name ]] || continue
+    require_unit_name "$name" revert-restore-unit || {
+      rc=1
+      continue
+    }
     tenant_install "$render_prev/$name" "$apps_unit_dir/$name" || rc=1
   done
   for name in "${intended[@]}"; do
     in_list "$name" "${previous[@]}" && continue
+    require_unit_name "$name" revert-remove-unit || {
+      rc=1
+      continue
+    }
     tenant_remove "$apps_unit_dir/$name" || rc=1
   done
 
@@ -809,9 +867,24 @@ revert_apply() {
   system_ctl restart "$quota_unit" || rc=1
 
   # 2b. The state document, so a revert leaves nothing claiming the new commit
-  # or the new content hashes.
+  # or the new content hashes. A saved document of another schema is not this
+  # library's truth: restoring it would move the host's record past whatever
+  # migrated it, so a mismatch is refused, journaled and paged -- the record stays
+  # and a human decides, rather than a revert silently rewriting the state.
   if [[ $(jq -r '.previousState // false' <<<"$doc") == true && -f $render_prev/state.json ]]; then
-    atomic_write "$deploy_state_file" <"$render_prev/state.json" || rc=1
+    saved_schema=$(jq -r '.schema // "missing"' "$render_prev/state.json" 2>/dev/null) ||
+      saved_schema=unreadable
+    if [[ $saved_schema == "$deploy_state_schema" ]]; then
+      atomic_write "$deploy_state_file" <"$render_prev/state.json" || rc=1
+    else
+      journal_append apps-revert-failed "$(jq -nc --arg commit "$current" --arg saved "$saved_schema" \
+        --argjson want "$deploy_state_schema" \
+        '{reason:"state-schema-mismatch",commit:$commit,savedSchema:$saved,wantSchema:$want}')" ||
+        warn "cannot journal the refused state restore"
+      deploy_notify fail apps-revert-state-schema || warn "could not report the refused state restore"
+      warn "not restoring $render_prev/state.json: schema '$saved_schema', this library writes $deploy_state_schema"
+      rc=1
+    fi
   else
     rm -f -- "$deploy_state_file" || rc=1
   fi
@@ -833,6 +906,10 @@ revert_apply() {
     in_list "$name" "${previous[@]}" && continue
     [[ $name == *.container ]] || continue
     name=${name%.container}
+    require_app_name "$name" revert-stop-app || {
+      rc=1
+      continue
+    }
     user_ctl stop "$(app_service "$name")" || rc=1
     system_ctl stop "$ingress_template$name" || rc=1
   done
@@ -847,6 +924,10 @@ revert_apply() {
   for name in "${previous[@]}"; do
     [[ $name == *.container ]] || continue
     name=${name%.container}
+    require_app_name "$name" revert-start-app || {
+      rc=1
+      continue
+    }
     if in_list "${name}.container" "${intended[@]}"; then
       user_ctl restart "$(app_service "$name")" || rc=1
       system_ctl restart "$ingress_template$name" || rc=1
@@ -920,7 +1001,7 @@ resolve_secret_values() { # <plan> <secrets json|"">
 # still names is a crash state a revert restores from; every other one older than
 # the grace period is removed here, under the drain's lock.
 cmd_sweep() {
-  local keep='' dir rc=0 removed=0
+  local keep='' dir removed=0
   deploy_state_init || {
     warn "cannot create $deploy_state_dir"
     return 4
@@ -939,12 +1020,15 @@ cmd_sweep() {
     if cleanup_work "$dir"; then
       removed=$((removed + 1))
     else
-      rc=1
+      # A path this sweep refuses is one a human has to look at, but it is not a
+      # reason to fail the sweep the drain runs before every deploy -- that would
+      # leave a plaintext tree holding the whole queue hostage, not a cleanup.
+      journal_append apps-work-kept "$(jq -nc --arg dir "$dir" '{dir:$dir}')" ||
+        warn "cannot journal the kept work tree"
     fi
   done
   journal_append apps-work-swept "$(jq -nc --argjson removed "$removed" \
     --arg kept "$keep" '{removed:$removed,kept:$kept}')" || warn "cannot journal the sweep"
-  ((rc == 0)) || return 1
   say "swept $removed stale work tree(s)"
   return 0
 }
@@ -1022,8 +1106,12 @@ cmd_apply() {
     cleanup_work "$work" || true
     return 4
   fi
+  # The tarball is untrusted bytes from a repository this host only validates
+  # after extraction, and the tree is a root-only directory: without these three
+  # flags tar takes ownership, permissions and the directory's own mode from it.
+  # --no-overwrite-dir keeps the 0700 tree this apply created.
   if ! bounded "$tar_timeout" "$tar_bin" -xzf "$work/commit.tar.gz" -C "$work/tree" \
-    --strip-components=1; then
+    --strip-components=1 --no-same-owner --no-same-permissions --no-overwrite-dir; then
     warn "cannot extract the commit tarball"
     cleanup_work "$work" || true
     return 4

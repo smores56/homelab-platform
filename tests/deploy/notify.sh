@@ -142,7 +142,10 @@ check_grep "$step" '"nonce": secrets\.token_hex\(16\)' "the body carries a 32-he
 check_grep "$step" 'hmac\.new\(' "the signature is HMAC"
 check_grep "$step" 'hashlib\.sha256' "the signature is SHA-256"
 check_grep "$step" 'X-Deploy-Signature: sha256=\$sig' "the signature header is the design's"
-check_grep "$step" 'X-Deploy-Timestamp: \$ts' "the timestamp header is the design's"
+# The skew is read from the body's `ts`, the one value the HMAC covers. An
+# unsigned timestamp header was a second answer to the same question: the sender
+# and the receiver could disagree and neither could be shown to be right.
+check_no_grep "$step" 'X-Deploy-Timestamp' "no unsigned timestamp header is sent"
 check_grep "$step" '--data-binary @"\$body"' "the body is sent with --data-binary from the file"
 check_grep "$step" '--fail-with-body --max-time 30' "the send is bounded and fails on a bad status"
 check_grep "$step" 'http://smortress:8484/v1/deploy' "the send targets the receiver over the tailnet"
@@ -201,7 +204,6 @@ if [[ -s $body ]]; then
 fi
 
 signature=$(awk 'prev == "-H" && /^X-Deploy-Signature: sha256=/ { sub(/^X-Deploy-Signature: sha256=/, ""); print; exit } { prev = $0 }' "$work/argv")
-stamp=$(awk 'prev == "-H" && /^X-Deploy-Timestamp: / { sub(/^X-Deploy-Timestamp: /, ""); print; exit } { prev = $0 }' "$work/argv")
 if [[ -s $body ]]; then
   expected=$(DEPLOY_WEBHOOK_SECRET=$DEPLOY_WEBHOOK_SECRET python3 - "$body" <<'PY'
 import hashlib
@@ -215,7 +217,13 @@ print(hmac.new(os.environ["DEPLOY_WEBHOOK_SECRET"].encode(), data, hashlib.sha25
 PY
 )
   check_eq "$signature" "$expected" "the signature is the HMAC of the sent bytes"
-  check_eq "$stamp" "$(jq -r '.ts' "$body" 2>/dev/null)" "the timestamp header matches the body's ts"
+fi
+# The whole point of dropping the header: the wire carries the timestamp once,
+# inside the signed bytes, so a header/body disagreement cannot exist.
+if grep -qE '^X-Deploy-Timestamp' "$work/argv" 2>/dev/null; then
+  bad "the request carries no timestamp header" "$(grep -E '^X-Deploy-Timestamp' "$work/argv")"
+else
+  ok "the request carries no timestamp header"
 fi
 if grep -qF -- "$DEPLOY_WEBHOOK_SECRET" "$work/log" "$work/argv" 2>/dev/null; then
   bad "the webhook secret never reaches curl's argv"

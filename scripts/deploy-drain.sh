@@ -4,7 +4,7 @@
 #
 # This is the single writer of state.json, started by smortress-deploy.path when
 # a request lands in the queue and re-triggered by every later one. It runs
-# under `flock /run/smortress/deploy.lock`, drains in strict FIFO order except
+# under `flock /run/smortress-deploy/deploy.lock`, drains in strict FIFO order except
 # that a newer request for the same repository supersedes an older pending one,
 # and rescans once before exiting so the window between "queue empty" and "unit
 # inactive" cannot drop an event.

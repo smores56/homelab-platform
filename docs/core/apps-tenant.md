@@ -168,10 +168,16 @@ Podman (image layers, container storage) is bounded by nothing yet.
 
 The tenant's image policy is root-owned at
 `/usr/share/smortress/apps-policy.json` and named by every rendered unit with
-`PodmanArgs=--signature-policy=…`; it admits any digest-pinned image, which is
-the documented risk of an unsupervised repository. The plan's per-app memory,
-CPU and task limits are unit settings, so they bound each container's cgroup
-directly. The tenant user's `/var` home (image layers, container storage) is not
+`PodmanArgs=--signature-policy=…`. It is `insecureAcceptAnything`: the flag names
+*which* policy applies, and this one enforces nothing, so no tenant image is
+signature-checked and no digest is required to be pinned for Policy's sake. What
+bounds a tenant image is the schema's digest pin (`image` must be `repo@sha256:…`,
+refused by the validator otherwise) and the reviewed commit — not a signature.
+The risk is deliberate: `homelab-apps` is one unsupervised repository, and a
+cosign key there would sign whatever that repository's automation produced.
+
+The plan's per-app memory, CPU and task limits are unit settings, so they bound
+each container's cgroup directly. The tenant user's `/var` home (image layers, container storage) is not
 on a dataset and has no quota yet — the accepted gap until a dataset or quota is
 designed for it.
 
@@ -204,23 +210,30 @@ runs `smortress-deploy unblock commit <sha>`.
    tenant could be filled but never emptied, and Serve's existing
    empty-plan pruning would never run. A rejected definition stops here, the
    installed plan untouched, and the commit is denylisted and paged.
-2. **Record before mutating.** `apply.json` (`phase: pulling`, previous and
+2. **Free space.** The floors are 10 GiB on `/var/home/apps` (the pulled
+   layers) and 8 GiB on `/` and `/var` (container store, ostree staging), and
+   they are checked *before* the apply record is written: a host that cannot
+   hold the images is refused while nothing at all has been recorded, so a retry
+   after space is freed starts from a clean state instead of reverting an
+   apply that never pulled anything.
+3. **Record before mutating.** `apply.json` (`phase: pulling`, previous and
    intended unit sets, the previous plan, the previous secret values as
    root-only `0600` files under `work/prev-secrets/`) is written, and the
    previous render tree is kept as `render.prev` until the apply commits. This
    record is what a crash is reverted from.
-3. **Pull everything.** Free-space floors are 10 GiB on `/var/home/apps` (the
-   pulled layers) and 8 GiB on `/` and `/var` (container store, ostree
-   staging). Every changed image is pulled by digest as the tenant —
+4. **Pull everything.** Every changed image is pulled by digest as the tenant —
    `runuser -u apps -- podman pull --signature-policy=/usr/share/smortress/apps-policy.json`
-   — under a 1800 s deadline. One failed pull aborts with nothing changed, so
-   "pull everything, then change anything" holds: no half-revision ever runs.
-4. **Plan, then quota.** `plan.json` is installed atomically as
+   — under a 1800 s deadline. The policy flag names a policy that accepts
+   anything, so the pull proves reachability and nothing about the bytes; the
+   digest in the reference is what the plan pinned. One failed pull aborts with
+   nothing changed, so "pull everything, then change anything" holds: no
+   half-revision ever runs.
+5. **Plan, then quota.** `plan.json` is installed atomically as
    `/var/lib/homelab/apps/plan.json`, then `smortress-apps-quota.service` is
    restarted so the applier reads the new plan and creates the new apps'
    directories and ZFS project quotas *before* anything starts. The unit is
    `RemainAfterExit=yes`, so `restart` is what re-runs it.
-5. **Units, secrets, ingress.** As the tenant, from `/` with
+6. **Units, secrets, ingress.** As the tenant, from `/` with
    `XDG_RUNTIME_DIR=/run/user/<uid>`: install the rendered units into
    `~apps/.config/containers/systemd`, remove the units and Podman secrets of
    apps that left the plan, `podman secret create --replace` the changed values
@@ -229,7 +242,7 @@ runs `smortress-deploy unblock commit <sha>`.
    ones, stop the removed ones, and start/stop
    `smortress-app-ingress@<name>` to match. Root never writes inside the
    tenant's home: every write there runs as the tenant through `runuser`.
-6. **Commit, then Serve.** `state.json` records the commit and the unit and
+7. **Commit, then Serve.** `state.json` records the commit and the unit and
    secret content hashes, `apply.json`, `render.prev` and `work/prev-secrets/`
    are removed, and `smortress-tailscale-serve.service` is restarted. It is a
    `RemainAfterExit` oneshot, so without the restart a new app has no route and

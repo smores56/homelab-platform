@@ -55,27 +55,8 @@ fi
 # shellcheck source=/dev/null
 source "$state_lib"
 
-# The gate's two helpers are the plane's, installed by the same loop. $PATH is
-# consulted first so a test can put a stand-in in front of them without touching
-# /usr/libexec; root's PATH does not contain /usr/libexec, so on the host the
-# installed name wins.
-resolve_tool() { # <env override> <installed name> <checkout file>
-  local override=${1:-} name=$2 sibling=$3 found
-  if [[ -n $override ]]; then
-    printf '%s\n' "$override"
-    return 0
-  fi
-  if found=$(command -v "$name" 2>/dev/null); then
-    printf '%s\n' "$found"
-    return 0
-  fi
-  if [[ -x /usr/libexec/$name ]]; then
-    printf '%s\n' "/usr/libexec/$name"
-    return 0
-  fi
-  printf '%s\n' "$sibling"
-}
-
+# The gate's two helpers are the plane's, installed by the same loop and resolved
+# by the state library's one `resolve_tool`.
 verify_bin=$(resolve_tool "${DEPLOY_GATE_VERIFY_BIN:-}" smortress-restic-verify \
   "$self_dir/smortress-restic-verify.sh")
 backup_bin=$(resolve_tool "${DEPLOY_BACKUP_BIN:-}" smortress-restic-backup \

@@ -223,7 +223,7 @@ jobs:
           # is read from the environment, so it is in no argv and no log line, and
           # signing the file rather than a string is what makes "the bytes that
           # were signed" a thing curl can be handed.
-          stamp=$(python3 - "$body" <<'PY'
+          sig=$(python3 - "$body" <<'PY'
           import hashlib
           import hmac
           import json
@@ -244,19 +244,21 @@ jobs:
           with open(sys.argv[1], "rb") as handle:
               data = handle.read()
           key = os.environ["DEPLOY_WEBHOOK_SECRET"].encode()
-          print(now, hmac.new(key, data, hashlib.sha256).hexdigest())
+          print(hmac.new(key, data, hashlib.sha256).hexdigest())
           PY
           )
-          read -r ts sig <<<"$stamp"
-          if [[ -z ${sig:-} || -z ${ts:-} ]]; then
+          if [[ -z ${sig:-} ]]; then
             echo "::error::could not build the signed deploy body"
             exit 1
           fi
+          # No timestamp header: the skew is read from the body's `ts`, which is
+          # the value the HMAC covers. A header would be an unsigned second
+          # answer to the same question, and the receiver has to pick one.
+          #
           # --data-binary and not -d: `-d` strips newlines, so the bytes on the wire
           # would differ from the bytes that were signed and the receiver would
           # reject a body this job insists it sent.
           curl --fail-with-body --max-time 30 \
             -H "X-Deploy-Signature: sha256=$sig" \
-            -H "X-Deploy-Timestamp: $ts" \
             --data-binary @"$body" \
             http://smortress:8484/v1/deploy

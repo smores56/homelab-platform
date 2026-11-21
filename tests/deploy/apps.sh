@@ -127,10 +127,14 @@ ping_url=https://hc.invalid/ping/abc
 # this suite published, anything else is a notification URL.
 cat >"$bin/curl" <<'EOF'
 #!/usr/bin/env bash
+printf '%s\n' "$*" >>"$FAKE_LOG/curl-argv"
 out= url=
 while (($#)); do
   case $1 in
     --output) out=$2; shift 2 ;;
+    # The deploy hands the ping URL over as a config on stdin so it never appears
+    # in argv; `-` is that config's file name.
+    --config) shift 2 ;;
     --connect-timeout | --retry | --max-time) shift 2 ;;
     -*) shift ;;
     *) url=$1; shift ;;
@@ -145,6 +149,9 @@ if [[ -n $out ]]; then
   }
   cp -- "$src" "$out"
   exit 0
+fi
+if [[ -z $url ]]; then
+  url=$(sed -n 's/^url = "\(.*\)"$/\1/p' | head -n 1)
 fi
 printf '%s\n' "$url" >>"$FAKE_LOG/notify-urls"
 exit "${FAKE_CURL_EXIT:-0}"
@@ -269,6 +276,16 @@ cat >"$bin/bootc" <<'EOF'
 printf '%s\n' "$*" >>"$FAKE_LOG/bootc-calls"
 exit 0
 EOF
+
+# The real tar behind a recorder: the extraction flags are part of the contract,
+# and a call into it must still extract a real tarball for the rest of the suite.
+real_tar=$(command -v tar)
+cat >"$bin/tar" <<EOF
+#!/usr/bin/env bash
+printf '%s\\n' "\$*" >>"\$FAKE_LOG/tar-argv"
+exec $real_tar "\$@"
+EOF
+export APPS_TAR_BIN=$bin/tar
 
 chmod 0755 "$bin"/*
 
@@ -447,6 +464,20 @@ check_json "$(cat "$state_dir/state.json")" '.apps.unitsHash | length' 64 \
   "the whole-set unit hash is recorded"
 check_no_file "$state_dir/apply.json" "a committed apply clears the crash record"
 check_eq "$(tail -n 1 "$log/notify-urls")" "$ping_url" "a clean apply pings the deploy check"
+# The ping URL is the capability to keep the check green: it is handed to curl as
+# a config on stdin, so no local account can read it out of /proc.
+check_no_grep "$log/curl-argv" "$ping_url" "the ping URL never reaches curl's argv"
+check_grep "$log/curl-argv" '--config -' "the ping URL is a curl config on stdin"
+# The tarball is untrusted bytes extracted as root: tar must not take ownership,
+# modes or the tree's own directory mode from it.
+extract=$(grep -F -- '-xzf' "$log/tar-argv" | head -n 1)
+for flag in --no-same-owner --no-same-permissions --no-overwrite-dir; do
+  if grep -qF -- "$flag" <<<"$extract"; then
+    ok "the extraction passes $flag"
+  else
+    bad "the extraction passes $flag" "$extract"
+  fi
+done
 check_grep "$log/actions" 'system start smortress-app-ingress@alpha' \
   "alpha's ingress is started"
 check_grep "$log/actions" 'system start smortress-app-ingress@beta' \
@@ -867,6 +898,107 @@ out=$(bash "$apps" revert 2>&1)
 rc=$?
 check_eq "$rc" 0 "a revert with no record is a no-op" "$out"
 if [[ -s $log/actions ]]; then bad "a no-op revert touches nothing" "$(cat "$log/actions")"; else ok "a no-op revert touches nothing"; fi
+
+
+# --- 13. a forged app name never reaches a unit instance ---------------------
+# The tenant's own unit directory is not a trusted source of names: a file with
+# the render marker in it is taken as an installed app, so a forged one lands in
+# the departed set. It must be refused and journaled, never spelled into a root
+# `systemctl` line or a path under the tenant's home.
+reset_case
+run_apply "$c_v1"
+check_eq "$rc" 0 "the base revision applies before the forged unit" "$out"
+forged='x;reboot'
+printf '# Rendered from apps/forged/app.toml\n[Container]\nImage=ghcr.io/example/alpha@%s\n' "$d_a" \
+  >"$APPS_UNIT_DIR/$forged.container"
+: >"$log/actions"
+: >"$state_dir/journal.jsonl"
+run_apply "$c_empty"
+check_eq "$rc" 5 "an apply that meets a forged unit name rolls back" "$out"
+check_eq "$(journal_field apps-name-refused '.name' | head -n 1)" "$forged" \
+  "the forged name is journaled"
+check_eq "$(journal_field apps-name-refused '.sink' | head -n 1)" remove-departed-unit \
+  "the refusal names the sink it was refused at"
+if grep -qF -- "$forged" "$log/actions" 2>/dev/null; then
+  bad "the forged name never reaches a unit command" "$(grep -F -- "$forged" "$log/actions")"
+else
+  ok "the forged name never reaches a unit command"
+fi
+# The revert cannot restore a unit whose name this deploy would never write, so it
+# says so and keeps the record instead of claiming the revision is back.
+check_eq "$(journal_field apps-revert-failed '.reason' | tail -n 1)" restore-incomplete \
+  "the incomplete revert is journaled as such"
+check_file "$state_dir/apply.json" "an incomplete revert keeps the crash record"
+
+# --- 14. only this deploy's own work trees are removed ----------------------
+# The path a sweep or a revert removes is named by `apply.json`, which an operator
+# can edit, and by a glob over the work directory. The shape is checked on the
+# canonical path: a symlink out of the tree, a name that is not a commit, and a
+# traversal that resolves elsewhere all survive.
+reset_case
+run_apply "$c_v1"
+outside=$work/outside
+mkdir -p "$outside/render.prev" "$state_dir/work/apps-notacommit"
+printf 'keep\n' >"$outside/render.prev/plan.json"
+printf 'keep\n' >"$state_dir/work/apps-notacommit/keep"
+ln -s "$outside" "$state_dir/work/apps-$c_changed"
+touch -h -d '3 days ago' "$state_dir/work/apps-notacommit" "$state_dir/work/apps-$c_changed"
+out=$(bash "$apps" sweep 2>&1)
+rc=$?
+check_eq "$rc" 0 "the sweep survives the trees it refuses" "$out"
+if [[ -d $outside/render.prev ]]; then
+  ok "a symlinked work tree is not followed out of the work directory"
+else
+  bad "a symlinked work tree is not followed out of the work directory"
+fi
+if [[ -L $state_dir/work/apps-$c_changed ]]; then
+  ok "the refused symlink itself stays"
+else
+  bad "the refused symlink itself stays" "$(ls -l "$state_dir/work")"
+fi
+if [[ -d $state_dir/work/apps-notacommit ]]; then
+  ok "a directory that is not a commit tree stays"
+else
+  bad "a directory that is not a commit tree stays"
+fi
+check_eq "$(journal_field apps-work-swept '.removed')" 0 "the sweep removes nothing it refused"
+check_eq "$(journal_field apps-work-kept '.dir' | wc -l)" 2 "the sweep journals the trees it refused"
+# The same check behind a traversal in the record: apply.json names a path that
+# resolves outside the work directory, and the revert's own cleanup refuses it
+# even after it has restored everything else.
+traversal=$work/state/work/../../outside
+jq -nc --arg work "$traversal" \
+  '{schema:1,phase:"installing",commit:"'"$c_v2"'",work:$work,
+    previousUnits:[],intendedUnits:[],previousPlan:false,previousState:false,
+    previousSecrets:{},intendedSecrets:[],startedAt:"2026-11-21T00:00:00Z"}' | apply_write
+out=$(bash "$apps" revert 2>&1)
+if [[ -f $outside/render.prev/plan.json ]]; then
+  ok "a traversal in apply.json removes nothing outside the work directory"
+else
+  bad "a traversal in apply.json removes nothing outside the work directory" "$out"
+fi
+
+# --- 15. a revert refuses a state document of another schema ----------------
+# The saved state.json is what a revert puts back, and it comes from a snapshot of
+# whatever revision was running: a document of another schema is not this
+# library's truth, so the revert refuses it, journals, pages and keeps its record
+# rather than silently rewriting what the host is recorded as running.
+reset_case
+run_apply "$c_v1"
+stage_interrupted "$c_v2" "$work/trees/$c_v2/homelab-apps-$c_v2"
+state_staged=$(sha "$state_dir/state.json")
+jq -c '.schema = 2' "$state_dir/work/apps-$c_v2/render.prev/state.json" |
+  atomic_write "$state_dir/work/apps-$c_v2/render.prev/state.json"
+: >"$log/notify-urls"
+out=$(bash "$apps" revert 2>&1)
+rc=$?
+check_eq "$rc" 1 "a revert refuses a state document of another schema" "$out"
+check_eq "$(sha "$state_dir/state.json")" "$state_staged" "the refused restore leaves the state alone"
+check_eq "$(journal_field apps-revert-failed '.reason' | head -n 1)" state-schema-mismatch \
+  "the refused restore is journaled with its reason"
+check_eq "$(tail -n 1 "$log/notify-urls")" "$ping_url/fail" \
+  "the refused restore pages the deploy check"
+check_file "$state_dir/apply.json" "the refused revert keeps the record"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 ((fail == 0))

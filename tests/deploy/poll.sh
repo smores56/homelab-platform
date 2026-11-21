@@ -84,11 +84,16 @@ while (($#)); do
     --output) out=$2; shift 2 ;;
     --write-out) write_out=$2; shift 2 ;;
     --fail | --fail-with-body) fail=1; shift ;;
+    --config) shift 2 ;;
     -H | --header | --max-time | --data-binary | -d | --retry) shift 2 ;;
     -*) shift ;;
     *) url=$1; shift ;;
   esac
 done
+# deploy_notify hands the ping URL over as a config on stdin, never in argv.
+if [[ -z $url ]]; then
+  url=$(sed -n 's/^url = "\(.*\)"$/\1/p' | head -n 1)
+fi
 status=200
 body='{}'
 case $url in

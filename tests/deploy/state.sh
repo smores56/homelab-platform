@@ -580,5 +580,60 @@ else
   bad "the deploy lock is free once the holder exits"
 fi
 
+# The lock's home, and the units that create it. /run/smortress holds the
+# decrypted secrets: a lock file there would be a write the units have to allow
+# inside the ciphertexts' own tree, so the lock moved to its own RuntimeDirectory
+# and neither unit may name /run/smortress as a writable path.
+default_lock=$(sed -nE 's/^deploy_lock_file=\$\{DEPLOY_LOCK_FILE:-([^}]+)\}$/\1/p' "$lib")
+check_eq "$default_lock" /run/smortress-deploy/deploy.lock \
+  "the deploy lock defaults to its own runtime directory"
+for unit in units/systemd/smortress-deploy.service units/systemd/smortress-boot-gate.service; do
+  if grep -qxF 'RuntimeDirectory=smortress-deploy' "$unit"; then
+    ok "$(basename -- "$unit") creates the lock's runtime directory"
+  else
+    bad "$(basename -- "$unit") creates the lock's runtime directory" "$(cat "$unit")"
+  fi
+  # A oneshot's RuntimeDirectory is removed when it exits, and a hand-run command
+  # holding the lock would then be locking an unlinked inode.
+  if grep -qxF 'RuntimeDirectoryPreserve=yes' "$unit"; then
+    ok "$(basename -- "$unit") keeps the runtime directory across its exits"
+  else
+    bad "$(basename -- "$unit") keeps the runtime directory across its exits"
+  fi
+  # Directive lines only: both files explain the move in a comment.
+  if grep -vE '^[[:space:]]*#' "$unit" | grep -qF '/run/smortress'; then
+    bad "$(basename -- "$unit") never widens /run/smortress" \
+      "$(grep -vE '^[[:space:]]*#' "$unit" | grep -F '/run/smortress')"
+  else
+    ok "$(basename -- "$unit") never widens /run/smortress"
+  fi
+done
+# A hand-run command has no unit, so the library creates the directory itself;
+# without that, every CLI command on a host whose drain has not run yet reports
+# "another drain holds the lock".
+fresh_lock=$work/fresh-run/deploy.lock
+if DEPLOY_LOCK_FILE=$fresh_lock bash -c '
+  set -uo pipefail
+  export DEPLOY_LOCK_FILE
+  # shellcheck source=/dev/null
+  source "'"$lib"'"
+  deploy_lock_acquire 5
+' 2>/dev/null && [[ -f $fresh_lock ]]; then
+  ok "the library creates the lock's directory when no unit has"
+else
+  bad "the library creates the lock's directory when no unit has"
+fi
+
+# The three helpers that resolve an installed program are one function: the gate
+# and the apps apply each carried a copy, so a fix to either missed the other.
+check_eq "$(grep -c '^resolve_tool()' scripts/*.sh | awk -F: '{ sum += $2 } END { print sum }')" 1 \
+  "resolve_tool has one definition"
+check_eq "$(DEPLOY_STATE_DIR=$DEPLOY_STATE_DIR bash -c '
+  export DEPLOY_STATE_DIR
+  # shellcheck source=/dev/null
+  source "'"$lib"'"
+  resolve_tool overridden apps-schema /nowhere/apps-schema.py
+')" overridden "resolve_tool keeps its environment override"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 ((fail == 0))

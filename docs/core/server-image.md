@@ -48,7 +48,7 @@ rollback path. Operator-only actions are in `docs/manual-steps.md` section 37.
 | `/usr/libexec/{deploy-state,deploy-drain,deploy-platform,deploy-apps,deploy-poll,deploy-heartbeat}` | `scripts/deploy-*.sh`: the state library, the queue drain (single writer of `state.json`), the platform snapshot gate and stage, the apps apply and revert, the hourly backstop and the five-minute dead-man. |
 | `/usr/libexec/smortress-boot-gate` | `scripts/smortress-boot-gate.sh`: reconciles an interrupted apps apply, then keeps or rolls back the deployment this host just booted. |
 | `/usr/libexec/smortress-deploy` | `scripts/deploy-cli.sh`, staged under the name the runbook uses: `status`, `release --force`, `unblock`, `bootstrap`. |
-| `/usr/lib/systemd/system/smortress-deploy-listener.service` | The listener, `Restart=always`, `Requires=After=sops-decrypt.service`, sandboxed with the state tree as its only writable path. |
+| `/usr/lib/systemd/system/smortress-deploy-listener.service` | The listener, `Restart=always`, `Requires=` and `After=` on `sops-decrypt.service`, sandboxed with the state tree as its only writable path. |
 | `/usr/lib/systemd/system/smortress-deploy.path`, `/usr/lib/systemd/system/smortress-deploy.service` | The queue trigger (`DirectoryNotEmpty=/var/lib/homelab/deploy/queue`) and the one drain of it, `TimeoutStartSec=12600`. |
 | `/usr/lib/systemd/system/smortress-deploy-poll.timer`, `/usr/lib/systemd/system/smortress-deploy-poll.service`, `/usr/lib/systemd/system/smortress-deploy-heartbeat.timer`, `/usr/lib/systemd/system/smortress-deploy-heartbeat.service`, `/usr/lib/systemd/system/smortress-deploy-retry.timer`, `/usr/lib/systemd/system/smortress-boot-gate.service` | The hourly backstop, the dead-man beat for the `deploy` Healthchecks check, the five-minute retry of a deferred queue entry, and the gate that runs `Before=boot-complete.target`. |
 | `/usr/share/smortress/deploy-units.txt` | The units the boot gate requires: what "serving" means for this host. The receiver's own units are deliberately absent — a missing deploy secret must page, not roll the host back. |
@@ -290,23 +290,33 @@ signed request to `http://smortress:8484/v1/deploy`:
 sha256=<hmac>` is computed over the exact bytes that go on the wire, which is why
 the job uses `curl --data-binary` and not `-d` (it strips the newline, the bytes
 stop matching the signature, and the receiver refuses the body it was sent).
+There is no timestamp header: the skew is read from the body's `ts`, the value the
+HMAC covers, so a header and a body cannot disagree about which clock a request
+belongs to.
 
 `smortress-deploy-listener.service` binds `127.0.0.1:8484`; the tailnet side is
 Serve's `--tcp=8484 tcp://127.0.0.1:8484` forward and `8484/tcp` in the
 `tailscale` zone, so no unit binds a wildcard address. The listener verifies the
-HMAC against either rotation slot, the ±300 s timestamp skew, the nonce ring, the
-shape and the repository, refuses a denylisted commit, answers `200` for a commit
-already deployed, and otherwise writes `queue/<uuid>.json` and answers `202`.
-Body cap 64 KiB, 10 s read timeout, queue cap 32 (`429` above it). It resolves no
-tag, checks no signature and writes no deployment state; `nonces.json` and
-`listener.lock` are the only files it owns.
+HMAC against either rotation slot, the ±300 s skew of the body's `ts`, the nonce
+ring, the shape and the repository, refuses a denylisted commit, answers `200` for
+a commit already deployed, and otherwise writes `queue/<uuid>.json` and answers
+`202`. Body cap 64 KiB, 10 s read timeout, at most 32 requests being read at once
+(`503` above it, taken before the first body byte), queue cap 32 (`429` above it).
+Everything a caller without the secret can fail — signature, shape, `ts`, replay —
+is answered before the listener takes its lock and is counted in memory instead of
+journaled, because a journal line is an fsync and `POST /v1/deploy` is reachable
+by anyone on the tailnet; `/healthz` reports that tally beside `status`. It
+resolves no tag, checks no signature and writes no deployment state;
+`nonces.json` and `listener.lock` are the only files it owns.
 
 ### The drain
 
 `smortress-deploy.path` watches the queue with `DirectoryNotEmpty=`, and
 `smortress-deploy.service` drains it as a oneshot under
-`flock /run/smortress/deploy.lock`: strict FIFO, except that a newer request for
-the same repository replaces an older pending one, with one rescan before exit.
+`flock /run/smortress-deploy/deploy.lock` — its own `RuntimeDirectory=`, never
+`/run/smortress`, which holds the decrypted secrets and stays read-only to every
+deploy unit: strict FIFO, except that a newer request for the same repository
+replaces an older pending one, with one rescan before exit.
 It is the single writer of `state.json`. `TimeoutStartSec=7200` bounds a wedged
 drain, and every external command inside it has its own deadline.
 
@@ -335,10 +345,12 @@ fail it identically.
 
 ### Platform: snapshot gate, switch, reboot
 
-`deploy-platform prepare` runs the snapshot gate before anything is staged:
-`smortress-restic-verify --local --json` per restore unit, SSD first and the HDD
-when the SSD is absent, and a unit without a fresh verified snapshot is backed up
-directly with `smortress-restic-backup --unit <unit> --no-maintenance` (1800 s
+`deploy-platform prepare` runs the snapshot gate before anything is staged: one
+read-only `smortress-restic-verify --local --json` answers with a verdict per
+restore unit (newest snapshot for `host,paths`, its `verified` tag, a max age of
+8400 s), SSD first and the HDD when the SSD is absent, and a unit without a fresh
+verified snapshot is backed up directly with
+`smortress-restic-backup --unit <unit> --no-maintenance` (1800 s
 each, 900 s of waiting for the hourly driver's unit lock, 3600 s for the whole
 gate; maintenance is excluded so the gate never waits for a prune). If no local
 repository can take the snapshot, or the budget runs out, the deploy **holds**:
@@ -435,7 +447,8 @@ before and after the reboot:
 
 `/usr/libexec/smortress-deploy` (`scripts/deploy-cli.sh`; root's `PATH` does not
 carry `/usr/libexec`) is the whole operator surface. `status` prints the deployed
-commits, the held and staged records and both denylist tables; `release --force`
+commits, the tenant's apps table, the held and staged records and both denylist
+tables; `release --force`
 waives the snapshot gate for the held digest; `unblock` drops one denylist entry;
 `bootstrap` records the running commit of a restored host, once, and refuses to
 overwrite one. The state

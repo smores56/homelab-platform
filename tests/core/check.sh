@@ -190,12 +190,62 @@ fi
 # implements but the runbook omits is only discoverable by reading the image.
 cli=scripts/deploy-cli.sh
 runbook=docs/manual-steps.md
-mapfile -t cli_verbs < <(sed -nE 's/^[[:space:]]+([a-z]+)\)$/\1/p' "$cli" | sort -u)
+
+# The verbs the dispatch implements: the labels of the top-level `case ... in`
+# block, which is the command switch. The previous derivation matched any indented
+# `word)` line, so a function-local `case` arm or a reformatted block changed the
+# answer silently -- and reading only the usage text would accept a CLI whose
+# usage lists a verb the dispatch no longer has.
+cli_dispatch_verbs() { # <file>
+  awk '
+    /^case .* in$/ { inside = 1; next }
+    inside && /^esac/ { inside = 0; next }
+    inside {
+      line = $0
+      sub(/^[[:space:]]+/, "", line)
+      if (line ~ /^[a-z][a-z0-9-]*\)$/) { sub(/\)$/, "", line); print line }
+    }
+  ' "$1" | sort -u
+}
+
+# The verbs the usage block promises: a line whose first word is the program,
+# optionally after `usage: `. Prose does not start with the program name, so a
+# sentence like "the smortress-deploy path" is not a verb.
+cli_usage_verbs() { # <file>
+  sed -nE 's/^[[:space:]]*(usage:[[:space:]]+)?smortress-deploy[[:space:]]+([a-z][a-z0-9-]*).*/\2/p' "$1" |
+    sort -u
+}
+
+# The usage block must name every verb the dispatch implements, or the CLI has a
+# command nobody can find. Fewer documented verbs than dispatched ones is the
+# failure this names instead of quietly checking nothing.
+cli_usage_complete() { # <file>
+  local -a dispatched=() usage=()
+  local verb
+  mapfile -t dispatched < <(cli_dispatch_verbs "$1")
+  mapfile -t usage < <(cli_usage_verbs "$1")
+  ((${#dispatched[@]})) || return 1
+  for verb in "${dispatched[@]}"; do
+    printf '%s\n' "${usage[@]}" | grep -qx -- "$verb" || return 1
+  done
+}
+
+# A verb a document runs, as opposed to one it mentions: the program is spelled
+# as the installed path, at the start of the line (after a prompt, a code fence
+# or `sudo`). This is what stops "the smortress-deploy path" being read as a verb
+# named `path` and failing the check that every documented verb exists.
+cli_documented_verbs() { # <files...>
+  grep -rhoE '^[[:space:]]*(```[a-z]*[[:space:]]*)?(\$[[:space:]]+)?(sudo[[:space:]]+)?/usr/libexec/smortress-deploy[[:space:]]+[a-z][a-z0-9-]*' "$@" |
+    awk '{ print $NF }' | sort -u
+}
+
+mapfile -t cli_verbs < <(cli_dispatch_verbs "$cli")
 checks=$((checks + 1))
-if ((${#cli_verbs[@]})) && printf '%s\n' "${cli_verbs[@]}" | grep -qx bootstrap; then
-  pass "the operator CLI implements the verbs the design names"
+if cli_usage_complete "$cli" &&
+  printf '%s\n' "${cli_verbs[@]}" | grep -qx bootstrap; then
+  pass "the operator CLI implements the verbs the design names and documents them all"
 else
-  fail "the operator CLI does not implement release/status/unblock/bootstrap"
+  fail "the operator CLI does not implement or document release/status/unblock/bootstrap"
 fi
 for verb in "${cli_verbs[@]}"; do
   checks=$((checks + 1))
@@ -209,13 +259,73 @@ done
 checks=$((checks + 1))
 undocumented=
 while IFS= read -r verb; do
+  [[ -n $verb ]] || continue
   printf '%s\n' "${cli_verbs[@]}" | grep -qx -- "$verb" || undocumented+="$verb "
-done < <(grep -rhoE 'smortress-deploy [a-z]+' docs README.md | awk '{ print $2 }' | sort -u)
+done < <(cli_documented_verbs docs README.md)
 if [[ -n $undocumented ]]; then
-  fail "the docs name ${undocumented}but the CLI does not implement it"
+  fail "the docs run ${undocumented}but the CLI does not implement it"
 else
   pass "every documented smortress-deploy verb exists"
 fi
+
+# The derivation, held against edits of the files it reads. A reformatted usage
+# block still yields the four verbs, a usage block that dropped a dispatched verb
+# fails instead of shrinking the set, and a sentence about the program is not an
+# invocation.
+verb_fixture=$(mktemp -d)
+cat >"$verb_fixture/cli.sh" <<'FIXTURE'
+#!/usr/bin/env bash
+usage() {
+  cat >&2 <<'EOF'
+usage: smortress-deploy status
+       smortress-deploy release --force
+       smortress-deploy unblock <commit|digest> <value>
+       smortress-deploy bootstrap <repo> <commit>
+
+  the smortress-deploy path from the runbook)
+EOF
+}
+cmd=${1-}
+case $cmd in
+  status)
+    shift
+    ;;
+  release)
+    shift
+    ;;
+  unblock)
+    shift
+    ;;
+  bootstrap)
+    shift
+    ;;
+  *)
+    exit 2
+    ;;
+esac
+FIXTURE
+checks=$((checks + 1))
+if cli_usage_complete "$verb_fixture/cli.sh" &&
+  [[ $(cli_dispatch_verbs "$verb_fixture/cli.sh" | tr '\n' ' ') == 'bootstrap release status unblock ' ]]; then
+  pass 'the verb derivation survives a reformatted usage block and prose'
+else
+  fail "the verb derivation found '$(cli_dispatch_verbs "$verb_fixture/cli.sh" | tr '\n' ' ')'"
+fi
+checks=$((checks + 1))
+sed '/smortress-deploy bootstrap <repo>/d' "$verb_fixture/cli.sh" >"$verb_fixture/cli-dropped.sh"
+if cli_usage_complete "$verb_fixture/cli-dropped.sh"; then
+  fail 'a usage block missing a dispatched verb was accepted'
+else
+  pass 'a usage block missing a dispatched verb fails loudly'
+fi
+checks=$((checks + 1))
+printf 'See the smortress-deploy path from the runbook.\n' >"$verb_fixture/runbook.md"
+if [[ -n $(cli_documented_verbs "$verb_fixture/runbook.md") ]]; then
+  fail "prose is read as a documented verb: $(cli_documented_verbs "$verb_fixture/runbook.md")"
+else
+  pass 'prose about the program is not a documented verb'
+fi
+rm -rf "$verb_fixture"
 
 # `--force` is not decoration: release refuses without it, so a runbook that
 # dropped the flag would document a command that always exits 2.
