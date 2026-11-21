@@ -66,10 +66,12 @@ key names are visible and no identity is needed.
 
 `CODEOWNERS` names the operator for `.github/**`, `CODEOWNERS` itself and
 `.sops.yaml`: an app-only PR needs no human approval, while a PR that changes
-the check or the recipient list cannot merge without one. Required signed
-commits are not enforced yet — no unattended signing key exists — and the
-broker holds no `pull_requests: write` on the tenant repository, so the agent
-cannot yet open the PR it is meant to auto-merge.
+the check or the recipient list cannot merge without one. **Signed commits are
+not required**, by operator decision: the agent runs unattended, so a signature
+would prove possession of a key that has to live on the machine, not that a
+human approved anything. The broker does not yet hold `pull_requests: write`
+on the tenant repository, so the agent cannot open the PR it is meant to
+auto-merge.
 
 ## Bounds
 
@@ -177,8 +179,8 @@ The deploy starts `smortress-app-ingress@<name>` for every app in the plan and
 stops the instances for apps that left it.
 
 The receiver task (#798) owns the remaining half: fetch the pushed commit, require it
-to be the tip of `homelab-apps` `main`, descend from the deployed commit, and
-carry a valid signature; re-run the validator from the image; pull each app image by digest as the
+to be the tip of `homelab-apps` `main` and to descend from the deployed commit;
+re-run the validator from the image; pull each app image by digest as the
 tenant user with `--signature-policy=/usr/share/smortress/apps-policy.json`
 (the host policy still rejects it for root); install the rendered units into
 `~apps/.config/containers/systemd`, create the tenant's Podman secrets from its
