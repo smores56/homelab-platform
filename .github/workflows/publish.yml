@@ -67,9 +67,23 @@ jobs:
           diff -u image/cosign.pub "$RUNNER_TEMP/cosign.pub"
 
       - name: build
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # A sibling package, never IMAGE_REPO: the cache is a pile of unsigned
+          # intermediate manifests and must not sit where a pullable image is
+          # expected.
+          CACHE_REPO: ghcr.io/smores56/smorespro-image-cache
         run: |
           set -euo pipefail
           . image/pins.env
+          # The cache push happens inside the build, so the login precedes it;
+          # push and cosign reuse the authfile.
+          mkdir -p "$RUNNER_TEMP/docker"
+          authfile="$RUNNER_TEMP/docker/config.json"
+          echo "$GITHUB_TOKEN" | podman login ghcr.io -u "${{ github.actor }}" \
+            --password-stdin --authfile "$authfile"
+          echo "DOCKER_CONFIG=$RUNNER_TEMP/docker" >>"$GITHUB_ENV"
+          echo "REGISTRY_AUTH_FILE=$authfile" >>"$GITHUB_ENV"
           # The base is a moving release tag; the build resolves it and records
           # the digest in the image's org.opencontainers.image.base.digest label.
           case "$BASE_IMAGE" in
@@ -92,6 +106,9 @@ jobs:
           done
           tag="sha-$(git rev-parse --short=12 HEAD)"
           echo "TAG=$tag" >>"$GITHUB_ENV"
+          # A cache key covers the parent layer and the instruction text, not the
+          # repositories it reads, so the layer is reused while the base tag
+          # resolves to the same digest. A failing cache push fails the build.
           podman build \
             --build-arg "BASE_IMAGE=$BASE_IMAGE" \
             --build-arg "BASE_DIGEST=$base_digest" \
@@ -99,24 +116,19 @@ jobs:
             --build-arg "NYM_SHA256_AMD64=$NYM_SHA256_AMD64" \
             --build-arg "NYM_SHA256_ARM64=$NYM_SHA256_ARM64" \
             --label "org.opencontainers.image.revision=$(git rev-parse HEAD)" \
+            --cache-from "$CACHE_REPO" \
+            --cache-to "$CACHE_REPO" \
             -f image/Containerfile \
             -t "${IMAGE_REPO}:${tag}" \
             -t "${IMAGE_REPO}:latest" \
             .
 
       - name: push the digest tag
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           . image/pins.env
-          mkdir -p "$RUNNER_TEMP/docker"
-          authfile="$RUNNER_TEMP/docker/config.json"
-          echo "DOCKER_CONFIG=$RUNNER_TEMP/docker" >>"$GITHUB_ENV"
-          echo "REGISTRY_AUTH_FILE=$authfile" >>"$GITHUB_ENV"
-          echo "$GITHUB_TOKEN" \
-            | podman login ghcr.io -u "${{ github.actor }}" --password-stdin --authfile "$authfile"
-          podman push "${IMAGE_REPO}:${TAG}" --authfile "$authfile" --digestfile "$RUNNER_TEMP/digest"
+          podman push "${IMAGE_REPO}:${TAG}" --authfile "$REGISTRY_AUTH_FILE" \
+            --digestfile "$RUNNER_TEMP/digest"
           echo "IMAGE_DIGEST=$(cat "$RUNNER_TEMP/digest")" >>"$GITHUB_ENV"
 
       # --new-bundle-format=false keeps the signature in the .sig lookaside tag
