@@ -1,8 +1,17 @@
 # The personal deployment's only network, and the reason it has no route off the
-# host. `Internal=true` makes podman create a bridge with no default route and no
-# NAT: the model server and the personal gateway resolve and reach each other by
-# container name, and nothing on this network can reach anything else -- not the
-# host's other networks, not the LAN, not the internet.
+# host.
+#
+# It is deliberately NOT `Internal=true`. Netavark builds no DNAT rules at all
+# for an internal network (`src/firewall/nft.rs`: `if !setup_portfw.internal`),
+# so a `PublishPort=` on one is silently dead -- which is what left the personal
+# gateway and web UI unreachable while their containers ran and listened. Egress
+# is denied by the route instead: `no_default_route=true` keeps the bridge
+# forwarding-enabled, so the host (and through it Tailscale Serve) reaches a
+# published port, while the container gets no default route, so nothing on this
+# network can reach the LAN or the internet.
+#
+# The model server, the gateway, the facade and the web UI reach each other by
+# container name, as before.
 #
 # Reachability from the tailnet is unaffected: the gateway publishes on
 # 127.0.0.1 (units/quadlet/agent-local.container) and Tailscale Serve forwards to
@@ -12,4 +21,4 @@
 Description=Smortress agent-local network (no egress)
 
 [Network]
-Internal=true
+Options=no_default_route=true

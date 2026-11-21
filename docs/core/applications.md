@@ -249,16 +249,22 @@ the other side's sources.
 
 | Deployment | Quadlets | Network | May reach | May not reach |
 | --- | --- | --- | --- | --- |
-| Personal | `agent-local`, `agent-model`, `agent-facade-personal`, `agent-webui-personal` | `agent-local.network`, `Internal=true` | each other, by container name | the internet, the LAN, the host, the general deployment -- no default route exists |
+| Personal | `agent-local`, `agent-model`, `agent-facade-personal`, `agent-webui-personal` | `agent-local.network`, `no_default_route=true` | each other, by container name; the host reaches their published ports | the internet, the LAN, the general deployment -- no default route exists |
 | General | `agent-general`, `agent-proxy`, `agent-facade-general`, `agent-webui-general` | `agent-general.network`, a plain bridge | the pinned provider, through the proxy; each other, by container name | the personal deployment, every personal source |
 
 The personal gateway publishes `127.0.0.1:18001`; the general one publishes
 `127.0.0.1:18002`; the proxy publishes `127.0.0.1:18003`; the personal web UI
 publishes `127.0.0.1:18006` and the general one `127.0.0.1:18007`. The two facades
-publish nothing at all. A published port is
-host-side DNAT *toward* a container, so it adds nothing to what that container can
-dial: the personal side still has no route off the host, which is why the sealed
-profile is a network property and not a firewall exception.
+publish nothing at all.
+
+Publishing is the reason `agent-local.network` is not `Internal=true`. Netavark
+creates no port-forwarding DNAT rules for an internal network and adds
+bidirectional isolation drops, so a published port on one is silently dead: the
+container listens, the unit is green, and the host cannot connect. Egress is
+denied by the route instead (`Options=no_default_route=true`): the bridge still
+forwards, so the host -- and through it Tailscale Serve -- reaches the published
+port, while the container has no route off its own subnet. That is still a
+network property, not a firewall exception.
 
 ### Collectors
 
@@ -575,11 +581,14 @@ successful start — it is proven by serving representative data from it.
   source, holds no credential it could leak beyond its own revocable gateway key,
   and its tool output can still carry whatever the hosted model reads. Treat
   anything it fetches as untrusted input, not as data the personal side may act on.
-- The personal deployment has no egress at all, which is verified as a network
-  property (`Internal=true`, no default route) rather than as a firewall rule. A
-  future change that attaches a second network to `agent-local` would silently
-  undo it; `tests/core/app-quadlets.sh` asserts the unit declares exactly one
-  network, and which one.
+- The personal deployment has no egress at all, which is verified as a route
+  property (`Options=no_default_route=true`) rather than as a firewall rule. It
+  cannot be `Internal=true` as well: netavark skips port forwarding for internal
+  networks, which is what silently killed the gateway's and the web UI's
+  published ports until the network was changed. A future change that attaches a
+  second network to `agent-local` could add a default route with it;
+  `tests/core/app-quadlets.sh` asserts the unit declares exactly one network and
+  which one, and that no publishing container sits on an internal network.
 - The runtime's defaults are broad: `computer_use`, `cronjob`, `delegation`,
   `skills`, `image_gen`, `connections` and `session_search` are enabled unless the
   config says otherwise, and disabling is per toolset with no per-tool switch.

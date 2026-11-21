@@ -177,7 +177,7 @@ with `Entrypoint=python3` replacing the image's gateway dispatcher:
 
 | Quadlet | Container name | Network | Port | Writable mounts |
 | --- | --- | --- | --- | --- |
-| `agent-facade-personal` | `smortress-agent-facade-personal` | `agent-local.network` (internal, no egress) | `18004` | `/memory` = `state/agent-local/memory`; `/index` = `state/agent-local/index` |
+| `agent-facade-personal` | `smortress-agent-facade-personal` | `agent-local.network` (no default route) | `18004` | `/memory` = `state/agent-local/memory`; `/index` = `state/agent-local/index` |
 | `agent-facade-general` | `smortress-agent-facade-general` | `agent-general.network` | `18005` | `/memory` = `state/agent-general/memory` |
 
 Neither publishes a port. The only client is that deployment's gateway, which

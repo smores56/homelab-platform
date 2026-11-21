@@ -4264,16 +4264,21 @@ A `Permission denied` under `/opt/data` means the remap did not run: check that
 the same network would read it.
 
 The personal side must have no egress, and that is checked from inside its own
-namespace, not from the host:
+namespace, not from the host. The network has no default route, so a name may
+still resolve through the bridge resolver while no connection can leave the
+subnet; the route and the failed connection are the proof, not the lookup:
 
 ```sh
+sudo podman exec smortress-agent-model ip route
 sudo podman exec smortress-agent-local python3 -c \
   'import socket; socket.create_connection(("1.1.1.1", 443), 3)' ; echo "exit=$?"
-sudo podman exec smortress-agent-model getent hosts example.com ; echo "exit=$?"
+sudo podman exec smortress-agent-local python3 -c \
+  'import socket; print(socket.create_connection(("smortress-agent-model", 8080), 3))'
 ```
 
-Both must fail (`exit=1` from `python3` or `getent`); the model call above still
-succeeding is what makes the failure meaningful.
+The first prints a subnet route and no `default`; the second must fail; the third
+must connect, because the model call above still succeeding is what makes the
+failure meaningful.
 
 ### 40.10 Check the two Serve routes
 

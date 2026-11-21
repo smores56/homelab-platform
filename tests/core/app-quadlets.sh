@@ -461,7 +461,7 @@ for q in "${app_quadlets[@]}"; do
 done
 
 # 11. The agent deployments (#711). Two networks split by authority: the personal
-#     side has one internal network and therefore no route off the host, the
+#     side denies egress with a route and therefore has no way off the host, the
 #     general side has egress and is the only side that can spend a hosted key --
 #     which it does not hold. These are the properties a misread of the units
 #     would silently undo.
@@ -472,10 +472,19 @@ agent_proxy=units/quadlet/agent-proxy.container
 agent_templates=(image/rootfs/etc/smortress/agent/local-config.yaml
   image/rootfs/etc/smortress/agent/general-config.yaml)
 
-if grep -q '^Internal=true$' units/quadlet/agent-local.network; then
-  ok 'the personal network has no egress'
+# `Internal=true` cannot be the personal side's answer: netavark skips port
+# forwarding entirely for internal networks, so the gateway and the web UI would
+# listen while their published ports stayed dead. Egress is denied by the route.
+if grep -qxF 'Options=no_default_route=true' units/quadlet/agent-local.network; then
+  ok 'the personal network has no default route'
 else
-  bad 'the personal network has no egress'
+  bad 'the personal network has no default route'
+fi
+if grep -q '^Internal=' units/quadlet/agent-local.network; then
+  bad 'the personal network is not an internal network' \
+    'Internal=true disables the published ports'
+else
+  ok 'the personal network is not an internal network'
 fi
 if grep -q '^Internal=' units/quadlet/agent-general.network; then
   bad 'the general network has egress'
@@ -486,13 +495,13 @@ for q in "$agent_local" "$agent_general" "$agent_model" "$agent_proxy"; do
   eq "$(grep -c '^Network=' "$q")" 1 "$q declares exactly one network"
 done
 eq "$(sed -n 's/^Network=//p' "$agent_local")" agent-local.network \
-  'the personal gateway is on the internal network only'
+  'the personal gateway is on the sealed network only'
 eq "$(sed -n 's/^Network=//p' "$agent_general")" agent-general.network \
   'the general gateway is on the egress network only'
 eq "$(sed -n 's/^Network=//p' "$agent_proxy")" agent-general.network \
   'the proxy is on the egress network only'
 eq "$(sed -n 's/^Network=//p' "$agent_model")" agent-local.network \
-  'the model server is on the internal network only'
+  'the model server is on the sealed network only'
 
 # The stateful runtimes cannot be read-only; the model server can, and the proxy
 # holds the credential file, so it is.
@@ -843,6 +852,21 @@ for net in "${!net_pins[@]}"; do
     bad "every container on $net pins its address" \
       "${net_unpinned[$net]}unpinned, would race for ${net_pins[$net]%% *}"
   fi
+done
+
+# 7c. A published port on an internal network is silently dead: netavark skips
+#     DNAT (`if !setup_portfw.internal`) and adds bidirectional isolation drops.
+#     The container listens, the unit is green, and the host cannot connect --
+#     the personal gateway and web UI were unreachable this way. Any container
+#     that publishes must therefore be off every `Internal=true` network.
+for q in units/quadlet/*.container; do
+  grep -q '^PublishPort=' "$q" || continue
+  while IFS= read -r spec; do
+    net=${spec%%:*}
+    if grep -qxF 'Internal=true' "units/quadlet/$net"; then
+      bad "$q publishes from a network that forwards" "$net is Internal=true"
+    fi
+  done < <(sed -n 's/^Network=//p' "$q")
 done
 
 # 8. The collectors: the only processes with egress that write into the personal
