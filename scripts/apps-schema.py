@@ -378,7 +378,21 @@ def mcs_levels(names: list[str]) -> dict[str, tuple[int, int]]:
 
 
 def network_for(egress: str) -> str:
+    """The podman network the container joins, as the plan records it."""
     return "pasta" if egress == "internet" else INTERNAL_NETWORK
+
+
+def quadlet_network(egress: str) -> str:
+    """The value a rendered unit uses for `Network=`.
+
+    Quadlet links a container to a Quadlet network only when the reference
+    ends in `.network`; a bare name is looked up as an already-existing podman
+    network, so the unit that creates it is never pulled in and the container
+    fails with "network not found". `NetworkName=` in the `.network` unit keeps
+    the network itself named `INTERNAL_NETWORK`, which is what `plan.json`
+    records and what the deploy expects to find.
+    """
+    return network_for(egress) if egress == "internet" else f"{INTERNAL_NETWORK}.network"
 
 
 def render_unit(name: str, data: dict[str, Any], loopback: int, level: tuple[int, int]) -> str:
@@ -394,7 +408,7 @@ def render_unit(name: str, data: dict[str, Any], loopback: int, level: tuple[int
         "[Container]",
         f"Image={data['image']}",
         f"ContainerName=smortress-app-{name}",
-        f"Network={network_for(data['egress'])}",
+        f"Network={quadlet_network(data['egress'])}",
         f"PublishPort=127.0.0.1:{loopback}:{data['port']}",
         f"Volume={DATA_ROOT}/{name}:/data:Z",
         "ReadOnly=true",
@@ -433,6 +447,9 @@ def render_network() -> str:
         "Description=apps tenant internal network\n"
         "\n"
         "[Network]\n"
+        # The unit stem would otherwise become `systemd-smortress-apps`, while
+        # every consumer names the network `smortress-apps`.
+        f"NetworkName={INTERNAL_NETWORK}\n"
         # No route out of the namespace; the loopback publish for Serve remains.
         "Internal=true\n"
     )
