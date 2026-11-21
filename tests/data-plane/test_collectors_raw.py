@@ -574,6 +574,38 @@ class BraveTests(unittest.TestCase):
                 replica.metadata("brave::table::visits")["rows"], 1
             )
 
+    def test_a_text_column_with_invalid_utf8_is_carried_as_bytes(self) -> None:
+        # Brave's own tables hold binary values in TEXT-affinity columns: `meta`
+        # has one for several keys. sqlite3 decodes TEXT to str before this module
+        # sees the value, so a column like that aborts the whole dump with
+        # `Could not decode to UTF-8` unless the connection hands it back raw.
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            database = root / "History"
+            self._database(database)
+            connection = sqlite3.connect(database)
+            try:
+                connection.execute("CREATE TABLE meta (key TEXT, value TEXT)")
+                connection.execute(
+                    "INSERT INTO meta VALUES ('binary', CAST(X'FFFE68' AS TEXT))"
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            generation = _generation(root / "replica")
+            collect_brave_db(
+                database,
+                generation,
+                device="smortress",
+                profile="Default",
+                captured_at=CAPTURED,
+            )
+            _publish(generation)
+
+            dump = json.loads(RawReplica(root / "replica").read("brave::table::meta"))
+            self.assertEqual(dump["rows"], [["binary", {"b64": "//5o"}]])
+
     def test_a_wal_sibling_is_a_refusal(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
