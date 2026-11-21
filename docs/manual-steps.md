@@ -6004,6 +6004,17 @@ the list gets the job rejected with `Branch "<ref>" is not allowed to deploy to
 <environment> due to environment protection rules.` and no step runs, so no
 secret is injected. The runtime proof is in 48.5.
 
+A `pull_request` run is not evaluated as the head branch. GitHub sees
+`refs/pull/<n>/merge`, so the `smores/*` policy does not match it and
+`tofu-plan-pr.yml` is refused for every PR, including this repository's own
+`smores/*` branches (observed run `44872568178` on PR #94: `Branch
+"refs/pull/94/merge" is not allowed to deploy to cloudflare-plan`). The
+policy list is still the intended one, but the pre-merge plan does not execute
+until either `refs/pull/*/merge` is allowed (which also admits agent and fork
+PRs to the read-only plan) or the plan moves to a `push` on `smores/*` (a
+workflow change, not part of this step). The required check therefore fails by
+construction today; the owner's `--admin` merge is what lands a PR.
+
 ### 48.5 Prove the ceiling
 
 Git's credential helper is the trap. `~/.config/git/config` contains
@@ -6181,6 +6192,11 @@ Accepted on 2026-11-21:
   1 item 3 is absent on `homelab-platform`, `nix-config`, and `kanbei`.
 - The 60 archived repositories are excluded; a private archived history is not
   readable by the machine user.
+- `cloudflare-plan`'s `main`/`smores/*` policy does not match a
+  `pull_request` run's `refs/pull/<n>/merge`; the plan check is refused for
+  every PR (recorded run `44872568178`). Fixing it is a separate decision:
+  allow `refs/pull/*/merge` (read-only plan for every PR, including agent and
+  fork PRs) or trigger the plan on `smores/*` pushes.
 - The `sdlc` approval author check in 48.6 is missing.
 
 The standard-practice replacement is a GitHub App installation token minted by
