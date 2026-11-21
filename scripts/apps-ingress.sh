@@ -53,7 +53,7 @@ if [[ ! $name =~ ^[a-z]([a-z0-9-]{0,29}[a-z0-9])?$ ]]; then
   exit 2
 fi
 
-if ! problems=$("$schema" verify-plan "$plan" 2>&1); then
+if ! problems=$("$schema" verify-plan --plan "$plan" 2>&1); then
   printf 'apps-ingress: %s is not accepted:\n%s\n' "$plan" "$problems" >&2
   exit 1
 fi

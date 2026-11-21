@@ -80,7 +80,11 @@ exec /usr/bin/id "$@"
 EOF
 cat >"$work/bin/schema" <<'EOF'
 #!/usr/bin/env bash
+# Mimic the shipped CLI: verify-plan takes --plan, and anything else is a usage
+# error. A stub that accepts any argv would let a wrong invocation ship.
 printf 'schema %s\n' "$*" >>"$FAKE_LOG"
+[[ ${1-} == verify-plan ]] || { echo "fake schema: unknown command ${1-}" >&2; exit 2; }
+[[ ${2-} == --plan ]] || { echo 'usage: apps-schema verify-plan --plan PLAN' >&2; exit 2; }
 [[ ${FAKE_SCHEMA_REJECT:-} == 1 ]] && { echo "plan: foreign path"; exit 1; }
 exit 0
 EOF
@@ -121,7 +125,7 @@ if [[ $host_line != *'0.0.0.0'* && $host_line != *'[::]'* ]]; then
 else
   bad 'nothing listens off loopback' "$host_line"
 fi
-contains "$(cat "$work/first.log")" 'schema verify-plan ' 'the plan is verified before anything listens'
+contains "$(cat "$work/first.log")" 'schema verify-plan --plan ' 'the plan is verified before anything listens'
 
 # The name becomes a path component, so only a schema-shaped name is accepted,
 # and nothing is started for a name the plan does not carry.
