@@ -442,3 +442,16 @@ jobs:
             fi
           done
           tests/policies/apiserver.sh stop || true
+
+  check-all:
+    name: check-all self-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      # The driver decides which groups a branch runs; a bad selector is a green
+      # run that tested nothing, so its logic carries its own test.
+      - name: run the pre-commit driver self-test
+        run: tests/check-all/check.sh
