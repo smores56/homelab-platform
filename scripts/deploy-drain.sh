@@ -169,6 +169,14 @@ drain_verify() {
       fi
       return 3
       ;;
+    5)
+      # No image for this commit: not a rejection, not an outage. The entry is
+      # final either way, and the caller journals it as its own event so an
+      # hourly poll over a docs-only commit does not look like a failure.
+      verify_reason=$(jq -er '.reason' <<<"$verify_verdict" 2>/dev/null) || verify_reason=tag-missing
+      verify_verdict=
+      return 5
+      ;;
     *)
       # Anything else -- exit 4, a crash, the deadline -- says nothing about the
       # commit, so the entry keeps its place in the queue.
@@ -253,6 +261,7 @@ fi
 
 drained=0
 rejected=0
+not_deployable=0
 held=0
 refused=0
 noop=0
@@ -417,6 +426,17 @@ while :; do
       say "$repo $commit: rejected ($verify_reason)"
       rejected=$((rejected + 1))
       ;;
+    5)
+      # The commit has no image (a docs-only or test-only main commit): nothing
+      # will change until an image-bearing commit, so this is not a failure, not
+      # a denylist entry and not a page.
+      journal_append verify-not-deployable "$(jq -nc --arg id "$id" --arg repo "$repo" \
+        --arg commit "$commit" --arg reason "$verify_reason" \
+        '{id:$id,repo:$repo,commit:$commit,reason:$reason}')" ||
+        warn "cannot journal the not-deployable verdict for $id"
+      say "$repo $commit: no image for this commit"
+      not_deployable=$((not_deployable + 1))
+      ;;
     *)
       defer_entry "$id" "$verify_reason"
       ;;
@@ -435,7 +455,9 @@ done
 journal_append drain-finish "$(jq -nc --argjson drained "$drained" --argjson rejected "$rejected" \
   --argjson held "$held" --argjson refused "$refused" \
   --argjson noop "$noop" --argjson superseded "$superseded" --argjson invalid "$invalid" \
+  --argjson not_deployable "$not_deployable" \
   '{drained:$drained,rejected:$rejected,held:$held,refused:$refused,
-    noop:$noop,superseded:$superseded,invalid:$invalid}')" ||
+    noop:$noop,superseded:$superseded,invalid:$invalid,
+    notDeployable:$not_deployable}')" ||
   warn "cannot journal the drain finish"
-say "drained $drained, rejected $rejected, held $held, refused $refused, no-op $noop, superseded $superseded, invalid $invalid"
+say "drained $drained, rejected $rejected, held $held, refused $refused, no-op $noop, not-deployable $not_deployable, superseded $superseded, invalid $invalid"

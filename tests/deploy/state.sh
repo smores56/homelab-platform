@@ -553,6 +553,28 @@ check_eq "$(grep -c '"event":"verified"' "$DEPLOY_STATE_DIR/journal.jsonl")" 2 \
 check_eq "$(grep -c '"event":"verify-rejected"' "$DEPLOY_STATE_DIR/journal.jsonl")" 0 \
   "no request is rejected on a cached tip"
 
+# --- a commit with no image is skipped, not paged ----------------------------
+# The publish workflow only builds image-bearing paths, so the poll sees a main
+# tip with no tag. That must pop the entry without a rejection page or a
+# denylist entry, or a docs-only commit would page every hour.
+cat >"$work/fake-verify-noimage" <<STUB
+#!/usr/bin/env bash
+printf '{"verdict":"not-deployable","reason":"tag-missing","repo":"%s","commit":"%s"}\n' "\$2" "\$4"
+exit 5
+STUB
+chmod 0755 "$work/fake-verify-noimage"
+rm -f "$DEPLOY_STATE_DIR"/queue/*.json
+: >"$DEPLOY_STATE_DIR/journal.jsonl"
+queue_seed "$id_c" homelab-platform 92 "$sha_old"
+DEPLOY_VERIFY_BIN=$work/fake-verify-noimage DEPLOY_DRAIN_RESCAN_PAUSE=0 \
+  timeout 30 bash "$drain" >/dev/null 2>&1
+check_eq "$(grep -c '"event":"verify-not-deployable"' "$DEPLOY_STATE_DIR/journal.jsonl")" 1 \
+  "a commit without an image is journaled as not deployable"
+check_eq "$(grep -c '"event":"verify-rejected"' "$DEPLOY_STATE_DIR/journal.jsonl")" 0 \
+  "a commit without an image is not a rejection"
+check_eq "$(find "$DEPLOY_STATE_DIR/queue" -name '*.json' | wc -l)" 0 \
+  "the skipped entry is popped"
+
 # --- the deploy lock ---------------------------------------------------------
 # The drain unit, the hourly poll and the CLI all write state.json; the lock is
 # what keeps one of them from losing another's write.

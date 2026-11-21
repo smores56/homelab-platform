@@ -90,6 +90,17 @@ class Failure(Exception):
         self.detail = detail
 
 
+class NotDeployable(Failure):
+    """The commit has no image yet: a test-only or docs-only main commit.
+
+    The registry tag is derived from the commit, and the publish workflow only
+    runs when an image-bearing path changes, so most commits on main have no
+    image. That is not a failure: it is refused without a denylist entry, without
+    a page, and without a retry, because nothing will change until the next
+    image-bearing commit.
+    """
+
+
 class Refused(Failure):
     """A verdict about the commit: exit 3. No later attempt changes it."""
 
@@ -374,7 +385,7 @@ def resolve_digests(commit: str) -> Resolved:
     base = f"/v2/{IMAGE_REPO}"
     reply = registry_get(f"{base}/manifests/{tag}", token, INDEX_ACCEPT)
     if reply.status == 404:
-        raise Refused("tag-missing", f"{IMAGE_REPO}:{tag} is not published")
+        raise NotDeployable("tag-missing", f"{IMAGE_REPO}:{tag} is not published")
     if reply.status != 200:
         raise Infrastructure(f"http-{reply.status}", f"{base}/manifests/{tag}")
     document = _document(reply, f"{base}/manifests/{tag}")
@@ -538,6 +549,10 @@ def main(argv: list[str]) -> int:
     base = {"repo": args.repo, "commit": args.commit}
     try:
         verdict = verify(args.repo, args.commit)
+    except NotDeployable as failure:
+        emit({"verdict": "not-deployable", "reason": failure.reason, **base, **_detail(failure)})
+        log(f"{args.repo} {args.commit}: not deployable ({failure.reason})")
+        return 5
     except Refused as failure:
         emit({"verdict": "rejected", "reason": failure.reason, **base, **_detail(failure)})
         log(f"{args.repo} {args.commit}: rejected ({failure.reason}) {failure.detail}".rstrip())

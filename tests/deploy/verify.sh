@@ -403,7 +403,11 @@ check_json "$out" .reason label-missing "a missing revision label is its own rea
 # --- the tag ------------------------------------------------------------------
 scenario '.tag.found = false'
 run_verify homelab-platform "$commit"
-check_eq "$rc" 3 "a commit with no published image is rejected"
+# Most main commits carry no image: the publish workflow only runs for
+# image-bearing paths. That is not a failure, so it gets its own exit and is
+# neither denylisted nor paged.
+check_eq "$rc" 5 "a commit with no published image is not deployable"
+check_json "$out" .verdict not-deployable "a missing tag has its own verdict"
 check_json "$out" .reason tag-missing "a missing tag is its own reason"
 
 # A tag that is a plain amd64 manifest records both forms as that one digest.
