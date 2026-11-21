@@ -293,6 +293,8 @@ jobs:
         run: tests/deploy/state.sh
       - name: deploy receiver tests
         run: tests/deploy/receiver.sh
+      - name: deploy verify tests
+        run: tests/deploy/verify.sh
 
   action-pins:
     name: action SHA pins

@@ -25,6 +25,9 @@ deploy_state_file=$deploy_state_dir/state.json
 deploy_journal=$deploy_state_dir/journal.jsonl
 deploy_journal_rotated=$deploy_state_dir/journal.1.jsonl
 deploy_denylist_file=$deploy_state_dir/denylist.json
+# The verifier's 120 s API cache. Written by deploy-verify while the drain holds
+# the lock, so no helper here writes it; only clearing it.
+deploy_cache_file=$deploy_state_dir/cache.json
 deploy_queue_dir=$deploy_state_dir/queue
 deploy_work_dir=$deploy_state_dir/work
 
@@ -122,9 +125,40 @@ state_field() { record_field state "$1"; }
 
 # The deployed commit for a repository, or nothing when the state has none: a
 # listener that cannot answer "already deployed" queues one redundant request,
-# which is the safe direction.
-state_deployed_commit() {
+# which is the safe direction. Every consumer that needs an ancestor (verifying a
+# descendancy, checking a boot) asks here rather than parsing state.json itself.
+deployed_commit() {
   state_field "repos.$1.commit" 2>/dev/null
+}
+
+# state_record_verified <repo> <commit> [<index-digest>] [<manifest-digest>]
+#
+# What the host is running now, written only after a deployment lands. Journaled
+# first: a crash between the two calls leaves the journal as the truth and this
+# file rebuildable, which is the rule for every record here. Both digest forms
+# are stored because bootc reports either the index digest or the platform
+# manifest digest, and the boot gate compares what it reports to what is here.
+state_record_verified() {
+  local repo=$1 commit=$2 index=${3:-} manifest=${4:-} current
+  [[ -n $repo && -n $commit ]] || return 2
+  case $repo in
+    homelab-platform | homelab-apps) ;;
+    *) return 2 ;;
+  esac
+  journal_append state-verified "$(jq -nc --arg repo "$repo" --arg commit "$commit" \
+    --arg index "$index" --arg manifest "$manifest" \
+    '{repo:$repo,commit:$commit,indexDigest:$index,manifestDigest:$manifest}')" || return 1
+  current=$(state_read 2>/dev/null) || current='{}'
+  jq -c --arg repo "$repo" --arg commit "$commit" --arg index "$index" --arg manifest "$manifest" \
+    --arg now "$(deploy_now)" '
+      . as $s
+      | {schema: ($s.schema // 1),
+         repos: (($s.repos // {}) | .[$repo] = ({commit: $commit}
+           + (if $index == "" then {} else {indexDigest: $index} end)
+           + (if $manifest == "" then {} else {manifestDigest: $manifest} end))),
+         apps: ($s.apps // {}),
+         updated: $now}
+    ' <<<"$current" | atomic_write "$deploy_state_file"
 }
 
 held_read() { record_read held; }
@@ -198,6 +232,18 @@ denylist_has() { # <commit|digest> <value>
   [[ -s $deploy_denylist_file ]] || return 1
   jq -e --arg table "$table" --arg value "$value" \
     '.[$table] // {} | has($value)' "$deploy_denylist_file" >/dev/null 2>&1
+}
+
+# Either digest form is a refusal: bootc reports one or the other for the same
+# boot, so a check on a single form would let a denied image through.
+denylist_has_digest() { denylist_has digest "$1"; }
+
+# cache_clear drops the verifier's 120 s API cache, so the next verification
+# looks at GitHub again. The verifier is the only writer of that file; this is
+# the hand-run and test-side reset, not a second writer.
+cache_clear() {
+  rm -f -- "$deploy_cache_file" || return 1
+  sync -- "$deploy_state_dir" 2>/dev/null || return 1
 }
 
 # The queue is the listener's outbox: one file per accepted request, named by the

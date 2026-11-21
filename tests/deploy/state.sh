@@ -240,6 +240,23 @@ check_eq "$(queue_list | tr '\n' ' ')" "${id_b} ${id_a} " "queue_coalesce keeps 
 check_eq "$(queue_count)" 2 "queue_coalesce removes the superseded entry"
 
 # --- the drain ---------------------------------------------------------------
+# Verification is an external program (T2), and this suite is about the queue
+# mechanics around it, so the drain is pointed at a stub that accepts everything:
+# the verdicts themselves are tests/deploy/verify.sh.
+cat >"$work/fake-verify" <<'STUB'
+#!/usr/bin/env bash
+repo= commit=
+while (($#)); do
+  case $1 in
+    --repo) repo=$2; shift 2 ;;
+    --commit) commit=$2; shift 2 ;;
+    *) shift ;;
+  esac
+done
+printf '{"verdict":"verified","repo":"%s","commit":"%s","digests":null}\n' "$repo" "$commit"
+STUB
+chmod 0755 "$work/fake-verify"
+export DEPLOY_VERIFY_BIN=$work/fake-verify
 for entry in "$DEPLOY_STATE_DIR"/queue/*.json; do rm -f "$entry"; done
 export DEPLOY_JOURNAL_MAX_BYTES=5242880
 : >"$DEPLOY_STATE_DIR/journal.jsonl"
@@ -256,13 +273,13 @@ else
   bad "the drain exits 0 on an empty queue" "exit $?"
 fi
 check_eq "$(queue_count)" 0 "the drain empties the queue"
-check_eq "$(grep -c '"event":"drained-stub"' "$DEPLOY_STATE_DIR/journal.jsonl")" 2 \
+check_eq "$(grep -c '"event":"verified"' "$DEPLOY_STATE_DIR/journal.jsonl")" 2 \
   "the drain rescans and drains the late entry"
 check_eq "$(grep -c '"event":"drain-start"' "$DEPLOY_STATE_DIR/journal.jsonl")" 1 \
   "the drain journals its start once"
 check_eq "$(grep -c '"event":"drain-finish"' "$DEPLOY_STATE_DIR/journal.jsonl")" 1 \
   "the drain journals its finish once"
-check_eq "$(jq -r 'select(.event=="drained-stub") | .repo' "$DEPLOY_STATE_DIR/journal.jsonl" | sort | tr '\n' ' ')" \
+check_eq "$(jq -r 'select(.event=="verified") | .repo' "$DEPLOY_STATE_DIR/journal.jsonl" | sort | tr '\n' ' ')" \
   'homelab-apps homelab-platform ' "each drained entry carries its repository"
 check_eq "$(jq -r 'select(.event=="drain-finish") | .drained' "$DEPLOY_STATE_DIR/journal.jsonl")" 2 \
   "the drain counts what it drained"

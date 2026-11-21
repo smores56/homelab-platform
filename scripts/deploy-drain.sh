@@ -9,11 +9,14 @@
 # and rescans once before exiting so the window between "queue empty" and "unit
 # inactive" cannot drop an event.
 #
-# The T1 action is a stub: verify the queued shape, journal `drained-stub`,
-# remove the entry. T2 replaces the action with the GitHub graph and registry
-# resolution; the queue handling around it does not change.
+# The action is verification (T2): the queued shape, then the host's own checks
+# -- tip, descendancy, tag-to-digest, revision label, denylist -- and the entry
+# is popped once that verdict is recorded. A rejection is final for that entry
+# and is never retried, because the hourly poll and the next event would fail
+# identically; an infrastructure failure leaves the entry queued and fails the
+# unit, so the next trigger retries it. Applying what was verified is T3-T5.
 #
-# Every knob is environment-overridable so tests/deploy/state.sh can drive this
+# Every knob is environment-overridable so tests/deploy/*.sh can drive this
 # exact code. Production sets none of them.
 #
 # shellcheck disable=SC2154  # deploy-state.sh assigns these at source time
@@ -43,12 +46,26 @@ source "$state_lib"
 # unit is not the only thing standing between an event and the next event.
 rescan_pause=${DEPLOY_DRAIN_RESCAN_PAUSE:-1}
 
+# The verifier ships in the image rootfs beside the receiver rather than through
+# the `smortress-src` loop, which installs `.sh` files only.
+verify_bin=${DEPLOY_VERIFY_BIN:-}
+if [[ -z $verify_bin ]]; then
+  if [[ -x /usr/libexec/deploy-verify.py ]]; then
+    verify_bin=/usr/libexec/deploy-verify.py
+  else
+    verify_bin=$self_dir/../image/rootfs/usr/libexec/deploy-verify.py
+  fi
+fi
+# The verifier bounds each HTTP call (30 s) itself; this bounds the call as a
+# whole, so a wedged process cannot hold the deploy lock until TimeoutStartSec.
+verify_deadline=${DEPLOY_VERIFY_DEADLINE:-300}
+
 say() { printf 'deploy-drain: %s\n' "$*"; }
 warn() { printf 'deploy-drain: %s\n' "$*" >&2; }
 
-# The queued shape T2 will act on. An entry that cannot be read must never wedge
-# the queue: it is dropped with a record, which is also what a half-written
-# legacy file becomes after a downgrade.
+# The queued shape the verification action acts on. An entry that cannot be read
+# must never wedge the queue: it is dropped with a record, which is also what a
+# half-written legacy file becomes after a downgrade.
 drain_entry_valid() { # <id>
   local file=$deploy_queue_dir/$1.json
   [[ -s $file ]] || return 1
@@ -57,6 +74,60 @@ drain_entry_valid() { # <id>
     and (.commit | type == "string" and test("^[0-9a-f]{40}$"))
     and (.id | type == "string")
   ' "$file" >/dev/null 2>&1
+}
+
+# drain_verify <id> <repo> <commit>
+#
+# Journals the verdict and returns 0 (verified), 3 (rejected) or 4 (could not
+# verify). The reason of the last call is left in $verify_reason. The written
+# stdout of a successful run is left in $verify_verdict: it carries both digest
+# forms, which is what the stage step needs and what a re-resolution would only
+# re-derive at the cost of more API budget.
+verify_reason=
+verify_verdict=
+drain_verify() {
+  local id=$1 repo=$2 sha=$3 rc=0
+  verify_reason=
+  verify_verdict=
+  verify_verdict=$(timeout "$verify_deadline" "$verify_bin" --repo "$repo" --commit "$sha") || rc=$?
+  case $rc in
+    0)
+      # A verifier that exits 0 without a parseable verdict is not a permission
+      # to act: treat it as a failure to verify, never as a pass.
+      if ! jq -e '.verdict == "verified"' <<<"$verify_verdict" >/dev/null 2>&1; then
+        verify_reason=malformed-verdict
+        verify_verdict=
+        return 4
+      fi
+      if ! journal_append verified "$(jq -nc --arg id "$id" --arg repo "$repo" --arg commit "$sha" \
+        --argjson verdict "$verify_verdict" '{id:$id,repo:$repo,commit:$commit,verdict:$verdict}')"; then
+        verify_reason=journal-unwritable
+        return 4
+      fi
+      return 0
+      ;;
+    3)
+      verify_reason=$(jq -er '.reason' <<<"$verify_verdict" 2>/dev/null) || verify_reason=unspecified
+      verify_verdict=
+      if ! journal_append verify-rejected "$(jq -nc --arg id "$id" --arg repo "$repo" --arg commit "$sha" \
+        --arg reason "$verify_reason" '{id:$id,repo:$repo,commit:$commit,reason:$reason}')"; then
+        verify_reason=journal-unwritable
+        return 4
+      fi
+      return 3
+      ;;
+    *)
+      # Anything else -- exit 4, a crash, the deadline -- says nothing about the
+      # commit, so the entry keeps its place in the queue.
+      verify_reason=$(jq -er '.reason' <<<"$verify_verdict" 2>/dev/null) || verify_reason="verifier-exit-$rc"
+      verify_verdict=
+      journal_append verify-infra-failure "$(jq -nc --arg id "$id" --arg repo "$repo" --arg commit "$sha" \
+        --arg reason "$verify_reason" --argjson exit "$rc" \
+        '{id:$id,repo:$repo,commit:$commit,reason:$reason,exit:$exit}')" ||
+        warn "cannot journal the verification failure of $id"
+      return 4
+      ;;
+  esac
 }
 
 # Bounded wait, not an unbounded one: a wedged holder turns into a failing unit
@@ -78,6 +149,8 @@ journal_append drain-start '{"source":"queue"}' || {
 }
 
 drained=0
+rejected=0
+noop=0
 superseded=0
 invalid=0
 rescanned=0
@@ -120,21 +193,52 @@ while :; do
     continue
   fi
 
-  journal_append drained-stub "$(jq -nc --arg id "$id" --arg repo "$repo" --arg commit "$commit" \
-    '{id:$id,repo:$repo,commit:$commit}')" || {
-    warn "cannot journal $id; leaving it queued"
-    exit 1
-  }
-  say "$repo $commit: drained (stub)"
-  drained=$((drained + 1))
+  # Already deployed is a no-op, not a verification: there is nothing to stage
+  # and the commit graph would answer `identical`. The listener answers 200 for
+  # the same case; this closes the race where the state moved while the entry
+  # waited in the queue.
+  if [[ $(deployed_commit "$repo") == "$commit" ]]; then
+    journal_append already-deployed "$(jq -nc --arg id "$id" --arg repo "$repo" --arg commit "$commit" \
+      '{id:$id,repo:$repo,commit:$commit}')" || {
+      warn "cannot journal the already-deployed entry $id; leaving it queued"
+      exit 1
+    }
+    noop=$((noop + 1))
+    queue_pop "$id" || {
+      warn "cannot remove $id from the queue"
+      exit 1
+    }
+    continue
+  fi
+
+  verdict_rc=0
+  drain_verify "$id" "$repo" "$commit" || verdict_rc=$?
+  case $verdict_rc in
+    0)
+      say "$repo $commit: verified"
+      drained=$((drained + 1))
+      # T3 attaches here: the verified verdict names the digests to stage, so the
+      # apply runs inside this iteration, before the entry is popped.
+      ;;
+    3)
+      # Popped, not retried: the same commit would fail every check identically
+      # on the next trigger, and a silent retry loop hides the failure.
+      say "$repo $commit: rejected ($verify_reason)"
+      rejected=$((rejected + 1))
+      ;;
+    *)
+      warn "$repo $commit: cannot verify ($verify_reason); leaving it queued"
+      exit 1
+      ;;
+  esac
   queue_pop "$id" || {
     warn "cannot remove $id from the queue"
     exit 1
   }
 done
 
-journal_append drain-finish "$(jq -nc --argjson drained "$drained" --argjson superseded "$superseded" \
-  --argjson invalid "$invalid" \
-  '{drained:$drained,superseded:$superseded,invalid:$invalid}')" ||
+journal_append drain-finish "$(jq -nc --argjson drained "$drained" --argjson rejected "$rejected" \
+  --argjson noop "$noop" --argjson superseded "$superseded" --argjson invalid "$invalid" \
+  '{drained:$drained,rejected:$rejected,noop:$noop,superseded:$superseded,invalid:$invalid}')" ||
   warn "cannot journal the drain finish"
-say "drained $drained, superseded $superseded, invalid $invalid"
+say "drained $drained, rejected $rejected, no-op $noop, superseded $superseded, invalid $invalid"
