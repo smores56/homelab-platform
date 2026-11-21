@@ -53,7 +53,7 @@ RuntimeDirectoryPreserve=yes
 ProtectSystem=strict
 ReadWritePaths=/var/lib/homelab/deploy
 ReadWritePaths=/boot
-ReadWritePaths=/sysroot
+ReadWritePaths=-/sysroot/ostree
 # `bootc rollback --apply` runs the same SELinux install_t probe the switch does,
 # so the gate needs the same private scratch as the drain.
 ReadWritePaths=/tmp
