@@ -1,0 +1,36 @@
+# The names the browsing collector is allowed to resolve.
+#
+# It answers only for hostnames the policy grants the `brave` label and refuses
+# everything else, which is the second gate behind the internal network: even a
+# client that ignored the proxy could not turn `sync-v2.brave.com` into an address
+# unless this responder agreed. Upstream forwarding goes out on the collectors'
+# network, which is why the container is dual-homed.
+#
+# Port 53 needs NET_BIND_SERVICE, so this one runs as root with that capability and
+# nothing else; the image is read-only and the process never writes a file.
+[Unit]
+Description=Allowlist DNS for the browsing collector
+Requires=agent-brave-network.service agent-collect-network.service
+After=network-online.target agent-brave-network.service agent-collect-network.service
+Wants=network-online.target
+
+[Container]
+Image=ghcr.io/smores56/homelab-platform/agent-egress@sha256:535b96b8ca9efd303a168c9efe59c5acc8ef65e624d64f0ca22dbf58a31919c4
+ContainerName=smortress-agent-egress-dns
+Network=agent-brave.network:ip=10.89.73.3
+Network=agent-collect.network
+User=0:0
+Exec=resolver --policy /etc/smortress/agent/egress-policy.json --source brave --listen 0.0.0.0:53
+Volume=/etc/smortress/agent/egress-policy.json:/etc/smortress/agent/egress-policy.json:ro
+ReadOnly=true
+Tmpfs=/tmp:rw,size=8m
+NoNewPrivileges=true
+DropCapability=ALL
+AddCapability=NET_BIND_SERVICE
+
+[Service]
+Restart=on-failure
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target

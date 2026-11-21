@@ -54,6 +54,10 @@ app_images=(
   # and signed here because Tuta serves no CalDAV and no SDK of theirs ships. The
   # digest is the publish-tuta-calendar run for the Containerfile at that path.
   'tuta-calendar|built:images/tuta-calendar/Containerfile|sha256:c60a3021245e7874821daa54ede7cef7cfb35da6bf58855b5538d2037fd37e4b'
+  # The collector egress gate (apps/agent_egress): an allowlist proxy and its DNS
+  # responder, the only two peers a browsing collector may reach. Built here
+  # because the policy and the checks that enforce it are ours.
+  'agent-egress|built:images/agent-egress/Containerfile|sha256:535b96b8ca9efd303a168c9efe59c5acc8ef65e624d64f0ca22dbf58a31919c4'
 )
 
 # app_image_ref NAME -> the only reference a Quadlet may contain.

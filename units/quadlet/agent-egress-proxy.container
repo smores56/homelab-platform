@@ -1,0 +1,35 @@
+# The only way out of agent-brave.network.
+#
+# It is dual-homed: it answers on the internal bridge and reaches upstream on the
+# collectors' network. A request is tunnelled only for a hostname the policy
+# grants the `brave` label, and CONNECT is additionally gated on the TLS SNI in
+# the first ClientHello, so a permitted CONNECT cannot be steered at another name.
+#
+# The policy is a file in the booted image, mounted read-only: what a collector
+# may reach is a reviewed fact of the image, not something a container can edit.
+# Nothing is published; the only client is the address the Brave container is told
+# to use.
+[Unit]
+Description=Egress proxy for the browsing collector
+Requires=agent-brave-network.service agent-collect-network.service
+After=network-online.target agent-brave-network.service agent-collect-network.service
+Wants=network-online.target
+
+[Container]
+Image=ghcr.io/smores56/homelab-platform/agent-egress@sha256:535b96b8ca9efd303a168c9efe59c5acc8ef65e624d64f0ca22dbf58a31919c4
+ContainerName=smortress-agent-egress-proxy
+Network=agent-brave.network:ip=10.89.73.2
+Network=agent-collect.network
+Exec=proxy --policy /etc/smortress/agent/egress-policy.json --source brave --listen 0.0.0.0:3128
+Volume=/etc/smortress/agent/egress-policy.json:/etc/smortress/agent/egress-policy.json:ro
+ReadOnly=true
+Tmpfs=/tmp:rw,size=8m
+NoNewPrivileges=true
+DropCapability=ALL
+
+[Service]
+Restart=on-failure
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target

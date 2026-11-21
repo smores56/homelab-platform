@@ -305,6 +305,30 @@ socket was down. A changed UIDVALIDITY or a vanished folder aborts the staging
 generation and exits non-zero instead of publishing a generation that looks like
 mass deletion.
 
+### Collector egress
+
+A collector whose provider is a browser cannot be given the collectors'
+network's general egress and left there. It gets its own network,
+`agent-brave.network`: `Internal=true`, so there is no default route and no NAT,
+and exactly two peers answer on it.
+
+| Peer | Address | What it does |
+| --- | --- | --- |
+| `agent-egress-proxy` | `10.89.73.2:3128` | tunnels only the hostnames the `brave` label is granted, and gates `CONNECT` on the TLS SNI inside the first ClientHello so a permitted tunnel cannot be steered at another name |
+| `agent-egress-dns` | `10.89.73.3:53` | answers `A`/`AAAA` only for those names and refuses everything else |
+
+Both are `agent-egress` (a signed image this repository builds) and both are
+dual-homed onto `agent-collect.network`, which is where their own upstream
+traffic leaves. The addresses are static because Chromium's `--proxy-server` and
+`--dns` take addresses: a name would have to be resolved by the responder that
+exists to refuse names it does not know.
+
+The grants live in `/etc/smortress/agent/egress-policy.json` inside the booted
+image, mounted read-only into both containers, so what a collector may reach is a
+reviewed fact of the image rather than something a container can edit. Nothing is
+published, and the proxy is the only path off the network: a browser that ignored
+it would dial an address the network cannot route.
+
 The network is deliberately not `agent-general.network` even though both have
 egress: the general side carries the hosted provider key, and a bank collector has
 no business on that segment. The unit runs the pinned `agent-runtime` digest with
