@@ -89,6 +89,9 @@ export DEPLOY_PING_SECRET=$work/deploy-ping-url.yaml
 export DEPLOY_UNITS_FILE=$work/deploy-units.txt
 export APPS_PLAN=$work/plan.json
 export GRUB_ENV=$work/grubenv
+# The gate only writes the flags when grub.cfg reads the counter; a fixture with
+# the snippet's variable stands in for a host where boot counting was installed.
+export GRUB_CFG=$work/grub.cfg
 export STUB_LOG=$log
 export PATH="$bin:$PATH"
 # shellcheck source=/dev/null
@@ -369,6 +372,7 @@ reset_case() { # keep the fakes' healthy answers, drop every record
   : >"$STUB_SYSTEMCTL_FAILED"
   printf '%s\n' "$ping_url" >"$DEPLOY_PING_SECRET"
   printf 'boot_success=0\nboot_counter=2\ndefault=0\n' >"$GRUB_ENV"
+  printf 'set boot_counter=3\n' >"$GRUB_CFG"
   jq -nc --argjson port "$app_port" \
     '{version:1,apps:{demo:{basePath:"/apps/demo",containerPort:8080,loopbackPort:$port}}}' \
     >"$APPS_PLAN"
@@ -808,8 +812,34 @@ check_grep "$snippet" 'boot_counter=' "the GRUB snippet counts the attempts"
 check_grep "$snippet" 'set default=1' "the GRUB snippet falls back to the previous deployment"
 check_grep image/rootfs/etc/systemd/system.conf.d/10-watchdog.conf 'RuntimeWatchdogSec=1min' \
   "a hung PID 1 becomes a reboot the counter can act on"
-check_grep image/rootfs/etc/sysctl.d/10-panic.conf 'kernel.panic=10' \
-  "a panic becomes a reboot the counter can act on"
+# A panic reboot without a bootloader counter loops the same image forever, so
+# the image must not ship one until counting is installed on the host.
+if [[ -e image/rootfs/etc/sysctl.d/10-panic.conf ]]; then
+  bad "no panic reboot ships without a counter"
+else
+  ok "no panic reboot ships without a counter"
+fi
+
+# --- 11. a host whose GRUB does not read the counter says so ----------------
+# bootupd reports every component current and never regenerates grub.cfg, so the
+# variables are written nowhere it would be read: the gate must journal that and
+# still decide the deployment.
+printf 'menuentry nothing\n' >"$GRUB_CFG"
+printf 'boot_success=0\nboot_counter=0\ndefault=1\n' >"$GRUB_ENV"
+# A clean boot: no deployment record, nothing to revert, and the units a healthy
+# host has. The previous cases deliberately broke both.
+rm -f "$state_dir/pending.json" "$state_dir/apply.json"
+printf 'core-one.service\ncore-two.service\n' >"$STUB_SYSTEMCTL_ACTIVE"
+: >"$STUB_SYSTEMCTL_FAILED"
+run_gate
+if ((rc == 0)); then
+  ok "a host without boot counting still finishes the gate"
+else
+  bad "a host without boot counting still finishes the gate" "$out"
+fi
+check_eq "$(grub_flags '.boot_counter')" 0 "the counter is left untouched without counting"
+check_eq "$(journal_field boot-counting-absent '.reason' | tail -1)" \
+  "grub.cfg does not read boot_counter" "the missing counter is journaled"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 ((fail == 0))

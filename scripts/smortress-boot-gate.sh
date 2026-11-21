@@ -111,6 +111,7 @@ zpool_bin=${ZPOOL_BIN:-zpool}
 mountpoint_bin=${MOUNTPOINT_BIN:-mountpoint}
 grub_editev=${GRUB_EDITEV:-grub2-editenv}
 grub_env=${GRUB_ENV:-/boot/grub2/grubenv}
+grub_cfg=${GRUB_CFG:-/boot/grub2/grub.cfg}
 deploy_units_file=${DEPLOY_UNITS_FILE:-/usr/share/smortress/deploy-units.txt}
 apps_plan=${APPS_PLAN:-/var/lib/homelab/apps/plan.json}
 apps_user=${APPS_USER:-apps}
@@ -162,12 +163,34 @@ grub_available() {
 # `default` is cleared with it -- a fallback entry left selected by an earlier
 # boot would otherwise pull the next reboot back to the older deployment while
 # this one is healthy.
+# The counter only exists when GRUB reads it, and on this host it does not: the
+# snippet ships in /usr/lib/bootupd/grub2-static/configs.d, but bootupd reports
+# every component current and never regenerates grub.cfg, so the variables would
+# be written and ignored. Name that once per boot instead of pretending, and
+# never fail the gate over a flag write -- the gate's job is to keep or roll back
+# this deployment, and a read-only /boot is not a deployment verdict.
+boot_counting_present() {
+  [[ -r $grub_cfg ]] && grep -q 'boot_counter' "$grub_cfg" 2>/dev/null
+}
+
+grub_flags_unavailable() {
+  journal_append boot-counting-absent '{"reason":"grub.cfg does not read boot_counter"}' || true
+  return 0
+}
+
 grub_mark_good() {
-  grub_available || return 1
+  grub_available || { grub_flags_unavailable; return 0; }
+  boot_counting_present || { grub_flags_unavailable; return 0; }
   timeout --signal=TERM --kill-after=5 "$(clamp_timeout "$grub_timeout")" "$grub_editev" \
-    "$grub_env" set "boot_success=1" "boot_counter=$boot_budget" || return 1
+    "$grub_env" set "boot_success=1" "boot_counter=$boot_budget" || {
+    journal_append grub-flags-failed '{"action":"mark-good"}' || true
+    return 0
+  }
   timeout --signal=TERM --kill-after=5 "$(clamp_timeout "$grub_timeout")" "$grub_editev" \
-    "$grub_env" unset default || return 1
+    "$grub_env" unset default || {
+    journal_append grub-flags-failed '{"action":"clear-default"}' || true
+    return 0
+  }
   return 0
 }
 
@@ -178,9 +201,13 @@ grub_mark_good() {
 # success values instead would re-arm the counter that must never pick the failed
 # deployment again.
 grub_abandon() {
-  grub_available || return 1
+  grub_available || { grub_flags_unavailable; return 0; }
+  boot_counting_present || { grub_flags_unavailable; return 0; }
   timeout --signal=TERM --kill-after=5 "$(clamp_timeout "$grub_timeout")" "$grub_editev" \
-    "$grub_env" set "boot_success=0" "boot_counter=-1" "default=0" || return 1
+    "$grub_env" set "boot_success=0" "boot_counter=-1" "default=0" || {
+    journal_append grub-flags-failed '{"action":"abandon"}' || true
+    return 0
+  }
   return 0
 }
 
