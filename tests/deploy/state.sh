@@ -599,6 +599,21 @@ else
   bad "the deferred entry carries a retry time"
 fi
 
+# --- a drain with only deferred work parks, never exits ----------------------
+# The path unit re-fires a oneshot the instant it exits while the queue is
+# non-empty, so exiting on "all deferred" spun the host into start-limit-hit and
+# a failed path unit. The drain waits for the stamp instead.
+rm -f "$DEPLOY_STATE_DIR"/queue/*.json
+: >"$DEPLOY_STATE_DIR/journal.jsonl"
+id_e=55555555-5555-4555-8555-555555555555
+queue_seed "$id_e" homelab-platform 94 "$sha_old"
+queue_defer "$id_e" "$(($(date +%s) + 3600))" test-hold
+DEPLOY_DRAIN_RESCAN_PAUSE=0 timeout 2 bash "$drain" >/dev/null 2>&1
+rc=$?
+check_eq "$rc" 124 "a drain with only deferred work parks instead of exiting"
+check_eq "$(grep -c '"event":"drain-parked"' "$DEPLOY_STATE_DIR/journal.jsonl")" 1 \
+  "the parked drain journals why it is waiting"
+
 # --- the deploy lock ---------------------------------------------------------
 # The drain unit, the hourly poll and the CLI all write state.json; the lock is
 # what keeps one of them from losing another's write.

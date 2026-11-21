@@ -38,10 +38,16 @@ self_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 # loop strips the `.sh`); a checkout has it beside the script.
 state_lib=${DEPLOY_STATE_LIB:-}
 if [[ -z $state_lib ]]; then
-  if [[ -r /usr/libexec/deploy-state ]]; then
-    state_lib=/usr/libexec/deploy-state
-  else
+  # Sibling first: in the image both files land in /usr/libexec, and in a
+  # checkout both are in scripts/. Preferring the fixed path made a checkout run
+  # the installed copy from the running image -- the suites silently tested the
+  # old library on the host that had one.
+  if [[ -r $self_dir/deploy-state.sh ]]; then
     state_lib=$self_dir/deploy-state.sh
+  elif [[ -r $self_dir/deploy-state ]]; then
+    state_lib=$self_dir/deploy-state
+  else
+    state_lib=/usr/libexec/deploy-state
   fi
 fi
 [[ -r $state_lib ]] || {

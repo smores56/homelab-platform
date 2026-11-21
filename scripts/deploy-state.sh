@@ -400,6 +400,26 @@ queue_list() {
   printf '%s\n' "${rows[@]}" | sort -k1,1n -k2,2n -k3,3 | cut -d' ' -f3-
 }
 
+# queue_next_retry_in <cap>: seconds until the earliest deferred entry may be
+# tried, capped. The drain parks on this instead of exiting: a path-triggered
+# oneshot is re-fired the moment it exits while the queue is non-empty, so
+# exiting on "all deferred" is the same storm one layer up.
+queue_next_retry_in() {
+  local cap=$1 now best="" id retry delta
+  now=$(date +%s)
+  while IFS= read -r id; do
+    retry=$(queue_field "$id" retry_at 2>/dev/null) || continue
+    [[ $retry =~ ^[0-9]+$ ]] || continue
+    ((retry > now)) || retry=$now
+    if ((best == 0 || retry < best)); then best=$retry; fi
+  done < <(queue_list)
+  if ((best == 0)); then printf '%s\n' "$cap"; return 0; fi
+  delta=$((best - now))
+  ((delta < 1)) && delta=1
+  ((delta > cap)) && delta=$cap
+  printf '%s\n' "$delta"
+}
+
 # queue_ready <id>: an entry the drain deferred after an infrastructure failure
 # carries a retry_at, and until that passes it is not this drain's work. A missing
 # or malformed stamp is ready: only a recorded deferral holds an entry back.

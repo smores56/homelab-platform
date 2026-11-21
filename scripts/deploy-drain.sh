@@ -43,10 +43,16 @@ self_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 # (the smortress-src loop strips the `.sh`); a checkout has it beside the script.
 state_lib=${DEPLOY_STATE_LIB:-}
 if [[ -z $state_lib ]]; then
-  if [[ -r /usr/libexec/deploy-state ]]; then
-    state_lib=/usr/libexec/deploy-state
-  else
+  # Sibling first: in the image both files land in /usr/libexec, and in a
+  # checkout both are in scripts/. Preferring the fixed path made a checkout run
+  # the installed copy from the running image -- the suites silently tested the
+  # old library on the host that had one.
+  if [[ -r $self_dir/deploy-state.sh ]]; then
     state_lib=$self_dir/deploy-state.sh
+  elif [[ -r $self_dir/deploy-state ]]; then
+    state_lib=$self_dir/deploy-state
+  else
+    state_lib=/usr/libexec/deploy-state
   fi
 fi
 [[ -r $state_lib ]] || {
@@ -67,6 +73,7 @@ rescan_pause=${DEPLOY_DRAIN_RESCAN_PAUSE:-1}
 # timer when no event arrives, and the heartbeat pages long before a queue of
 # deferrals goes unnoticed.
 retry_delay=${DEPLOY_RETRY_DELAY:-300}
+defer_cap=${DEPLOY_DRAIN_DEFER_CAP:-60}
 
 # The verifier ships in the image rootfs beside the receiver rather than through
 # the `smortress-src` loop, which installs `.sh` files only.
@@ -303,8 +310,16 @@ while :; do
     fi
   done
   if [[ -z $id ]]; then
-    say "every queued request is deferred; the retry timer brings the next attempt"
-    break
+    # Parking, not exiting: systemd re-fires a path-triggered oneshot as soon as
+    # it exits while the queue is non-empty, so exiting here is a hot loop that
+    # ends in start-limit-hit and a failed path unit. Wait for the nearest stamp
+    # and re-scan, capped so a changed queue and the unit timeout stay in play.
+    park=$(queue_next_retry_in "$defer_cap")
+    journal_append drain-parked "$(jq -nc --argjson wait "$park" '{wait:$wait}')" ||
+      warn "cannot journal the parked drain"
+    say "every queued request is deferred; next attempt in ${park}s"
+    sleep "$park"
+    continue
   fi
   repo=
   commit=
