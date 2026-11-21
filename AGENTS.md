@@ -22,39 +22,25 @@
 ## Before you commit
 
 ```sh
-scripts/kustomize-build-all.sh          # every clusters/** kustomization renders
-tests/policies/check.sh                 # static policy, RBAC, network, broker assertions
-tests/policies/check.sh --runtime       # real admission + can-i probes on a throwaway
-                                        # apiserver (CI job `policy admission runtime`)
-python3 -m unittest discover -s apps/broker/tests -t apps/broker   # broker unit tests
-tests/agent-control/check.sh            # agent-control unit tests (routes, scope, audit)
-python3 -m unittest discover -s apps/webhook/tests -t apps/webhook  # webhook unit tests
-python3 -m unittest discover -s apps/agent_proxy/tests -t apps/agent_proxy  # hosted proxy unit tests
-python3 -m unittest discover -s apps/agent_facade/tests -t apps/agent_facade  # agent facade unit tests (deployment split, memory, FTS, MCP)
-tests/tofu/check.sh                     # Cloudflare config shape, no credentials
-tests/backup/check.sh                   # mirror script args/URLs, no network
-tests/observability/check.sh            # vector unit tests, config drift, exporter tests
-tests/digest/check.sh                   # digest builder fixtures, egress and reverse-path contract
-tests/data-plane/check.sh               # data-plane contracts, identity, journal, broker, backup, collectors, memory, CLI
-tests/tuta-calendar/check.sh            # calendar exporter: crypto, session seal, entity mapping, pagination
-tests/agent-egress/check.sh            # collector egress: allowlist proxy, SNI gate, DNS responder, log redaction
-tests/brave/check.sh                    # browsing collector: seed planting, History snapshot, collector over the copy
-tests/core/agent-drill.sh               # operator drill: root gate, dry run, probe shapes (no host)
-yamllint .
-actionlint .                              # a workflow GitHub cannot parse never runs, silently
-shellcheck scripts/*.sh tests/policies/*.sh tests/tofu/*.sh \
-  tests/access/*.sh tests/backup/*.sh tests/digest/*.sh tests/observability/*.sh \
-  tests/agent-control/*.sh tests/agent-egress/*.sh tests/brave/*.sh \
-  clusters/homelab/flux-system/bootstrap.sh \
-  clusters/homelab/platform/backup/*.sh provision/*.sh tests/provision/*.sh
-scripts/check-action-pins.sh
-scripts/check-pr-secret-boundary.sh
-scripts/check-codeowners.sh
-git diff --check
+scripts/check-all.sh             # every group, in parallel
+scripts/check-all.sh --changed   # only the groups this branch touches
+scripts/check-all.sh --list      # the groups and their commands
 ```
+
+The driver is the source of truth and runs the same commands CI does; CI keeps
+its jobs sharded for parallelism. `--changed` runs every group when a changed
+path no group claims, so a new directory can never fall through.
+
+Two checks stay outside it: `tests/policies/check.sh --runtime` needs a
+throwaway apiserver, and `tests/check-all/check.sh` is the driver's own test.
+Run the latter with any `scripts/check-all.sh` change.
 
 Run the formatters only where the repository defines them; this repo has no
 formatter beyond `tofu fmt -check -recursive tofu`.
+
+`git config core.hooksPath .githooks` installs the pre-push gate, which runs
+`scripts/check-all.sh --changed`. Groups need the tools CI installs: on a
+fresh host run `scripts/install-ci-tools.sh ~/.local/bin` and put it on PATH.
 
 ## Cluster conventions
 

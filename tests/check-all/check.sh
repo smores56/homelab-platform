@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# The pre-commit driver's selection logic: no cluster, no credentials.
+#   tests/check-all/check.sh
+set -uo pipefail
+
+root=$(git rev-parse --show-toplevel)
+cd "$root" || exit 1
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+pass=0
+fail=0
+ok() { pass=$((pass + 1)); printf 'ok   %s\n' "$*"; }
+no() { fail=$((fail + 1)); printf 'FAIL %s\n' "$*" >&2; }
+expect() {
+  if [[ $2 == "$3" ]]; then ok "$1"; else no "$1 (want '$2', got '$3')"; fi
+}
+
+groups=$(scripts/check-all.sh --list | wc -l | tr -d ' ')
+selected() {
+  printf '%s\n' "$@" >"$work/paths"
+  scripts/check-all.sh --paths-from "$work/paths" --dry-run
+}
+
+expect "a broker change selects the broker tests" "broker" \
+  "$(selected apps/broker/server.py)"
+expect "an agent-control change selects its check and lint" $'agent-control\nlint' \
+  "$(selected tests/agent-control/check.sh)"
+expect "a workflow change selects lint" "lint" \
+  "$(selected .github/workflows/ci.yml)"
+expect "a docs change selects nothing" "" \
+  "$(selected README.md docs/tenancy.md)"
+expect "an unclaimed path selects every group" "$groups" \
+  "$(selected brand/new-thing | wc -l | tr -d ' ')"
+expect "--list names each group once" "$groups" \
+  "$(scripts/check-all.sh --list | cut -f1 | sort -u | wc -l | tr -d ' ')"
+expect "--only keeps one group" "broker" \
+  "$(printf 'apps/broker/x\n' >"$work/paths"; \
+     scripts/check-all.sh --paths-from "$work/paths" --only broker,webhook --dry-run)"
+
+printf '\n%d passed, %d failed\n' "$pass" "$fail"
+((fail == 0))
