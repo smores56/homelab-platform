@@ -39,6 +39,24 @@ locals {
         dst    = ["tag:smortress:443", "tag:smortress:8443", "tag:smortress:10000"]
       },
       {
+        # The public edge (design #725). The VPS terminates public TLS and needs
+        # the two dedicated Serve ports, never 443: 443 also carries the agent
+        # gateway APIs and the wallpaper tree, and a port-scoped rule cannot
+        # express a path. The edge is not in group:owner, so it never reaches
+        # sshd on the host.
+        action = "accept"
+        src    = ["tag:vps"]
+        dst    = ["tag:smortress:8446", "tag:smortress:8447"]
+      },
+      {
+        # The owner reaches the edge's sshd and nothing else on it. The edge is
+        # a public box, so its login is tailnet-only: the panel firewall refuses
+        # 22 from the internet and this is the only rule that opens it.
+        action = "accept"
+        src    = ["group:owner"]
+        dst    = ["tag:vps:22"]
+      },
+      {
         # The deploy receiver (design #798). A CI job carries tag:deploy for the
         # length of one run and may reach exactly one port: the receiver's
         # tailnet-served TCP forward on loopback. Every other port on the host
@@ -72,6 +90,10 @@ locals {
       # its owner may apply, so the creator's group owns the tag; nothing else
       # in the tailnet carries it.
       "tag:deploy" = ["group:owner"]
+      # The public edge. An OAuth client can only mint a key carrying a tag its
+      # owner may apply, so the VPS joins with its own key and the owner group
+      # owns the tag; nothing else in the tailnet may carry it.
+      "tag:vps" = ["group:owner"]
       # The host's own tag. The ACL cannot name a device by hostname (the
       # validator wants an address), and a hosts alias pins the tailnet IP, so
       # the destination is a tag: it survives a reinstall that hands the node a
@@ -86,11 +108,21 @@ locals {
     tests = [
       {
         src    = var.tailscale_login
-        accept = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:10000", "tag:smortress:22000"]
+        accept = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:10000", "tag:smortress:22000", "tag:vps:22"]
       },
       {
         src  = "tag:untrusted"
-        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:10000", "tag:smortress:22000"]
+        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8446", "tag:smortress:8447", "tag:vps:22"]
+      },
+      {
+        # The edge reaches the two Serve ports and nothing else: no sshd, no
+        # agent gateway, no Syncthing, no deploy receiver.
+        src    = "tag:vps"
+        accept = ["tag:smortress:8446", "tag:smortress:8447"]
+      },
+      {
+        src  = "tag:vps"
+        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8484"]
       },
       {
         # The deploy node reaches the receiver and nothing else.
@@ -99,7 +131,7 @@ locals {
       },
       {
         src  = "tag:deploy"
-        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:10000", "tag:smortress:22000"]
+        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8446", "tag:smortress:8447", "tag:vps:22"]
       },
     ]
   }
