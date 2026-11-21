@@ -184,5 +184,100 @@ else
   fail 'agent shell dispatcher checks'
 fi
 
+# The deploy receiver has a runbook and an operator CLI, and the two have to say
+# the same thing: a documented verb the program does not implement sends an
+# operator into a maintenance window with nothing to run, and a verb the program
+# implements but the runbook omits is only discoverable by reading the image.
+cli=scripts/deploy-cli.sh
+runbook=docs/manual-steps.md
+mapfile -t cli_verbs < <(sed -nE 's/^[[:space:]]+([a-z]+)\)$/\1/p' "$cli" | sort -u)
+checks=$((checks + 1))
+if ((${#cli_verbs[@]})) && printf '%s\n' "${cli_verbs[@]}" | grep -qx bootstrap; then
+  pass "the operator CLI implements the verbs the design names"
+else
+  fail "the operator CLI does not implement release/status/unblock/bootstrap"
+fi
+for verb in "${cli_verbs[@]}"; do
+  checks=$((checks + 1))
+  if grep -qE "smortress-deploy $verb([[:space:]]|\`|\\||$)" "$runbook"; then
+    pass "the runbook starts smortress-deploy $verb"
+  else
+    fail "the runbook never runs smortress-deploy $verb"
+  fi
+done
+# The other direction, over every document an operator reads.
+checks=$((checks + 1))
+undocumented=
+while IFS= read -r verb; do
+  printf '%s\n' "${cli_verbs[@]}" | grep -qx -- "$verb" || undocumented+="$verb "
+done < <(grep -rhoE 'smortress-deploy [a-z]+' docs README.md | awk '{ print $2 }' | sort -u)
+if [[ -n $undocumented ]]; then
+  fail "the docs name ${undocumented}but the CLI does not implement it"
+else
+  pass "every documented smortress-deploy verb exists"
+fi
+
+# `--force` is not decoration: release refuses without it, so a runbook that
+# dropped the flag would document a command that always exits 2.
+checks=$((checks + 1))
+if grep -q -- '--force' "$runbook" && grep -q 'force=1' "$cli"; then
+  pass 'release --force is documented and required'
+else
+  fail 'release --force is missing from the runbook or no longer required'
+fi
+
+# Every human step this feature needs, by the name the code or the console uses.
+for step in deploy-notify TS_OAUTH_CLIENT_ID TS_OAUTH_CLIENT_SECRET \
+  DEPLOY_WEBHOOK_SECRET tag:deploy bootupctl /boot/grub2/grub.cfg journal.jsonl \
+  webhook-secret-next.yaml; do
+  checks=$((checks + 1))
+  if grep -qF -- "$step" "$runbook"; then
+    pass "the runbook names $step"
+  else
+    fail "the runbook never names $step"
+  fi
+done
+
+# The secrets the deploy programs read are the secrets the runbook seeds: the
+# names come from the readers, not from a list here, so a fourth file cannot ship
+# without a step that fills it.
+checks=$((checks + 1))
+seeded=
+while IFS= read -r secret; do
+  grep -qE "^${secret//./\\.}[[:space:]]" image/rootfs/etc/smortress/secrets.manifest || {
+    fail "$secret is read by the deploy path but is not in the decrypt manifest"
+    seeded=1
+  }
+  grep -qF -- "$secret" "$runbook" || {
+    fail "$secret is read by the deploy path but the runbook never seeds it"
+    seeded=1
+  }
+done < <(grep -rhoE '(webhook-secret(-next)?|deploy-ping-url)\.yaml' \
+  scripts image/rootfs/usr/libexec | sort -u)
+((seeded)) || pass 'every secret the deploy path reads has a manifest line and a runbook step'
+
+# The state paths the runbook tells an operator to read are the library's own
+# defaults, not a path someone remembered once.
+checks=$((checks + 1))
+state_dir=$(sed -nE 's/^deploy_state_dir=\$\{DEPLOY_STATE_DIR:-([^}]+)\}$/\1/p' scripts/deploy-state.sh)
+if [[ -n $state_dir ]] && grep -qF -- "$state_dir" "$runbook" &&
+  grep -qF 'journal.jsonl' "$runbook"; then
+  pass 'the runbook reads the state tree the deploy library writes'
+else
+  fail 'the runbook names a state path the deploy library does not use'
+fi
+
+# A deploy unit that ships without a line in the image document is a service an
+# operator meets for the first time during an incident.
+for unit in units/systemd/smortress-deploy* units/systemd/smortress-boot-gate.service; do
+  checks=$((checks + 1))
+  base=$(basename "$unit")
+  if grep -qF -- "$base" docs/core/server-image.md; then
+    pass "the image document names $base"
+  else
+    fail "the image document never names $base"
+  fi
+done
+
 printf '\n%d checks, %d failed\n' "$checks" "$failures"
 ((failures == 0))

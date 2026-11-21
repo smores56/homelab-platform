@@ -43,6 +43,18 @@ rollback path. Operator-only actions are in `docs/manual-steps.md` section 37.
 | `/usr/lib/systemd/system/smortress-agent-config.service` | Seeds each gateway's `config.yaml` (`cp -n`), substitutes the facade token from its decrypted ciphertext while the placeholder is still there, rewrites `.env`'s `API_SERVER_KEY` and `webui.env`'s gateway key and UI password at every boot, and creates each facade's memory root and each UI's state and workspace directories. |
 | `/usr/libexec/agent-config-seed` | `scripts/agent-config-seed.sh`: the seeding itself, so the token is read from a file into a variable instead of being spliced into an `ExecStart` line. |
 | `/usr/lib/systemd/system/smortress-nvidia-cdi.service` | Generates `/etc/cdi/nvidia.yaml` at boot so `AddDevice=nvidia.com/gpu=all` resolves for the model container; ordered before it. |
+| `/usr/libexec/deploy-receiver.py` | The deploy listener (#798): loopback HTTP on `127.0.0.1:8484`, HMAC over the raw request bytes against two rotation slots, ±300 s skew, nonce ring under its own `flock listener.lock`, 64 KiB body cap, queue cap 32. It resolves no tag and writes no deployment state; it ships in the rootfs because the build's `smortress-src` loop installs `*.sh` only. |
+| `/usr/libexec/deploy-verify.py` | The host's own verification: tip of `main`, descendancy from the deployed commit, tag `sha-<commit[:12]>` → digests, `org.opencontainers.image.revision` label, denylist. Anonymous GitHub and registry calls, cached 120 s, 30 s each. Also rootfs, for the same reason. |
+| `/usr/libexec/{deploy-state,deploy-drain,deploy-platform,deploy-apps,deploy-poll,deploy-heartbeat}` | `scripts/deploy-*.sh`: the state library, the queue drain (single writer of `state.json`), the platform snapshot gate and stage, the apps apply and revert, the hourly backstop and the five-minute dead-man. |
+| `/usr/libexec/smortress-boot-gate` | `scripts/smortress-boot-gate.sh`: reconciles an interrupted apps apply, then keeps or rolls back the deployment this host just booted. |
+| `/usr/libexec/smortress-deploy` | `scripts/deploy-cli.sh`, staged under the name the runbook uses: `status`, `release --force`, `unblock`, `bootstrap`. |
+| `/usr/lib/systemd/system/smortress-deploy-listener.service` | The listener, `Restart=always`, `Requires=After=sops-decrypt.service`, sandboxed with the state tree as its only writable path. |
+| `/usr/lib/systemd/system/smortress-deploy.path`, `/usr/lib/systemd/system/smortress-deploy.service` | The queue trigger (`DirectoryNotEmpty=/var/lib/homelab/deploy/queue`) and the one drain of it, `TimeoutStartSec=7200`. |
+| `/usr/lib/systemd/system/smortress-deploy-poll.timer`, `/usr/lib/systemd/system/smortress-deploy-poll.service`, `/usr/lib/systemd/system/smortress-deploy-heartbeat.timer`, `/usr/lib/systemd/system/smortress-deploy-heartbeat.service`, `/usr/lib/systemd/system/smortress-boot-gate.service` | The hourly backstop, the dead-man beat for the `deploy` Healthchecks check, and the gate that runs `Before=boot-complete.target`. |
+| `/usr/share/smortress/deploy-units.txt` | The units the boot gate requires: what "serving" means for this host. The receiver's own units are deliberately absent — a missing deploy secret must page, not roll the host back. |
+| `/usr/lib/bootupd/grub2-static/configs.d/10-smortress-count.cfg` | The three-attempt boot counter, installed into `grub.cfg` by `bootupctl update`; the only rollback that exists before userspace. |
+| `/etc/systemd/system.conf.d/10-watchdog.conf`, `/etc/sysctl.d/10-panic.conf` | `RuntimeWatchdogSec=1min` and `kernel.panic=10`, so a hung PID 1 or a panic becomes a reboot the counter can act on. |
+| `/etc/tmpfiles.d/smortress.conf` | Creates `/var/lib/homelab/deploy`, `queue` and `work` at `0700 root`: the receiver's state tree, outside every recovery group because the journal and `bootc status` rebuild it. |
 
 `units/quadlet/pattern.container` is the canonical copy in the repository; the
 image ships it read-only as the base for a new application. A placeholder
@@ -254,6 +266,184 @@ trust instead of leaving the host on the tag.
 The install path keeps a digest (`ignition/operator/derived-image`): a fresh host
 must come up on the build that was verified, not on whatever `:latest` names.
 
+## The deploy path
+
+The image is the only delivery, so a merge to `main` reaches this host through
+the receiver and nothing else. Its authority is the host's own: every input is a
+notification, and each decision is re-derived here from the GitHub commit graph,
+the registry tag, the image's own label and the signature `bootc` checks. A
+request that fails any check changes nothing and leaves the last good deployment
+running.
+
+### The trigger
+
+`publish-server-image.yml` ends with a `notify` job — `needs: publish`, `main`
+only, `environment: deploy-notify`, `permissions: {}`, no checkout, no cosign key
+— that joins the tailnet as an ephemeral node carrying `tag:deploy` and posts one
+signed request to `http://smortress:8484/v1/deploy`:
+
+```json
+{"repo": "homelab-platform", "commit": "<40-hex>", "ts": <unix>, "nonce": "<32-hex>"}
+```
+
+`homelab-apps` posts the same body from its own workflow. `X-Deploy-Signature:
+sha256=<hmac>` is computed over the exact bytes that go on the wire, which is why
+the job uses `curl --data-binary` and not `-d` (it strips the newline, the bytes
+stop matching the signature, and the receiver refuses the body it was sent).
+
+`smortress-deploy-listener.service` binds `127.0.0.1:8484`; the tailnet side is
+Serve's `--tcp=8484 tcp://127.0.0.1:8484` forward and `8484/tcp` in the
+`tailscale` zone, so no unit binds a wildcard address. The listener verifies the
+HMAC against either rotation slot, the ±300 s timestamp skew, the nonce ring, the
+shape and the repository, refuses a denylisted commit, answers `200` for a commit
+already deployed, and otherwise writes `queue/<uuid>.json` and answers `202`.
+Body cap 64 KiB, 10 s read timeout, queue cap 32 (`429` above it). It resolves no
+tag, checks no signature and writes no deployment state; `nonces.json` and
+`listener.lock` are the only files it owns.
+
+### The drain
+
+`smortress-deploy.path` watches the queue with `DirectoryNotEmpty=`, and
+`smortress-deploy.service` drains it as a oneshot under
+`flock /run/smortress/deploy.lock`: strict FIFO, except that a newer request for
+the same repository replaces an older pending one, with one rescan before exit.
+It is the single writer of `state.json`. `TimeoutStartSec=7200` bounds a wedged
+drain, and every external command inside it has its own deadline.
+
+`/usr/libexec/deploy-verify.py` answers "may this commit deploy" for every entry,
+fail-closed and journaled with the reason:
+
+1. The commit is off the denylist, is the tip of `main` *now*
+   (`GET /repos/smores56/<repo>/git/ref/heads/main`), is not the deployed commit,
+   and `GET /repos/smores56/<repo>/compare/<deployed>...<commit>` answers
+   `ahead`. No deployed commit is a `bootstrap-required` rejection, never a guess.
+2. Platform only: the tag `sha-<commit[:12]>` is resolved anonymously (ghcr token
+   → manifest → `Docker-Content-Digest`, following an index to the amd64
+   manifest) and that manifest's config blob must carry
+   `org.opencontainers.image.revision` equal to the commit. The digest is
+   therefore what the registry says that tag is; the event cannot propose one.
+   Both the index and the platform manifest digest are recorded, because `bootc`
+   reports either form.
+3. The signature is `bootc`'s check at the switch, not ours, so an unsigned or
+   foreign digest never stages.
+
+API calls are anonymous and cached for 120 s; each is bounded at 30 s; a
+rate-limited answer is an infrastructure failure — the entry stays queued and
+the journal says so, and the dead-man pages once it has waited half an hour.
+A rejected commit is popped and never retried, because the next trigger would
+fail it identically.
+
+### Platform: snapshot gate, switch, reboot
+
+`deploy-platform prepare` runs the snapshot gate before anything is staged:
+`smortress-restic-verify --local --json` per restore unit, SSD first and the HDD
+when the SSD is absent, and a unit without a fresh verified snapshot is backed up
+directly with `smortress-restic-backup --unit <unit> --no-maintenance` (1800 s
+each, 900 s of waiting for the hourly driver's unit lock, 3600 s for the whole
+gate; maintenance is excluded so the gate never waits for a prune). If no local
+repository can take the snapshot, or the budget runs out, the deploy **holds**:
+`held.json`, a `/fail` ping, a journal line, and nothing staged. Only
+`smortress-deploy release --force`, run by hand as root, releases it.
+
+`deploy-platform stage` follows a green gate: `bootc switch
+--enforce-container-sigpolicy ghcr.io/smores56/homelab-platform/server@<manifest
+digest>` (stage only, never `--apply`), then `.status.staged.image.imageDigest`
+must equal one of the two recorded forms — a staged entry nobody verified means
+nothing is recorded and nothing reboots — then `pending.json` and `systemctl
+reboot`.
+
+`switch` and not `upgrade`: `--enforce-container-sigpolicy` exists only on
+`switch`/install, and a digest-pinned host never moves on `upgrade`.
+
+### The boot gate
+
+`smortress-boot-gate.service` runs on every boot, `Before=boot-complete.target`
+and `After=multi-user.target`, after the same inputs as the drain. It first
+reconciles an interrupted apps apply (a bounded `deploy-apps revert`, before any
+health check, because the tenant may be half of two revisions), then — only when
+`pending.json` exists — compares `.status.booted.image.imageDigest` to the
+recorded digests:
+
+- **match.** The health gate, retried inside 300 s: every unit in
+  `/usr/share/smortress/deploy-units.txt` active and none of them `failed`, the
+  pool imported, `/srv/apps` a mountpoint, every app in `plan.json` up with its
+  ingress loopback port accepting a connect, and every expected Serve path
+  present in `tailscale serve status --json`. Success records the deployment,
+  sets `boot_success=1`, resets the counter, clears `pending.json` and pings the
+  `deploy` check green.
+- **no match.** The counter already fell back or an operator rolled back:
+  `rolled-back-by-bootloader`, the digest denylisted, a `/fail` ping, the record
+  consumed and the GRUB flags reset. A stale `pending.json` therefore cannot roll
+  back a healthy host.
+- **unreadable.** Nothing is decided: the record stays for the next boot, and the
+  counter is what protects the host.
+
+A failed health gate denylists the digest, pages, and runs `bootc rollback
+--apply`, resetting `boot_success`, `boot_counter` and `default` so a spent
+counter cannot re-select the deployment that just failed.
+
+### Below userspace
+
+`bootc` has no boot counting and the gate only runs if userspace starts, so the
+image ships `/usr/lib/bootupd/grub2-static/configs.d/10-smortress-count.cfg`: on
+every boot it sets `boot_success=0` and decrements `boot_counter` from 3, and at
+zero selects the previous deployment (`default=1`) and marks the counter spent.
+`RuntimeWatchdogSec=1min` and `kernel.panic=10` turn a hung PID 1 or a panic into
+the reboot that counter acts on. The snippet reaches `/boot/grub2/grub.cfg` only
+after one `bootupctl update` on the host, which is a named step, not an
+assumption: `docs/manual-steps.md` section 49 asserts the text is in `grub.cfg`.
+Without that step the feature claims no pre-userspace rollback.
+
+### The two backstops
+
+`smortress-deploy-poll.timer` runs hourly at `:20` and enqueues a request when a
+repository's `main` tip differs from the deployed commit: the case an event
+cannot cover — a notify job that never ran, a tailnet that was down, a build that
+landed while the host was off. It decides nothing; it only enqueues, pages on a
+denylisted tip, and stops enqueuing one until `smortress-deploy unblock` removes
+that entry.
+
+`smortress-deploy-heartbeat.timer` (every 5 minutes) pings the `deploy` check
+green only when `GET /healthz` answers `200` within 5 s *and* no queue entry has
+waited more than 30 minutes; anything else pings `/fail` with the reason. It is
+separate from the poll on purpose: a poll-driven ping stays green while the drain
+is wedged behind a stalled pull with the lock held.
+
+### What a hand-run switch still gives up
+
+`sudo bootc switch --enforce-container-sigpolicy <reference>` still verifies the
+signature and still boots, and the GRUB counter still covers a deployment that
+never reaches userspace. What it gives up is everything the receiver checks
+before and after the reboot:
+
+- the tip and descendancy check, so a signed build from an older commit or a
+  divergent branch stages happily (the `:latest` paragraph above is the same
+  trade);
+- the `org.opencontainers.image.revision` binding from commit to digest, so a
+  tag that moved between build and switch is not caught;
+- the snapshot gate: nothing proves the restore units have a fresh verified
+  local snapshot before the reboot;
+- the staged-digest read-back, which is what catches a switch that staged
+  something other than the verified manifest;
+- the boot gate itself: a hand-run switch writes no `pending.json`, so there is
+  no health gate, no denylist entry and no recorded deployment. The record in
+  `state.json` stays at the older commit until something else writes it —
+  `smortress-deploy bootstrap` exists for a restored host, not for making a hand
+  switch look deployed.
+
+### Operating it
+
+`/usr/libexec/smortress-deploy` (`scripts/deploy-cli.sh`; root's `PATH` does not
+carry `/usr/libexec`) is the whole operator surface. `status` prints the deployed
+commits, the held and staged records and both denylist tables; `release --force`
+waives the snapshot gate for the held digest; `unblock` drops one denylist entry;
+`bootstrap` records the running commit of a restored host, once, and refuses to
+overwrite one. The state
+tree is root-only under `/var/lib/homelab/deploy/`, `journal.jsonl` is
+append-only and rotates at 5 MiB, and the operator procedure — the two CI
+Environments, the three `deploy-*` ciphertexts, the Healthchecks check, the
+`bootupctl update`, and how to read a hold — is `docs/manual-steps.md`
+section 49.
 ## Disks and encryption
 
 FCOS owns a fixed raw disk image: `p1` BIOS-BOOT, `p2` EFI-SYSTEM, `p3` boot,
@@ -354,6 +544,7 @@ scripts/check-server-image.sh
 scripts/check-action-pins.sh
 scripts/check-pr-secret-boundary.sh
 shellcheck scripts/*.sh
+tests/deploy/*.sh                         # the deploy path against fakes: listener, verification, gates, apply
 scripts/render-ignition.sh --synthetic --check   # needs butane on PATH; CI pins it
 actionlint .github/workflows/server-image-static.yml \
   .github/workflows/publish-server-image.yml
@@ -387,6 +578,14 @@ These require the physical host and are not claimed as proven by this task:
   --enforce-container-sigpolicy` accepting the signed digest with the committed
   public key.
 - `bootc rollback` with the real deployment history and the next signed switch.
+- The deploy path end to end on the host (#798 T8): a CI notify arriving over
+  `tag:deploy` into `127.0.0.1:8484`, `bootupctl update` installing
+  `10-smortress-count.cfg` into `/boot/grub2/grub.cfg` and `default=1` being
+  honoured, the SP5100 watchdog arming at `RuntimeWatchdogSec=1min`, the gate's
+  sandbox permitting `bootc rollback --apply` and `systemctl reboot`, the tenant
+  probes (`systemctl --user --machine=apps@.host`) and the shape of
+  `tailscale serve status --json`, plus one real deploy of each repository and a
+  rollback drill.
 
 ## Local proof recorded by T2
 

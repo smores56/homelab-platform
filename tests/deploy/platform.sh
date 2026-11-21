@@ -403,5 +403,105 @@ check_json "$status" ".denylist.digests[\"$other_index\"].reason" boot-gate \
 check_json "$status" '.denylist.commits | type' object "status reports both denylist tables"
 pending_clear
 
+# --- 10. the denylist is cleared by hand ------------------------------------
+# A denylisted tip stops the hourly poll and refuses every event, so the clear is
+# the operator's own act: the CLI owns it, records who did it, and removes one
+# entry from one table -- never the whole list.
+reset_gate
+jq -nc --arg d "$other_index" --arg c "$commit" '
+  {schema:1,
+   commits:{($c):{reason:"apps-schema",at:"2026-11-20T01:00:00Z"}},
+   digests:{($d):{reason:"boot-gate",at:"2026-11-20T01:00:00Z"}}}' |
+  atomic_write "$state_dir/denylist.json"
+
+out=$(SUDO_USER=smores PATH="$work/nonroot:$PATH" bash "$cli" unblock digest "$other_index" 2>&1)
+rc=$?
+check_eq "$rc" 1 "a non-root unblock is refused"
+if denylist_has digest "$other_index"; then ok "a refused unblock leaves the entry in place"; else
+  bad "a refused unblock leaves the entry in place"
+fi
+if grep -q denylist-cleared "$state_dir/journal.jsonl" 2>/dev/null; then
+  bad "a refused unblock journals nothing"
+else
+  ok "a refused unblock journals nothing"
+fi
+
+run_cli unblock
+check_eq "$rc" 2 "unblock without arguments is a usage error"
+run_cli unblock tag "$commit"
+check_eq "$rc" 2 "unblock rejects an unknown table"
+run_cli unblock commit "$other_index"
+check_eq "$rc" 2 "unblock rejects a digest where a commit belongs"
+run_cli unblock digest "$commit"
+check_eq "$rc" 2 "unblock rejects a commit where a digest belongs"
+out=$(PATH="$work/uid0:$PATH" SUDO_USER=alice bash "$cli" unblock digest "$other_index" 2>&1)
+rc=$?
+check_eq "$rc" 0 "root clears a denylisted digest"
+if denylist_has digest "$other_index"; then bad "the cleared digest is gone"; else
+  ok "the cleared digest is gone"
+fi
+if denylist_has commit "$commit"; then ok "clearing one table keeps the other"; else
+  bad "clearing one table keeps the other"
+fi
+check_eq "$(journal_field denylist-cleared '.operator')" alice \
+  "the clear is journaled with the operator"
+check_eq "$(journal_field denylist-cleared '.kind')" digest "the clear is journaled with the table"
+check_eq "$(journal_field denylist-cleared '.value')" "$other_index" \
+  "the clear is journaled with the value"
+
+out=$(PATH="$work/uid0:$PATH" SUDO_USER=alice bash "$cli" unblock digest "$other_index" 2>&1)
+rc=$?
+check_eq "$rc" 1 "clearing an entry that is not listed is refused"
+
+# --- 11. a restored host is bootstrapped by hand ----------------------------
+# Without a recorded ancestor there is no descendancy to check and the verifier
+# refuses every deploy with `bootstrap-required`. The operator names the running
+# commit once; nothing here infers it, and nothing overwrites a record.
+reset_gate
+rm -f "$state_dir/state.json"
+bootstrap_commit=0123456789abcdef0123456789abcdef01234567
+
+out=$(SUDO_USER=smores PATH="$work/nonroot:$PATH" bash "$cli" bootstrap homelab-apps \
+  "$bootstrap_commit" 2>&1)
+rc=$?
+check_eq "$rc" 1 "a non-root bootstrap is refused"
+if [[ -e $state_dir/state.json ]]; then bad "a refused bootstrap writes no state"; else
+  ok "a refused bootstrap writes no state"
+fi
+
+run_cli bootstrap
+check_eq "$rc" 2 "bootstrap without arguments is a usage error"
+run_cli bootstrap nix-config "$bootstrap_commit"
+check_eq "$rc" 2 "bootstrap rejects a repository the receiver does not deploy"
+run_cli bootstrap homelab-apps abc123
+check_eq "$rc" 2 "bootstrap rejects a commit that is not 40 hex"
+
+out=$(PATH="$work/uid0:$PATH" SUDO_USER=alice bash "$cli" bootstrap homelab-apps \
+  "$bootstrap_commit" 2>&1)
+rc=$?
+check_eq "$rc" 0 "root records the running commit"
+check_json "$(state_read)" '.repos["homelab-apps"].commit' "$bootstrap_commit" \
+  "the bootstrapped commit is recorded"
+check_eq "$(journal_field bootstrap-recorded '.operator')" alice \
+  "the bootstrap is journaled with the operator"
+check_eq "$(journal_field bootstrap-recorded '.repo')" homelab-apps \
+  "the bootstrap is journaled with the repository"
+
+out=$(PATH="$work/uid0:$PATH" SUDO_USER=alice bash "$cli" bootstrap homelab-apps \
+  "$commit" 2>&1)
+rc=$?
+check_eq "$rc" 1 "bootstrap never overwrites a recorded commit"
+check_json "$(state_read)" '.repos["homelab-apps"].commit' "$bootstrap_commit" \
+  "the refused bootstrap leaves the record alone"
+
+# A bootstrapped platform host records the commit only: the digests belong to the
+# deployment the registry still serves, and a next deploy writes both forms.
+out=$(PATH="$work/uid0:$PATH" SUDO_USER=alice bash "$cli" bootstrap homelab-platform \
+  "$bootstrap_commit" 2>&1)
+rc=$?
+check_eq "$rc" 0 "both repositories can be bootstrapped"
+check_json "$(state_read)" '.repos["homelab-platform"] | has("indexDigest")' false \
+  "a bootstrap records no digest it did not observe"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 ((fail == 0))

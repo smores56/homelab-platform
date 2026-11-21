@@ -4,7 +4,7 @@
 definitions are not units: `scripts/apps-schema.py` validates them and renders
 rootless Quadlets plus a plan, and the pieces below turn that plan into a
 running, bounded tenant. This document describes what exists on smortress and
-what the deploy still has to do when it applies a revision.
+what the deploy does, and gives up, when it applies a revision.
 
 ## Accounts and datasets
 
@@ -164,7 +164,7 @@ its `[Service]` section, which the generator puts in the service it starts. The
 tenant's total is therefore the sum of the apps it runs, and the tenant's own
 Podman (image layers, container storage) is bounded by nothing yet.
 
-## What the deploy still adds
+## What the deploy adds
 
 The tenant's image policy is root-owned at
 `/usr/share/smortress/apps-policy.json` and named by every rendered unit with
@@ -175,15 +175,74 @@ directly. The tenant user's `/var` home (image layers, container storage) is not
 on a dataset and has no quota yet — the accepted gap until a dataset or quota is
 designed for it.
 
-The deploy starts `smortress-app-ingress@<name>` for every app in the plan and
-stops the instances for apps that left it.
+## What applies a revision
 
-The receiver task (#798) owns the remaining half: fetch the pushed commit, require it
-to be the tip of `homelab-apps` `main` and to descend from the deployed commit;
-re-run the validator from the image; pull each app image by digest as the
-tenant user with `--signature-policy=/usr/share/smortress/apps-policy.json`
-(the host policy still rejects it for root); install the rendered units into
-`~apps/.config/containers/systemd`, create the tenant's Podman secrets from its
-SOPS section, reload and restart only the changed apps,
-and leave the last good revision running when any step fails. The immediate
-reboot snapshot and post-boot health gate belong to that same gate.
+`scripts/deploy-apps.sh` is the only writer of the tenant, and the deploy
+receiver (#798) is the only thing that runs it: `deploy-apps apply --commit
+<sha>` for a queued apps request, `deploy-apps revert` when an apply has to be
+undone. Nothing on the host pulls `homelab-apps` on its own.
+
+**Verification first, on the host.**
+`image/rootfs/usr/libexec/deploy-verify.py --repo homelab-apps --commit <sha>`
+refuses the commit unless it is off the denylist, is the tip of `main` *now*,
+is not the deployed commit, and `compare/<deployed>...<commit>` answers `ahead`
+— descendancy in one request, against the ancestor `state.json` records. No
+commit-signature check: signed commits are not required in this repository
+(operator decision above), and tip + descendancy + the validator are what
+actually bound a commit. A rejection is final — the drain pops the entry and
+the same commit is refused at the listener and by the poll until an operator
+runs `smortress-deploy unblock commit <sha>`.
+
+**Then the apply, in this order**, with a revert path behind every step:
+
+1. **Fetch and render.** The commit tarball from `codeload.github.com` is
+   extracted into `/var/lib/homelab/deploy/work/apps-<commit>/tree`. The
+   tenant's `secrets.sops.json` is decrypted once (machine identity) and handed
+   to `apps-schema validate --root <tree> --secrets <file>`, then to
+   `apps-schema render --root <tree> --out render.next --secrets <file>`.
+   `render` runs with `--allow-empty`, which the deploy alone uses: without it a
+   tenant could be filled but never emptied, and Serve's existing
+   empty-plan pruning would never run. A rejected definition stops here, the
+   installed plan untouched, and the commit is denylisted and paged.
+2. **Record before mutating.** `apply.json` (`phase: pulling`, previous and
+   intended unit sets, the previous plan, the previous secret values as
+   root-only `0600` files under `work/prev-secrets/`) is written, and the
+   previous render tree is kept as `render.prev` until the apply commits. This
+   record is what a crash is reverted from.
+3. **Pull everything.** Free-space floors are 10 GiB on `/var/home/apps` (the
+   pulled layers) and 8 GiB on `/` and `/var` (container store, ostree
+   staging). Every changed image is pulled by digest as the tenant —
+   `runuser -u apps -- podman pull --signature-policy=/usr/share/smortress/apps-policy.json`
+   — under a 1800 s deadline. One failed pull aborts with nothing changed, so
+   "pull everything, then change anything" holds: no half-revision ever runs.
+4. **Plan, then quota.** `plan.json` is installed atomically as
+   `/var/lib/homelab/apps/plan.json`, then `smortress-apps-quota.service` is
+   restarted so the applier reads the new plan and creates the new apps'
+   directories and ZFS project quotas *before* anything starts. The unit is
+   `RemainAfterExit=yes`, so `restart` is what re-runs it.
+5. **Units, secrets, ingress.** As the tenant, from `/` with
+   `XDG_RUNTIME_DIR=/run/user/<uid>`: install the rendered units into
+   `~apps/.config/containers/systemd`, remove the units and Podman secrets of
+   apps that left the plan, `podman secret create --replace` the changed values
+   (rotation included; `rm` then `create` fails on an in-use secret),
+   `systemctl --user daemon-reload`, start the new apps, restart the changed
+   ones, stop the removed ones, and start/stop
+   `smortress-app-ingress@<name>` to match. Root never writes inside the
+   tenant's home: every write there runs as the tenant through `runuser`.
+6. **Commit, then Serve.** `state.json` records the commit and the unit and
+   secret content hashes, `apply.json`, `render.prev` and `work/prev-secrets/`
+   are removed, and `smortress-tailscale-serve.service` is restarted. It is a
+   `RemainAfterExit` oneshot, so without the restart a new app has no route and
+   a removed app keeps one. A Serve failure here is journaled and paged but
+   does not revert the revision: Serve also fails on unrelated dataset
+   absenteeism, and a healthy apps revision must not be rolled back for a route.
+
+**Revert.** A failure after the first mutation restores every changed unit from
+`render.prev`, the previous plan and secret values, restarts the changed apps,
+starts the removed ones again, regenerates Serve and clears the record.
+`apply.json` is also the crash state: an apply interrupted by a reboot is
+reverted by the boot gate at the next boot — before any of its health checks,
+because the tenant may be half of two revisions — or by the drain before it
+acts on the queue. An apps deploy reboots nothing, so it has no boot gate and no
+boot counting; the platform half of the receiver, and the pre-userspace counter
+that covers it, are in `docs/core/server-image.md`.

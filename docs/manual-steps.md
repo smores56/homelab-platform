@@ -6205,3 +6205,309 @@ repository and `contents`/`pull_requests`/`issues`), with the App private key in
 the dispatcher and never in the job. That is a design delta to #702/#715, not
 part of this walkthrough; this section records the approved T0 identity and the
 controls that bound it.
+
+## 49. Deploy receiver (#798, T7): notify credentials, the three secrets, the boot counter, and the operator commands
+
+The receiver is the only thing that changes a deployment on `smortress`. A merge
+to `homelab-platform` `main` or to `homelab-apps` `main` reaches the host as one
+signed request, and the host re-derives everything else itself
+(`docs/core/server-image.md`, "The deploy path"). Nothing but these credentials,
+one Healthchecks check and one `bootupctl update` is a human decision: the
+workflows, the units, the state tree, the secrets' manifest lines and the
+snapshot gate are all in the tree.
+
+The image ships the receiver, the drain, the verifier, the platform and apps
+steps, the boot gate and the operator CLI; it starts the listener, the queue
+path, the boot gate and the two timers at boot. The `deploy-notify` Environment
+is what the two notify jobs read, so the order below is: Environment, tailnet
+client, Healthchecks check, ciphertexts, boot counter, then the commands an
+operator uses when something needs a hand.
+
+### 49.1 Create the `deploy-notify` Environment in both repositories
+
+Both repositories have a `notify` job that runs `environment: deploy-notify` with
+`permissions: {}` and no checkout; the Environment is main-only so a pull request
+or a branch run cannot read the webhook key even if it edits the workflow.
+
+The webhook key is not minted here: it is the value the repository already
+encrypts at `secrets/server/webhook-secret.yaml`, and both Environments and the
+host have to agree on it byte for byte. Read it from there (49.4 replaces it if
+that ciphertext still holds the random value the commit shipped) and record it in
+the password manager.
+
+```sh
+OWNER=$(cat ~/.config/smores56-agent/owner-token)
+WEBHOOK=$(sops decrypt --extract '["webhook-secret"]' secrets/server/webhook-secret.yaml)
+
+for repo in homelab-platform homelab-apps; do
+  GH_TOKEN="$OWNER" gh api -X PUT "repos/smores56/$repo/environments/deploy-notify" \
+    --input - <<'JSON'
+{"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}
+JSON
+  GH_TOKEN="$OWNER" gh api -X POST \
+    "repos/smores56/$repo/environments/deploy-notify/deployment-branch-policies" \
+    -f name=main -f type=branch
+done
+```
+
+The three secrets are the same names in both repositories because both jobs run
+the same script: the OAuth client from 49.2 in two secrets, and the one webhook
+key the host also holds (`webhook-secret.yaml`, 49.4).
+
+```sh
+for repo in homelab-platform homelab-apps; do
+  printf '%s' '<oauth client id>' | GH_TOKEN="$OWNER" \
+    gh secret set TS_OAUTH_CLIENT_ID --env deploy-notify --repo "smores56/$repo"
+  printf '%s' '<oauth client secret>' | GH_TOKEN="$OWNER" \
+    gh secret set TS_OAUTH_CLIENT_SECRET --env deploy-notify --repo "smores56/$repo"
+  printf '%s' "$WEBHOOK" | GH_TOKEN="$OWNER" \
+    gh secret set DEPLOY_WEBHOOK_SECRET --env deploy-notify --repo "smores56/$repo"
+done
+
+for repo in homelab-platform homelab-apps; do
+  printf '%-16s ' "$repo"
+  GH_TOKEN="$OWNER" gh api "repos/smores56/$repo/environments/deploy-notify/secrets" \
+    --jq '[.secrets[].name] | sort | join(",")'
+done
+# expect:
+# homelab-platform DEPLOY_WEBHOOK_SECRET,TS_OAUTH_CLIENT_ID,TS_OAUTH_CLIENT_SECRET
+# homelab-apps     DEPLOY_WEBHOOK_SECRET,TS_OAUTH_CLIENT_ID,TS_OAUTH_CLIENT_SECRET
+```
+
+There are still no repository-level secrets (48.4).
+
+### 49.2 Create the tailnet client that carries `tag:deploy`
+
+The notify job joins the tailnet as an ephemeral node tagged `tag:deploy`, and
+the ACL admits that tag on `tag:smortress:8484` and on nothing else. The tag's
+owner is `group:owner`; a client that mints any other tag is refused, and the
+`policy_file` admin client from section 45 is not used here.
+
+1. Admin console → Settings → OAuth clients → **New client**. Scopes: `auth_keys`
+   write and `devices` write, nothing else — `auth_keys` is what mints the
+   ephemeral pre-authorized key, `devices` is what lets the tag be applied to it.
+   Tags: `tag:deploy`.
+2. Put the client id and secret in both repositories' `deploy-notify`
+   Environment (49.1). One client, two Environments: rotating it is a change in
+   both, and a job that can reach the tailnet must never also hold the cosign key
+   (which lives in `server-image`, a different Environment).
+3. Prove the tag carries the right reach after the next deploy: the notify job's
+   log shows the node joining, the POST answers `202`, and the node disappears
+   from `tailscale status` when the job ends.
+
+### 49.3 Create the `deploy` Healthchecks check
+
+One check, five-minute period, is the receiver's only notification path: every
+failure, hold and rollback pings `/fail`, every successful apply and every healthy
+boot gate pings success, and Pushover's own integration is what reaches the
+phone.
+
+1. Healthchecks → **Add Check**: name `deploy`, period **5 minutes**, grace time
+   **5 minutes**, no schedule, integration **Pushover**. Simple `ping/<uuid>` URL.
+2. Record the URL; it goes into `secrets/server/deploy-ping-url.yaml` (49.4), not
+   into a workflow and not into this repository's plaintext.
+3. Confirm the dead-man is what keeps it green: the beat is
+   `smortress-deploy-heartbeat.timer` every five minutes, and it pings `/fail`
+   when the listener does not answer `/healthz` or a queue entry is older than
+   30 minutes. A stopped listener therefore pages, which is the point.
+
+### 49.4 Seed the three deploy ciphertexts, and rotate the key inside one deploy
+
+`secrets/server/{webhook-secret,webhook-secret-next,deploy-ping-url}.yaml` and
+their three manifest lines ship with the image; the values behind them are the
+operator's. `webhook-secret` is what both notify jobs sign with today,
+`webhook-secret-next` is the rotation slot, and `deploy-ping-url` is 49.3's URL.
+All three are `value` in the manifest, so `sops-decrypt` writes the bare scalar:
+the listener compares the raw key, and the heartbeat hands the bare URL to curl.
+
+Confirm what the committed ciphertext holds before you trust a deploy to it:
+
+```sh
+sops decrypt --extract '["webhook-secret"]' secrets/server/webhook-secret.yaml
+# expect: a 64-character hex value you hold, and the two DEPLOY_WEBHOOK_SECRET
+#         secrets (49.1) are exactly it. A value nobody holds is a key no notify
+#         job can sign with, and the listener then refuses every event.
+
+sops decrypt --extract '["deploy-ping-url"]' secrets/server/deploy-ping-url.yaml
+# expect: the https://hc-ping.com/<uuid> URL from 49.3
+```
+
+Replace one that does not match, or seed a rotation slot that has no meaning yet:
+
+```sh
+( umask 077
+  printf 'deploy-ping-url: %s\n' 'https://hc-ping.com/<uuid>' >/tmp/deploy-ping-url.yaml
+  sops --encrypt --input-type yaml --output-type yaml \
+    --filename-override secrets/server/deploy-ping-url.yaml \
+    /tmp/deploy-ping-url.yaml >secrets/server/deploy-ping-url.yaml
+  rm -f /tmp/deploy-ping-url.yaml
+)
+```
+
+`webhook-secret-next` is the same command with that key name and a fresh
+`openssl rand -hex 32`. It holds a random value nobody knows, which is correct:
+the listener accepts either file, and a slot nobody holds changes no behaviour.
+
+Rotating the webhook key takes two platform deploys, and there is no window in
+which the old key is refused:
+
+1. Write the new key into `webhook-secret-next.yaml`, commit, and let the image
+   publish and the receiver deploy it. From that boot the listener accepts either
+   key.
+2. Change `DEPLOY_WEBHOOK_SECRET` in both `deploy-notify` Environments to the new
+   key (49.1). The next notify signs with it and is accepted.
+3. Move the new key into `webhook-secret.yaml` and put a fresh random value in
+   `webhook-secret-next.yaml`; commit and deploy. The old key is now gone from
+   the image.
+4. Prove it: `curl` one request, or wait for the next merge, and read
+   `journal.jsonl` for `queue-enqueued` (49.6); a body signed with the retired
+   key is a `deploy-rejected` with reason `bad-signature`.
+
+The listener refuses to start when `webhook-secret.yaml` is empty or missing, so
+a failed decrypt is a unit that answers nothing rather than one that accepts
+unsigned requests. `sudo systemctl status smortress-deploy-listener` is where
+that shows up, and the heartbeat pages for it.
+
+### 49.5 Install the boot counter into GRUB
+
+`bootc` has no boot counting and the post-boot gate only runs if userspace
+starts, so the image ships
+`/usr/lib/bootupd/grub2-static/configs.d/10-smortress-count.cfg`; `bootupd`
+copies it into `/boot/grub2/grub.cfg` on one command. Until that command runs,
+the feature claims no pre-userspace rollback.
+
+```sh
+command -v bootupctl   # the base ships bootupd; nothing is layered for this
+sudo bootupctl update
+sudo grep -c 'boot_counter' /boot/grub2/grub.cfg
+# expect: a non-zero count
+sudo grep -q 'boot_counter=-1' /boot/grub2/grub.cfg && echo snippet-installed
+# expect: snippet-installed
+```
+
+`grub.cfg` is regenerated from the static configs, so re-run `bootupctl update`
+after any base rebase that rewrites it. After the next reboot, prove the counter
+is live and the gate cleared it:
+
+```sh
+sudo grub2-editenv /boot/grub2/grubenv list
+# expect: boot_success=1 and boot_counter=3 on a healthy boot
+journalctl -u smortress-boot-gate.service --no-pager -n 20
+# expect: "healthy after N attempt(s)" on a boot that deployed nothing
+```
+
+If the snippet cannot be installed, say so where the rollback is claimed: a
+deployment that never reaches userspace then stays on the failed image until an
+operator rolls back by hand.
+
+### 49.6 The operator view: `status`, `/healthz`, and the journal
+
+`/usr/libexec/smortress-deploy` is the whole operator surface. It is not on
+root's `PATH` (`/usr/libexec` is not, by design), so every command below names
+the installed path. `status` is read-only and takes no lock, so it answers on
+a host whose drain is wedged.
+
+```sh
+sudo /usr/libexec/smortress-deploy status | jq .
+# {"schema":1,
+#  "repos":{"homelab-platform":{"commit":"…","indexDigest":"sha256:…","manifestDigest":"sha256:…"},
+#           "homelab-apps":{"commit":"…"}},
+#  "updated":"…",
+#  "held":null,
+#  "pending":null,
+#  "denylist":{"commits":{},"digests":{}}}
+
+sudo curl -sS http://127.0.0.1:8484/healthz
+# expect: {"status":"ok"}
+```
+
+`state.json` records what is running. `pending.json` exists only between a staged
+platform deploy and the boot gate that judges it, `held.json` only while a
+snapshot gate is waiting for an operator. The append-only record is
+`/var/lib/homelab/deploy/journal.jsonl` (rotated to `journal.1.jsonl` at 5 MiB),
+one JSON object per line:
+
+```sh
+sudo tail -n 20 /var/lib/homelab/deploy/journal.jsonl | jq -c .
+# the events worth knowing:
+#   queue-enqueued, deploy-rejected, already-deployed      the listener's answers
+#   verified, verify-rejected, verify-infra-failure       the host's own verdict
+#   deploy-held, gate-released, gate-released-by-operator, gate-green
+#   stage-digest-mismatch, boot-gate-green, boot-gate-failed, rolled-back-by-bootloader
+#   apps-start, apps-pulled, apps-rejected, apps-applied, apps-quota-applied,
+#   apps-reverted, apps-failed, apps-serve-failed
+#   denylist-cleared, bootstrap-recorded, poll-denylisted, notify-sent, notify-failed
+sudo journalctl -u smortress-deploy-listener.service -u smortress-deploy.service \
+  -u smortress-boot-gate.service --no-pager -n 50
+```
+
+### 49.7 A held deploy: what it looks like, and `release --force`
+
+A platform deploy whose snapshot gate cannot make one restore unit fresh — no
+usable local repository, or the 3600 s budget spent — holds instead of rebooting.
+Nothing is staged, nothing reboots, the check is red, and the hold is the only
+state:
+
+```sh
+sudo /usr/libexec/smortress-deploy status | jq '.held'
+# {"schema":1,"digest":"sha256:…","commit":"…","digests":{…},
+#  "missingUnits":["books"],"reason":"no-usable-repository","heldAt":"…","released":false}
+```
+
+Fix the repository (the restic plane's own sections), or decide the reboot is
+worth it without that unit. The second is the break-glass path and takes the
+flag on purpose:
+
+```sh
+sudo /usr/libexec/smortress-deploy release --force
+# smortress-deploy: released sha256:… for smores; the next drain of <commit> stages it
+```
+
+It records the operator, the digest and the missing units, changes no image and
+reboots nothing: the next request for that commit — the hourly poll re-enqueues
+it while it is still the tip — reaches the gate, sees the release, stages and
+reboots. A release covers one digest only.
+
+### 49.8 A denylisted commit or digest: `unblock`
+
+A failed gate, a rollback and a rejected apps definition all denylist what they
+refused, and a denial is final: the listener refuses the commit, and the hourly
+poll pages and stops enqueuing it. That is deliberate, so the way out is a hand
+that removes exactly one entry:
+
+```sh
+sudo /usr/libexec/smortress-deploy status | jq '.denylist'
+# {"commits":{"<40-hex>":{"reason":"apps:definition-rejected","at":"…"}},
+#  "digests":{"sha256:…":{"reason":"boot-gate:apps-not-mounted","at":"…"}}}
+
+sudo /usr/libexec/smortress-deploy unblock digest sha256:…
+# smortress-deploy: cleared the denylisted digest sha256:… for smores
+sudo /usr/libexec/smortress-deploy unblock commit <40-hex>
+```
+
+Set the value only after the cause is gone — a fixed definition is a *new* commit
+and needs no unblock; a denied digest is usually a failed health gate, so read
+`journal.jsonl` for its `boot-gate-failed` reason first. `unblock` refuses a
+non-root caller, a mistyped table (`commit`/`digest` only) and a value that is not
+on the list, and journals `denylist-cleared` with the operator.
+
+### 49.9 A restored or rebuilt host: `bootstrap`
+
+`state.json` lives outside every recovery group because it is rebuildable, and
+the one thing that cannot be inferred is the commit the host is running: no
+recorded ancestor means no descendancy check, and every deploy is refused with
+`bootstrap-required` rather than guessed. After a restore, and only then:
+
+```sh
+sudo bootc status --json | jq -r '.status.booted.image.imageDigest'
+sudo /usr/libexec/smortress-deploy bootstrap homelab-platform <40-hex>
+# smortress-deploy: recorded homelab-platform at <sha> for smores; the next deploy must be a descendant of it
+sudo /usr/libexec/smortress-deploy bootstrap homelab-apps <40-hex>
+```
+
+Take the commit from the image's own `org.opencontainers.image.revision` label
+when the booted digest is no longer in the registry. `bootstrap` refuses to
+overwrite an existing record, refuses a repository the receiver does not deploy,
+and journals `bootstrap-recorded`. It is not a way to make a hand-run
+`bootc switch` look deployed (see `docs/core/server-image.md`, "What a hand-run
+switch still gives up").

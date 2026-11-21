@@ -1,24 +1,33 @@
 #!/usr/bin/env bash
-# smortress-deploy: the operator's half of the deploy receiver (SDLC #798, T3).
+# smortress-deploy: the operator's half of the deploy receiver (SDLC #798).
 #
-#   smortress-deploy release --force
 #   smortress-deploy status
+#   smortress-deploy release --force
+#   smortress-deploy unblock <commit|digest> <value>
+#   smortress-deploy bootstrap <repo> <commit>
 #
-# The image installs this as /usr/libexec/smortress-deploy, so the two commands
-# are the ones the runbook names. `release --force` is the only way a held
-# platform deploy proceeds: it waives the snapshot gate for the digest the
-# operator saw held, records who did it and how many restore units were missing,
-# and changes nothing else. It never stages an image and never reboots -- the
-# next drain of that commit reaches the gate, sees the release and stages.
+# The image installs this as /usr/libexec/smortress-deploy, so the commands are
+# the ones the runbook names. `release --force` is the only way a held platform
+# deploy proceeds: it waives the snapshot gate for the digest the operator saw
+# held, records who did it and how many restore units were missing, and changes
+# nothing else. It never stages an image and never reboots -- the next drain of
+# that commit reaches the gate, sees the release and stages.
 #
 # `status` is read-only and takes no lock: every record it reads is written by
 # temp file and rename, so a reader sees a whole document or the previous one,
 # and an operator inspecting a wedged host must not queue behind the wedge.
 #
-# Exit codes: 0 done, 1 refused (not root, no hold), 2 usage, 4 the state could
-# not be read or written.
+# `unblock` is the way off the denylist: a denied tip is refused at the listener
+# and stops the hourly poll, so nothing deploys that commit again until the
+# operator removes exactly the entry a gate or a rollback added.
 #
-# `unblock` and `bootstrap` are T7 (#805).
+# `bootstrap` records the commit a restored or rebuilt host is running, once:
+# a deployment is only ever verified against a recorded ancestor, and nothing on
+# the host may guess one. It refuses to overwrite a record, so a mistaken
+# bootstrap cannot silently move the ancestor forward.
+#
+# Exit codes: 0 done, 1 refused (not root, nothing to release or clear, a record
+# already present), 2 usage, 4 the state could not be read or written.
 #
 # shellcheck disable=SC2154  # deploy-state.sh assigns these at source time
 set -euo pipefail
@@ -44,11 +53,15 @@ warn() { printf 'smortress-deploy: %s\n' "$*" >&2; }
 
 usage() {
   cat >&2 <<'EOF'
-usage: smortress-deploy release --force
-       smortress-deploy status
+usage: smortress-deploy status
+       smortress-deploy release --force
+       smortress-deploy unblock <commit|digest> <value>
+       smortress-deploy bootstrap <repo> <commit>
 
-  release --force  waive the snapshot gate for the held platform digest (root)
   status           deployed commits, the held and pending records, the denylist
+  release --force  waive the snapshot gate for the held platform digest (root)
+  unblock          drop one denylist entry (root)
+  bootstrap        record the running commit of a restored host, once (root)
 EOF
 }
 
@@ -127,6 +140,112 @@ cmd_status() {
      denylist: {commits: ($denylist.commits // {}), digests: ($denylist.digests // {})}}'
 }
 
+# The value's shape is the table's: a commit is a 40-hex sha and a digest is a
+# sha256 reference, so a mistyped table or a truncated value is a usage error
+# rather than a silent no-op on a list that keeps the host unable to deploy.
+valid_denylist_value() { # <commit|digest> <value>
+  case $1 in
+    commit) [[ $2 =~ ^[0-9a-f]{40}$ ]] ;;
+    digest) [[ $2 =~ ^sha256:[0-9a-f]{64}$ ]] ;;
+    *) return 1 ;;
+  esac
+}
+
+cmd_unblock() {
+  local kind=${1-} value=${2-} operator uid
+  (($# == 2)) || {
+    usage
+    exit 2
+  }
+  if ! valid_denylist_value "$kind" "$value"; then
+    warn "unblock takes {commit <40-hex sha>|digest sha256:<64-hex>}, not $kind $value"
+    exit 2
+  fi
+  uid=$(id -u)
+  if [[ $uid != 0 ]]; then
+    warn "unblock must be run as root (uid $uid)"
+    exit 1
+  fi
+  operator=${SUDO_USER:-$uid}
+
+  if ! deploy_lock_acquire; then
+    warn "another drain holds $deploy_lock_file; nothing was cleared"
+    exit 1
+  fi
+  trap deploy_lock_release EXIT
+
+  if ! denylist_has "$kind" "$value"; then
+    # Not an error in the state: the operator asked for the wrong entry, and
+    # saying so is what stops them believing the host will deploy again.
+    warn "$value is not on the denylist; nothing was cleared"
+    exit 1
+  fi
+  journal_append denylist-cleared "$(jq -nc --arg kind "$kind" --arg value "$value" \
+    --arg by "$operator" '{kind:$kind,value:$value,operator:$by}')" || {
+    warn "cannot journal the clear; the entry is unchanged"
+    exit 4
+  }
+  denylist_remove "$kind" "$value" || {
+    warn "cannot rewrite $deploy_denylist_file"
+    exit 4
+  }
+  say "cleared the denylisted $kind $value for $operator"
+  return 0
+}
+
+cmd_bootstrap() {
+  local repo=${1-} commit=${2-} operator uid existing
+  (($# == 2)) || {
+    usage
+    exit 2
+  }
+  case $repo in
+    homelab-platform | homelab-apps) ;;
+    *)
+      warn "bootstrap takes homelab-platform or homelab-apps, not $repo"
+      exit 2
+      ;;
+  esac
+  if [[ ! $commit =~ ^[0-9a-f]{40}$ ]]; then
+    warn "bootstrap takes the 40-character commit the host is running, not $commit"
+    exit 2
+  fi
+  uid=$(id -u)
+  if [[ $uid != 0 ]]; then
+    warn "bootstrap must be run as root (uid $uid)"
+    exit 1
+  fi
+  operator=${SUDO_USER:-$uid}
+
+  if ! deploy_lock_acquire; then
+    warn "another drain holds $deploy_lock_file; nothing was recorded"
+    exit 1
+  fi
+  trap deploy_lock_release EXIT
+
+  existing=$(deployed_commit "$repo" 2>/dev/null) || existing=""
+  if [[ -n $existing ]]; then
+    # The recorded ancestor is what every later deploy is checked against, so a
+    # second bootstrap is a request to move it by hand -- exactly the history
+    # rewrite the descendancy check exists to prevent.
+    warn "$repo already records $existing; bootstrap never overwrites a record"
+    exit 1
+  fi
+  journal_append bootstrap-recorded "$(jq -nc --arg repo "$repo" --arg commit "$commit" \
+    --arg by "$operator" '{repo:$repo,commit:$commit,operator:$by}')" || {
+    warn "cannot journal the bootstrap; the state is unchanged"
+    exit 4
+  }
+  # Commit only: the digest forms belong to the image the registry serves today,
+  # which is the verifier's answer to give on the next real deploy.
+  state_record_verified "$repo" "$commit" || {
+    warn "cannot record $repo at $commit"
+    exit 4
+  }
+  say "recorded $repo at $commit for $operator; the next deploy must be a descendant of it"
+  return 0
+}
+
 cmd=${1-}
 case $cmd in
   release)
@@ -136,6 +255,14 @@ case $cmd in
   status)
     shift
     cmd_status
+    ;;
+  unblock)
+    shift
+    cmd_unblock "$@"
+    ;;
+  bootstrap)
+    shift
+    cmd_bootstrap "$@"
     ;;
   -h | --help)
     usage

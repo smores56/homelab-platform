@@ -4,14 +4,21 @@
 # unit listed wrongly rolls back every deployment -- the list is what "serving"
 # means for this host, not every unit the image enables.
 #
+# A line is only valid for a unit that stays active on a healthy host: a oneshot
+# with RemainAfterExit=yes, or a daemon. `smortress-tailscale-up.service` is not
+# here for that reason: it carries
+# ConditionPathExists=!/var/lib/homelab/tailscale-enrolled, so systemd skips it
+# and it reads `inactive` on every host that has finished enrolling -- listing it
+# would roll back every deploy on a healthy host. The tailnet is asserted through
+# tailscaled and the Serve unit instead.
+#
 # The deploy's own units are deliberately absent (the listener, the path, the
-# drain, the poll and heartbeat timers): their secrets are seeded after the
-# receiver first lands (SDLC #798, T6), and a missing deploy secret must page
-# rather than roll the host back onto an image that cannot deploy at all.
+# drain, the poll and heartbeat timers): their secrets are seeded by hand after
+# the receiver first lands (docs/manual-steps.md), and a missing deploy secret
+# must page rather than roll the host back onto an image that cannot deploy.
 firewalld.service
 sops-decrypt.service
 tailscaled.service
-smortress-tailscale-up.service
 smortress-tailscale-serve.service
 smortress-crypttab-fix.service
 smortress-data-init.service

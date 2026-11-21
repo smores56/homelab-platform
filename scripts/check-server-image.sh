@@ -746,12 +746,12 @@ for unit in smortress-app-secrets.service smortress-tailscale-serve.service \
   check "image enables $unit" has "$unit" image/Containerfile
 done
 
-# Deploy receiver (T4). A platform deploy ends in a reboot, so the pieces that
-# decide whether the new deployment stays are asserted here: the gate unit and
-# its ordering, the counter that is the only rollback before userspace, and the
-# list of units the gate requires. A missing unit in that list is a gate that
-# checks nothing; a listed deploy unit is a gate that rolls the host back for a
-# secret seeded after the first deploy lands.
+# Deploy receiver (#798). A platform deploy ends in a reboot, so the pieces that
+# decide whether the new deployment stays are asserted here: the units the image
+# starts, the gate unit and its ordering, the counter that is the only rollback
+# before userspace, and the list of units the gate requires. A missing unit in
+# that list is a gate that checks nothing; a listed unit that is not active on a
+# healthy host is a gate that rolls every deployment back.
 gate_unit=units/systemd/smortress-boot-gate.service
 check "the boot gate unit exists" test -s "$gate_unit"
 check "the boot gate runs before boot-complete" \
@@ -772,18 +772,6 @@ check "the boot gate wants its inputs without requiring them" \
 check "the boot gate is installed where the loop puts it" \
   has 'ExecStart=/usr/libexec/smortress-boot-gate' "$gate_unit"
 check "the image installs the boot gate" has 'scripts/smortress-boot-gate.sh' image/Containerfile
-# The `smortress-src` loop installs only what the COPY list names, and it strips
-# the `.sh`: `deploy-apps` was written in T5 and never listed, so the drain's apps
-# child was a path the image did not have. Every program a unit's ExecStart names
-# is asserted here for the same reason.
-for program in deploy-apps deploy-poll deploy-heartbeat; do
-  check "the image installs scripts/$program.sh" has "scripts/$program.sh" image/Containerfile
-done
-for program in deploy-poll deploy-heartbeat; do
-  check "a unit runs the installed $program" has "/usr/libexec/$program" units/systemd
-done
-# deploy-apps has no unit of its own: the drain runs it for a queued apps request.
-check "the drain resolves the installed deploy-apps" has '/usr/libexec/deploy-apps' scripts/deploy-drain.sh
 check "the boot gate is sandboxed" grep -qE '^ProtectSystem=strict' "$gate_unit"
 # The gate mutates the grubenv and the ostree deployment it rolls back to, and
 # nothing else: a wider writable tree would let a compromised gate rewrite a unit.
@@ -793,6 +781,95 @@ check "the drain waits for the boot gate" \
   grep -qE '^After=.*smortress-boot-gate\.service' units/systemd/smortress-deploy.service
 check "the drain can write the boot it stages" \
   grep -qE '^ReadWritePaths=(-)?/boot$' units/systemd/smortress-deploy.service
+
+# Every program a unit or a script names under /usr/libexec has to be installed by
+# the image, and the set is derived rather than listed: the `smortress-src` loop
+# installs only what its COPY line names and strips the `.sh`, so `deploy-apps`
+# was written in T5 and never listed and the drain's apps child was a path the
+# image did not have. A program is installed by one of the three deliveries: the
+# rootfs copy, an explicit `/usr/libexec/<name>` destination, or the `.sh` loop --
+# except the operator CLI, which is staged under the name the runbook uses.
+# shellcheck disable=SC2013  # the derived names are paths and contain no blanks
+for program in $(grep -rhoE --exclude=check-server-image.sh \
+  '/usr/libexec/[A-Za-z0-9._-]*[A-Za-z0-9_-]' units image/rootfs scripts/*.sh |
+  sed 's|.*/||' | sort -u); do
+  if [[ -f image/rootfs/usr/libexec/$program ]]; then
+    check "the image ships /usr/libexec/$program" test -x "image/rootfs/usr/libexec/$program"
+  elif [[ $program == smortress-deploy ]]; then
+    check "the image installs /usr/libexec/$program" \
+      has 'scripts/deploy-cli.sh /usr/libexec/smortress-src/smortress-deploy.sh' image/Containerfile
+  elif grep -qF "/usr/libexec/$program" image/Containerfile; then
+    ok "the image installs /usr/libexec/$program"
+  else
+    check "the image installs /usr/libexec/$program" has "scripts/$program.sh" image/Containerfile
+  fi
+done
+# `COPY` preserves the mode, so a rootfs program committed non-executable is a
+# unit that fails with 203/EXEC at the first boot rather than at review time.
+for program in deploy-receiver.py deploy-verify.py; do
+  check "the rootfs commits $program executable" \
+    test "$(git ls-files -s "image/rootfs/usr/libexec/$program" | cut -d' ' -f1)" = 100755
+done
+check "the loop installs every staged helper 0755" \
+  has 'install -m 0755 "$f" "/usr/libexec/$(basename "${f%.sh}")"' image/Containerfile
+# The deploy's own programs: the two python helpers ship in the rootfs (the loop
+# would drop them), and the shell helpers go through it.
+for program in deploy-state deploy-drain deploy-platform deploy-apps deploy-poll deploy-heartbeat; do
+  check "the image installs scripts/$program.sh" has "scripts/$program.sh" image/Containerfile
+done
+for program in deploy-poll deploy-heartbeat; do
+  check "a unit runs the installed $program" has "/usr/libexec/$program" units/systemd
+done
+# deploy-apps has no unit of its own: the drain runs it for a queued apps request.
+check "the drain resolves the installed deploy-apps" has '/usr/libexec/deploy-apps' scripts/deploy-drain.sh
+
+# The units the image starts at boot. The drain is the exception and is asserted
+# as such: it is a queue-triggered oneshot with no [Install] section, so enabling
+# it would fail the build and starting it at boot would drain an empty queue.
+receiver_unit=units/systemd/smortress-deploy-listener.service
+check "the receiver unit exists" test -s "$receiver_unit"
+check "the receiver runs the installed program" \
+  has 'ExecStart=/usr/bin/python3 /usr/libexec/deploy-receiver.py' "$receiver_unit"
+check "the receiver refuses to start without the decrypt step" \
+  grep -qE '^Requires=sops-decrypt\.service' "$receiver_unit"
+for unit in smortress-deploy-listener.service smortress-deploy.path \
+  smortress-boot-gate.service smortress-deploy-poll.timer \
+  smortress-deploy-heartbeat.timer; do
+  check "image enables $unit" has "$unit" image/Containerfile
+done
+check "the queue path triggers the drain" \
+  grep -qxF 'Unit=smortress-deploy.service' units/systemd/smortress-deploy.path
+check "the queue path watches the receiver's queue" \
+  grep -qxF 'DirectoryNotEmpty=/var/lib/homelab/deploy/queue' units/systemd/smortress-deploy.path
+check "the drain is triggered by the queue, not enabled at boot" \
+  lacks 'WantedBy=' units/systemd/smortress-deploy.service
+# A oneshot that its own trigger starts must not also be enabled: an enabled
+# drain runs its snapshot gate on an empty queue, and an enabled poll service
+# fires once at boot with no timer behind it.
+for unit in smortress-deploy.service smortress-deploy-poll.service \
+  smortress-deploy-heartbeat.service; do
+  check "the image leaves $unit to its trigger" lacks "$unit" image/Containerfile
+done
+check "the poll timer starts the poll service" \
+  grep -qxF 'Unit=smortress-deploy-poll.service' units/systemd/smortress-deploy-poll.timer
+check "the heartbeat timer starts the heartbeat service" \
+  grep -qxF 'Unit=smortress-deploy-heartbeat.service' units/systemd/smortress-deploy-heartbeat.timer
+check "the tmpfiles entry creates the queue" \
+  has 'd /var/lib/homelab/deploy/queue 0700 root root -' image/rootfs/etc/tmpfiles.d/smortress.conf
+
+# The three secrets the deploy path reads are `value` scalars: the listener
+# compares the raw key, the heartbeat hands the bare URL to curl and sops-decrypt
+# writes the scalar alone, so a `yaml` entry would compare a document.
+for name in webhook-secret webhook-secret-next deploy-ping-url; do
+  check "$name is a manifest value" \
+    grep -qE "^${name//./\\.}\.yaml[[:space:]]+root[[:space:]]+root[[:space:]]+0400[[:space:]]+value$" \
+    image/rootfs/etc/smortress/secrets.manifest
+done
+
+# The gate's list is only meaningful if every line is active on a healthy host:
+# a unit the image does not enable is inactive at every boot, and so is one that
+# skips itself through a negated condition (the enrollment unit, after its
+# marker). Both are a gate that rolls back every deployment.
 units_file=image/rootfs/usr/share/smortress/deploy-units.txt
 check "the gate's unit list ships in the image" test -s "$units_file"
 check "the unit list is shipped by the rootfs copy" has 'COPY image/rootfs/ /' image/Containerfile
@@ -803,6 +880,17 @@ if grep -vE '^[[:space:]]*#' "$units_file" | grep -qiE 'deploy'; then
 else
   ok "the gate requires no deploy unit (its secret is seeded after the first deploy)"
 fi
+while IFS= read -r unit; do
+  [[ -n $unit ]] || continue
+  pattern="(^|[[:space:]])${unit//./\\.}([[:space:]]|;)"
+  check "the gate lists only units the image enables: $unit" grep -qE "$pattern" image/Containerfile
+  if [[ -f units/systemd/$unit ]] &&
+    grep -qE '^ConditionPathExists=!' "units/systemd/$unit"; then
+    bad "the gate lists no unit that skips itself: $unit"
+  else
+    ok "the gate lists no unit that skips itself: $unit"
+  fi
+done < <(awk '!/^[[:space:]]*#/ { print $1 }' "$units_file")
 count_cfg=image/rootfs/usr/lib/bootupd/grub2-static/configs.d/10-smortress-count.cfg
 check "the boot counter snippet ships where bootupd reads it" test -s "$count_cfg"
 check "the snippet clears boot_success on every boot" has 'set boot_success=0' "$count_cfg"
@@ -811,6 +899,45 @@ check "the snippet selects the previous deployment at zero" has 'set default=1' 
 check "a hung PID 1 reboots" \
   has 'RuntimeWatchdogSec=1min' image/rootfs/etc/systemd/system.conf.d/10-watchdog.conf
 check "a panic reboots" has 'kernel.panic=10' image/rootfs/etc/sysctl.d/10-panic.conf
+
+# The feature installs no distribution package: graph and signature questions are
+# answered by the GitHub API and bootc's own policy, so the only dnf run in the
+# build is the discarded sudo-build stage.
+final_stage=$(grep -nE '^FROM \$\{BASE_IMAGE\}$' image/Containerfile | cut -d: -f1)
+if [[ -z $final_stage ]] || awk -v start="$final_stage" 'NR > start && /dnf/' image/Containerfile |
+  grep -q .; then
+  bad "the runtime stage installs no distribution package"
+else
+  ok "the runtime stage installs no distribution package"
+fi
+
+# A deploy change that does not rebuild the image ships a commit whose host code
+# is the previous build's, because the image is the only delivery. Every file the
+# receiver ships must therefore sit under a publish path filter.
+publish=.github/workflows/publish-server-image.yml
+deploy_files=()
+while IFS= read -r file; do deploy_files+=("$file"); done < <(
+  printf '%s\n' scripts/deploy-*.sh scripts/smortress-boot-gate.sh image/rootfs/usr/libexec/deploy-*.py \
+    image/rootfs/usr/share/smortress/deploy-units.txt \
+    image/rootfs/usr/lib/bootupd/grub2-static/configs.d/10-smortress-count.cfg \
+    units/systemd/smortress-deploy* units/systemd/smortress-boot-gate.service \
+    secrets/server/webhook-secret.yaml secrets/server/webhook-secret-next.yaml \
+    secrets/server/deploy-ping-url.yaml
+)
+unpublished=
+for file in "${deploy_files[@]}"; do
+  if [[ ! -e $file ]]; then
+    unpublished+="$file(missing) "
+    continue
+  fi
+  grep -qF "\"${file%%/*}/**\"" "$publish" || unpublished+="$file "
+done
+if [[ -n $unpublished ]]; then
+  bad "every file the receiver ships rebuilds the image: $unpublished"
+else
+  ok "every file the receiver ships rebuilds the image"
+fi
+
 # Every timer this image ships must be enabled here, or it silently never fires.
 for timer in units/systemd/*.timer; do
   unit=${timer#units/systemd/}

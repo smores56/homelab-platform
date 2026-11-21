@@ -277,6 +277,26 @@ denylist_has() { # <commit|digest> <value>
 # boot, so a check on a single form would let a denied image through.
 denylist_has_digest() { denylist_has digest "$1"; }
 
+# denylist_remove <commit|digest> <value>
+#
+# The only way off the list, and it is the operator's: a denylisted tip stops the
+# hourly poll until *that* entry is gone, so the removal is one value from one
+# table, journaled by the caller with who ran it. Removing the whole list would
+# reopen every refusal a gate ever made.
+denylist_remove() {
+  local kind=$1 value=$2 table current
+  case $kind in
+    commit) table=commits ;;
+    digest) table=digests ;;
+    *) return 2 ;;
+  esac
+  [[ -n $value ]] || return 2
+  current=$(denylist_read)
+  jq -c --arg table "$table" --arg value "$value" \
+    '.[$table] = ((.[$table] // {}) | del(.[$value]))' <<<"$current" |
+    atomic_write "$deploy_denylist_file"
+}
+
 # cache_clear drops the verifier's 120 s API cache, so the next verification
 # looks at GitHub again. The verifier is the only writer of that file; this is
 # the hand-run and test-side reset, not a second writer.
