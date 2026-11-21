@@ -467,8 +467,8 @@ python3 -m unittest discover -s apps/broker/tests -t apps/broker -v
 tests/policies/check.sh
 
 # admission and can-i probes on the throwaway apiserver
-nix shell nixpkgs#etcd nixpkgs#kubernetes nixpkgs#openssl nixpkgs#kustomize \
-  nixpkgs#yq-go nixpkgs#jq -c tests/policies/check.sh --runtime
+scripts/install-ci-tools.sh "$HOME/.local/bin"   # etcd, kube-apiserver, kubectl
+tests/policies/check.sh --runtime
 ```
 
 The runtime probe evaluates `system:serviceaccount:tenant-apps:nanobot` against

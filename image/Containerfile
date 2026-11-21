@@ -8,10 +8,9 @@
 
 ARG BASE_IMAGE
 
-# The stage for the two things Fedora does not package in a usable form: the PAM
-# module sudo loads (pam_rssh, design #767 T8) and the local SELinux module that
-# lets sudo_t reach the forwarded agent socket. Both leave as files, so the stage
-# is discarded and the image keeps no toolchain from it.
+# The stage for the one thing Fedora does not package in a usable form: the PAM
+# module sudo loads (pam_rssh, design #767 T8). It leaves the stage as a file, so
+# the stage is discarded and the image keeps no toolchain from it.
 #
 # pam_rssh is a Rust cdylib linked against openssl and libpam, so a `.so` copied
 # from anywhere else would be an ABI mismatch found at the first sudo prompt
@@ -70,9 +69,8 @@ LABEL org.opencontainers.image.title="smortress server image" \
       org.opencontainers.image.vendor="smores56"
 
 # No package layer. sudo's touch factor is pam_rssh, which Fedora does not
-# package, and the SELinux module is local: both are built in the sudo-build
-# stage above and arrive as files, which is why this image neither installs nor
-# removes a distribution package.
+# package: it is built in the sudo-build stage above and arrives as a file, which
+# is why this image neither installs nor removes a distribution package.
 
 # Runtime helpers, units and ciphertext. The public cosign key is the only
 # signature-related material in the image; the policy references it by path.
@@ -259,7 +257,9 @@ RUN set -eux; \
 RUN firewall-offline-cmd --set-default-zone=drop
 
 # Fail the build if the base is not digest-pinned, the policy no longer rejects
-# by default, or the escalation tooling the runbooks depend on is absent.
+# by default, or the escalation tooling the runbooks depend on is absent. The PAM
+# modules are the `required` rows of the sudo stack: a base that dropped one
+# would fail closed and leave every non-root account unable to escalate at all.
 RUN set -eux; \
     case "${BASE_IMAGE}" in *@sha256:*) ;; *) echo "BASE_IMAGE is not digest-pinned" >&2; exit 1 ;; esac; \
     command -v python3 >/dev/null || { echo "the image has no python3 for the plan verifier" >&2; exit 1; }; \
@@ -268,5 +268,7 @@ RUN set -eux; \
     test -s /etc/ssh/authorized_keys.d/smores || { echo "the shipped ssh key file is missing or empty: it is the only key sshd reads (design #767)" >&2; exit 1; }; \
     ! grep -q 'sk-ssh-ed25519' /etc/ssh/authorized_keys.d/smores || { echo "the shipped key file carries a FIDO handle; the image ships a plain ed25519 key (design #767)" >&2; exit 1; }; \
     test -f /usr/lib64/security/libpam_rssh.so || { echo "libpam_rssh.so is missing: it is sudo's touch factor (design #767)" >&2; exit 1; }; \
+    test -f /usr/lib64/security/pam_faillock.so || { echo "pam_faillock.so is missing: it counts the sudo gate's failures (design #767)" >&2; exit 1; }; \
+    test -f /usr/lib64/security/pam_unix.so || { echo "pam_unix.so is missing: it is the sudo gate's password fallback (design #767)" >&2; exit 1; }; \
     test -e /etc/ssh/sudo_authorized_keys || { echo "the sudo key file is missing: libpam_rssh.so reads it on every prompt (design #767)" >&2; exit 1; }; \
     ! test -f /usr/lib64/security/pam_oath.so || { echo "pam_oath.so is still in the image: sudo's TOTP is retired (design #767)" >&2; exit 1; }; \

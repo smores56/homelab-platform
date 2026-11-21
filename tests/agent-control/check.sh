@@ -13,7 +13,7 @@ cd "$root" || exit 1
 
 command -v python3 >/dev/null 2>&1 || {
   echo "missing required tool: python3" >&2
-  echo "nix shell nixpkgs#python312 -c tests/agent-control/check.sh" >&2
+  echo "install python3" >&2
   exit 1
 }
 

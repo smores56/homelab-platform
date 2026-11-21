@@ -14,6 +14,12 @@ TOFU_VERSION=1.13.9
 TOFU_SHA256=bc44eb6b06446ba83bd4072114891987f590f66cca712737a7f1147c50c539ce
 VECTOR_VERSION=0.61.0
 VECTOR_SHA256=84a27c3ad6b772fdb05bb76ea01a31498bfc8f5e71f32cc78a0d96841f1aa827
+# The throwaway control plane of tests/policies/apiserver.sh; the server archive
+# carries both kube-apiserver and kubectl, so one download serves the harness.
+ETCD_VERSION=v3.7.4
+ETCD_SHA256=a0d47d07d081c12611fe69dc81a16ae8dd758401c0fe3a83d508823a1dac558e
+KUBERNETES_VERSION=v1.34.1
+KUBERNETES_SHA256=5b4b56cdcaaa1f388deb8114ecaae93c93a12cb81ecb5486d0cf67b33d3438e6
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
@@ -46,10 +52,27 @@ fetch "https://github.com/vectordotdev/vector/releases/download/v${VECTOR_VERSIO
 tar -xzf "$tmp/vector.tar.gz" -C "$tmp"
 install -m 0755 "$tmp/vector-x86_64-unknown-linux-gnu/bin/vector" "$dest/vector"
 
+fetch "https://github.com/etcd-io/etcd/releases/download/${ETCD_VERSION}/etcd-${ETCD_VERSION}-linux-amd64.tar.gz" \
+  etcd.tar.gz "$ETCD_SHA256"
+tar -xzf "$tmp/etcd.tar.gz" -C "$tmp" "etcd-${ETCD_VERSION}-linux-amd64/etcd"
+install -m 0755 "$tmp/etcd-${ETCD_VERSION}-linux-amd64/etcd" "$dest/etcd"
+
+fetch "https://dl.k8s.io/${KUBERNETES_VERSION}/kubernetes-server-linux-amd64.tar.gz" \
+  kubernetes-server.tar.gz "$KUBERNETES_SHA256"
+# Named members only: the archive also holds the controller manager, scheduler,
+# proxy and their cloud provider plugins, none of which the harness starts.
+tar -xzf "$tmp/kubernetes-server.tar.gz" -C "$tmp" \
+  kubernetes/server/bin/kube-apiserver kubernetes/server/bin/kubectl
+install -m 0755 "$tmp/kubernetes/server/bin/kube-apiserver" "$dest/kube-apiserver"
+install -m 0755 "$tmp/kubernetes/server/bin/kubectl" "$dest/kubectl"
+
 "$dest/kustomize" version
 "$dest/kubeconform" -v
 "$dest/tofu" version
 "$dest/vector" --version
+"$dest/etcd" --version
+"$dest/kube-apiserver" --version
+"$dest/kubectl" version --client
 
 YQ_VERSION=v4.54.3
 YQ_SHA256=129534601871538efe0ba4c5e62a34fb1d5f469bcb975c4fddeb467d82974973

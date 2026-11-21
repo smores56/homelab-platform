@@ -20,7 +20,7 @@ fi
 
 for tool in cosign skopeo; do
   if ! command -v "$tool" >/dev/null 2>&1; then
-    echo "verify-image: $tool is not installed; try: nix shell nixpkgs#$tool -c scripts/verify-image.sh $ref" >&2
+    echo "verify-image: $tool is not installed; install $tool and re-run scripts/verify-image.sh $ref" >&2
     exit 1
   fi
 done

@@ -33,7 +33,7 @@ eq() {
 for tool in yq jq vector python3 git kustomize; do
   command -v "$tool" >/dev/null 2>&1 || {
     echo "missing required tool: $tool" >&2
-    echo "nix shell nixpkgs#yq-go nixpkgs#jq nixpkgs#python3 -c tests/observability/check.sh" >&2
+    echo "install $tool; scripts/install-ci-tools.sh ~/.local/bin provides kustomize, yq and vector" >&2
     exit 1
   }
 done

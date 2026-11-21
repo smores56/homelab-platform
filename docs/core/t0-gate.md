@@ -123,7 +123,7 @@ It fails on: a snapshot older than 36 h, a pack read error, a retained tree
 absent from the snapshot, a restore whose file count disagrees with the
 snapshot listing, a missing or older-than-24 h Immich dump, or a dump that
 `pg_restore --list` cannot parse (`pg_restore` absent is a failure, not a
-pass — `nix shell nixpkgs#postgresql --command pg_restore --list <file>` is
+pass — `pg_restore --list <file>` is
 the one-off). The restore target is a directory the script creates under
 `/var/tmp` with 8 GiB of headroom; `--keep` leaves it in place, otherwise the
 script deletes only what it created. A plaintext restore of the vault under

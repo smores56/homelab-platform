@@ -14,9 +14,9 @@ Rules that make it a kit rather than a list:
   without the drill is the same as not having it.
 
 The drill has to be possible on a machine with nothing installed, so the kit
-also says how to get the tools: `nix shell nixpkgs#restic` (restic 0.19.1, the
-version that wrote the legacy repositories) or the distro package, and
-`nix shell nixpkgs#postgresql` when a dump needs `pg_restore`.
+also says how to get the tools: restic 0.19.1, the version that wrote the
+legacy repositories, or the distro package, and `postgresql-client` when a dump
+needs `pg_restore`.
 
 ## Items
 
@@ -30,7 +30,7 @@ version that wrote the legacy repositories) or the distro package, and
 | 970 LUKS passphrase (current rollback disk) | opens the old-generation rollback before it is converted into the SSD repository | 2026-11-15 (T0) | — |
 | smortress SSH host private key | the host's SOPS age identity and what `provision/smortress/build-seed.sh` carries into a reinstall | 2026-11-15 (T0) | — |
 | SOPS admin age identity | decrypts the versioned secret files; passphrase-encrypted copy per machine | existing | — |
-| YubiKey restore bundle (`nix run .#key-backup`) | FIDO2 credential handles; PIV keys cannot be exported and are unaffected | existing | — |
+| YubiKey restore bundle (FIDO2 credential records) | FIDO2 credential handles; PIV keys cannot be exported and are unaffected | existing | — |
 | New 980 root LUKS passphrase | offline unlock of the new OS disk (Tang + TPM2 is the unattended path) | T2 | — |
 | New 980 data LUKS passphrase | offline unlock of the data pool | T2 | — |
 | cosign signing key | re-signs a derived image when CI is unavailable | T2 | — |

@@ -8,8 +8,7 @@
 #   tests/policies/apiserver.sh stop    # kills both processes
 #
 # Required on PATH: etcd, kube-apiserver, openssl.
-#   nix shell nixpkgs#etcd nixpkgs#kubernetes nixpkgs#openssl -c \
-#     tests/policies/apiserver.sh start
+#   scripts/install-ci-tools.sh ~/.local/bin    # or the distro packages
 set -euo pipefail
 
 state_dir="${POLICY_TEST_STATE:-${TMPDIR:-/tmp}/homelab-policy-apiserver}"

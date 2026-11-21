@@ -39,9 +39,9 @@ tests/data-plane/check.sh               # data-plane contracts, identity, journa
 tests/tuta-calendar/check.sh            # calendar exporter: crypto, session seal, entity mapping, pagination
 tests/agent-egress/check.sh            # collector egress: allowlist proxy, SNI gate, DNS responder, log redaction
 tests/brave/check.sh                    # browsing collector: seed planting, History snapshot, collector over the copy
-nix run nixpkgs#yamllint -- .
-nix run nixpkgs#actionlint -- .              # a workflow GitHub cannot parse never runs, silently
-nix run nixpkgs#shellcheck -- scripts/*.sh tests/policies/*.sh tests/tofu/*.sh \
+yamllint .
+actionlint .                              # a workflow GitHub cannot parse never runs, silently
+shellcheck scripts/*.sh tests/policies/*.sh tests/tofu/*.sh \
   tests/access/*.sh tests/backup/*.sh tests/digest/*.sh tests/observability/*.sh \
   tests/agent-control/*.sh tests/agent-egress/*.sh tests/brave/*.sh \
   clusters/homelab/flux-system/bootstrap.sh \
@@ -52,8 +52,8 @@ scripts/check-codeowners.sh
 git diff --check
 ```
 
-Run `nix fmt` equivalents only where the repository defines them; this repo has
-no formatter beyond `tofu fmt` (`nix run nixpkgs#opentofu -- fmt -check -recursive tofu`).
+Run the formatters only where the repository defines them; this repo has no
+formatter beyond `tofu fmt -check -recursive tofu`.
 
 ## Cluster conventions
 

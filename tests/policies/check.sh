@@ -55,7 +55,7 @@ eq() {
 for tool in yq jq git kustomize; do
   command -v "$tool" >/dev/null 2>&1 || {
     echo "missing required tool: $tool" >&2
-    echo "nix shell nixpkgs#yq-go nixpkgs#jq nixpkgs#kustomize -c tests/policies/check.sh" >&2
+    echo "install $tool; scripts/install-ci-tools.sh ~/.local/bin provides kustomize and yq" >&2
     exit 1
   }
 done

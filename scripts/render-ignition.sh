@@ -56,7 +56,7 @@ done
 
 butane=${BUTANE:-butane}
 if ! command -v "$butane" >/dev/null 2>&1; then
-  echo "butane is not installed; run this under 'nix shell nixpkgs#butane' or set BUTANE" >&2
+  echo "butane is not installed; install butane or set BUTANE" >&2
   exit 1
 fi
 sops_bin=${SOPS_BIN:-sops}
@@ -114,7 +114,7 @@ else
     require_file "$repo/ignition/operator/$f"
   done
   command -v "$sops_bin" >/dev/null 2>&1 \
-    || die "sops is not installed; run this under 'nix shell nixpkgs#sops' or set SOPS_BIN"
+    || die "sops is not installed; install sops or set SOPS_BIN"
   if $stock; then
     derived_image=$UCORE_IMAGE
   else

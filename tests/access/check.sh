@@ -62,7 +62,7 @@ fi
 
 for tool in curl jq; do
   command -v "$tool" >/dev/null 2>&1 || {
-    echo "tests/access/check.sh: missing $tool (nix shell nixpkgs#curl nixpkgs#jq)" >&2
+    echo "tests/access/check.sh: missing $tool (install curl and jq)" >&2
     exit 1
   }
 done
