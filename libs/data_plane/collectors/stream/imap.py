@@ -411,6 +411,23 @@ def _list_name(line: bytes) -> str:
         ) from exc
 
 
+def pinned_tls_context(ca_file: str | Path) -> ssl.SSLContext:
+    """A context that trusts exactly the certificate in ``ca_file``, by bytes.
+
+    TutaBridge hardcodes its certificate's subject alternative names to
+    ``localhost`` and ``127.0.0.1`` (``crates/bridge/src/tls.rs`` in
+    ``spartanz51/tutabridge``), so no DNS name this container could dial can
+    pass a hostname check -- ``smortress-agent-tmail`` included. The pin
+    replaces that check: only a peer presenting that exact certificate
+    verifies, which is the guarantee the bridge's own healthcheck relies on and
+    the one the LOGIN credential needs on the collectors' network.
+    """
+
+    context = ssl.create_default_context(cafile=str(ca_file))
+    context.check_hostname = False
+    return context
+
+
 class ImapMailbox(Mailbox):
     """``imaplib`` behind the collector's seam, pinned to the bridge's certificate.
 
@@ -427,9 +444,8 @@ class ImapMailbox(Mailbox):
         password: str,
         ca_file: str | Path,
     ) -> None:
-        context = ssl.create_default_context(cafile=str(ca_file))
         self._client = imaplib.IMAP4_SSL(
-            host, port, ssl_context=context, timeout=IDLE_READ_TIMEOUT
+            host, port, ssl_context=pinned_tls_context(ca_file), timeout=IDLE_READ_TIMEOUT
         )
         try:
             status, data = self._client.login(user, password)

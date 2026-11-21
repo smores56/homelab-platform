@@ -9,7 +9,12 @@ wrapper has no test-only branch in the logic below it.
 from __future__ import annotations
 
 import json
+import shutil
+import socket
+import ssl
+import subprocess
 import tempfile
+import threading
 import unittest
 from dataclasses import dataclass, field
 from unittest import mock
@@ -23,6 +28,7 @@ from data_plane.collectors.stream import (
     Mailbox,
     collect_mailbox,
     message_headers,
+    pinned_tls_context,
     normalize_flags,
     parse_idle_line,
     uid_diff,
@@ -416,6 +422,91 @@ class CarryTests(unittest.TestCase):
             second = root / "published" / "gen-0002" / "objects" / "mail%3A%3AINBOX%3A%3A1"
             self.assertEqual(first.stat().st_ino, second.stat().st_ino)
             self.assertEqual(second.read_bytes(), _message("1"))
+
+def _self_signed(directory: Path, san: str) -> Path:
+    """A self-signed certificate for ``san``, written to ``directory``."""
+
+    directory.mkdir(parents=True, exist_ok=True)
+    cert = directory / "cert.pem"
+    subprocess.run(
+        [
+            "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+            "-subj", "/CN=localhost",
+            "-addext", f"subjectAltName={san}",
+            "-keyout", str(directory / "key.pem"),
+            "-out", str(cert),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    return cert
+
+
+class _TlsServer:
+    """A one-shot TLS listener presenting ``cert``, for the pin's cases."""
+
+    def __init__(self, cert: Path) -> None:
+        self._cert = cert
+
+    def __enter__(self) -> tuple[str, int]:
+        self._socket = socket.socket()
+        self._socket.bind(("127.0.0.1", 0))
+        self._socket.listen(1)
+        self._thread = threading.Thread(target=self._serve, daemon=True)
+        self._thread.start()
+        address: tuple[str, int] = self._socket.getsockname()
+        return address
+
+    def _serve(self) -> None:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(self._cert, self._cert.with_name("key.pem"))
+        try:
+            connection, _ = self._socket.accept()
+        except OSError:
+            return
+        with connection:
+            try:
+                with context.wrap_socket(connection, server_side=True):
+                    pass
+            except ssl.SSLError:
+                pass
+
+    def __exit__(self, *_exc: object) -> None:
+        self._socket.close()
+        self._thread.join(timeout=5)
+
+
+@unittest.skipUnless(shutil.which("openssl"), "openssl generates the fixture certificates")
+class PinnedCertificateTests(unittest.TestCase):
+    """What ``--ca-file`` promises: that certificate, not that name.
+
+    The bridge's certificate hardcodes its subject alternative names to
+    ``localhost`` and ``127.0.0.1``, so the collector dials a name no
+    certificate it will ever be handed covers. The pin is the byte-exact
+    certificate instead, and these cases hold both halves of that: a foreign
+    name still verifies, a foreign certificate does not.
+    """
+
+    def test_a_name_the_certificate_does_not_cover_still_verifies(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cert = _self_signed(Path(tmp), "DNS:localhost,IP:127.0.0.1")
+            with _TlsServer(cert) as address:
+                context = pinned_tls_context(cert)
+                self.assertFalse(context.check_hostname)
+                self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
+                with socket.create_connection(address) as raw:
+                    with context.wrap_socket(raw, server_hostname="smortress-agent-tmail"):
+                        pass
+
+    def test_a_different_certificate_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            trusted = _self_signed(Path(tmp) / "trusted", "DNS:localhost")
+            other = _self_signed(Path(tmp) / "other", "DNS:localhost")
+            with _TlsServer(other) as address:
+                context = pinned_tls_context(trusted)
+                with socket.create_connection(address) as raw:
+                    with self.assertRaises(ssl.SSLCertVerificationError):
+                        context.wrap_socket(raw, server_hostname="smortress-agent-tmail")
 
 
 if __name__ == "__main__":
