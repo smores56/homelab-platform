@@ -5156,3 +5156,10 @@ tailnet.
    From a device that is not in `group:owner` — a phone on another account, or a
    node carrying `tag:untrusted` — port 22 on smortress must not answer. `tailscale
    ping smortress` still succeeds there: the policy drops the port, not the node.
+
+   The policy names the host by address (`hosts.smortress` in
+   `tofu/tailscale.tf`), and that literal is the whole route in. A reinstall that
+   re-enrolls the node can give it a different tailnet address: read
+   `tailscale ip -4` on the host, update the literal, and apply before walking
+   away — otherwise `dst = ["smortress:22"]` names an address the host does not
+   hold and nothing reaches sshd but the console.
