@@ -6735,7 +6735,9 @@ snapshot, no room on the target filesystem, repository not configured) and the
 remaining checks for that backend are skipped: a drill is only evidence once the
 contents were checked. A `FAIL …: restore target <dir> inside the live dataset
 <key>` line means `--target` names a path under a mounted dataset, which is the
-one thing a drill must never write into; pick a target under `/var/tmp`.
+one thing a drill must never write into; pick a target on a data disk
+(`/var/lib/restic/hdd/drill` or `/var/lib/restic/ssd/drill`), never under
+`/var/tmp`.
 `SKIP restored hledger projection is present` is expected before the finance
 collector's first run, because that journal is derived.
 

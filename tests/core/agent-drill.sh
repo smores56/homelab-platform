@@ -128,6 +128,10 @@ check 'dry-run restore plans the restore-drill helper' \
 # restore that fills the root filesystem takes every service down with it.
 check 'the default restore target is on a data disk' \
   grep -qE 'restoring into /var/lib/restic/(ssd|hdd)/' <<<"$out"
+check 'the default drill root is only chosen from a mounted disk' \
+  grep -qF 'mountpoint -q "$candidate"' "$script"
+check 'a restore target on the root filesystem is refused' \
+  grep -qF 'resolves to the root filesystem' "$script"
 check 'the drill no longer roots its default target at /var/tmp' \
   test -z "$(grep -n 'default: /var/tmp' <<<"$("$script" --help 2>&1)")"
 
