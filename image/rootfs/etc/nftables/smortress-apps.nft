@@ -37,13 +37,6 @@ table inet smortress_apps_egress {
         meta skuid apps udp dport 53 accept
         meta skuid apps tcp dport 53 accept
 
-        # The tenant's own bridge is inside 10.0.0.0/8, so the LAN drop below
-        # would also drop the rootless port forward's connection to the
-        # container it belongs to, and every published port would time out.
-        # The tenant network is not a LAN: allow exactly its subnet, which the
-        # network unit pins, and nothing else private.
-        meta skuid apps ip daddr 10.89.0.0/24 accept
-
         # Any address this host answers on is local, including one outside the
         # private ranges; fib covers loopback and every configured address.
         meta skuid apps fib daddr type local drop

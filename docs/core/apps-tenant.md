@@ -89,11 +89,7 @@ cannot yet open the PR it is meant to auto-merge.
   forwards the tenant's DNS as the tenant uid and the resolver may be the host
   stub, MagicDNS or a LAN router, so no static set can name it. An app can
   therefore still reach a resolver on the tailnet or LAN, but nothing else.
-  The tenant's own network is excepted: the bridge sits inside
-  `10.0.0.0/8`, and the rule that keeps the tenant off the LAN would
-  otherwise drop rootlessport's forward to the container it belongs to,
-  which made every published port time out. The network unit pins its
-  subnet to `10.89.0.0/24` so the rule can name it exactly. `egress = "none"` joins the internal Podman network, which has no
+  `egress = "none"` joins the internal Podman network, which has no
   route out; Serve still reaches the loopback publish. Either class sits behind
   the same fail-closed table: a placeholder with the allow-list's name drops the
   whole account from earlier in boot, so a ruleset that fails to load leaves the
