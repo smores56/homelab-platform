@@ -119,6 +119,7 @@ cat >"$bin/bootc" <<'EOF'
 printf '%s\n' "$*" >>"$STUB_LOG/bootc-calls"
 staged=$(sed -n 's/^staged=//p' "$STUB_BOOTC_STATE" 2>/dev/null)
 booted=$(sed -n 's/^booted=//p' "$STUB_BOOTC_STATE" 2>/dev/null)
+booted_spec=$(sed -n 's/^booted_spec=//p' "$STUB_BOOTC_STATE" 2>/dev/null)
 case ${1-} in
   switch)
     # A real switch stages the image it names. The default is to leave the entry
@@ -132,11 +133,19 @@ case ${1-} in
     fi
     exit "${STUB_BOOTC_SWITCH_EXIT:-0}"
     ;;
+  upgrade)
+    # Moving within the tracked reference stages the same way a switch does.
+    if [[ -n ${STUB_BOOTC_UPGRADE_STAGE:-} ]]; then
+      printf 'staged=%s\nbooted=%s\nbooted_spec=%s\n' \
+        "$STUB_BOOTC_UPGRADE_STAGE" "$booted" "$booted_spec" >"$STUB_BOOTC_STATE"
+    fi
+    exit "${STUB_BOOTC_UPGRADE_EXIT:-0}"
+    ;;
   rollback) exit "${STUB_BOOTC_ROLLBACK_EXIT:-0}" ;;
   status)
     if [[ " $* " == *" --booted "* ]]; then
-      jq -nc --arg d "$booted" \
-        '{status:{booted:{image:{imageDigest:(if $d == "" then null else $d end)}}}}'
+      jq -nc --arg d "$booted" --arg s "$booted_spec" \
+        '{status:{booted:{image:{imageDigest:(if $d == "" then null else $d end),image:(if $s == "" then null else $s end)}}}}'
     elif [[ -n ${STUB_BOOTC_NO_STAGED:-} ]]; then
       jq -nc --arg d "$booted" '{status:{booted:{image:{imageDigest:$d}}}}'
     else
@@ -345,7 +354,7 @@ seed_pending() { # <index> <manifest> <commit> [<booted>]
   jq -nc --arg i "$1" --arg m "$2" --arg c "$3" \
     '{schema:1,phase:"staged",commit:$c,digest:$i,digests:{index:$i,manifest:$m},
       stagedAt:"2026-11-20T00:00:00Z"}' | pending_write || return 1
-  printf 'staged=%s\nbooted=%s\n' "$2" "$4" >"$STUB_BOOTC_STATE"
+  printf 'staged=%s\nbooted=%s\nbooted_spec=%s\n' "$2" "$4" "${5:-}" >"$STUB_BOOTC_STATE"
 }
 
 reset_case() { # keep the fakes' healthy answers, drop every record
@@ -451,8 +460,7 @@ check_eq "$(head -n 1 "$log/curl-urls")" "$ping_url/fail" "a refused stage pages
 # booted image is the verified one there is nothing to stage, and that must
 # record the deployment rather than refuse a null staged entry.
 reset_case
-printf 'staged=
-booted=%s\n' "$digest_manifest" >"$STUB_BOOTC_STATE"
+printf 'staged=\nbooted=%s\n' "$digest_manifest" >"$STUB_BOOTC_STATE"
 run_stage --commit "$commit" --digests "$digests"
 check_eq "$rc" 6 "an already-booted verified image is recorded, not refused"
 check_no_grep "$log/systemctl-calls" 'reboot' "an already-booted image never reboots"
@@ -460,6 +468,31 @@ check_eq "$(journal_field stage-already-booted '.commit')" "$commit" \
   "the already-booted image is journaled"
 check_json "$(cat "$state_dir/state.json")" '.repos["homelab-platform"].commit' "$commit" \
   "the already-booted image is recorded in state"
+
+# The host tracks :latest. `switch` is a reference change and stages nothing
+# when the spec already matches, so moving within the tag is `upgrade`, and the
+# verified digest still has to be what upgrade staged.
+reset_case
+printf 'staged=\nbooted=%s\nbooted_spec=%s:latest\n' "$digest_prev_manifest" "$image_ref" \
+  >"$STUB_BOOTC_STATE"
+export STUB_BOOTC_UPGRADE_STAGE=$digest_manifest
+run_stage --commit "$commit" --digests "$digests"
+unset STUB_BOOTC_UPGRADE_STAGE
+check_eq "$rc" 0 "a tracked reference moves with upgrade"
+check_eq "$(grep -c '^upgrade' "$log/bootc-calls")" 1 \
+  "the move within the tracked reference is upgrade"
+check_eq "$(grep -c '^switch' "$log/bootc-calls" || true)" 0 \
+  "a tracked reference is not switched again"
+check_grep "$log/systemctl-calls" 'reboot' "a staged upgrade reaches the reboot"
+
+reset_case
+printf 'staged=\nbooted=%s\nbooted_spec=%s:latest\n' "$digest_prev_manifest" "$image_ref" \
+  >"$STUB_BOOTC_STATE"
+export STUB_BOOTC_UPGRADE_STAGE=$digest_other
+run_stage --commit "$commit" --digests "$digests"
+unset STUB_BOOTC_UPGRADE_STAGE
+check_eq "$rc" 5 "an upgrade that staged an unverified image is refused"
+check_no_grep "$log/systemctl-calls" 'reboot' "an unverified upgrade never reboots"
 
 reset_case
 export STUB_BOOTC_NO_STAGED=1

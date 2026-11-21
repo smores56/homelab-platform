@@ -618,11 +618,13 @@ check_eq "$(grep -c '"event":"drain-parked"' "$DEPLOY_STATE_DIR/journal.jsonl")"
 # bootc creates /run/bootc/storage while it stages a pull; ProtectSystem=strict
 # leaves /run read-only, and the failure is a staging exit on every deploy.
 for unit in units/systemd/smortress-deploy.service units/systemd/smortress-boot-gate.service; do
-  if grep -qx 'RuntimeDirectory=bootc' "$unit"; then
-    ok "$(basename "$unit") gives bootc its runtime directory"
-  else
-    bad "$(basename "$unit") gives bootc its runtime directory"
-  fi
+  for dir in bootc ostree; do
+    if grep -qx "RuntimeDirectory=$dir" "$unit"; then
+      ok "$(basename "$unit") gives bootc /run/$dir"
+    else
+      bad "$(basename "$unit") gives bootc /run/$dir"
+    fi
+  done
 done
 
 # --- the deploy lock ---------------------------------------------------------

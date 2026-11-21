@@ -38,6 +38,9 @@ RuntimeDirectory=smortress-deploy
 # stages a pull; ProtectSystem=strict leaves /run read-only, so PID 1 creates
 # that one directory writable instead of opening all of /run.
 RuntimeDirectory=bootc
+# ostree opens its runtime auth file at /run/ostree/auth.json on every pull;
+# without it the switch fails with "Function not implemented".
+RuntimeDirectory=ostree
 RuntimeDirectoryMode=0700
 RuntimeDirectoryPreserve=yes
 # The snapshot gate (T3) runs the Restic driver as a child, and that driver keeps

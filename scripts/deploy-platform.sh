@@ -439,7 +439,7 @@ booted_matches() {
 }
 
 cmd_stage() {
-  local commit='' digests='' index='' manifest='' staged='' rc=0
+  local commit='' digests='' index='' manifest='' staged='' rc=0 booted_spec='' 
   while (($#)); do
     case $1 in
       --commit)
@@ -486,17 +486,27 @@ cmd_stage() {
     return 6
   fi
 
-  # The host tracks the tag, so `bootc upgrade` and a hand-run switch both work
-  # later. The digest is still what was verified and what the denylist and the
-  # boot gate name: the read-back below refuses a tag that moved between the
-  # resolution and this switch.
-  timeout --signal=TERM --kill-after=60 "$switch_timeout" "$bootc_bin" switch \
-    --enforce-container-sigpolicy "$image_repo:$image_tag" || rc=$?
+  # Moving within the tracked reference is `upgrade`: `switch` is a reference
+  # change, and bootc answers "image specification is unchanged" -- staging
+  # nothing -- when the target spec equals the booted one, even though the tag
+  # now names a newer digest. `upgrade` has no sigpolicy flag, but the shipped
+  # policy has `default: reject` plus a `sigstoreSigned` entry for this
+  # repository, so the pull is verified either way.
+  booted_spec=$(timeout --signal=TERM --kill-after=10 "$(clamp_timeout "$stage_status_timeout")" \
+    "$bootc_bin" status --booted --json 2>/dev/null |
+    jq -er '.status.booted.image.image // empty' 2>/dev/null) || booted_spec=''
+  if [[ $booted_spec == "$image_repo:$image_tag" ]]; then
+    timeout --signal=TERM --kill-after=60 "$switch_timeout" "$bootc_bin" upgrade || rc=$?
+  else
+    # A different reference: the switch both sets it and stages the image.
+    timeout --signal=TERM --kill-after=60 "$switch_timeout" "$bootc_bin" switch \
+      --enforce-container-sigpolicy "$image_repo:$image_tag" || rc=$?
+  fi
   if ((rc != 0)); then
     journal_append stage-failed "$(jq -nc --arg commit "$commit" --arg manifest "$manifest" \
       --argjson exit "$rc" '{commit:$commit,manifest:$manifest,exit:$exit}')" ||
       warn "cannot journal the failed switch"
-    warn "bootc switch $image_repo:$image_tag failed (exit $rc); nothing was staged"
+    warn "bootc could not stage $image_repo:$image_tag (exit $rc); nothing was staged"
     deploy_notify fail stage-failed || warn "could not report the failed stage"
     return 4
   fi
