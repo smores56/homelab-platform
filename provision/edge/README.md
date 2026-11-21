@@ -11,7 +11,7 @@ ctrl panel offers no cloud-init and no API to declare one.
 | `bootstrap.sh` | the whole provisioning step: packages, tailnet join, firewall, Caddy, unattended upgrades, then `verify.sh` |
 | `Caddyfile` | the two names, TLS-ALPN-01 only, proxying to Serve ports 8446/8447 |
 | `nftables.conf` | second firewall layer: 443 and 41641 public, 22 on the tailnet only |
-| `99-edge-hardening.conf` | sshd drop-in; sorts after cloud-init's password-auth file |
+| `05-edge-hardening.conf` | sshd drop-in; sshd keeps the first value, so `05-` beats cloud-init's `50-` |
 | `verify.sh` | on-box proof of the design's shape; run it after any hand change |
 
 ## Order
@@ -29,4 +29,9 @@ ctrl panel offers no cloud-init and no API to declare one.
 4. Reconnect over the tailnet and run `verify.sh`.
 
 The DNS cutover is not part of this: it waits for #709's retirement gate and is
-one apply of `edge_ipv4` (`tofu/dns.tf`). See `docs/core/public-edge.md`.
+two applies of `edge_ipv4` (`tofu/dns.tf`), cluster records first. See
+`docs/core/public-edge.md`.
+
+`verify.sh`'s direct-path check can fail in the first seconds after the join,
+before the WireGuard path is established; re-run it rather than changing
+anything.

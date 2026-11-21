@@ -31,7 +31,7 @@ recovery-kit item or must not exist.
 | --- | --- | --- |
 | Caddy | `provision/edge/Caddyfile` | TLS for the two names, proxies to Serve ports 8446 and 8447 |
 | nftables | `provision/edge/nftables.conf` | 443 and udp/41641 public, 22 on `tailscale0` only |
-| sshd | `provision/edge/99-edge-hardening.conf` | keys only, no password, no root password login |
+| sshd | `provision/edge/05-edge-hardening.conf` | keys only, no password, no root password login; `05-` so it beats cloud-init's `50-cloud-init.conf` |
 | tailscale | `provision/edge/bootstrap.sh` | joins once as `tag:vps`, hostname `edge`, tags set key expiry off |
 
 The ctrl panel's own firewall is the first layer and allows exactly `tcp/443`,
@@ -85,6 +85,9 @@ Between the two steps the names fall through to the wildcard, which is the host
 tunnel behind the Access deny: refused, not served. That window is seconds, and
 it is the only one; a single apply would instead fail on the second record and
 leave exactly the same window with a red apply.
+
+The cluster tunnel keeps its ingress rules for both names. With no DNS record
+they serve nothing; #709 decides when the rules go, not this cutover.
 
 The cutover waits on #709's retirement gate: it changes which Immich is
 authoritative, which is a data decision, not a DNS one. Rollback is the same
