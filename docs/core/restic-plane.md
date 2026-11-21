@@ -70,6 +70,17 @@ a point in time. Restoring one returns the agent to that point; it must be start
 after the restore with its own state directory owned by uid 1000, exactly as any
 other application dataset.
 
+The two groups are one dataset each, not one group split in two: the personal
+deployment writes everything it owns under `/var/lib/agent/local` and the general
+deployment everything under `/var/lib/agent/general`, including the collectors'
+quarantine and replica trees and the facades' memory and index. That is what makes
+them restore-united — one snapshot, one restore, no half deployment. It is also
+the boundary: no unit on either side mounts the other's dataset, and the general
+group restores exactly its own. Both are in every destination's run, retention and
+freshness check because they are entries in the same table as any other unit.
+`tests/core/agent-recovery.sh` asserts all of this, including against a tree
+broken on purpose.
+
 A job snapshots **every dataset in its unit** and passes all of their staging
 paths to one restic snapshot:
 
@@ -209,8 +220,9 @@ never by a timer.
 ## Freshness verifier
 
 `smortress-restic-verify` runs hourly at `:40`, after the `:05` jobs and their
-bounded retries, and checks every backend/unit pair (24 checks). It fails
-closed on anything it cannot prove.
+bounded retries, and checks every backend/unit pair from the same table (ten
+units, three destinations, thirty checks today). It fails closed on anything it
+cannot prove.
 
 **The join.** For each pair it reads the durable state and the repository:
 
@@ -390,5 +402,15 @@ a success against another repository not counting), repository
 init refusing an unmounted or non-empty directory, and `format=value` in
 `sops-decrypt`. `scripts/check-server-image.sh` asserts the static shape: mount
 units present with the right UUIDs, every restic unit enabled, the driver
-ordered after all five readiness instances, and both tags on every retention
+ordered after every readiness instance, and both tags on every retention
 command.
+
+`tests/core/agent-recovery.sh` covers the two agent groups: it runs the real
+driver against stubs and requires a successful snapshot of each group on `ssd`,
+`hdd` and `r2` with exactly its own dataset as the path; then it breaks the tree
+in eleven ways — a dropped group, a general unit carrying personal data, one
+dataset in two units, a general unit mounting the personal state, a collector
+writing to the general group, a unit mounting agent state without naming its side,
+a writable model mount, a dropped destination timer, missing readiness ordering, a
+retention skip and a drill root inside a live dataset — and requires the finding
+each one names before the unbroken tree is allowed to pass.
