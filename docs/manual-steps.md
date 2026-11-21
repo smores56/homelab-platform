@@ -5670,9 +5670,19 @@ tailnet.
    node carrying `tag:untrusted` — port 22 on smortress must not answer. `tailscale
    ping smortress` still succeeds there: the policy drops the port, not the node.
 
-   The policy names the host by address (`hosts.smortress` in
-   `tofu/tailscale.tf`), and that literal is the whole route in. A reinstall that
-   re-enrolls the node can give it a different tailnet address: read
-   `tailscale ip -4` on the host, update the literal, and apply before walking
-   away — otherwise `dst = ["smortress:22"]` names an address the host does not
-   hold and nothing reaches sshd but the console.
+   The policy names the host by tag (`tag:smortress`), not by address: a bare
+   hostname is rejected by the validator ("invalid address") and a `hosts` alias
+   pins the tailnet IP that a reinstall changes. `tofu/tailscale.tf` owns both
+   halves — `data.tailscale_device` resolves the node by hostname and
+   `tailscale_device_tags` gives it the tag — and the ACL resource depends on the
+   tag resource, so a policy that names a tag no device carries cannot be applied
+   in the same run that creates the tag.
+
+   Two consequences worth knowing. The node itself is now outside
+   `group:owner`, so it is not a source in any rule: traffic *from* smortress to
+   another tailnet node is dropped (Syncthing still syncs because the laptops
+   dial in). And a re-enrolment that uses an auth key without the tag strips it;
+   mint the key with `--advertise-tags=tag:smortress`, or run the next apply to
+   put it back. Tagging devices needs the CI client's `devices:core` scope
+   (manual-steps section 46 step 2); a `policy_file`-only client can rewrite the
+   policy but not the tag.
