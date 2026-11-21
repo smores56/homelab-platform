@@ -16,10 +16,12 @@
 # `deploy-held`), so a staged deploy and a green gate stay separate records.
 #
 # `stage` is the second half and only ever follows a `prepare` that exited 0:
-# `bootc switch --enforce-container-sigpolicy` on the verified manifest digest
-# (stage only, never `--apply`, so nothing reboots behind the gate's back), the
-# `bootc status` read-back that proves the staged digest is the one the verifier
-# resolved, `pending.json`, and the reboot. It deliberately does not live inside
+# `bootc switch --enforce-container-sigpolicy` to the tracked tag (stage only,
+# never `--apply`, so nothing reboots behind the gate's back), the `bootc status`
+# read-back that proves the staged digest is one of the forms the verifier
+# resolved -- a tag that moved between resolution and switch is refused, not
+# rebooted into -- `pending.json`, and the reboot. A host that already runs the
+# verified image records the deployment and exits 6 with no reboot. It deliberately does not live inside
 # `prepare`, so a gate that ran twice cannot stage twice, and it takes no deploy
 # lock: the drain that calls it already holds one.
 #
