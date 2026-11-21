@@ -66,23 +66,9 @@ jobs:
           cosign public-key --key env://COSIGN_PRIVATE_KEY >"$RUNNER_TEMP/cosign.pub"
           diff -u image/cosign.pub "$RUNNER_TEMP/cosign.pub"
 
-      # The build pushes its cache to the same registry, so the credential
-      # must exist before it; push and cosign below reuse this authfile.
-      - name: log in to ghcr.io
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/docker"
-          authfile="$RUNNER_TEMP/docker/config.json"
-          echo "$GITHUB_TOKEN" \
-            | podman login ghcr.io -u "${{ github.actor }}" --password-stdin \
-              --authfile "$authfile"
-          echo "DOCKER_CONFIG=$RUNNER_TEMP/docker" >>"$GITHUB_ENV"
-          echo "REGISTRY_AUTH_FILE=$authfile" >>"$GITHUB_ENV"
-
       - name: build
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # A sibling package, never IMAGE_REPO: the cache is a pile of unsigned
           # intermediate manifests and must not sit where a pullable image is
           # expected.
@@ -90,6 +76,14 @@ jobs:
         run: |
           set -euo pipefail
           . image/pins.env
+          # The cache push happens inside the build, so the login precedes it;
+          # push and cosign reuse the authfile.
+          mkdir -p "$RUNNER_TEMP/docker"
+          authfile="$RUNNER_TEMP/docker/config.json"
+          echo "$GITHUB_TOKEN" | podman login ghcr.io -u "${{ github.actor }}" \
+            --password-stdin --authfile "$authfile"
+          echo "DOCKER_CONFIG=$RUNNER_TEMP/docker" >>"$GITHUB_ENV"
+          echo "REGISTRY_AUTH_FILE=$authfile" >>"$GITHUB_ENV"
           # The base is a moving release tag; the build resolves it and records
           # the digest in the image's org.opencontainers.image.base.digest label.
           case "$BASE_IMAGE" in
@@ -112,13 +106,9 @@ jobs:
           done
           tag="sha-$(git rev-parse --short=12 HEAD)"
           echo "TAG=$tag" >>"$GITHUB_ENV"
-          # A cache key covers the parent layer and the instruction's text, not
-          # the repositories the instruction reads, so the package layer
-          # survives every build that leaves the resolved base and the RUN line
-          # alone. The base is a moving release tag, so a Fedora release move
-          # re-resolves packages on its own; between moves a rebuild reuses the
-          # layer, and a failing cache push fails the build, which is why the
-          # login precedes it.
+          # A cache key covers the parent layer and the instruction text, not the
+          # repositories it reads, so the layer is reused while the base tag
+          # resolves to the same digest. A failing cache push fails the build.
           podman build \
             --build-arg "BASE_IMAGE=$BASE_IMAGE" \
             --build-arg "BASE_DIGEST=$base_digest" \
