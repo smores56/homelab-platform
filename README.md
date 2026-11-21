@@ -52,6 +52,13 @@ scripts/refresh-pins.sh --write   # pin it
 then commit the `image/pins.env` change. The scheduled watcher opens an issue
 when `--check` sees a newer digest or release.
 
+CI keeps the package layer in `ghcr.io/smores56/smorespro-image-cache`, a
+sibling package to the image. A cache key covers the parent layer and the
+instruction's text, not the repositories the instruction reads, so the layer is
+reused until the base digest in `image/pins.env` or the `RUN` line changes — the
+pin bump is what re-resolves packages. `scripts/build-image.sh` never touches the
+cache; a local build is uncached and offline-safe.
+
 ## Package sources
 
 The image installs from the Fedora 45 repositories configured in the pinned
