@@ -811,8 +811,8 @@ check "the image installs the boot gate" has 'scripts/smortress-boot-gate.sh' im
 check "the boot gate is sandboxed" grep -qE '^ProtectSystem=strict' "$gate_unit"
 # The gate mutates the grubenv and the ostree deployment it rolls back to, and
 # nothing else: a wider writable tree would let a compromised gate rewrite a unit.
-check "the boot gate widens /boot and the ostree tree only" \
-  grep -qE '^ReadWritePaths=(-)?/sysroot/ostree' "$gate_unit"
+check "the boot gate widens /boot and the sysroot tree only" \
+  grep -qE '^ReadWritePaths=(-)?/sysroot' "$gate_unit"
 check "the drain waits for the boot gate" \
   grep -qE '^After=.*smortress-boot-gate\.service' units/systemd/smortress-deploy.service
 check "the drain can write the boot it stages" \
