@@ -103,7 +103,7 @@ COPY scripts/storage-layout.sh scripts/zfs-ready.sh scripts/sops-decrypt.sh scri
      scripts/app-secrets.sh scripts/immich-dump.sh scripts/tailscale-serve.sh \
      scripts/apps-quota.sh scripts/apps-user.sh scripts/apps-ingress.sh \
      scripts/deploy-state.sh scripts/deploy-drain.sh \
-     scripts/deploy-platform.sh \
+     scripts/deploy-platform.sh scripts/smortress-boot-gate.sh \
      scripts/agent-config-seed.sh \
      scripts/smortress-password.sh scripts/agent-job.sh scripts/agent-job-personal.sh scripts/agent-job-general.sh scripts/agent-job-provision.sh \
      /usr/libexec/smortress-src/
@@ -261,6 +261,7 @@ RUN set -eux; \
       smortress-tailscale-serve.service \
       smortress-deploy-listener.service \
       smortress-deploy.path \
+      smortress-boot-gate.service \
       smortress-immich-dump.timer \
       smortress-agent-collect-finance.timer \
       smortress-agent-collect-calendar.timer \

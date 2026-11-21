@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Platform apply, part one: the pre-reboot snapshot gate, the hold and the
-# break-glass waiver (SDLC #798, T3).
+# break-glass waiver (SDLC #798, T3), and the stage that follows it (T4).
 #
 #   deploy-platform prepare --commit <sha> --digests <json>
+#   deploy-platform stage   --commit <sha> --digests <json>
 #
 # A platform deploy reboots the host, so every restore unit needs a verified
 # local snapshot before that reboot: a unit without one is backed up once,
@@ -10,15 +11,24 @@
 # instead of rebooting without it. The SSD is preferred and the HDD is the
 # fallback, because the 970 can be absent while the machine is still deployable.
 #
-# `prepare` stages nothing, writes no `pending.json` and never reboots. Staging,
-# the `bootc status` check and the reboot are T4 (#802) and attach as the `stage`
-# arm of this script; the gate's outcome is a journal line (`gate-green`,
-# `gate-released`, `deploy-held`), so a staged deploy and a green gate stay
-# separate records.
+# `prepare` stages nothing, writes no `pending.json` and never reboots; the
+# gate's outcome is a journal line (`gate-green`, `gate-released`,
+# `deploy-held`), so a staged deploy and a green gate stay separate records.
 #
-# Exit codes: 0 the gate is green, or a released hold covers this digest;
+# `stage` is the second half and only ever follows a `prepare` that exited 0:
+# `bootc switch --enforce-container-sigpolicy` on the verified manifest digest
+# (stage only, never `--apply`, so nothing reboots behind the gate's back), the
+# `bootc status` read-back that proves the staged digest is the one the verifier
+# resolved, `pending.json`, and the reboot. It deliberately does not live inside
+# `prepare`, so a gate that ran twice cannot stage twice, and it takes no deploy
+# lock: the drain that calls it already holds one.
+#
+# Exit codes: 0 the gate is green, or a released hold covers this digest (prepare),
+# or the deployment is staged and the reboot requested (stage);
 # 2 usage; 4 the gate could not run and nothing was recorded (the caller keeps
-# the request queued); 5 the deploy is held until an operator releases it.
+# the request queued), or `bootc switch` / the reboot failed;
+# 5 the deploy is held until an operator releases it (prepare), or the staged
+# digest is not the verified one (stage -- nothing is staged, nothing reboots).
 #
 # Every knob is environment-overridable so tests/deploy/platform.sh can drive
 # this exact code. Production sets none of them: the defaults are the host
@@ -104,12 +114,42 @@ warn() { printf 'deploy-platform: %s\n' "$*" >&2; }
 usage() {
   cat >&2 <<'EOF'
 usage: deploy-platform prepare --commit <40-hex> --digests <json>
+       deploy-platform stage   --commit <40-hex> --digests <json>
 
   --commit   the commit the deploy was verified for
   --digests  {"index": "<sha256:...>", "manifest": "<sha256:...>"} as the
-             verifier resolved them; the index form names the release
+             verifier resolved them; the index form names the release and the
+             manifest form is what bootc switches to
 EOF
 }
+
+# Both arms take the same pair, and both refuse a pair they cannot trust.
+check_commit_digests() { # <commit> <digests-json>
+  [[ $1 =~ ^[0-9a-f]{40}$ ]] || {
+    warn "--commit must be a 40-character lowercase hex sha"
+    return 2
+  }
+  # Both forms are required: the release names the index digest, and the boot
+  # gate has to accept whichever form bootc reports for the staged image.
+  jq -e '(.index | type == "string" and test("^sha256:[0-9a-f]{64}$"))
+         and (.manifest | type == "string" and test("^sha256:[0-9a-f]{64}$"))' \
+    <<<"$2" >/dev/null 2>&1 || {
+    warn "--digests must carry the index and manifest digests"
+    return 2
+  }
+}
+
+# The bounds of a stage: one switch and one status read, each on its own clock,
+# plus the reboot. The switch is the only call in this script that pulls an
+# image, so it gets the design's 3600 s; nothing here runs under the snapshot
+# gate's budget, which is a different clock entirely.
+switch_timeout=${DEPLOY_SWITCH_TIMEOUT:-3600}
+stage_status_timeout=${DEPLOY_STAGE_STATUS_TIMEOUT:-60}
+stage_reboot_timeout=${DEPLOY_STAGE_REBOOT_TIMEOUT:-60}
+bootc_bin=${BOOTC_BIN:-bootc}
+stage_systemctl=${SYSTEMCTL_BIN:-systemctl}
+image_repo=${DEPLOY_IMAGE_REPO:-ghcr.io/smores56/homelab-platform/server}
+boot_budget=${DEPLOY_BOOT_BUDGET:-3}
 
 budget_left() {
   local left=$((gate_deadline - $(date -u +%s)))
@@ -222,18 +262,7 @@ cmd_prepare() {
       *) usage; return 2 ;;
     esac
   done
-  [[ $commit =~ ^[0-9a-f]{40}$ ]] || {
-    warn "--commit must be a 40-character lowercase hex sha"
-    return 2
-  }
-  # Both forms are required: the release names the index digest, and the boot
-  # gate has to accept whichever form bootc reports for the staged image.
-  jq -e '(.index | type == "string" and test("^sha256:[0-9a-f]{64}$"))
-         and (.manifest | type == "string" and test("^sha256:[0-9a-f]{64}$"))' \
-    <<<"$digests" >/dev/null 2>&1 || {
-    warn "--digests must carry the index and manifest digests"
-    return 2
-  }
+  check_commit_digests "$commit" "$digests" || return 2
   digest=$(jq -r '.index' <<<"$digests")
 
   deploy_state_init || {
@@ -353,6 +382,101 @@ cmd_prepare() {
   return 0
 }
 
+# stage: switch, prove what bootc staged, record it, reboot.
+#
+# `switch` and not `upgrade`: `--enforce-container-sigpolicy` exists only on
+# switch/install, and a digest-pinned host never moves on upgrade. There is no
+# `--apply` here on purpose -- the reboot is the deploy, and it happens only after
+# `pending.json` exists, so a crash between the two leaves the boot gate a record
+# to judge instead of an unrecorded new deployment.
+cmd_stage() {
+  local commit='' digests='' index='' manifest='' staged='' rc=0
+  while (($#)); do
+    case $1 in
+      --commit)
+        commit=${2-}
+        shift 2
+        ;;
+      --digests)
+        digests=${2-}
+        shift 2
+        ;;
+      *) usage; return 2 ;;
+    esac
+  done
+  check_commit_digests "$commit" "$digests" || return 2
+  index=$(jq -r '.index' <<<"$digests")
+  # The switch names the platform manifest digest, which is the image a host
+  # actually boots; the index digest is what the release and the denylist name.
+  manifest=$(jq -r '.manifest' <<<"$digests")
+
+  deploy_state_init || {
+    warn "cannot create $deploy_state_dir"
+    return 4
+  }
+  journal_append stage-start "$(jq -nc --arg commit "$commit" --arg digest "$index" \
+    --arg manifest "$manifest" \
+    '{commit:$commit,digest:$digest,manifest:$manifest}')" || {
+    warn "cannot journal the stage start"
+    return 4
+  }
+
+  timeout --signal=TERM --kill-after=60 "$switch_timeout" "$bootc_bin" switch \
+    --enforce-container-sigpolicy "$image_repo@$manifest" || rc=$?
+  if ((rc != 0)); then
+    journal_append stage-failed "$(jq -nc --arg commit "$commit" --arg manifest "$manifest" \
+      --argjson exit "$rc" '{commit:$commit,manifest:$manifest,exit:$exit}')" ||
+      warn "cannot journal the failed switch"
+    warn "bootc switch $image_repo@$manifest failed (exit $rc); nothing was staged"
+    deploy_notify fail stage-failed || warn "could not report the failed stage"
+    return 4
+  fi
+
+  # What bootc staged is the only thing the boot gate can compare a boot to, so
+  # a staged entry that is not one of the digests the verifier resolved means the
+  # deploy would reboot into an image nobody checked. Nothing is recorded.
+  staged=$(timeout --signal=TERM "$stage_status_timeout" "$bootc_bin" status --json 2>/dev/null |
+    jq -er '.status.staged.image.imageDigest // empty' 2>/dev/null) || staged=''
+  if [[ -z $staged || ($staged != "$index" && $staged != "$manifest") ]]; then
+    journal_append stage-digest-mismatch "$(jq -nc --arg commit "$commit" --arg staged "$staged" \
+      --arg digest "$index" --arg manifest "$manifest" \
+      '{commit:$commit,staged:$staged,digest:$digest,manifest:$manifest}')" ||
+      warn "cannot journal the staged digest mismatch"
+    warn "bootc staged '${staged:-nothing}', not $index or $manifest; not rebooting"
+    deploy_notify fail stage-digest-mismatch || warn "could not report the staged digest mismatch"
+    return 5
+  fi
+
+  jq -nc --arg commit "$commit" --arg digest "$index" --arg manifest "$manifest" \
+    --argjson digests "$digests" --argjson budget "$boot_budget" --arg at "$(deploy_now)" \
+    '{schema:1,phase:"staged",commit:$commit,digest:$digest,digests:$digests,
+      budget:$budget,stagedAt:$at}' | pending_write || {
+    journal_append stage-pending-failed "$(jq -nc --arg commit "$commit" \
+      --arg manifest "$manifest" '{commit:$commit,manifest:$manifest}')" ||
+      warn "cannot journal the failed pending record"
+    warn "cannot write the pending record; not rebooting"
+    return 4
+  }
+  journal_append stage-pending "$(jq -nc --arg commit "$commit" --arg digest "$index" \
+    --arg manifest "$manifest" --arg staged "$staged" --argjson budget "$boot_budget" \
+    '{commit:$commit,digest:$digest,manifest:$manifest,staged:$staged,budget:$budget}')" ||
+    warn "cannot journal the pending record"
+
+  # A released hold is not cleared here: it is cleared by the boot gate that sees
+  # this deployment actually run, so a release cannot outlive a failed boot.
+  say "staged $staged for $commit; rebooting"
+  rc=0
+  timeout --signal=TERM --kill-after=15 "$stage_reboot_timeout" "$stage_systemctl" reboot || rc=$?
+  if ((rc != 0)); then
+    journal_append stage-reboot-failed "$(jq -nc --argjson exit "$rc" '{exit:$exit}')" ||
+      warn "cannot journal the failed reboot"
+    warn "systemctl reboot failed (exit $rc); the pending record stays for the next boot"
+    deploy_notify fail stage-reboot-failed || warn "could not report the failed reboot"
+    return 4
+  fi
+  return 0
+}
+
 cmd=${1-}
 case $cmd in
   prepare)
@@ -361,10 +485,12 @@ case $cmd in
     cmd_prepare "$@" || rc=$?
     exit "$rc"
     ;;
-  # T4 (#802) adds `stage --commit <sha> --digests <json>` here: `bootc switch`,
-  # the `bootc status --json` digest check, `pending.json` and the reboot. It
-  # deliberately does not live inside `prepare`, so a gate that ran twice cannot
-  # stage twice.
+  stage)
+    shift
+    rc=0
+    cmd_stage "$@" || rc=$?
+    exit "$rc"
+    ;;
   -h | --help)
     usage
     exit 0

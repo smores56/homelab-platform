@@ -1,0 +1,54 @@
+[Unit]
+Description=Keep or roll back the deployment this host just booted
+# Greenboot's ordering, and the reason the receiver can promise a rollback: the
+# gate runs late in boot (every service the health checks ask about has been
+# started) and the boot is not declared complete until it has recorded or
+# rolled back the deployment. It runs on every boot, not only after a deploy, so
+# an interrupted apps apply is reconciled too.
+Before=boot-complete.target
+After=multi-user.target
+After=sops-decrypt.service network-online.target
+After=smortress-tailscale-serve.service
+# systemd rejects a template glob in an ordering dependency ("Failed to add
+# dependency on zfs-ready@*.service"), and After=multi-user.target already orders
+# this unit after every readiness unit the image enables. The apps dataset is the
+# one the health gate mounts-checks, so its instance is named outright.
+After=zfs-ready@raw-apps.service
+# Wants, not Requires: a dependency that failed is exactly what the health gate
+# is there to judge, and a unit skipped for a failed dependency would leave a
+# broken deployment recorded as landed. The GRUB counter is the net under this.
+Wants=sops-decrypt.service zfs-ready@raw-apps.service network-online.target
+Wants=smortress-tailscale-serve.service
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/smortress-boot-gate
+# The health budget (300 s) plus one bounded rollback (900 s), so a wedged
+# `bootc` or a wedged probe cannot hold the boot for ever.
+TimeoutStartSec=1800
+UMask=0077
+User=root
+
+# The gate writes the deploy records, the deploy lock and the grubenv, and
+# `bootc rollback --apply` writes the ostree deployment it switches to. Nothing
+# else is writable: a compromised gate cannot rewrite a unit, a Quadlet or the
+# tenant's data. `/boot` and `/sysroot/ostree` are the minimum a bootc mutation
+# needs; `-` keeps the unit startable where /sysroot is not a separate mount.
+ProtectSystem=strict
+ReadWritePaths=/var/lib/homelab/deploy
+ReadWritePaths=/run/smortress
+ReadWritePaths=/boot
+ReadWritePaths=-/sysroot/ostree
+ProtectHome=read-only
+PrivateTmp=yes
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+
+[Install]
+WantedBy=multi-user.target

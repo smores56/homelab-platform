@@ -295,6 +295,10 @@ jobs:
         run: tests/deploy/receiver.sh
       - name: deploy verify tests
         run: tests/deploy/verify.sh
+      - name: deploy platform gate tests
+        run: tests/deploy/platform.sh
+      - name: deploy boot gate tests
+        run: tests/deploy/boot.sh
 
   action-pins:
     name: action SHA pins

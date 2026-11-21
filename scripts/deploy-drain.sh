@@ -9,16 +9,18 @@
 # and rescans once before exiting so the window between "queue empty" and "unit
 # inactive" cannot drop an event.
 #
-# The action is verification (T2) then the platform snapshot gate (T3): the
-# queued shape, the host's own checks -- tip, descendancy, tag-to-digest,
-# revision label, denylist -- and, for a platform commit, the pre-reboot gate.
-# The entry is popped once that verdict is recorded. A rejection is final for
-# that entry and is never retried, because the hourly poll and the next event
-# would fail identically; an infrastructure failure leaves the entry queued and
-# fails the unit, so the next trigger retries it. A held deploy is popped too:
-# the hold record is the resume point, and `smortress-deploy release --force`
-# plus the next request is what carries it forward. Applying a verified apps
-# commit is T5.
+# The action is verification (T2), then the platform snapshot gate (T3) and the
+# stage that reboots into the verified image (T4): the queued shape, the host's
+# own checks -- tip, descendancy, tag-to-digest, revision label, denylist -- the
+# pre-reboot gate, then `bootc switch` and the reboot. The entry is popped once
+# that verdict is recorded, and on a platform deploy the reboot is the exit: the
+# record that the deployment landed is written by the boot gate on the way up,
+# not here. A rejection is final for that entry and is never retried, because the
+# hourly poll and the next event would fail identically; an infrastructure
+# failure leaves the entry queued and fails the unit, so the next trigger retries
+# it. A held deploy is popped too: the hold record is the resume point, and
+# `smortress-deploy release --force` plus the next request is what carries it
+# forward. Applying a verified apps commit is T5.
 #
 # Every knob is environment-overridable so tests/deploy/*.sh can drive this
 # exact code. Production sets none of them.
@@ -168,6 +170,7 @@ drained=0
 rejected=0
 held=0
 deferred=0
+refused=0
 noop=0
 superseded=0
 invalid=0
@@ -236,10 +239,9 @@ while :; do
       say "$repo $commit: verified"
       if [[ $repo == homelab-platform ]]; then
         # The gate before any reboot: every restore unit must have a fresh
-        # verified local snapshot, or the host holds instead of staging.
-        # T4 attaches here: once the gate is green it calls
-        # `deploy-platform stage --commit "$commit" --digests "$digests"`, which
-        # stages, writes pending.json and reboots.
+        # verified local snapshot, or the host holds instead of staging. Only a
+        # green gate ($gate_rc 0) reaches `stage`, which is what keeps this drain
+        # from rebooting the host for a commit nobody checked the backups of.
         digests=$(jq -c '.digests // empty' <<<"$verify_verdict" 2>/dev/null) || digests=""
         if [[ -z $digests ]]; then
           warn "$repo $commit: the verdict names no digests; leaving it queued"
@@ -249,7 +251,31 @@ while :; do
         timeout "$gate_timeout" "$platform_bin" prepare --commit "$commit" --digests "$digests" ||
           gate_rc=$?
         case $gate_rc in
-          0) say "$repo $commit: snapshot gate green" ;;
+          0)
+            say "$repo $commit: snapshot gate green"
+            # Staging is the last thing this drain does for the entry: it writes
+            # pending.json before it asks for the reboot, so the record the boot
+            # gate needs is on disk even if the shutdown kills this process. A
+            # successful stage has no verdict to journal -- the boot gate records
+            # the deployment on the way back up.
+            stage_rc=0
+            timeout "$gate_timeout" "$platform_bin" stage --commit "$commit" --digests "$digests" ||
+              stage_rc=$?
+            case $stage_rc in
+              0) say "$repo $commit: staged; rebooting into it" ;;
+              5)
+                # The staged image is not the one the verifier resolved. Nothing
+                # was recorded and the same switch would fail identically, so the
+                # entry is popped and the operator reads the journal.
+                say "$repo $commit: staged image refused"
+                refused=$((refused + 1))
+                ;;
+              *)
+                warn "$repo $commit: staging failed (exit $stage_rc); leaving it queued"
+                exit 1
+                ;;
+            esac
+            ;;
           5)
             # Held is a decision, not an outage: the entry is popped and the
             # hold record is what the operator releases.
@@ -289,9 +315,9 @@ while :; do
 done
 
 journal_append drain-finish "$(jq -nc --argjson drained "$drained" --argjson rejected "$rejected" \
-  --argjson held "$held" --argjson deferred "$deferred" --argjson noop "$noop" \
-  --argjson superseded "$superseded" --argjson invalid "$invalid" \
-  '{drained:$drained,rejected:$rejected,held:$held,deferred:$deferred,noop:$noop,
-    superseded:$superseded,invalid:$invalid}')" ||
+  --argjson held "$held" --argjson deferred "$deferred" --argjson refused "$refused" \
+  --argjson noop "$noop" --argjson superseded "$superseded" --argjson invalid "$invalid" \
+  '{drained:$drained,rejected:$rejected,held:$held,deferred:$deferred,refused:$refused,
+    noop:$noop,superseded:$superseded,invalid:$invalid}')" ||
   warn "cannot journal the drain finish"
-say "drained $drained, rejected $rejected, held $held, deferred $deferred, no-op $noop, superseded $superseded, invalid $invalid"
+say "drained $drained, rejected $rejected, held $held, deferred $deferred, refused $refused, no-op $noop, superseded $superseded, invalid $invalid"

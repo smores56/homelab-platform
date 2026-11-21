@@ -741,9 +741,64 @@ done
 check "quadlets live where the generator scans" has '/usr/share/containers/systemd/' image/Containerfile
 check "the placeholder is not installed as a runnable quadlet" \
   lacks 'units/quadlet/pattern.container /usr/share/containers/systemd' image/Containerfile
-for unit in smortress-app-secrets.service smortress-tailscale-serve.service; do
+for unit in smortress-app-secrets.service smortress-tailscale-serve.service \
+  smortress-boot-gate.service; do
   check "image enables $unit" has "$unit" image/Containerfile
 done
+
+# Deploy receiver (T4). A platform deploy ends in a reboot, so the pieces that
+# decide whether the new deployment stays are asserted here: the gate unit and
+# its ordering, the counter that is the only rollback before userspace, and the
+# list of units the gate requires. A missing unit in that list is a gate that
+# checks nothing; a listed deploy unit is a gate that rolls the host back for a
+# secret seeded after the first deploy lands.
+gate_unit=units/systemd/smortress-boot-gate.service
+check "the boot gate unit exists" test -s "$gate_unit"
+check "the boot gate runs before boot-complete" \
+  grep -qE '^Before=boot-complete\.target' "$gate_unit"
+check "the boot gate runs late in boot" grep -qE '^After=.*multi-user\.target' "$gate_unit"
+check "the boot gate waits for the decrypt step" \
+  grep -qE '^After=.*sops-decrypt\.service' "$gate_unit"
+# A template glob is not a valid ordering dependency in systemd, so the apps
+# instance is named and multi-user.target carries the rest.
+check "the boot gate waits for the apps dataset" \
+  grep -qE '^After=.*zfs-ready@raw-apps\.service' "$gate_unit"
+check "the boot gate waits for the network" \
+  grep -qE '^After=.*network-online\.target' "$gate_unit"
+check "the boot gate waits for the Serve routes" \
+  grep -qE '^After=.*smortress-tailscale-serve\.service' "$gate_unit"
+check "the boot gate wants its inputs without requiring them" \
+  grep -qE '^Wants=.*sops-decrypt\.service' "$gate_unit"
+check "the boot gate is installed where the loop puts it" \
+  has 'ExecStart=/usr/libexec/smortress-boot-gate' "$gate_unit"
+check "the image installs the boot gate" has 'scripts/smortress-boot-gate.sh' image/Containerfile
+check "the boot gate is sandboxed" grep -qE '^ProtectSystem=strict' "$gate_unit"
+# The gate mutates the grubenv and the ostree deployment it rolls back to, and
+# nothing else: a wider writable tree would let a compromised gate rewrite a unit.
+check "the boot gate widens /boot and the ostree tree only" \
+  grep -qE '^ReadWritePaths=(-)?/sysroot/ostree' "$gate_unit"
+check "the drain waits for the boot gate" \
+  grep -qE '^After=.*smortress-boot-gate\.service' units/systemd/smortress-deploy.service
+check "the drain can write the boot it stages" \
+  grep -qE '^ReadWritePaths=(-)?/boot$' units/systemd/smortress-deploy.service
+units_file=image/rootfs/usr/share/smortress/deploy-units.txt
+check "the gate's unit list ships in the image" test -s "$units_file"
+check "the unit list is shipped by the rootfs copy" has 'COPY image/rootfs/ /' image/Containerfile
+check "the gate requires the decrypt step" grep -qxF 'sops-decrypt.service' "$units_file"
+check "the gate requires the pool" grep -qxF 'smortress-zpool.service' "$units_file"
+if grep -vE '^[[:space:]]*#' "$units_file" | grep -qiE 'deploy'; then
+  bad "the gate requires no deploy unit (its secret is seeded after the first deploy)"
+else
+  ok "the gate requires no deploy unit (its secret is seeded after the first deploy)"
+fi
+count_cfg=image/rootfs/usr/lib/bootupd/grub2-static/configs.d/10-smortress-count.cfg
+check "the boot counter snippet ships where bootupd reads it" test -s "$count_cfg"
+check "the snippet clears boot_success on every boot" has 'set boot_success=0' "$count_cfg"
+check "the snippet counts three attempts" has 'set boot_counter=3' "$count_cfg"
+check "the snippet selects the previous deployment at zero" has 'set default=1' "$count_cfg"
+check "a hung PID 1 reboots" \
+  has 'RuntimeWatchdogSec=1min' image/rootfs/etc/systemd/system.conf.d/10-watchdog.conf
+check "a panic reboots" has 'kernel.panic=10' image/rootfs/etc/sysctl.d/10-panic.conf
 # Every timer this image ships must be enabled here, or it silently never fires.
 for timer in units/systemd/*.timer; do
   unit=${timer#units/systemd/}

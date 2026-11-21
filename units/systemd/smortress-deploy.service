@@ -8,6 +8,11 @@ After=sops-decrypt.service
 # step keeps the first drain of a boot from finding no directory at all.
 After=systemd-tmpfiles-setup.service
 After=network-online.target
+# A drain that ran while the boot gate was still deciding would verify against a
+# state.json the gate had not written yet and stage a deployment the host already
+# booted, so it waits for the gate. After= only: a gate that failed must not stop
+# the queue from draining.
+After=smortress-boot-gate.service
 # A wedged drain must not hold the shutdown path.
 Conflicts=shutdown.target
 Before=shutdown.target
@@ -39,6 +44,12 @@ ReadWritePaths=/run/smortress
 ReadWritePaths=/var/lib/homelab/restic
 ReadWritePaths=-/var/lib/restic/ssd
 ReadWritePaths=-/var/lib/restic/hdd
+# The stage (T4) is a `bootc switch` and a reboot: bootc writes the grubenv, the
+# BLS entry and the ostree deployment it stages, so /boot and /sysroot/ostree are
+# the minimum below the read-only tree. `systemctl reboot` needs no path of its
+# own -- a read-only mount does not block a unix-socket connect.
+ReadWritePaths=/boot
+ReadWritePaths=-/sysroot/ostree
 ProtectHome=read-only
 PrivateTmp=yes
 NoNewPrivileges=yes

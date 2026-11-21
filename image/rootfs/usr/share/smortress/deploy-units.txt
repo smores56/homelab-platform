@@ -1,0 +1,25 @@
+# Units a healthy host must have active, read by the post-boot gate
+# (/usr/libexec/smortress-boot-gate) before it records a deployment as landed.
+# The gate /fails the deploy if any line here is not active or is `failed`, so a
+# unit listed wrongly rolls back every deployment -- the list is what "serving"
+# means for this host, not every unit the image enables.
+#
+# The deploy's own units are deliberately absent (the listener, the path, the
+# drain, the poll and heartbeat timers): their secrets are seeded after the
+# receiver first lands (SDLC #798, T6), and a missing deploy secret must page
+# rather than roll the host back onto an image that cannot deploy at all.
+firewalld.service
+sops-decrypt.service
+tailscaled.service
+smortress-tailscale-up.service
+smortress-tailscale-serve.service
+smortress-crypttab-fix.service
+smortress-data-init.service
+smortress-zpool.service
+zfs-ready@raw-apps.service
+smortress-apps-user.service
+smortress-apps-quota.service
+smortress-apps-deny.service
+smortress-apps-egress.service
+smortress-app-secrets.service
+smortress-password.service
