@@ -614,6 +614,17 @@ check_eq "$rc" 124 "a drain with only deferred work parks instead of exiting"
 check_eq "$(grep -c '"event":"drain-parked"' "$DEPLOY_STATE_DIR/journal.jsonl")" 1 \
   "the parked drain journals why it is waiting"
 
+# --- bootc runs with the scratch it needs, and nothing wider -----------------
+# bootc creates /run/bootc/storage while it stages a pull; ProtectSystem=strict
+# leaves /run read-only, and the failure is a staging exit on every deploy.
+for unit in units/systemd/smortress-deploy.service units/systemd/smortress-boot-gate.service; do
+  if grep -qx 'RuntimeDirectory=bootc' "$unit"; then
+    ok "$(basename "$unit") gives bootc its runtime directory"
+  else
+    bad "$(basename "$unit") gives bootc its runtime directory"
+  fi
+done
+
 # --- the deploy lock ---------------------------------------------------------
 # The drain unit, the hourly poll and the CLI all write state.json; the lock is
 # what keeps one of them from losing another's write.

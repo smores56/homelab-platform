@@ -34,6 +34,10 @@ User=root
 # `smortress-deploy bootstrap` holding the lock must not have its inode unlinked
 # by the drain finishing behind it: two writers would then agree on nothing.
 RuntimeDirectory=smortress-deploy
+# bootc creates a temporary containers-storage at /run/bootc/storage while it
+# stages a pull; ProtectSystem=strict leaves /run read-only, so PID 1 creates
+# that one directory writable instead of opening all of /run.
+RuntimeDirectory=bootc
 RuntimeDirectoryMode=0700
 RuntimeDirectoryPreserve=yes
 # The snapshot gate (T3) runs the Restic driver as a child, and that driver keeps

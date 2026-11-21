@@ -35,6 +35,10 @@ User=root
 # lock the drain does, and the secrets must stay read-only. Preserve=yes so a
 # hand-run command's lock inode survives this oneshot's own cleanup.
 RuntimeDirectory=smortress-deploy
+# bootc creates a temporary containers-storage at /run/bootc/storage while it
+# stages a pull; ProtectSystem=strict leaves /run read-only, so PID 1 creates
+# that one directory writable instead of opening all of /run.
+RuntimeDirectory=bootc
 RuntimeDirectoryMode=0700
 RuntimeDirectoryPreserve=yes
 
