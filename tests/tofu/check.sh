@@ -108,7 +108,7 @@ for host in photos music opds ntfy; do
 done
 
 echo "== protected applications"
-for app in memory agent backrest; do
+for app in memory agent; do
   block=$(extract "cloudflare_zero_trust_access_application.${app}")
   if [[ -z $block ]]; then
     bad "application ${app} exists"
@@ -117,7 +117,7 @@ for app in memory agent backrest; do
   ok "application ${app} exists"
   if grep -q 'cloudflare_zero_trust_access_policy.email.id' <<<"$block"; then ok "${app} allows the owner email"; else bad "${app} allows the owner email"; fi
 done
-for app in memory agent backrest; do
+for app in memory agent; do
   if grep -q 'cloudflare_zero_trust_access_policy.service_auth.id' <<<"$(extract "cloudflare_zero_trust_access_application.${app}")"; then
     ok "${app} accepts any valid service token"
   else
@@ -141,21 +141,23 @@ fi
 
 # The hosted Backrest reader (#707) owns recovery.sammohr.dev; the static letter
 # and its Pages domain are retired.
-backrest_app=$(extract cloudflare_zero_trust_access_application.backrest)
-if grep -qF 'uri  = "recovery.${var.domain}"' <<<"$backrest_app"; then
-  ok "backrest serves recovery.<zone>"
+#
+# The name has NO identity gate (design #701, re-affirmed 2026-11-20): family
+# has to reach the reader with nothing set up in advance, so it carries a
+# public bypass application and the reader's own password is the only login.
+# What makes that acceptable is the write denial at the Backrest and R2 layers,
+# which the exposed surface is: `docs/core/backrest.md`.
+absent cloudflare_zero_trust_access_application.backrest 'no Access application gates recovery.<zone>'
+hasnt 'recovery has no application destination of its own' 'uri[[:space:]]*=[[:space:]]*"recovery\.\$\{var\.domain\}"'
+if grep -qE '^[[:space:]]*"recovery",$' "$work/code.tf"; then
+  ok "recovery is a public bypass hostname"
 else
-  bad "backrest serves recovery.<zone>"
+  bad "recovery is a public bypass hostname" "local.public_apps must name recovery"
 fi
 if grep -qE '^resource "cloudflare_(pages_domain|dns_record)" "recovery"' tofu/pages.tf; then
   bad "the Pages domain and DNS record are retired"
 else
   ok "the Pages domain and DNS record are retired"
-fi
-if grep -q '^[[:space:]]*"backrest",$' <<<"$(extract cloudflare_zero_trust_access_application.public)"; then
-  bad "backrest must not be a public bypass hostname"
-else
-  ok "backrest is not a public bypass hostname"
 fi
 
 # nanobot.sammohr.dev is retired in favour of agent.sammohr.dev (SDLC #583).
@@ -336,6 +338,79 @@ if grep -q 'agent-hooks' <<<"$(extract cloudflare_ruleset.dav_rate_limit)"; then
   bad "the rate-limit rule does not cover the webhook receiver"
 else
   ok "the rate-limit rule does not cover the webhook receiver"
+fi
+
+# The reader is public, so its login endpoint carries the brute-force control
+# the absent gate does not: the design's "Cloudflare login rate limit". It needs
+# its own rule, because the media budget above is sized for an Immich scroll and
+# is orders of magnitude too loose for a password. The two populations cannot
+# share one threshold, and a rate-limit rule carries exactly one.
+echo "== backrest login rate limit"
+rl=$(extract cloudflare_ruleset.dav_rate_limit)
+login_rule=$(awk '
+  /^    \{$/ { buf = ""; inrule = 1 }
+  inrule { buf = buf $0 "\n" }
+  inrule && /^    \},$/ {
+    if (buf ~ /v1\.Authentication\/Login/) { printf "%s", buf; exit }
+    inrule = 0
+  }
+' <<<"$rl")
+if [[ -n $login_rule ]]; then
+  ok "a rate-limit rule names the Backrest login endpoint"
+else
+  bad "a rate-limit rule names the Backrest login endpoint" "no rule in cloudflare_ruleset.dav_rate_limit matches /v1.Authentication/Login"
+fi
+if grep -qF 'http.host eq \"recovery.${var.domain}\"' <<<"$login_rule"; then
+  ok "the login rule applies to recovery.<zone>"
+else
+  bad "the login rule applies to recovery.<zone>"
+fi
+if grep -qE '^[[:space:]]*action[[:space:]]*=[[:space:]]*"block"' <<<"$login_rule"; then
+  ok "the login rule blocks the request"
+else
+  bad "the login rule blocks the request"
+fi
+login_budget=$(sed -nE 's/.*requests_per_period[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' <<<"$login_rule")
+if [[ -n $login_budget ]] && ((login_budget <= 60)); then
+  ok "the login rule allows at most 60 requests per period"
+else
+  bad "the login rule allows at most 60 requests per period" "got '${login_budget:-none}'; a password budget must stay far below the media one"
+fi
+if grep -qE '^[[:space:]]*period[[:space:]]*=[[:space:]]*10$' <<<"$login_rule"; then
+  ok "the login rule counts in the plan's 10-second window"
+else
+  bad "the login rule counts in the plan's 10-second window"
+fi
+eq "$(grep -c 'ratelimit = {' <<<"$rl")" "2" "the ruleset carries one rule per population"
+
+# The same contract in prose: the deployed model is password-only, and the
+# control that replaced the gate is write denial, not the gate.
+echo "== recovery access model in the docs"
+if grep -qiE 'no (Cloudflare )?Access gate|has no Access gate' docs/core/backrest.md; then
+  ok "backrest.md states the reader has no Access gate"
+else
+  bad "backrest.md states the reader has no Access gate"
+fi
+if grep -qiE 'write RPCs? (are |is )?denied' docs/core/backrest.md; then
+  ok "backrest.md carries the write-denial safety argument"
+else
+  bad "backrest.md carries the write-denial safety argument"
+fi
+if grep -qE '^[[:space:]]*\| `recovery\.sammohr\.dev` \|.*password' docs/cloudflare.md; then
+  ok "cloudflare.md lists recovery in the public surface, password-only"
+else
+  bad "cloudflare.md lists recovery in the public surface, password-only" \
+    "expected a public-surface table row for recovery.sammohr.dev that names its password"
+fi
+if grep -rniE 'access-protected' docs/ | grep -qi backrest; then
+  bad "no doc calls the reader Access-protected" "$(grep -rniE 'access-protected' docs/ | grep -i backrest)"
+else
+  ok "no doc calls the reader Access-protected"
+fi
+if grep -qF 'state rm cloudflare_zero_trust_access_application.backrest' docs/manual-steps.md; then
+  ok "manual steps remove the backrest state entry first"
+else
+  bad "manual steps remove the backrest state entry first"
 fi
 
 echo "== state backend"

@@ -8,7 +8,7 @@ kept but serves nothing.
 ## Deployment
 
 ```
-browser -- Access (owner identity) -- Worker -- Durable Object -- container (Backrest, restic 0.19.1)
+browser -- Backrest password -- Worker -- Durable Object -- container (Backrest, restic 0.19.1)
                                                                   |
                                                                   +-- R2 (read-only token)
 ```
@@ -18,10 +18,14 @@ browser -- Access (owner identity) -- Worker -- Durable Object -- container (Bac
   without the repository id, URI and GUID, which deliberately do not live in
   `wrangler.json`.
 - `backrest/scripts/gate.sh` runs the acceptance matrix against a deployment.
-- Cloudflare Access is the wildcard application (`tofu/access.tf`); the
-  `backrest` application adds the `service auth` policy so the matrix can run
-  without a browser. That policy is account-wide — any service token in the
-  account is accepted, which `docs/cloudflare.md` already documents.
+- `recovery.sammohr.dev` has **no Cloudflare Access gate** (design #701,
+  re-affirmed 2026-11-20). The name is in `local.public_apps` in `tofu/access.tf`,
+  so Access lets it through to the Worker, and family can use it with nothing
+  set up in advance. The reader's own password is the only login, and
+  `tofu/rate-limit.tf` rate limits the login endpoint at 10 requests per 10 s per
+  IP with a 10 s mitigation window. There is no `backrest` Access application,
+  no email policy on the name and no service token in the path; a service token
+  header from `gate.sh` is simply an unused header now.
 - `deploy.sh` builds the image, pushes it with `wrangler containers build -p`,
   asks the registry for the digest it stored, and deploys a config whose image
   reference is that digest. Two podman quirks are why it does not simply call
@@ -86,6 +90,18 @@ another. A four-hour stream is the only honest test.
 
 ## The read-only boundary
 
+**Why an internet-facing reader needs no identity gate.** Access is an
+availability tax on the one workflow that must work when nothing else does:
+family members would need a Cloudflare login set up before a disaster, and the
+recovery kit is paper. Exposing the UI without that gate is acceptable only
+because of the boundary below: **write RPCs are denied at the Backrest layer by
+the Worker and at the R2 layer by the token**, so what is exposed is a read-only
+browser over one repository. The absent gate is not the control; the write
+denial is. If that denial ever weakens — a Backrest release the proxy does not
+recognise, or an R2 token with write scope — re-adding the Access application is
+the documented fallback, and the `write denial` row of the gate matrix is what
+detects it.
+
 Backrest has no read-only role, and its admin API is one request away from
 `auth.disabled: true`. The Worker is therefore the boundary, not a pass-through:
 
@@ -139,7 +155,7 @@ pass the same matrix if Cloudflare fails.
 | automated redeploy | `backrest/scripts/deploy.sh` twice; the second run serves without manual steps |
 | cold start without binary egress | image ships `/bin/restic`; `BACKREST_RESTIC_COMMAND` set; no restic download in `wrangler tail` |
 | reindex before readiness | first request after a wake lists snapshots and can mint a download URL |
-| authentication | `gate.sh verify`: Access-only request is refused by Backrest; config shape asserted |
+| authentication | `gate.sh verify`: an anonymous request is refused by Backrest with its own login form, with no Access redirect in front of it; the login endpoint is rate limited at the edge (`tofu/rate-limit.tf`) |
 | redaction | `gate.sh verify`: no repo password or R2 key in `GetConfig`, JSON and protobuf |
 | verified-only | `gate.sh verify`: `ListSnapshots` returns only `verified` tags |
 | small file and small directory | `gate.sh verify` |
@@ -175,7 +191,8 @@ only:
 
 - `/data` and `/cache` are persistent volumes; the config is still re-rendered
   from `/etc/backrest/env` on every start, so no drift is possible;
-- Access reaches it through a Cloudflare Tunnel instead of a Worker route;
+- the hostname reaches it through a Cloudflare Tunnel instead of a Worker route,
+  with the same absence of an Access gate and the same edge rate limit;
 - the same `gate.sh` matrix runs against the same hostname.
 
 Exact commands are in `docs/manual-steps.md` §39.8.

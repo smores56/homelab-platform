@@ -3470,19 +3470,51 @@ read -rsp 'read-only access key id: ' R2_READ_ACCESS_KEY_ID && export R2_READ_AC
 read -rsp 'read-only secret: ' R2_READ_SECRET_ACCESS_KEY && export R2_READ_SECRET_ACCESS_KEY
 ```
 
-### 39.3 Access service token
+### 39.3 Access service token (optional for the reader)
 
-Zero Trust → Access → Service Auth → Create. Store the pair in Bitwarden. The
-`service auth` policy is account-wide, so this token also reaches `memory` and
-`agent` if it leaks; rotate it in the same place if that happens. It does **not**
-reach ssh: there is no `ssh` application at the edge any more, because the route
+The reader has no Access application (39.4), so nothing needs a service token to
+reach it and `gate.sh` sends the pair only when it is exported. The token from
+the `memory`/`agent` work still exists for those two: the `service auth` policy
+is account-wide, so a leak reaches both; rotate it in the same place. It does
+**not** reach ssh: there is no `ssh` application at the edge, because the route
 is tailnet-only (section 41).
 
-### 39.4 Apply the Access application
+### 39.4 Remove the reader's Access gate
 
-`tofu/access.tf` declares the `backrest` application. Merging the change runs
-`tofu-apply` (it triggers on `tofu/**` changes to `main`); a manual dispatch is
-`gh workflow run tofu-apply.yml`.
+`tofu/access.tf` no longer declares a `backrest` application: the name is in
+`local.public_apps` so Access passes it to the Worker and Backrest's password is
+the only login. The application carried `prevent_destroy`, so drop its state
+entry **first** — dropping the block alone fails the apply:
+
+```sh
+tofu -chdir=tofu state rm cloudflare_zero_trust_access_application.backrest
+```
+
+Then apply. A merge of the change runs `tofu-apply` (it triggers on `tofu/**`
+changes to `main`); a manual dispatch is `gh workflow run tofu-apply.yml`. The
+same change adds a second rule to `tofu/rate-limit.tf` (10 requests per 10 s per
+IP on `/v1.Authentication/Login`); the zone has allowed a single rate-limit rule
+so far, so an apply that fails with `2 out of 1` means the zone still has one
+slot and the owner picks which rule keeps it (`docs/cloudflare.md`).
+
+Verify from a network that is not the tailnet, with no Cloudflare session:
+
+```sh
+curl -sS -o /dev/null -D - https://recovery.sammohr.dev/ | head -3
+# no `location: https://<team>.cloudflareaccess.com` and no 401/403 from
+# Access: the response is the reader's own page or its login form
+```
+
+Then the login limit, which answers `429`/`403` rather than the login form after
+the burst:
+
+```sh
+for _ in $(seq 12); do
+  curl -sS -o /dev/null -w '%{http_code}\n' -X POST \
+    -H 'Content-Type: application/json' --data '{"username":"probe","password":"probe"}' \
+    https://recovery.sammohr.dev/v1.Authentication/Login
+done
+```
 
 ### 39.5 Worker secrets and the first deploy
 

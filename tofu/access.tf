@@ -93,9 +93,9 @@ resource "cloudflare_zero_trust_access_application" "wildcard" {
 # blocks went with the resources, so the owner's apply destroys them without a
 # `tofu state rm` first.
 #
-# Protected applications: the memory MCP, the assistant and the backrest reader.
-# Service auth where an unattended client reaches the endpoint, because a browser
-# login is not available to `cloudflared access` or a device proxy.
+# Protected applications: the memory MCP and the assistant. Service auth where an
+# unattended client reaches the endpoint, because a browser login is not
+# available to `cloudflared access` or a device proxy.
 resource "cloudflare_zero_trust_access_application" "memory" {
   account_id       = var.account_id
   name             = "memory"
@@ -176,12 +176,22 @@ locals {
   #                 carried alongside the ntfy bearer the broker injects. The
   #                 app's own auth is the gate: deny-all default, no signup, and
   #                 ntfy's per-visitor request limiter.
+  #   recovery    - the hosted Backrest reader (#707). Design #701 opens it so
+  #                 family can reach it with nothing set up in advance; the
+  #                 re-affirmation on 2026-11-20 kept it password-only. Then the
+  #                 reader's password is the only login, its login endpoint is
+  #                 rate limited (rate-limit.tf), and what makes the exposure
+  #                 acceptable is that write RPCs are denied at the Backrest and
+  #                 R2 layers, so the surface is a read-only browser
+  #                 (docs/core/backrest.md). Re-adding Access here is the
+  #                 fallback if that denial ever weakens.
   public_apps = toset([
     "photos",
     "music",
     "opds",
     "agent-hooks",
     "ntfy",
+    "recovery",
   ])
 }
 
@@ -208,35 +218,8 @@ resource "cloudflare_zero_trust_access_application" "public" {
   # reviewed widening of the public surface.
 }
 
-# The hosted Backrest reader (#707) took over `recovery.sammohr.dev` when the
-# static letter was retired. The owner's identity is the browser path; the
-# service-auth policy exists because the recovery gate runs unattended from a
-# laptop, and a service token is the only authorization a curl invocation can
-# present. Access covers the signed same-origin download URLs because they live
-# under this hostname.
-resource "cloudflare_zero_trust_access_application" "backrest" {
-  account_id       = var.account_id
-  name             = "backrest"
-  type             = "self_hosted"
-  session_duration = "720h"
-
-  destinations = [{
-    type = "public"
-    uri  = "recovery.${var.domain}"
-  }]
-
-  policies = [
-    {
-      id         = cloudflare_zero_trust_access_policy.email.id
-      precedence = 1
-    },
-    {
-      id         = cloudflare_zero_trust_access_policy.service_auth.id
-      precedence = 2
-    },
-  ]
-
-  lifecycle {
-    prevent_destroy = true
-  }
-}
+# The hosted Backrest reader (#707) owns `recovery.sammohr.dev`, and it has no
+# Access application (#701, re-affirmed 2026-11-20): the name is in
+# `local.public_apps` above so the wildcard does not gate it. The application
+# that used to sit here carried `prevent_destroy`, so its state entry is removed
+# first and the object deleted at the edge (docs/manual-steps.md §39.4).
