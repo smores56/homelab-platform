@@ -12,7 +12,7 @@ definition cannot express them. Unknown keys are errors at every level.
     scripts/apps-schema.py validate --root <homelab-apps checkout> \
         [--secrets <tenant sops json>]
     scripts/apps-schema.py render --root <homelab-apps checkout> --out <dir> \
-        [--secrets <tenant sops json>] [--check]
+        [--secrets <tenant sops json>] [--check] [--allow-empty]
 
 ``validate`` prints ``apps/<name>/app.toml: <problem>`` per problem on stdout
 and exits non-zero; it prints nothing when the tree is clean. It is the same
@@ -21,7 +21,12 @@ fails closed — a missing ``apps/`` directory is an error, not an empty plan �
 and it reads the tenant SOPS file's *key names* only, never a value.
 
 ``render`` emits one rootless Podman Quadlet per app and ``plan.json``; it
-validates first and writes nothing when any definition is rejected. The
+validates first and writes nothing when any definition is rejected. An ``apps/``
+directory with no app in it is refused unless ``--allow-empty`` is given: a
+mistyped root or a failed extract must not empty the tenant, while the deploy
+that removes the last app has to be able to render the empty plan that stops
+every unit and prunes every Serve route.
+
 Quadlets are user units for the unprivileged ``apps`` user: they publish
 nothing — ingress is the root-owned proxy in ``scripts/apps-ingress.sh``,
 because a rootless publish forwards as the tenant uid and the tenant's egress
@@ -598,15 +603,24 @@ def owned(path: Path) -> bool:
     return path.suffix in {".container", ".network"} and is_rendered(path)
 
 
-def render(root: Path, out: Path, secrets: Path | None, check: bool) -> int:
+def render(
+    root: Path, out: Path, secrets: Path | None, check: bool, allow_empty: bool = False
+) -> int:
     problems, definitions = scan(root, secrets)
     if problems:
         # A rejected tree renders nothing: a partial tenant is worse than none.
         for problem in problems:
             print(problem)
         return 1
-    if not definitions:
-        print(f"{root}/apps: no app definitions; refusing to render an empty tenant", file=sys.stderr)
+    if not definitions and not allow_empty:
+        # The default stays: an empty `apps/` is far more often a mistyped root
+        # or a half-extracted tree than an operator emptying the tenant, and the
+        # caller that really means it says so with --allow-empty.
+        print(
+            f"{root}/apps: no app definitions; refusing to render an empty tenant "
+            "(pass --allow-empty to empty it)",
+            file=sys.stderr,
+        )
         return 1
 
     files = render_files(definitions)
@@ -693,6 +707,11 @@ def main(argv: list[str] | None = None) -> int:
         help="tenant SOPS JSON file; required when a definition references secrets",
     )
     render_cmd.add_argument("--check", action="store_true", help="fail on drift instead of writing")
+    render_cmd.add_argument(
+        "--allow-empty",
+        action="store_true",
+        help="render the empty tenant (no app definitions) instead of refusing",
+    )
 
     verify_cmd = sub.add_parser("verify-plan", help="re-validate a rendered plan.json")
     verify_cmd.add_argument("--plan", type=Path, required=True)
@@ -707,7 +726,7 @@ def main(argv: list[str] | None = None) -> int:
             print(problem)
         return 1 if problems else 0
     if args.command == "render":
-        return render(args.root, args.out, args.secrets, args.check)
+        return render(args.root, args.out, args.secrets, args.check, args.allow_empty)
     if args.command == "verify-plan":
         problems = verify_plan(args.plan)
         for problem in problems:

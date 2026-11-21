@@ -25,9 +25,10 @@ Before=shutdown.target
 [Service]
 Type=oneshot
 ExecStart=/usr/libexec/smortress-boot-gate
-# The health budget (300 s) plus one bounded rollback (900 s), so a wedged
-# `bootc` or a wedged probe cannot hold the boot for ever.
-TimeoutStartSec=1800
+# The bounded apps revert (1200 s), the health budget (300 s) and one bounded
+# rollback (900 s), so a wedged tenant helper or `bootc` cannot hold the boot for
+# ever. The revert bound is shorter than an apply's: it pulls no image.
+TimeoutStartSec=2700
 UMask=0077
 User=root
 
@@ -41,6 +42,17 @@ ReadWritePaths=/var/lib/homelab/deploy
 ReadWritePaths=/run/smortress
 ReadWritePaths=/boot
 ReadWritePaths=-/sysroot/ostree
+# A gate on a boot after an interrupted apps apply reverts it through
+# deploy-apps, which restores the tenant plan here and, as the tenant via
+# runuser, its units and secret values under /var/home/apps.
+ReadWritePaths=/var/lib/homelab/apps
+# ProtectHome=read-only would make the tenant home read-only for the runuser
+# child and fail the revert, so exactly that home is re-opened; /root stays
+# protected.
+ReadWritePaths=/var/home/apps
+# Rootless podman and `systemctl --user` write their runtime state and private
+# socket here; no session bus is needed.
+ReadWritePaths=/run/user
 ProtectHome=read-only
 PrivateTmp=yes
 NoNewPrivileges=yes

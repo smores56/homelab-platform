@@ -287,6 +287,36 @@ else
   ok 'an empty tenant is refused'
 fi
 
+# --allow-empty is the deploy's escape hatch for removing the last app: it is
+# the same tree, and it has to produce the empty plan (which is what stops every
+# unit and prunes every Serve route) instead of writing nothing.
+if ! "$validator" render --root "$emptytree" --out "$work/emptyout" --allow-empty \
+    >"$work/empty.log" 2>&1; then
+  bad 'an empty tenant renders with --allow-empty' "$(cat "$work/empty.log")"
+elif [[ $(jq -r '.apps | length' "$work/emptyout/plan.json" 2>/dev/null) == 0 ]]; then
+  ok 'an empty tenant renders with --allow-empty'
+else
+  bad 'an empty tenant renders with --allow-empty' "$(cat "$work/emptyout/plan.json" 2>/dev/null)"
+fi
+if [[ -z $(find "$work/emptyout" -maxdepth 1 -type f -name '*.container' -print -quit) ]]; then
+  ok 'the empty plan has no unit'
+else
+  bad 'the empty plan has no unit' "$(ls "$work/emptyout")"
+fi
+# The flag means "there is nothing to render", not "skip validation": a bad
+# definition is still a rejection.
+if "$validator" render --root "$work/badtree" --out "$work/badout-empty" --allow-empty \
+    >/dev/null 2>&1; then
+  bad '--allow-empty does not weaken validation'
+else
+  ok '--allow-empty does not weaken validation'
+fi
+if [[ ! -e $work/badout-empty ]] || [[ -z $(ls -A "$work/badout-empty" 2>/dev/null) ]]; then
+  ok '--allow-empty writes nothing for a rejected tree'
+else
+  bad '--allow-empty writes nothing for a rejected tree' "$(ls "$work/badout-empty")"
+fi
+
 # --out pointing at a file is a diagnostic, not a traceback.
 if "$validator" render --root "$tree" --secrets "$tree/secrets.sops.json" --out "$work/render.log" >"$work/outfile.log" 2>&1; then
   bad '--out pointing at a file is refused'

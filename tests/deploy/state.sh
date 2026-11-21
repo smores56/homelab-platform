@@ -272,6 +272,20 @@ chmod 0755 "$work/fake-platform"
 export DEPLOY_PLATFORM_BIN=$work/fake-platform
 export FAKE_PLATFORM_LOG=$work/platform-calls
 : >"$work/platform-calls"
+# The apps apply/revert is T5's own suite; this suite proves the drain hands a
+# verified apps entry to it and reverts an interrupted apply before the queue.
+cat >"$work/fake-apps" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$FAKE_APPS_LOG"
+if [[ ${1:-} == revert ]]; then
+  rm -f "$DEPLOY_STATE_DIR/apply.json"
+fi
+exit "${FAKE_APPS_EXIT:-0}"
+STUB
+chmod 0755 "$work/fake-apps"
+export DEPLOY_APPS_BIN=$work/fake-apps
+export FAKE_APPS_LOG=$work/apps-calls
+: >"$work/apps-calls"
 for entry in "$DEPLOY_STATE_DIR"/queue/*.json; do rm -f "$entry"; done
 export DEPLOY_JOURNAL_MAX_BYTES=5242880
 : >"$DEPLOY_STATE_DIR/journal.jsonl"
@@ -298,6 +312,29 @@ check_eq "$(jq -r 'select(.event=="verified") | .repo' "$DEPLOY_STATE_DIR/journa
   'homelab-apps homelab-platform ' "each drained entry carries its repository"
 check_eq "$(jq -r 'select(.event=="drain-finish") | .drained' "$DEPLOY_STATE_DIR/journal.jsonl")" 2 \
   "the drain counts what it drained"
+check_eq "$(grep -c 'apply --commit' "$work/apps-calls")" 1 \
+  "the drain hands the verified apps entry to the apps apply"
+
+# An interrupted apps apply is reverted before anything is drained: the next
+# entry would otherwise be applied on top of half of the previous revision.
+: >"$work/apps-calls"
+printf '{"schema":1,"phase":"installing","previousUnits":[],"intendedUnits":[]}\n' |
+  apply_write
+: >"$DEPLOY_STATE_DIR/journal.jsonl"
+if DEPLOY_DRAIN_RESCAN_PAUSE=0 timeout 30 bash "$drain" >/dev/null 2>&1; then
+  ok "the drain reverts an interrupted apps apply"
+else
+  bad "the drain reverts an interrupted apps apply"
+fi
+check_eq "$(head -n 1 "$work/apps-calls")" revert \
+  "the interrupted apply is reverted before the queue is drained"
+check_eq "$(jq -r 'select(.event=="apply-reverted") | .by' "$DEPLOY_STATE_DIR/journal.jsonl")" drain \
+  "the drain journals the reverted apply"
+if [[ -e $DEPLOY_STATE_DIR/apply.json ]]; then
+  bad "the reverted apply clears the record"
+else
+  ok "the reverted apply clears the record"
+fi
 
 # An entry that cannot be read must never wedge the queue behind it.
 printf '{"id":"%s"}\n' "$id_b" | atomic_write "$DEPLOY_STATE_DIR/queue/$id_b.json"

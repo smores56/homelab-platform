@@ -522,6 +522,17 @@ chmod 0755 "$work/fake-platform"
 export DEPLOY_PLATFORM_BIN=$work/fake-platform
 export FAKE_PLATFORM_LOG=$work/platform-calls
 : >"$work/platform-calls"
+# The apps apply is T5 and has its own suite; what this suite proves is that the
+# drain hands a verified apps entry to it and acts on its exit code.
+cat >"$work/fake-apps" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$FAKE_APPS_LOG"
+exit "${FAKE_APPS_EXIT:-0}"
+STUB
+chmod 0755 "$work/fake-apps"
+export DEPLOY_APPS_BIN=$work/fake-apps
+export FAKE_APPS_LOG=$work/apps-calls
+: >"$work/apps-calls"
 
 queue_seed() { # <id> <repo> <commit>
   jq -nc --arg id "$1" --arg repo "$2" --arg commit "$3" --argjson at "$(date +%s)" \
@@ -636,10 +647,12 @@ fi
 check_eq "$(queue_count)" 1 "an entry the gate could not clear stays queued"
 unset FAKE_PLATFORM_EXIT
 
-# An apps commit has no reboot, so it never reaches the snapshot gate.
+# An apps commit has no reboot: it goes straight to the apps apply, and that
+# program's exit code is the whole verdict.
 clear_queue
 seed_state "$deployed" "$deployed" >/dev/null
 : >"$work/platform-calls"
+: >"$work/apps-calls"
 id_g=77777777-7777-4777-8777-777777777777
 queue_seed "$id_g" homelab-apps "$commit"
 if drain_run; then
@@ -647,13 +660,39 @@ if drain_run; then
 else
   bad "a verified apps commit does not fail the drain" "$(cat "$work/drain.out")"
 fi
-check_eq "$(queue_count)" 0 "the deferred apps entry is removed from the queue"
+check_eq "$(queue_count)" 0 "the applied apps entry is removed from the queue"
+check_eq "$(cat "$work/apps-calls")" "apply --commit $commit" \
+  "the drain hands the apps entry to the apps apply"
 check_eq "$(jq -r 'select(.event=="apps-deferred") | .commit' "$state_dir/journal.jsonl" | tail -n1)" \
-  "$commit" "the apps apply is journaled as deferred"
+  "" "the drain no longer defers the apps apply"
 if [[ -s $work/platform-calls ]]; then
   bad "an apps commit never reaches the snapshot gate" "$(cat "$work/platform-calls")"
 else
   ok "an apps commit never reaches the snapshot gate"
 fi
+
+# A commit the schema refused is final: the apply denylisted it, so the entry is
+# popped and counted, and the same commit is not retried forever.
+clear_queue
+queue_seed "$id_g" homelab-apps "$commit"
+if FAKE_APPS_EXIT=3 drain_run; then
+  ok "a rejected apps commit does not fail the drain"
+else
+  bad "a rejected apps commit does not fail the drain" "$(cat "$work/drain.out")"
+fi
+check_eq "$(queue_count)" 0 "a rejected apps entry is removed from the queue"
+check_eq "$(jq -r 'select(.event=="drain-finish") | .rejected' "$state_dir/journal.jsonl" | tail -n1)" 1 \
+  "the drain counts the rejected apps commit"
+
+# A retryable or reverted failure leaves the entry queued so the next trigger
+# tries again; the apply changed nothing or put the previous revision back.
+clear_queue
+queue_seed "$id_g" homelab-apps "$commit"
+if FAKE_APPS_EXIT=5 drain_run; then
+  bad "a reverted apps apply fails the drain"
+else
+  ok "a reverted apps apply fails the drain"
+fi
+check_eq "$(queue_count)" 1 "an apps entry that changed nothing stays queued"
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 ((fail == 0))

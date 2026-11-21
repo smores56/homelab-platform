@@ -10,6 +10,12 @@
 # platform deployment, but it acts on the platform only when `pending.json` says
 # a stage was written and a reboot requested.
 #
+# The reconcile is a bounded `deploy-apps revert`: the tenant may be half of two
+# revisions, with the plan already the new one, so no health check may judge it
+# before the recorded revision is back. A revert that cannot finish is a failed
+# gate, not a pass: the record stays for the next boot and no platform decision
+# is made on a tenant nobody restored.
+#
 # With a pending record it compares the booted deployment's digest to the one the
 # verifier recorded, in both forms bootc may report (index or platform manifest):
 #
@@ -106,6 +112,18 @@ connect_timeout=${DEPLOY_BOOT_GATE_CONNECT_TIMEOUT:-5}
 status_timeout=${DEPLOY_BOOT_GATE_STATUS_TIMEOUT:-60}
 grub_timeout=${DEPLOY_BOOT_GATE_GRUB_TIMEOUT:-30}
 rollback_timeout=${DEPLOY_ROLLBACK_TIMEOUT:-900}
+# deploy-apps carries its own 5400 s apply budget; a revert pulls no image, so
+# this shorter net under one that wedges still fits in the gate unit's
+# TimeoutStartSec alongside the health budget and a rollback.
+apps_bin=${DEPLOY_APPS_BIN:-}
+if [[ -z $apps_bin ]]; then
+  if [[ -x /usr/libexec/deploy-apps ]]; then
+    apps_bin=/usr/libexec/deploy-apps
+  else
+    apps_bin=$self_dir/deploy-apps.sh
+  fi
+fi
+apps_revert_timeout=${DEPLOY_APPS_REVERT_TIMEOUT:-1200}
 
 say() { printf 'smortress-boot-gate: %s\n' "$*"; }
 warn() { printf 'smortress-boot-gate: %s\n' "$*" >&2; }
@@ -366,15 +384,27 @@ rolled_back() { # <booted> <commit> <index> <manifest>
 }
 
 # --- main -------------------------------------------------------------------
-# An interrupted apps apply is T5's to revert; for now the boot has to say that
-# it found one and leave the record, which is what makes the revert possible.
+# The tenant a previous boot or a watchdog left half-applied. This runs before
+# the health checks because they check the revision the plan names; on a
+# half-applied tenant that revision is not what is running.
 reconcile_apply() {
-  local phase
+  local phase rc=0
   record_exists apply || return 0
   phase=$(record_field apply phase 2>/dev/null) || phase=unknown
   journal_append apply-interrupted "$(jq -nc --arg phase "$phase" '{phase:$phase}')" ||
     warn "cannot journal the interrupted apps apply"
-  say "an apps apply was interrupted (phase $phase); the record is left for the revert"
+  timeout --signal=TERM --kill-after=60 "$apps_revert_timeout" "$apps_bin" revert || rc=$?
+  if ((rc != 0)); then
+    journal_append apply-revert-failed "$(jq -nc --arg phase "$phase" --argjson exit "$rc" \
+      '{phase:$phase,exit:$exit,by:"boot-gate"}')" ||
+      warn "cannot journal the failed apps revert"
+    warn "an interrupted apps apply (phase $phase) could not be reverted (exit $rc); the record is kept"
+    return 1
+  fi
+  journal_append apply-reverted "$(jq -nc --arg phase "$phase" '{phase:$phase,by:"boot-gate"}')" ||
+    warn "cannot journal the reverted apps apply"
+  say "reverted the interrupted apps apply (phase $phase)"
+  return 0
 }
 
 main() {
@@ -391,7 +421,7 @@ main() {
   trap deploy_lock_release EXIT
 
   journal_append boot-gate-start '{}' || warn "cannot journal the gate start"
-  reconcile_apply
+  reconcile_apply || exit 1
 
   if ! record_exists pending; then
     say "no staged deployment"

@@ -299,6 +299,8 @@ jobs:
         run: tests/deploy/platform.sh
       - name: deploy boot gate tests
         run: tests/deploy/boot.sh
+      - name: deploy apps apply tests
+        run: tests/deploy/apps.sh
 
   action-pins:
     name: action SHA pins

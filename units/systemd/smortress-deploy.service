@@ -50,6 +50,19 @@ ReadWritePaths=-/var/lib/restic/hdd
 # own -- a read-only mount does not block a unix-socket connect.
 ReadWritePaths=/boot
 ReadWritePaths=-/sysroot/ostree
+# The apps apply (T5) atomically installs the tenant plan here, and restarts the
+# quota applier and Serve so both read it.
+ReadWritePaths=/var/lib/homelab/apps
+# The pull, the unit install and the secret replacement are tenant-side work via
+# runuser, so root never writes here. ProtectHome=read-only makes /home (the
+# symlink to /var/home) read-only for every process in this namespace, including
+# the runuser child, which would leave the pull and the unit install failing on
+# EROFS; re-opening only the tenant's own home keeps root's home protected.
+ReadWritePaths=/var/home/apps
+# Rootless podman keeps its runtime state, and `systemctl --user` its private
+# socket, under the tenant's runtime directory. The socket needs no session bus,
+# so this path is the whole of the widening.
+ReadWritePaths=/run/user
 ProtectHome=read-only
 PrivateTmp=yes
 NoNewPrivileges=yes

@@ -10,17 +10,24 @@
 # inactive" cannot drop an event.
 #
 # The action is verification (T2), then the platform snapshot gate (T3) and the
-# stage that reboots into the verified image (T4): the queued shape, the host's
-# own checks -- tip, descendancy, tag-to-digest, revision label, denylist -- the
-# pre-reboot gate, then `bootc switch` and the reboot. The entry is popped once
-# that verdict is recorded, and on a platform deploy the reboot is the exit: the
-# record that the deployment landed is written by the boot gate on the way up,
-# not here. A rejection is final for that entry and is never retried, because the
-# hourly poll and the next event would fail identically; an infrastructure
-# failure leaves the entry queued and fails the unit, so the next trigger retries
-# it. A held deploy is popped too: the hold record is the resume point, and
-# `smortress-deploy release --force` plus the next request is what carries it
-# forward. Applying a verified apps commit is T5.
+# stage that reboots into the verified image (T4), or the apps apply (T5): the
+# queued shape, the host's own checks -- tip, descendancy, tag-to-digest, revision
+# label, denylist -- then the pre-reboot gate and `bootc switch`, or the tenant
+# apply that installs the commit's units, secrets and Serve routes. The entry is
+# popped once that verdict is recorded, and on a platform deploy the reboot is the
+# exit: the record that the deployment landed is written by the boot gate on the
+# way up, not here. A rejection is final for that entry and is never retried,
+# because the hourly poll and the next event would fail identically; an
+# infrastructure failure leaves the entry queued and fails the unit, so the next
+# trigger retries it. A held deploy is popped too: the hold record is the resume
+# point, and `smortress-deploy release --force` plus the next request is what
+# carries it forward.
+#
+# The drain also owns the crash state of an apps apply: it reverts an interrupted
+# one (apply.json) before it drains anything, because the next request would
+# otherwise be applied on top of half of the previous one. The boot gate journals
+# `apply-interrupted` when it finds one and leaves the record; on a boot without a
+# pending platform deployment this is the process that repairs the tenant.
 #
 # Every knob is environment-overridable so tests/deploy/*.sh can drive this
 # exact code. Production sets none of them.
@@ -77,6 +84,19 @@ if [[ -z $platform_bin ]]; then
   fi
 fi
 gate_timeout=${DEPLOY_GATE_DEADLINE:-4200}
+
+# The apps apply ships through the same loop. It keeps its own 5400 s budget and
+# every child's deadline; this is the net under a wedged one, and it stays inside
+# the drain unit's own TimeoutStartSec.
+apps_bin=${DEPLOY_APPS_BIN:-}
+if [[ -z $apps_bin ]]; then
+  if [[ -x /usr/libexec/deploy-apps ]]; then
+    apps_bin=/usr/libexec/deploy-apps
+  else
+    apps_bin=$self_dir/deploy-apps.sh
+  fi
+fi
+apps_timeout=${DEPLOY_APPS_DEADLINE:-6000}
 
 say() { printf 'deploy-drain: %s\n' "$*"; }
 warn() { printf 'deploy-drain: %s\n' "$*" >&2; }
@@ -166,10 +186,24 @@ journal_append drain-start '{"source":"queue"}' || {
   exit 1
 }
 
+# Before the queue: an interrupted apps apply is half of one revision and the
+# installed plan may already be the new one, so draining a request onto it would
+# snapshot a state that never existed. The revert is idempotent and the gate has
+# already journaled that it found the record.
+if record_exists apply; then
+  apps_rc=0
+  timeout "$apps_timeout" "$apps_bin" revert || apps_rc=$?
+  if ((apps_rc != 0)); then
+    warn "an interrupted apps apply could not be reverted (exit $apps_rc); not draining"
+    exit 1
+  fi
+  journal_append apply-reverted "$(jq -nc --arg by drain '{by:$by}')" ||
+    warn "cannot journal the reverted apply"
+fi
+
 drained=0
 rejected=0
 held=0
-deferred=0
 refused=0
 noop=0
 superseded=0
@@ -288,12 +322,24 @@ while :; do
             ;;
         esac
       else
-        # Apps has no reboot and therefore no snapshot gate; its apply is T5.
-        journal_append apps-deferred "$(jq -nc --arg id "$id" --arg repo "$repo" \
-          --arg commit "$commit" '{id:$id,repo:$repo,commit:$commit}')" ||
-          warn "cannot journal the deferred apps deploy"
-        say "$repo $commit: apps apply deferred to T5"
-        deferred=$((deferred + 1))
+        # Apps has no reboot and no snapshot gate: the apply pulls, installs and
+        # reverts on its own, so its exit is the whole verdict. 3 is a commit the
+        # validator refused and the apply already denylisted, which is final for
+        # this entry; anything else changed nothing (or was rolled back) and the
+        # entry keeps its place.
+        apps_rc=0
+        timeout "$apps_timeout" "$apps_bin" apply --commit "$commit" || apps_rc=$?
+        case $apps_rc in
+          0) say "$repo $commit: applied" ;;
+          3)
+            say "$repo $commit: rejected by the apps schema"
+            rejected=$((rejected + 1))
+            ;;
+          *)
+            warn "$repo $commit: the apps apply failed (exit $apps_rc); leaving it queued"
+            exit 1
+            ;;
+        esac
       fi
       drained=$((drained + 1))
       ;;
@@ -315,9 +361,9 @@ while :; do
 done
 
 journal_append drain-finish "$(jq -nc --argjson drained "$drained" --argjson rejected "$rejected" \
-  --argjson held "$held" --argjson deferred "$deferred" --argjson refused "$refused" \
+  --argjson held "$held" --argjson refused "$refused" \
   --argjson noop "$noop" --argjson superseded "$superseded" --argjson invalid "$invalid" \
-  '{drained:$drained,rejected:$rejected,held:$held,deferred:$deferred,refused:$refused,
+  '{drained:$drained,rejected:$rejected,held:$held,refused:$refused,
     noop:$noop,superseded:$superseded,invalid:$invalid}')" ||
   warn "cannot journal the drain finish"
-say "drained $drained, rejected $rejected, held $held, deferred $deferred, refused $refused, no-op $noop, superseded $superseded, invalid $invalid"
+say "drained $drained, rejected $rejected, held $held, refused $refused, no-op $noop, superseded $superseded, invalid $invalid"

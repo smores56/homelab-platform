@@ -155,6 +155,7 @@ case $verb in
     exit 0
     ;;
   is-active)
+    printf 'is-active %s\n' "$unit" >>"$STUB_LOG/gate-order"
     if [[ $scope == user ]]; then file=$STUB_SYSTEMCTL_USER_ACTIVE; else file=$STUB_SYSTEMCTL_ACTIVE; fi
     if grep -qxF -- "$unit" "$file" 2>/dev/null; then
       printf 'active\n'
@@ -233,6 +234,19 @@ for a in "$@"; do url=$a; done
 printf '%s\n' "$url" >>"$STUB_LOG/curl-urls"
 exit 0
 EOF
+
+# The apps revert is a separate program with its own suite (tests/deploy/apps.sh);
+# here it stands in for the gate's call, removes the record the way a successful
+# revert does, and shares one ordering log with the health checks.
+cat >"$bin/deploy-apps" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$STUB_LOG/apps-calls"
+printf 'deploy-apps %s\n' "$*" >>"$STUB_LOG/gate-order"
+if [[ ${1:-} == revert && ${STUB_APPS_KEEP_APPLY:-0} != 1 && ${STUB_APPS_EXIT:-0} == 0 ]]; then
+  rm -f "$DEPLOY_STATE_DIR/apply.json"
+fi
+exit "${STUB_APPS_EXIT:-0}"
+EOF
 chmod 0755 "$bin"/*
 
 export STUB_BOOTC_STATE=$work/bootc-state
@@ -240,6 +254,7 @@ export STUB_SYSTEMCTL_ACTIVE=$work/active-units
 export STUB_SYSTEMCTL_USER_ACTIVE=$work/active-user-units
 export STUB_SYSTEMCTL_FAILED=$work/failed-units
 export STUB_SERVE_JSON=$work/serve.json
+export DEPLOY_APPS_BIN=$bin/deploy-apps
 
 # The listener is a real socket: the gate's ingress check must fail on a closed
 # port and pass on a bound one, and a stub could only ever say what it was told.
@@ -316,8 +331,10 @@ reset_case() { # keep the fakes' healthy answers, drop every record
   : >"$log/tailscale-calls"
   : >"$log/zpool-calls"
   : >"$log/mountpoint-calls"
+  : >"$log/apps-calls"
+  : >"$log/gate-order"
   unset STUB_BOOTC_SWITCH_EXIT STUB_BOOTC_ROLLBACK_EXIT STUB_BOOTC_NO_STAGED \
-    STUB_ZPOOL_OK STUB_MOUNTPOINT_OK GRUB_EDITEV
+    STUB_ZPOOL_OK STUB_MOUNTPOINT_OK GRUB_EDITEV STUB_APPS_EXIT STUB_APPS_KEEP_APPLY
   # A two-second budget keeps the failed-health cases short while still proving
   # that the gate retries instead of deciding on the first look.
   export DEPLOY_BOOT_GATE_BUDGET=2 DEPLOY_BOOT_GATE_PAUSE=1
@@ -548,23 +565,55 @@ check_no_file "$state_dir/state.json" "a rolled-back deployment records nothing"
 check_no_grep "$log/systemctl-calls" 'is-active' "a rolled-back boot runs no health checks"
 
 # --- 7. no pending record: reconcile only ----------------------------------
-# An interrupted apps apply is journaled and left for T5 to revert; the boot gate
-# must not touch it and must not roll anything back.
+# An interrupted apps apply is reverted by the gate itself; with no pending
+# platform deployment nothing else happens -- no bootc, no health check.
 reset_case
-jq -nc '{schema:1,phase:"pulling",previousUnits:{},intendedUnits:{}}' | apply_write
+jq -nc '{schema:1,phase:"pulling",previousUnits:[],intendedUnits:[]}' | apply_write
 run_gate
 check_eq "$rc" 0 "a boot with no pending deploy passes"
 check_eq "$(journal_field apply-interrupted '.phase')" pulling \
   "an interrupted apps apply is journaled with its phase"
-check_file "$state_dir/apply.json" "the interrupted apps apply is left for T5"
+check_grep "$log/apps-calls" 'revert' "the gate calls the apps revert"
+check_eq "$(journal_field apply-reverted '.by')" boot-gate \
+  "the gate journals the reverted apply"
+check_no_file "$state_dir/apply.json" "the reverted apply clears the record"
 check_no_grep "$log/bootc-calls" 'rollback' "no pending deploy means no rollback"
 check_no_grep "$log/bootc-calls" 'status' "no pending deploy means no bootc comparison"
 if [[ -s $log/curl-urls ]]; then bad "a quiet boot notifies nothing"; else ok "a quiet boot notifies nothing"; fi
 if [[ -s $log/systemctl-calls ]]; then
-  bad "a quiet boot runs no health checks" "$(cat "$log/systemctl-calls")"
+  bad "a quiet boot runs no health checks" "$(cat "$log"/systemctl-calls)"
 else
   ok "a quiet boot runs no health checks"
 fi
+
+# A revert that cannot finish is a failed gate: the record stays for the next
+# boot and no platform decision is made on a tenant nobody restored.
+reset_case
+jq -nc '{schema:1,phase:"installing",previousUnits:[],intendedUnits:[]}' | apply_write
+export STUB_APPS_EXIT=1
+run_gate
+unset STUB_APPS_EXIT
+check_eq "$rc" 1 "a failed apps revert fails the gate"
+check_eq "$(journal_field apply-revert-failed '.by')" boot-gate \
+  "a failed apps revert is journaled"
+check_file "$state_dir/apply.json" "a failed revert keeps the record for the next boot"
+check_no_grep "$log/bootc-calls" 'rollback' "a failed revert makes no platform decision"
+
+# With a pending deployment the revert still comes first: the health gate must
+# judge the revision the recorded plan names, not a half-applied tenant.
+reset_case
+seed_pending "$digest_index" "$digest_manifest" "$commit" "$digest_manifest"
+jq -nc '{schema:1,phase:"installing",previousUnits:[],intendedUnits:[]}' | apply_write
+run_gate
+check_eq "$rc" 0 "a matching boot with an interrupted apply passes"
+revert_line=$(grep -n 'deploy-apps revert' "$log/gate-order" | head -n 1 | cut -d: -f1)
+first_check=$(grep -n 'is-active' "$log/gate-order" | head -n 1 | cut -d: -f1)
+if [[ -n $revert_line && -n $first_check && $revert_line -lt $first_check ]]; then
+  ok "the apps revert runs before the health checks"
+else
+  bad "the apps revert runs before the health checks" "revert='$revert_line' first-check='$first_check'"
+fi
+check_no_file "$state_dir/apply.json" "a pending boot clears the reverted apply"
 
 # --- 8. a host without grub2-editenv says so instead of doing nothing ------
 # The counter is the only pre-userspace rollback; a host that cannot reset it
