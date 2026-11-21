@@ -41,7 +41,23 @@ User=1000:1000
 AddDevice=nvidia.com/gpu=all
 SecurityLabelType=nvidia_container_t
 # The image entrypoint is the server binary, so Exec= is the argument list only.
-Exec=--host 0.0.0.0 --port 8080 -ngl 99 -c 65536 --jinja --alias local-agent -m /models/Qwen2.5-7B-Instruct-Q4_K_M.gguf
+#
+# `-c` is the TOTAL context and llama.cpp divides it across `--parallel` slots,
+# so 196608 / 3 gives every slot the 65,536 the gateway config pins. Three slots
+# is the subagent bound: parent plus `delegation.max_concurrent_children: 2`, and
+# a fourth slot is what the card cannot pay for (measured 23,990 MiB of 24,576 at
+# four 64k slots with fp16 KV).
+#
+# Measured on this host with Inkling 2 Mini AD-Q4_K: 20,834 MiB resident, 57 tok/s
+# generation, 123 tok/s prompt, load 33 s. `-ub 128` is what makes it fit: the
+# prompt graph is sized by the micro-batch, and at the default 512 it wants a
+# 6.5 GiB compute buffer that fails cudaMalloc. `-ctk/-ctv q8_0` halves the KV
+# cache (2 GiB per 64k slot) and needs `-fa on`, which is also what keeps the
+# attention graph small. Dropping any of the three puts the load back over the
+# card's 24 GiB.
+# One line, not a backslash continuation: Quadlet's parser is the thing that has
+# to agree with it, and an Exec= split across lines is a question, not a fact.
+Exec=--host 0.0.0.0 --port 8080 -ngl 99 -c 196608 --parallel 3 -ub 128 -fa on -ctk q8_0 -ctv q8_0 --jinja --alias local-agent -m /models/Inkling-2-Mini-AD-Q4_K.gguf
 Volume=/var/lib/agent/model:/models:ro,z
 ReadOnly=true
 NoNewPrivileges=true
@@ -50,8 +66,9 @@ DropCapability=ALL
 [Service]
 # 143 is SIGTERM, which a deliberate stop sends: not a failure.
 SuccessExitStatus=143
-# Loading a 4.7 GiB model onto the GPU, and the first start after a reboot also
-# relabels the dataset, which is why the timeout is generous.
+# Loading a 16.5 GiB model onto the GPU takes about half a minute, and the first
+# start after a reboot also relabels the dataset, which is why the timeout is
+# generous.
 Restart=on-failure
 TimeoutStartSec=600
 

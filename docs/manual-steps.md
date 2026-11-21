@@ -4145,32 +4145,56 @@ so a rotated gateway key lands with the next reboot -- the container reads
 
 ### 40.8 Fetch the pinned model into the model dataset
 
-The model is not in any backup: 4.7 GiB of a blob that a checksum re-derives. It
+The model is not in any backup: 16.5 GiB of a blob that a checksum re-derives. It
 is fetched once into `state/agent-model`, which the pool unit must have created and
 mounted first.
+
+The weight file is `AtomicChat/Inkling-2-Mini-GGUF`, a GGUF conversion of
+Thinking Machines' `thinkingmachines/Inkling-2-Mini` (26.4B MoE, 3.4B active, 1M
+context, Apache-2.0). `AD-Q4_K` is the quant the unit pins: the base repository's
+own table puts it at KLD 0.0080 / top-1 96.3% against BF16. The *Uncensored*
+variant in the neighbouring repository is deliberately not used: it costs fidelity
+(0.0115 / 95.6% at the same quant) and buys nothing for a typed-tool agent, while
+the personal profile reads attacker-influenced mail and calendar text. The
+`mmproj` vision projector is not fetched either -- the deployment is text-only
+until something asks for images.
 
 ```sh
 sudo zfs get -H -o value mounted smortress/state/agent-model
 sudo chown 1000:1000 /var/lib/agent/model
-sudo curl -fL --retry 3 --continue-at -   -o /var/lib/agent/model/Qwen2.5-7B-Instruct-Q4_K_M.gguf.part \
-  'https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/resolve/main/Qwen2.5-7B-Instruct-Q4_K_M.gguf?download=true'
+sudo curl -fL --retry 3 --continue-at - -o /var/lib/agent/model/Inkling-2-Mini-AD-Q4_K.gguf.part \
+  'https://huggingface.co/AtomicChat/Inkling-2-Mini-GGUF/resolve/main/Inkling-2-Mini-AD-Q4_K.gguf?download=true'
 ```
 
 Verify before it is used. The size and the checksum are the pin; a partial or
 re-encoded download fails here, not inside llama.cpp:
 
 ```sh
-echo '65b8fcd92af6b4fefa935c625d1ac27ea29dcb6ee14589c55a8f115ceaaa1423  /var/lib/agent/model/Qwen2.5-7B-Instruct-Q4_K_M.gguf.part' \
+echo '2bfc233e10925297cc79dffce5d9be4f2a2b43e499ea6a1bf03b9242867dce9e  /var/lib/agent/model/Inkling-2-Mini-AD-Q4_K.gguf.part' \
   | sudo sha256sum -c -
-sudo stat -c '%s' /var/lib/agent/model/Qwen2.5-7B-Instruct-Q4_K_M.gguf.part   # 4683074240
-sudo mv /var/lib/agent/model/Qwen2.5-7B-Instruct-Q4_K_M.gguf.part \
-        /var/lib/agent/model/Qwen2.5-7B-Instruct-Q4_K_M.gguf
-sudo chown 1000:1000 /var/lib/agent/model/Qwen2.5-7B-Instruct-Q4_K_M.gguf
+sudo stat -c '%s' /var/lib/agent/model/Inkling-2-Mini-AD-Q4_K.gguf.part   # 16525559776
+sudo mv /var/lib/agent/model/Inkling-2-Mini-AD-Q4_K.gguf.part \
+        /var/lib/agent/model/Inkling-2-Mini-AD-Q4_K.gguf
+sudo chown 1000:1000 /var/lib/agent/model/Inkling-2-Mini-AD-Q4_K.gguf
 ```
 
 The name matters: `units/quadlet/agent-model.container` starts the server with
-`-m /models/Qwen2.5-7B-Instruct-Q4_K_M.gguf`. A different file name needs that
-unit changed as well, which is an image change.
+`-m /models/Inkling-2-Mini-AD-Q4_K.gguf`. A different file name needs that unit
+changed as well, which is an image change. The previous model
+(`Qwen2.5-7B-Instruct-Q4_K_M.gguf`) is dead weight once the new one loads; it lives
+in no backup unit, so removing it is just disk:
+
+```sh
+sudo rm -f /var/lib/agent/model/Qwen2.5-7B-Instruct-Q4_K_M.gguf
+```
+
+The server's flags are one decision and are measured, not guessed: `-c 196608
+--parallel 3` gives three 65,536-token slots (the config's `context_length` is
+one slot), `-ub 128` keeps the prompt graph small enough to allocate, and
+`-fa on -ctk q8_0 -ctv q8_0` halve the KV cache while flash attention keeps the
+attention graph flat. 20,834 MiB resident of 24,576 at 57 tok/s generation is what
+that buys; a fourth slot, the default micro-batch, or an fp16 cache each push the
+load back over the card.
 
 ### 40.9 Validate the units and check the three listeners
 

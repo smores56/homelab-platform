@@ -375,14 +375,28 @@ one other process, `smortress-agent-brave-seed.service`, before the browser star
 (`docs/manual-steps.md` section 40.17).
 
 The model server (`agent-model`) is llama.cpp pinned at
-`ghcr.io/ggml-org/llama.cpp:server-cuda`, started with `-c 65536`. That number is a
-floor the runtime imposes -- Hermes refuses a model under 64,000 tokens -- and
-`image/rootfs/etc/smortress/agent/local-config.yaml` pins the same value as
-`model.context_length`. The two are one decision in two files, and changing one
-without the other stops the gateway admitting the model. The GGUF itself
-(`Qwen2.5-7B-Instruct-Q4_K_M.gguf`, 4,683,074,240 bytes) is fetched into
-`state/agent-model` by hand and verified by checksum
+`ghcr.io/ggml-org/llama.cpp:server-cuda` build **b12602**, the first release with
+the merged Inkling 2 loop architecture. The GGUF is
+`Inkling-2-Mini-AD-Q4_K.gguf` (16,525,559,776 bytes), a GGUF conversion of
+Thinking Machines' `thinkingmachines/Inkling-2-Mini` -- 26.4B MoE with 3.4B active
+(5.4B with the three loop passes), 1M native context, Apache-2.0. It is fetched
+into `state/agent-model` by hand and verified by checksum
 (`docs/manual-steps.md` section 40.8); it is the one dataset in no backup unit.
+The Uncensored fine-tune of the same weights is deliberately not used: it costs
+fidelity at the same quant and removes a weak tripwire on a profile that reads
+attacker-influenced mail and calendar text.
+
+The flags are one measured decision, not defaults: `-c 196608 --parallel 3` is
+three 65,536-token slots because llama.cpp divides `-c` across slots, and
+`image/rootfs/etc/smortress/agent/local-config.yaml` pins `model.context_length:
+65536`, which is one slot -- not the total. Three slots is also the subagent
+bound (`delegation.max_concurrent_children: 2` plus the parent). `-ub 128` keeps
+the prompt graph allocatable (the default micro-batch wants a 6.5 GiB compute
+buffer and fails `cudaMalloc`), and `-fa on -ctk q8_0 -ctv q8_0` halve the KV
+cache while keeping the attention graph small. Measured on this host: 20,834 MiB
+resident of 24,576, 57 tok/s generation, 123 tok/s prompt, 33 s load. A fourth
+slot, the default micro-batch, or an fp16 cache each put the load back over the
+card.
 
 GPU access is two directives: `AddDevice=nvidia.com/gpu=all` and
 `SecurityLabelType=nvidia_container_t`. The device name resolves through

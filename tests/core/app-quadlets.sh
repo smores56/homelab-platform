@@ -596,12 +596,25 @@ fi
 
 # The runtime refuses a model under 64,000 tokens, so the server's window and the
 # config's pin are one decision in two files.
+# `-c` is the TOTAL context and llama.cpp divides it across --parallel slots, so
+# the config's context_length is one slot: c / parallel, never c itself. A unit
+# that changes --parallel without -c shrinks every slot under the runtime's floor.
 model_context=$(sed -n 's/^Exec=.*-c \([0-9]*\).*/\1/p' "$agent_model")
+slot_parallel=$(sed -n 's/^Exec=.*--parallel \([0-9]*\).*/\1/p' "$agent_model")
 config_context=$(sed -n 's/^  context_length: //p' image/rootfs/etc/smortress/agent/local-config.yaml)
-if [[ -n $model_context && $model_context == "$config_context" ]] && ((model_context >= 64000)); then
-  ok "the local context window is pinned to $model_context on both sides"
+if [[ -n $model_context && -n $slot_parallel && $slot_parallel -gt 0 ]] &&
+  ((model_context % slot_parallel == 0)) &&
+  ((model_context / slot_parallel == config_context)) && ((config_context >= 64000)); then
+  ok "each model slot is pinned to $config_context tokens like the config"
 else
-  bad 'the local context window is pinned on both sides' "model=$model_context config=$config_context"
+  bad 'each model slot is pinned like the config' \
+    "model=$model_context parallel=$slot_parallel config=$config_context"
+fi
+if grep -qE '^Exec=.*-fa on' "$agent_model" &&
+  grep -qE '^Exec=.*-ctk q8_0' "$agent_model"; then
+  ok 'the model server runs flash attention with a quantized cache'
+else
+  bad 'the model server runs flash attention with a quantized cache'
 fi
 local_disabled=$(sed -n '/^  disabled_toolsets:/,/^[^ -]/p' image/rootfs/etc/smortress/agent/local-config.yaml)
 for toolset in web search browser terminal file memory code_execution catalog \
