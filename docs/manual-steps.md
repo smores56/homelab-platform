@@ -4193,6 +4193,20 @@ sudo podman quadlet list | grep agent
 systemctl cat agent-proxy.service agent-facade-personal.service | head -40
 ```
 
+A changed `[Network]` option does not apply by rebooting alone:
+`podman network create --ignore` leaves an existing network's stored config
+untouched, and the generated `ExecStart` will happily show the new flag while
+the network keeps the old one. `NetworkDeleteOnStop=true` on the agent networks
+makes the next boot rebuild them; on a running host the manual form is
+
+```sh
+sudo systemctl stop agent-webui-personal agent-local agent-facade-personal agent-model
+sudo systemctl stop agent-local-network.service
+sudo podman network rm systemd-agent-local
+sudo systemctl start agent-local-network.service
+sudo systemctl start agent-model.service agent-facade-personal.service agent-local.service agent-webui-personal.service
+```
+
 `systemctl cat` is the ground truth: it prints the unit the generator produced, so a
 `Network=` that resolved to nothing, a `Secret=` that no Podman secret satisfies, or
 a `Volume=` whose host path is missing (`statfs /usr/lib/agent-facade: no such file
