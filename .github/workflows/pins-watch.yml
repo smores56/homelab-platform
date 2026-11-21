@@ -1,6 +1,10 @@
-# Opens an issue when either moving pin in image/pins.env is stale: the Fedora
-# bootc base digest or the NymVPN release. It never commits and never rebuilds:
-# a refresh stays a reviewed change made with scripts/refresh-pins.sh --write.
+# Opens an issue when the moving NymVPN pin in image/pins.env is stale. It never
+# commits and never rebuilds: a refresh stays a reviewed change made with
+# scripts/refresh-pins.sh --write.
+#
+# The base is not watched and has nothing to refresh: image/pins.env carries the
+# fedora-bootc release tag and every build resolves it, so drift there is
+# impossible by construction.
 name: pins-watch
 
 on:
@@ -26,7 +30,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends skopeo jq curl
 
-      - name: check the pin
+      - name: check the NymVPN pin
         id: check
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -47,13 +51,14 @@ jobs:
           DRIFT: ${{ steps.check.outputs.drift }}
         run: |
           set -euo pipefail
-          title="Newer base digest or NymVPN release available"
-          # The watcher predates the NymVPN pin and used a base-only title; a
-          # stray open issue under it would otherwise never be closed again.
-          legacy="Newer fedora-bootc base digest available"
+          title="Newer NymVPN release available"
+          # The watcher predates this title the way it predates the base tag; a
+          # stray open issue under either would otherwise never be closed again.
+          legacy_titles=("Newer base digest or NymVPN release available"
+            "Newer fedora-bootc base digest available")
           detail=$(cat "$RUNNER_TEMP/check")
           existing=""
-          for candidate in "$title" "$legacy"; do
+          for candidate in "$title" "${legacy_titles[@]}"; do
             number=$(gh issue list --state open --limit 100 --json number,title \
               --jq "[.[] | select(.title == \"$candidate\")][0].number // empty")
             [[ -n $number ]] || continue

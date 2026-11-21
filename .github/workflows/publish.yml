@@ -35,7 +35,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: install podman, jq, shellcheck
+      - name: install podman, skopeo, jq, shellcheck
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends podman skopeo jq shellcheck
@@ -90,10 +90,23 @@ jobs:
         run: |
           set -euo pipefail
           . image/pins.env
+          # The base is a moving release tag; the build resolves it and records
+          # the digest in the image's org.opencontainers.image.base.digest label.
           case "$BASE_IMAGE" in
-            *@sha256:*) ;;
-            *) echo "BASE_IMAGE is not digest-pinned" >&2; exit 1 ;;
+            *@sha256:*)
+              echo "BASE_IMAGE is digest-pinned; the release tag is what the build resolves" >&2; exit 1 ;;
+            quay.io/fedora/fedora-bootc:latest)
+              echo "BASE_IMAGE is :latest; the release tag is what the build resolves" >&2; exit 1 ;;
+            quay.io/fedora/fedora-bootc:*) ;;
+            *) echo "BASE_IMAGE is not a quay.io/fedora/fedora-bootc release tag" >&2; exit 1 ;;
           esac
+          if ! base_digest=$(skopeo inspect --format '{{.Digest}}' "docker://$BASE_IMAGE"); then
+            echo "cannot resolve $BASE_IMAGE to a digest" >&2; exit 1
+          fi
+          if [[ ! $base_digest =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "registry returned no usable digest for $BASE_IMAGE: $base_digest" >&2; exit 1
+          fi
+          echo "BASE_DIGEST=$base_digest" >>"$GITHUB_ENV"
           for pin in NYM_VERSION NYM_SHA256_AMD64 NYM_SHA256_ARM64; do
             [[ -n ${!pin:-} ]] || { echo "$pin is missing from image/pins.env" >&2; exit 1; }
           done
@@ -108,6 +121,7 @@ jobs:
           # which is why the login precedes it.
           podman build \
             --build-arg "BASE_IMAGE=$BASE_IMAGE" \
+            --build-arg "BASE_DIGEST=$base_digest" \
             --build-arg "NYM_VERSION=$NYM_VERSION" \
             --build-arg "NYM_SHA256_AMD64=$NYM_SHA256_AMD64" \
             --build-arg "NYM_SHA256_ARM64=$NYM_SHA256_ARM64" \
@@ -168,4 +182,5 @@ jobs:
             echo '- image: `'"${IMAGE_REPO}"'`'
             echo '- digest: `'"${IMAGE_DIGEST}"'`'
             echo '- tag: `'"${TAG}"'`'
+            echo '- base: `'"${BASE_IMAGE}@${BASE_DIGEST}"'`'
           } >>"$GITHUB_STEP_SUMMARY"

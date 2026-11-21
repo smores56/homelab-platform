@@ -2,16 +2,20 @@
 # session. Built by scripts/build-image.sh and published by
 # .github/workflows/publish.yml.
 #
-# The base is digest-pinned. Everything added here is a distribution package
-# from the pinned base's Fedora repositories, the configuration under
-# image/rootfs, or one of two documented exceptions: Brave Origin from Brave's
-# RPM repository, and NymVPN's release tarball (no RPM exists). No signing key,
-# secret or per-machine state enters the image.
+# The base is the moving fedora-bootc release tag, resolved to a digest at build
+# time. Everything added here is a distribution package from that base's Fedora
+# repositories, the configuration under image/rootfs, or one of two documented
+# exceptions: Brave Origin from Brave's RPM repository, and NymVPN's release
+# tarball (no RPM exists). No signing key, secret or per-machine state enters
+# the image.
 
 ARG BASE_IMAGE
 FROM ${BASE_IMAGE}
 
 ARG BASE_IMAGE
+# The tag moves, so the digest the builder resolved from it is passed in and
+# labelled below: the label is how a built image still declares its base.
+ARG BASE_DIGEST
 # NymVPN's tarball is per architecture, and `uname -m` inside the build already
 # says x86_64 or aarch64, which is what the asset names use. The hashes come
 # from image/pins.env; a wrong one fails the build.
@@ -23,6 +27,7 @@ LABEL org.opencontainers.image.title="smorespro image" \
       org.opencontainers.image.description="Fedora bootc base with a niri session for the smorespro laptop" \
       org.opencontainers.image.source="https://github.com/smores56/smorespro-image" \
       org.opencontainers.image.base.name="${BASE_IMAGE}" \
+      org.opencontainers.image.base.digest="${BASE_DIGEST}" \
       org.opencontainers.image.vendor="smores56"
 
 # The desktop stack is explicit because the base is minimal: it ships
@@ -38,7 +43,7 @@ LABEL org.opencontainers.image.title="smorespro image" \
 # systemd-resolved is not optional either: nym-vpnd discovers its DNS backend at
 # runtime and prefers systemd-resolved, but falls back to rewriting
 # /etc/resolv.conf, which the daemon's ProtectSystem=strict then refuses. It is
-# already in the pinned base; listing and enabling it here keeps a future base
+# already in the base; listing and enabling it here keeps a future base
 # refresh from silently taking the backend away.
 #
 # pam-u2f serves two stacks with different authfiles: /etc/pam.d/login calls it
@@ -156,10 +161,18 @@ RUN set -eux; \
     systemctl mask rpm-ostreed-automatic.timer; \
     systemctl set-default graphical.target
 
-# Fail the build if the base is not digest-pinned or the shipped policy no
-# longer rejects by default.
+# Fail the build if the base is not the fedora-bootc release tag or the shipped
+# policy no longer rejects by default. A digest here would pin a manifest quay
+# collects within hours, and :latest would track an unscheduled release.
 RUN set -eux; \
-    case "${BASE_IMAGE}" in *@sha256:*) ;; *) echo "BASE_IMAGE is not digest-pinned" >&2; exit 1 ;; esac; \
+    case "${BASE_IMAGE}" in \
+      *@sha256:*) \
+        echo "BASE_IMAGE is digest-pinned; the release tag is what the build resolves" >&2; exit 1 ;; \
+      quay.io/fedora/fedora-bootc:latest) \
+        echo "BASE_IMAGE is :latest; the release tag is what the build resolves" >&2; exit 1 ;; \
+      quay.io/fedora/fedora-bootc:*) ;; \
+      *) echo "BASE_IMAGE is not a quay.io/fedora/fedora-bootc release tag" >&2; exit 1 ;; \
+    esac; \
     jq -e '.default[0].type == "reject"' /etc/containers/policy.json >/dev/null; \
     jq -e '.transports.docker["ghcr.io/smores56/smorespro-image"][0].keyPath == "/etc/pki/containers/smorespro.pub"' /etc/containers/policy.json >/dev/null; \
     test -s /etc/pki/containers/smorespro.pub
