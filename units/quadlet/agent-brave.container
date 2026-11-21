@@ -40,11 +40,9 @@ Requires=zfs-ready@state-agent-local.service smortress-agent-config.service agen
 After=zfs-ready@state-agent-local.service smortress-agent-config.service agent-brave-network.service smortress-agent-brave-seed.service
 
 [Container]
-# Digest from the `publish-brave` run for images/brave/Containerfile. This row is
-# provisional until that run has happened once: it is the first local build of the
-# Containerfile, and the workflow prints the authoritative digest
-# (docs/manual-steps.md section 40.17, step 1).
-Image=ghcr.io/smores56/homelab-platform/brave@sha256:88c8f0456c4ddbe2e3ca961105bb76560ccdf7a11889c26cb741987490137ffc
+# The digest of the `publish-brave` run for images/brave/Containerfile; a rebuild
+# prints a new row in scripts/app-images.sh and this line moves with it.
+Image=ghcr.io/smores56/homelab-platform/brave@sha256:9b505ba383925597812ffb1d52876b3b5f8f00b2bf999418936521cbb13d707e
 ContainerName=smortress-agent-brave
 Network=agent-brave.network
 User=1000:1000

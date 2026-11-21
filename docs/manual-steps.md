@@ -4274,23 +4274,19 @@ The seed is the chain's key. Anything holding it can read and write the synced
 history, so it lives in one ciphertext, reaches one unit as a Podman secret at uid
 1000 mode 0400, and lands in a `0600` `Preferences` document. Nothing logs it.
 
-1. Publish the browser image once. `units/quadlet/agent-brave.container` names
-   `ghcr.io/smores56/homelab-platform/brave` at the digest of the first local
-   build of `images/brave/Containerfile`, because the image does not exist in the
-   registry until `publish-brave` runs:
+1. Upgrade to an image that carries the browser. The publish run for
+   `images/brave/Containerfile` already happened; its digest is pinned in
+   `scripts/app-images.sh` and in `units/quadlet/agent-brave.container`, and both
+   move together when the image is rebuilt:
 
    ```sh
-   gh workflow run publish-brave
-   gh run watch "$(gh run list --workflow publish-brave --limit 1 \
-     --json databaseId --jq '.[0].databaseId')"
+   git log --oneline -1 -- scripts/app-images.sh
+   sudo bootc upgrade && sudo systemctl reboot
    ```
 
-   The run ends with the pin row on stdout and in the job summary. Replace the
-   `brave|built:images/brave/Containerfile|sha256:…` row in
-   `scripts/app-images.sh` **and** the `Image=` line in
-   `units/quadlet/agent-brave.container` with it, in one commit: a row that moves
-   without the Quadlet pins a digest the host never pulls, and the container fails
-   at start on a digest that does not exist.
+   A pin that moves without the Quadlet names a digest the host never pulls, and
+   the container fails before it starts; a Quadlet that moves without the row
+   fails the check that every application image is in the table.
 
 2. Export the seed from a desktop profile already in the chain, with Brave
    **closed**. Brave stores base64 of the raw blob (`v10` + IV + ciphertext) and
