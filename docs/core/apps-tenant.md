@@ -45,6 +45,32 @@ The plan is root-owned and every consumer runs the renderer's own
 20000-29999, a quota outside 1 byte-50G, a duplicate or non-numeric project id,
 a bad image reference, a non-object entry or invalid JSON changes nothing.
 
+## Repository and check
+
+`homelab-apps` holds definitions only: `apps/<name>/app.toml` and, when an app
+needs secrets, `secrets.sops.json` — a SOPS file over the platform recipients
+(operator key, machine identity, three YubiKeys), committed still encrypted.
+The design originally named a tenant-only age recipient whose identity decrypts
+nothing else; it is not used, because the apply step runs as root and already
+holds the machine identity, so a second key would add a secret to protect
+without narrowing that path. A definition may reference only keys under its own
+`apps.<name>` section.
+
+The required check named `apps-schema` runs this repository's validator from
+`homelab-platform` at a SHA pinned in the tenant workflow — never a vendored
+copy — and renders rather than only validating, because the host renders before
+it applies. Both repositories are public, so the checkout needs no credential
+and the tenant workflow carries no secret a pull request could read. The
+validator reads the secrets file still encrypted: SOPS encrypts values only, so
+key names are visible and no identity is needed.
+
+`CODEOWNERS` names the operator for `.github/**`, `CODEOWNERS` itself and
+`.sops.yaml`: an app-only PR needs no human approval, while a PR that changes
+the check or the recipient list cannot merge without one. Required signed
+commits are not enforced yet — no unattended signing key exists — and the
+broker holds no `pull_requests: write` on the tenant repository, so the agent
+cannot yet open the PR it is meant to auto-merge.
+
 ## Bounds
 
 - **Quota.** Nothing on the host can grow past the table: `raw/apps`
@@ -134,7 +160,7 @@ directly. The tenant user's `/var` home (image layers, container storage) is not
 on a dataset and has no quota yet — the accepted gap until a dataset or quota is
 designed for it.
 
-The receiver task owns the remaining half: fetch the pushed commit, require it
+The receiver task (#798) owns the remaining half: fetch the pushed commit, require it
 to be the tip of `homelab-apps` `main`, descend from the deployed commit, and
 carry a valid signature; re-run the validator from the image; pull each app image by digest as the
 tenant user with `--signature-policy=/usr/share/smortress/apps-policy.json`
