@@ -71,6 +71,13 @@ declare -A dataset_quota=(
 #: is 0750, so the unprivileged tenant user cannot read application data; the
 #: tenant's own dataset belongs to the tenant and is private to it.
 declare -A dataset_root_owner=(
+  # No container writes these, so the operator owns them outright. Without an
+  # entry they take the numeric default, which is uid 1000 -- `core` on this
+  # host, not the operator -- and init-zpool chowns every dataset root at each
+  # boot, so the operator's access has to be re-applied by hand every time.
+  [raw/git]=smores:smores
+  [raw/repo-archive]=smores:smores
+  [raw/wallpapers]=smores:smores
   # The tenant account by name, never by id: systemd-sysusers allocates the id,
   # so a number here would hand /srv/apps to whoever holds it after the account
   # is recreated. init-zpool resolves the name when it chowns, and the pool unit
