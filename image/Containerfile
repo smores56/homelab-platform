@@ -1,10 +1,14 @@
 # Derived uCore bootc image for smortress. Built by scripts/build-image.sh and
 # published by .github/workflows/publish-server-image.yml.
 #
-# The base is a digest-pinned uCore stable-nvidia image. Everything this file
-# adds is non-secret configuration, systemd units, Quadlets, SOPS ciphertext
-# and hash-pinned host binaries. No signing key, age identity or LUKS key ever
-# enters the image.
+# The base is the uCore stable-nvidia stream tag, not a digest-pinned build:
+# upstream publishes new streams constantly and ghcr garbage-collects superseded
+# digests within hours, so a pinned digest rots into "manifest unknown" build
+# failures. The build resolves the tag and records the digest it resolved in the
+# org.opencontainers.image.base.digest label below, which is how a built image
+# still says what it was built on. Everything this file adds is non-secret
+# configuration, systemd units, Quadlets, SOPS ciphertext and hash-pinned host
+# binaries. No signing key, age identity or LUKS key ever enters the image.
 
 ARG BASE_IMAGE
 
@@ -55,6 +59,10 @@ RUN set -eux; \
 FROM ${BASE_IMAGE}
 
 ARG BASE_IMAGE
+# The digest the tag resolved to at build time, passed by scripts/build-image.sh
+# and the publish workflow. The image asserts nothing about its value; it is
+# recorded so a built image still names the exact base it was built on.
+ARG BASE_DIGEST
 ARG SOPS_VERSION
 ARG SOPS_SHA256
 ARG AGE_VERSION
@@ -62,10 +70,14 @@ ARG AGE_SHA256
 ARG RESTIC_VERSION
 ARG RESTIC_SHA256
 
+# base.name is the tag the build asked for and base.digest is what that tag
+# resolved to, both recorded here because nothing in the repository pins them:
+# this label is the only durable record of the base a given build ran on.
 LABEL org.opencontainers.image.title="smortress server image" \
       org.opencontainers.image.description="Derived uCore bootc image for the smortress core" \
       org.opencontainers.image.source="https://github.com/smores56/homelab-platform" \
       org.opencontainers.image.base.name="${BASE_IMAGE}" \
+      org.opencontainers.image.base.digest="${BASE_DIGEST}" \
       org.opencontainers.image.vendor="smores56"
 
 # No package layer. sudo's touch factor is pam_rssh, which Fedora does not
@@ -265,13 +277,20 @@ RUN set -eux; \
 # services; ports are added there, never published on 0.0.0.0/::.
 RUN firewall-offline-cmd --set-default-zone=drop
 
-# Fail the build if the base is not digest-pinned, the policy no longer rejects
-# by default, or the escalation tooling the runbooks depend on is absent. The PAM
-# modules are the `required` rows of the sudo stack: a base that dropped one
-# would fail closed and leave every non-root account unable to escalate at all.
-# A NOPASSWD grant would bypass pam_authenticate entirely and void the whole stack.
+# Fail the build if the base is not a stream tag, the policy no longer rejects by
+# default, or the escalation tooling the runbooks depend on is absent. The base
+# must stay a tag: a digest-pinned base rots when upstream garbage-collects it,
+# and `:latest` is not a stream the uCore project maintains. The PAM modules are
+# the `required` rows of the sudo stack: a base that dropped one would fail closed
+# and leave every non-root account unable to escalate at all. A NOPASSWD grant
+# would bypass pam_authenticate entirely and void the whole stack.
 RUN set -eux; \
-    case "${BASE_IMAGE}" in *@sha256:*) ;; *) echo "BASE_IMAGE is not digest-pinned" >&2; exit 1 ;; esac; \
+    case "${BASE_IMAGE}" in \
+      *:latest) echo "BASE_IMAGE must be a stream tag, not :latest: ${BASE_IMAGE}" >&2; exit 1 ;; \
+      *@sha256:*) echo "BASE_IMAGE must be a stream tag, not a digest: ${BASE_IMAGE}" >&2; exit 1 ;; \
+      *:*) ;; \
+      *) echo "BASE_IMAGE must be a tagged reference: ${BASE_IMAGE}" >&2; exit 1 ;; \
+    esac; \
     command -v python3 >/dev/null || { echo "the image has no python3 for the plan verifier" >&2; exit 1; }; \
     jq -e '.default[0].type == "reject"' /etc/containers/policy.json >/dev/null; \
     jq -e '.transports.docker["ghcr.io/smores56/homelab-platform"][0].keyPath == "/etc/pki/containers/smortress.pub"' /etc/containers/policy.json >/dev/null; \

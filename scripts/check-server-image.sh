@@ -29,14 +29,41 @@ lacks() { ! grep -rqF -- "$1" "$2"; }
 count() { grep -cF -- "$1" "$2" || true; }
 probe() { local name=$1; shift; if "$@" >/dev/null 2>&1; then ok "$name"; else bad "$name"; fi; }
 
-if [[ $UCORE_IMAGE =~ @sha256:[0-9a-f]{64}$ ]]; then ok "base image is digest-pinned"; else bad "base image is digest-pinned"; fi
+# The base is the moving uCore stream tag, not a digest: upstream publishes new
+# streams constantly and ghcr garbage-collects superseded digests within hours, so
+# a pinned digest rots into "manifest unknown". What the build records instead is
+# the digest the tag resolved to, in the image's base.digest label.
+if [[ $UCORE_IMAGE =~ ^[a-z0-9][a-z0-9./_-]*:[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+  ok "base image tracks a stream tag"
+else
+  bad "base image tracks a stream tag: $UCORE_IMAGE"
+fi
+if [[ $UCORE_IMAGE == *:latest || $UCORE_IMAGE == *@sha256:* ]]; then
+  bad "base image is neither :latest nor digest-pinned: $UCORE_IMAGE"
+else
+  ok "base image is neither :latest nor digest-pinned"
+fi
 if [[ -n ${IMAGE_REPO:-} ]]; then ok "image repository is set"; else bad "image repository is set"; fi
 for pin in SOPS_SHA256 AGE_SHA256 RESTIC_SHA256 BUTANE_SHA256 COSIGN_SHA256; do
   if [[ ${!pin} =~ ^[0-9a-f]{64}$ ]]; then ok "$pin format"; else bad "$pin format"; fi
 done
 
 check "Containerfile takes a base argument" has "FROM \${BASE_IMAGE}" image/Containerfile
-check "Containerfile rejects a floating base" lacks ':latest' image/Containerfile
+check "Containerfile rejects a floating base" \
+  has '*:latest) echo "BASE_IMAGE must be a stream tag, not :latest' image/Containerfile
+check "Containerfile rejects a digest-pinned base" \
+  has 'BASE_IMAGE must be a stream tag, not a digest' image/Containerfile
+check "Containerfile requires a tagged base" \
+  has 'BASE_IMAGE must be a tagged reference' image/Containerfile
+check "Containerfile takes the resolved base digest" has 'ARG BASE_DIGEST' image/Containerfile
+check "the image records the base tag" \
+  has 'org.opencontainers.image.base.name="${BASE_IMAGE}"' image/Containerfile
+check "the image records the resolved base digest" \
+  has 'org.opencontainers.image.base.digest="${BASE_DIGEST}"' image/Containerfile
+check "the build resolves a base digest" has 'BASE_DIGEST' scripts/build-image.sh
+check "the publish workflow resolves a base digest" \
+  has 'BASE_DIGEST' .github/workflows/publish-server-image.yml
+check "nothing rewrites a base pin" lacks 'sed -i' scripts/refresh-pins.sh
 check "Containerfile installs the public key" has 'image/cosign.pub /etc/pki/containers/smortress.pub' image/Containerfile
 check "Containerfile masks Podman auto-update" has 'podman-auto-update.timer' image/Containerfile
 check "Containerfile masks bootc auto-update" has 'bootc-fetch-apply-updates.timer' image/Containerfile

@@ -37,7 +37,7 @@ jobs:
       - name: install podman
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends podman
+          sudo apt-get install -y --no-install-recommends podman skopeo
       - name: install pinned cosign
         run: |
           set -euo pipefail
@@ -57,14 +57,38 @@ jobs:
           test -s image/cosign.pub
           cosign public-key --key env://COSIGN_PRIVATE_KEY >"$RUNNER_TEMP/cosign.pub"
           diff -u image/cosign.pub "$RUNNER_TEMP/cosign.pub"
-      - name: permit the digest-pinned base pull for the builder
+      - name: permit the base pull for the builder
         # The runtime policy is the one that matters and is baked into the image.
-        # The builder has no uCore public key, and the base is digest-pinned in
-        # image/pins.env, so this bypass is limited to the build container.
+        # The builder has no uCore public key and the base is a uCore stream tag,
+        # so this bypass is limited to the build container.
         run: |
           mkdir -p "$HOME/.config/containers"
           printf '%s' '{"default":[{"type":"insecureAcceptAnything"}]}' \
             >"$HOME/.config/containers/policy.json"
+      - name: resolve the base digest
+        # The base tracks the uCore stream tag, so the digest is whatever the tag
+        # names when the build starts. Resolve it here rather than inside the
+        # build: a registry failure fails the job before anything is built, and
+        # the run summary and the image label both name the digest that build ran
+        # on. The tag moves, so this digest is a record, not a pin.
+        run: |
+          set -euo pipefail
+          . image/pins.env
+          base=$UCORE_IMAGE
+          digest=$(skopeo inspect --format '{{.Digest}}' "docker://$base")
+          if [[ ! $digest =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::cannot resolve the base digest of $base: $digest"
+            exit 1
+          fi
+          echo "BASE_DIGEST=$digest" >>"$GITHUB_ENV"
+          {
+            echo "### Base image"
+            echo
+            echo "- \`$base\` (stream tag)"
+            echo "- \`${base}@${digest}\` (resolved by this run)"
+            echo
+          } >>"$GITHUB_STEP_SUMMARY"
+          echo "base: ${base}@${digest}"
       - name: build
         run: scripts/build-image.sh
       - name: push, sign and verify the pushed digest
