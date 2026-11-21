@@ -82,10 +82,12 @@ sudo systemctl stop 'smortress-agent-*'
 The collectors matter as much as the applications: they write into
 `/var/lib/agent/local/quarantine`, which is a state tree below.
 
-Containers are not units. `smortress-agent-mail-stream` and
-`smortress-agent-model` are created outside systemd and hold bind mounts into
-`/var/lib/agent/local` and `/var/lib/agent/model`, so a `systemctl` sweep leaves
-them running and the pool refuses to export with `pool is busy`:
+Containers are not units, and a Quadlet's unit is named after its file, not
+after its container: `units/quadlet/agent-model.container` generates
+`agent-model.service` and starts a container called `smortress-agent-model`. A
+`systemctl stop 'smortress-agent-*'` therefore misses it. Two containers hold
+bind mounts into `/var/lib/agent/local` and `/var/lib/agent/model`, so the pool
+refuses to export with `pool is busy` until they are stopped by container name:
 
 ```sh
 sudo podman ps -a --format '{{.Names}}	{{.Status}}'
