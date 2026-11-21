@@ -8,6 +8,7 @@ without a socket.
 from __future__ import annotations
 
 import base64
+import io
 import json
 import unittest
 import urllib.error
@@ -151,6 +152,21 @@ class FetchTests(unittest.TestCase):
         with self.assertRaises(AuthenticationError) as caught:
             fetch_accountset(AccessUrl.parse(ACCESS), opener=opener)
         self.assertIn("403", str(caught.exception))
+        self.assertNotIn("s3cr", str(caught.exception))
+
+    def test_an_http_error_carries_the_providers_reason(self) -> None:
+        # A 400 with no reason is undebuggable from a journal that may not say
+        # what the provider disliked; `errors` is the only part of the body that
+        # is safe to repeat.
+        body = io.BytesIO(b'{"errors": ["end-date must not be in the future"]}')
+
+        def opener(request, timeout=30):
+            raise urllib.error.HTTPError(request.full_url, 400, "Bad Request", {}, body)
+
+        with self.assertRaises(AuthenticationError) as caught:
+            fetch_accountset(AccessUrl.parse(ACCESS), opener=opener)
+        self.assertIn("400", str(caught.exception))
+        self.assertIn("end-date must not be in the future", str(caught.exception))
         self.assertNotIn("s3cr", str(caught.exception))
 
     def test_a_non_json_body_is_refused(self) -> None:

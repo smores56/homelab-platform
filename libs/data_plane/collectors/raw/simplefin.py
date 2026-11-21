@@ -176,7 +176,8 @@ def fetch_accountset(
             body = response.read()
     except urllib.error.HTTPError as exc:
         raise AuthenticationError(
-            f"SimpleFIN answered {exc.code} for {urllib.parse.urlsplit(url).path}"
+            f"SimpleFIN answered {exc.code} for "
+            f"{urllib.parse.urlsplit(url).path}{_provider_reason(exc)}"
         ) from exc
     except (urllib.error.URLError, OSError) as exc:
         raise ValidationError(
@@ -190,6 +191,30 @@ def fetch_accountset(
     if not isinstance(payload, Mapping):
         raise ValidationError("the SimpleFIN response is not an object")
     return payload
+
+
+def _provider_reason(error: urllib.error.HTTPError) -> str:
+    """The provider's own reason from the error body, if it names one.
+
+    SimpleFIN answers a refusal as ``{"errors": [...]}``. Only that list is
+    repeated: the rest of the body belongs to the account, not to a journal line.
+    """
+
+    try:
+        body = error.read(4096)
+    except (OSError, ValueError):
+        return ""
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return ""
+    if not isinstance(payload, Mapping):
+        return ""
+    errors = payload.get("errors")
+    if not isinstance(errors, list):
+        return ""
+    text = "; ".join(str(item) for item in errors if isinstance(item, (str, int, float)))
+    return f": {text[:200]}" if text else ""
 
 
 def redact(text: str) -> str:
