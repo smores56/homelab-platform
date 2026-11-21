@@ -6830,7 +6830,10 @@ tailscale status
 ```
 
 Port 22 is closed at the panel, so this console session is the only way in
-until the tailnet link is up.
+until the tailnet link is up. A root key has to be authorized before `§50.5`
+closes password auth: the template installs the key from the order form into
+`/root/.ssh/authorized_keys`. If the order carried none, add one now from this
+console — after the bootstrap, key auth is the only way to log in.
 
 ### 50.5 Copy the bootstrap over the tailnet and run it
 

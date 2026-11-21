@@ -22,7 +22,9 @@ ctrl panel offers no cloud-init and no API to declare one.
    `udp/41641` and ICMP echo. Console/VNC bypasses it, so this cannot lock you
    out.
 3. From the HTML5 console, run `bootstrap.sh` with a `tag:vps` preauthorized
-   key, the host's MagicDNS name and an ACME contact address.
+   key, the host's MagicDNS name and an ACME contact address. A root SSH key
+   must already be in `/root/.ssh/authorized_keys`; the template takes it from
+   the order form, and the bootstrap leaves key auth as the only way in.
 4. Reconnect over the tailnet and run `verify.sh`.
 
 The DNS cutover is not part of this: it waits for #709's retirement gate and is
