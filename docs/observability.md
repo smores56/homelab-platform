@@ -439,7 +439,7 @@ tests/observability/check.sh          # vector test + validate, drift, unit test
 tests/policies/check.sh               # static policy stack (364 assertions)
 tests/digest/check.sh                 # digest builder fixtures + rendered contract
 scripts/kustomize-build-all.sh        # every clusters/** kustomization
-nix run nixpkgs#kubeconform -- -strict -ignore-missing-schemas /tmp/manifests/*.yaml
+kubeconform -strict -ignore-missing-schemas /tmp/manifests/*.yaml
 ```
 
 Recorded 2026-11-11 (agent VM, Vector 0.61.0, Loki 3.7.9, Python 3.13, k3s

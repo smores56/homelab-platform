@@ -196,7 +196,7 @@ scripts/kustomize-build-all.sh
 tests/policies/check.sh
 tests/tofu/check.sh
 tests/access/check.sh   # skips without CLOUDFLARE_API_TOKEN
-nix shell nixpkgs#yamllint nixpkgs#shellcheck nixpkgs#opentofu -c bash -c \
+bash -c \
   'yamllint -c .yamllint.yaml $(git ls-files "*.yaml" "*.yml") && shellcheck scripts/*.sh tests/policies/*.sh tests/tofu/*.sh tests/access/*.sh clusters/homelab/flux-system/bootstrap.sh && tofu fmt -check -recursive tofu'
 ```
 
@@ -319,8 +319,7 @@ contract from `docs/manual-steps.md` step 10, not an ESO generator.
 
 ```sh
 tests/policies/check.sh            # 364 static assertions, no cluster
-nix shell nixpkgs#etcd nixpkgs#kubernetes nixpkgs#openssl nixpkgs#kustomize \
-  nixpkgs#yq-go nixpkgs#jq -c tests/policies/check.sh --runtime
+tests/policies/check.sh --runtime
 kubectl get validatingadmissionpolicies,validatingadmissionpolicybindings
 kubectl auth can-i create secrets -n tenant-apps \
   --as=system:serviceaccount:tenant-apps:tenant-apps-reconciler   # no

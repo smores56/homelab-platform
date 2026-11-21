@@ -136,8 +136,7 @@ runtime half.
 ### What runs on demand (runtime, real API server)
 
 ```sh
-nix shell nixpkgs#etcd nixpkgs#kubernetes nixpkgs#openssl nixpkgs#kustomize \
-  nixpkgs#yq-go nixpkgs#jq -c tests/policies/check.sh --runtime
+tests/policies/check.sh --runtime
 ```
 
 `tests/policies/apiserver.sh` boots etcd plus `kube-apiserver` on loopback ports

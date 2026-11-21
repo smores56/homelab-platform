@@ -36,9 +36,10 @@ changes by pull request from a fork, so no PR workflow can read a secret.
 ## Local checks
 
 ```sh
-nix run nixpkgs#kustomize -- build clusters/homelab/platform
-nix run nixpkgs#yamllint -- .
-nix run nixpkgs#shellcheck -- scripts/*.sh
+scripts/install-ci-tools.sh "$HOME/.local/bin"   # pinned kustomize, kubeconform, tofu, vector, yq
+kustomize build clusters/homelab/platform
+yamllint .
+shellcheck scripts/*.sh
 scripts/check-action-pins.sh
 scripts/check-pr-secret-boundary.sh
 scripts/check-codeowners.sh
