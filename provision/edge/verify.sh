@@ -38,6 +38,17 @@ eq() {
   exit 1
 }
 
+# The upstream name lives in the Caddy environment file; the checks below need
+# the same value Caddy proxies to, not a copy typed here.
+[[ -r /etc/caddy/edge.env ]] || {
+  printf 'edge: /etc/caddy/edge.env is missing\n' >&2
+  exit 1
+}
+set -a
+# shellcheck source=/dev/null
+. /etc/caddy/edge.env
+set +a
+
 # The config on disk is the config that will load.
 check "the installed Caddyfile validates" \
   caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
@@ -45,6 +56,13 @@ check "Caddy serves photos.sammohr.dev" grep -qxF 'photos.sammohr.dev {' /etc/ca
 check "Caddy serves opds.sammohr.dev" grep -qxF 'opds.sammohr.dev {' /etc/caddy/Caddyfile
 check "Caddy never answers HTTP-01" grep -qF 'disable_http_challenge' /etc/caddy/Caddyfile
 check "Caddy has no admin API" grep -qxF 'admin off' /etc/caddy/Caddyfile
+# Exactly two site blocks, never a third: a site added by hand is a name
+# published by accident, and every positive grep above would still pass.
+eq "$(grep -E '^[a-z0-9.-]+[[:space:]]*\{' /etc/caddy/Caddyfile \
+  | sed 's/[[:space:]]*{$//' | sort | tr '\n' ' ')" \
+  'opds.sammohr.dev photos.sammohr.dev ' "Caddy serves exactly the two names"
+check_not "no site proxies 443" grep -qF ':443' /etc/caddy/Caddyfile
+check_not "no site answers plain HTTP" grep -qF 'http://' /etc/caddy/Caddyfile
 eq "$(stat -c '%a' /etc/caddy/edge.env)" 640 "the Caddy environment file is root-readable only"
 
 for unit in caddy nftables tailscaled unattended-upgrades; do
@@ -73,6 +91,24 @@ check "Caddy listens on 443" ss -ltnH 'sport = :443'
 status=$(tailscale status --json 2>/dev/null || true)
 eq "$(jq -r '.BackendState // empty' <<<"$status")" Running "the tailnet link is up"
 check "the node carries tag:vps" jq -e '.Self.Tags // [] | index("tag:vps")' <<<"$status"
+
+# The whole point of the panel's udp/41641 rule: a direct path, not DERP. This
+# exits non-zero when every reply came back relayed.
+check "the path to smortress is direct" \
+  timeout 30 tailscale ping --c 3 --until-direct=true smortress
+
+# The upstream is the tailnet's own certificate on Serve's dedicated ports.
+# Caddy verifies that chain against the public roots, so a chain that does not
+# verify here would be a 502 on every public request, not a warning.
+upstream_cert=$(openssl s_client -connect "$SMORTRESS_FQDN:8446" \
+  -servername "$SMORTRESS_FQDN" -verify_return_error </dev/null 2>&1 || true)
+check "the upstream certificate verifies" grep -qF 'Verify return code: 0 (ok)' <<<"$upstream_cert"
+check "Serve fronts Immich on 8446" curl -sS -o /dev/null --max-time 10 \
+  "https://$SMORTRESS_FQDN:8446/"
+check "Serve fronts OPDShelf on 8447" curl -sS -o /dev/null --max-time 10 \
+  "https://$SMORTRESS_FQDN:8447/"
+check_not "the edge cannot reach the host on 443" curl -sS -o /dev/null --max-time 5 \
+  "https://$SMORTRESS_FQDN:443/"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 exit $((fail > 0))
