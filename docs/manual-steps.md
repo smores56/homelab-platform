@@ -4980,10 +4980,13 @@ spare must be enrolled too.
    faillock --user smores --reset
    ```
 
-   Console *login* is unaffected while the tally stands, because login is its own
-   PAM stack. That matters more now than it did: there is no console break-glass
-   row in this stack — the password fallback is the break-glass everywhere — so a
-   locked tally at the physical console is a five-minute wait, not a way in.
+   The physical console is **not** a way around the tally. Fedora's `login`
+   pulls in `system-auth`, the same file that carries `pam_faillock preauth`, and
+   the tally is per user in `/var/run/faillock` rather than per service, so a
+   console login is refused too until it ages out. It ages out slower there than
+   it does for sudo: stock `login` runs `deny=3 unlock_time=600`, so the console
+   may be the last way back. What the console gives you is the same break-glass
+   as ssh — the account password, in sudo's own stack — not a bypass.
 
 6. Run the AVC drill after every image change that touches this stack, and log
    the socket path it prints.
