@@ -9,6 +9,7 @@ checked for it: a message ends up in a journal, and the token is the account.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import unittest
 from typing import Any, Mapping
@@ -179,6 +180,26 @@ class RefusalTest(unittest.TestCase):
         with self.assertRaises(ApiError) as caught:
             list(client.calendar_events(LIST_ID, TOKEN))
         self.assertIn("not JSON", str(caught.exception))
+
+
+class SessionIdTest(unittest.TestCase):
+    def test_the_list_id_is_translated_not_indexed(self) -> None:
+        # `str.maketrans` builds a table keyed by ordinals, so `_STD_TO_EXT[c]`
+        # raised `KeyError: 'a'` right after the TOTP step and `init` stored
+        # nothing. The mapping is the extended alphabet Tuta's IdTuple uses.
+        raw = bytes(range(9)) + b"the rest of the session"
+        token = base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+        prefix = base64.b64encode(raw[:9]).decode("ascii").replace("=", "")
+
+        list_id, element_id = api_module._session_id(token)
+
+        self.assertEqual(list_id, prefix.translate(api_module._STD_TO_EXT))
+        self.assertEqual(
+            element_id, crypto.b64url_encode(hashlib.sha256(raw[9:]).digest())
+        )
+        self.assertNotIn("+", list_id)
+        self.assertNotIn("/", list_id)
+        self.assertTrue(any(character.islower() for character in list_id))
 
 
 class LoginTest(unittest.TestCase):

@@ -414,6 +414,6 @@ def _session_id(access_token: str) -> list[str]:
     except ValueError as exc:
         raise ApiError("the access token is not base64url; it cannot identify a session") from exc
     prefix = base64.b64encode(raw[:_GENERATED_ID_BYTES]).decode("ascii")
-    list_id = "".join(_STD_TO_EXT[character] for character in prefix if character != "=")
+    list_id = prefix.replace("=", "").translate(_STD_TO_EXT)
     element_id = b64url_encode(hashlib.sha256(raw[_GENERATED_ID_BYTES:]).digest())
     return [list_id, element_id]
