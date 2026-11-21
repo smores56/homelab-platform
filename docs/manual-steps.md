@@ -5751,3 +5751,56 @@ tailnet.
    put it back. Tagging devices needs the CI client's `devices:core` scope
    (manual-steps section 46 step 2); a `policy_file`-only client can rewrite the
    policy but not the tag.
+
+## 47. Agent shell jobs (T5 of #702): runner uids, prepull, and the two probes
+
+`smortress-agent-job-provision.service` creates each shell runner's subuid range,
+the general runner's ACL on `/var/srv/git`, and the uid-keyed egress table. The
+pinned job image must be prepulled once per runner; `--pull=never` makes a job on
+a host that skipped this fail closed rather than reach a registry.
+
+```sh
+sudo systemctl status --no-pager smortress-agent-job-provision.service
+getent passwd agent-shell-personal agent-shell-general
+grep -E '^agent-shell-(personal|general):' /etc/subuid /etc/subgid
+sudo nft list table inet smortress_agent_jobs
+getfacl -p /var/srv/git | grep agent-shell-general
+sudo /usr/libexec/agent-job-provision --check
+```
+
+The check exits 0 only when both ranges are the exact expected lines and the
+egress ruleset parses. Pre-pull the pinned image as each runner:
+
+```sh
+image=$(cat /etc/smortress/agent/job-image)
+for runner in agent-shell-personal agent-shell-general; do
+  state=${runner#agent-shell-}
+  runtime=/run/smortress/agent-job/$runner
+  sudo install -d -o "$runner" -g "$runner" -m 0700 "$runtime"
+  sudo -u "$runner" env -i HOME="/var/lib/agent-shell/$state" \
+    XDG_RUNTIME_DIR="$runtime" PATH=/usr/bin:/bin podman pull "$image"
+done
+```
+
+Prove the split with one job per class. The personal job has no host mount and no
+route out; the general job sees only the general tree, with general egress.
+
+```sh
+sudo /usr/libexec/agent-job-personal \
+  'id; test ! -e /var/srv/git && echo "no general tree"; test -e /run/podman/podman.sock && echo "socket" || echo "no podman socket"'
+sudo /usr/libexec/agent-job-general 'id; ls -la /work | head'
+```
+
+Both egress refusals must be denials, not timeouts into a successful fetch:
+
+```sh
+sudo /usr/libexec/agent-job-personal \
+  'python3 -c "import urllib.request; urllib.request.urlopen(\"https://example.com\", timeout=3)" || echo blocked'
+sudo /usr/libexec/agent-job-general \
+  'python3 -c "import urllib.request; urllib.request.urlopen(\"http://169.254.169.254/latest/meta-data/\", timeout=3)" || echo blocked'
+```
+
+An output that exceeds 1 MiB is truncated and reported; a job that runs past 300
+seconds has its whole transient cgroup killed and any leftover container removed.
+Shell jobs are unsupervised YOLO by design: there is no command approval here.
+The only approval contract is the write broker's `libs/data_plane/approval.py`.
