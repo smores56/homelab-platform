@@ -326,11 +326,11 @@ needs no operator file, and the password is changed by minting new ciphertext
 scripts/check-server-image.sh
 scripts/check-action-pins.sh
 scripts/check-pr-secret-boundary.sh
-nix shell nixpkgs#shellcheck -c shellcheck scripts/*.sh
-nix shell nixpkgs#butane -c scripts/render-ignition.sh --synthetic --check
-nix run nixpkgs#actionlint -- .github/workflows/server-image-static.yml \
+shellcheck scripts/*.sh
+scripts/render-ignition.sh --synthetic --check   # needs butane on PATH; CI pins it
+actionlint .github/workflows/server-image-static.yml \
   .github/workflows/publish-server-image.yml
-nix run nixpkgs#yamllint -- -c .yamllint.yaml .github/workflows/server-image-static.yml \
+yamllint -c .yamllint.yaml .github/workflows/server-image-static.yml \
   .github/workflows/publish-server-image.yml .sops.yaml
 ```
 
@@ -363,17 +363,17 @@ These require the physical host and are not claimed as proven by this task:
 The following ran on the development machine, without the operator key:
 
 ```text
-nix shell nixpkgs#butane -c scripts/render-ignition.sh --synthetic --check
+scripts/render-ignition.sh --synthetic --check
 render-ignition: butane accepted
 
 scripts/check-server-image.sh
 server image static checks passed
 
-nix shell nixpkgs#shellcheck -c shellcheck scripts/*.sh   # exit 0
-nix run nixpkgs#actionlint -- .github/workflows/server-image-static.yml \
+shellcheck scripts/*.sh   # exit 0
+actionlint .github/workflows/server-image-static.yml \
   .github/workflows/publish-server-image.yml               # exit 0
 
-HOME=/tmp/podman-home nix shell nixpkgs#podman -c scripts/build-image.sh
+HOME=/tmp/podman-home scripts/build-image.sh
 Successfully tagged ghcr.io/smores56/homelab-platform/server:sha-0c53b3f4c5a9
 ```
 

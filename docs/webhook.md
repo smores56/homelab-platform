@@ -168,14 +168,14 @@ else. The remote halves live in `clusters/homelab/platform/network/webhook-flows
 
 ```sh
 # unit tests (no cluster, no network)
-nix shell nixpkgs#python312 -c python3 -m unittest discover -s apps/webhook/tests -t apps/webhook -v
+python3 -m unittest discover -s apps/webhook/tests -t apps/webhook -v
 
 # the manifests and the policy contract
-nix shell nixpkgs#kustomize -c kustomize build clusters/homelab/webhook
-nix shell nixpkgs#yq-go nixpkgs#jq nixpkgs#kustomize -c tests/policies/check.sh
+kustomize build clusters/homelab/webhook
+tests/policies/check.sh
 
 # static Cloudflare shape (the bypass app and the tunnel route)
-nix shell nixpkgs#opentofu -c tests/tofu/check.sh
+tests/tofu/check.sh
 ```
 
 Live-gated (need the cluster, a provider and the operator):

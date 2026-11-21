@@ -4,6 +4,11 @@ Everything here needs a human: account creation, 2FA, token issuance, and the
 one-time GitHub settings that `gh api` is allowed to change but an agent must
 not. Record the date and who ran it when it is done.
 
+The commands assume the tools are on `PATH`: `sops`, `age`, `cosign`, `skopeo`,
+`crane`, `jose`, `openssl`, `podman`, `restic` and `python3` from the distro or
+their pinned releases, and `kustomize`, `kubeconform`, `tofu`, `vector` and `yq`
+from `scripts/install-ci-tools.sh`.
+
 ## 1. Create the `smores56-homelab-agent` GitHub App
 
 The agent's GitHub identity is an app, not a user: installation tokens are
@@ -581,7 +586,7 @@ re-imported. State is never committed.
 
 ```sh
 # on smortress, as the operator
-cd ~/src/homelab-platform
+cd /srv/git/github.com/smores56/homelab-platform/main
 sudo cp /var/lib/cloudflare-tofu/terraform.tfstate tofu/terraform.tfstate
 sudo chown "$(id -u):$(id -g)" tofu/terraform.tfstate
 ```
@@ -643,7 +648,7 @@ already exists. Do it in this order and read the `state list` diff.
    (`docs/secrets.md`), which only the admin identity decrypts:
 
    ```sh
-   cd ~/src/homelab-platform
+   cd /srv/git/github.com/smores56/homelab-platform/main
    sops secrets/cloudflare.yaml     # create it: cloudflare-api-token,
                                     # r2-state-access-key-id, r2-state-secret-access-key
    ```
@@ -656,7 +661,7 @@ already exists. Do it in this order and read the `state list` diff.
 2. Back up the local state and record what it holds, before touching anything:
 
    ```sh
-   cd ~/src/homelab-platform
+   cd /srv/git/github.com/smores56/homelab-platform/main
    cp tofu/terraform.tfstate "tofu/terraform.tfstate.pre-r2-$(date +%F)"
    ./scripts/tofu-cloudflare.sh state pull > "/var/backups/tofu-state-$(date +%F).json" 2>/dev/null \
      || tofu -chdir=tofu state pull > "/var/backups/tofu-state-$(date +%F).json"
@@ -825,7 +830,7 @@ a deliberate all-zero digest placeholder. From a machine with registry access:
 ```sh
 docker build -t ghcr.io/smores56/homelab-platform/broker:<git-sha> apps/broker
 docker push ghcr.io/smores56/homelab-platform/broker:<git-sha>
-nix run nixpkgs#crane -- digest ghcr.io/smores56/homelab-platform/broker:<git-sha>
+crane digest ghcr.io/smores56/homelab-platform/broker:<git-sha>
 ```
 
 Replace the `image:` line with
@@ -1410,7 +1415,7 @@ construction: there is no Access login for GitHub.
    ```sh
    docker build -t ghcr.io/smores56/homelab-platform/webhook:<git-sha> apps/webhook
    docker push ghcr.io/smores56/homelab-platform/webhook:<git-sha>
-   nix run nixpkgs#crane -- digest ghcr.io/smores56/homelab-platform/webhook:<git-sha>
+   crane digest ghcr.io/smores56/homelab-platform/webhook:<git-sha>
    ```
 
    Replace the `image:` line in `deployment.yaml` with
@@ -2327,7 +2332,7 @@ commands from the `~/repos/github.com/smores56/homelab-platform` checkout on
    ```
 
    `pg_restore` is not on the host's PATH; the script reports the exact
-   `nix shell nixpkgs#postgresql --command pg_restore --list <file>` line if it
+   `pg_restore --list <file>` line if it
    cannot find one, and that counts as a failure, not a pass.
 
 5. Measure the root-only trees and the secrets (names only), then replace the
@@ -2362,8 +2367,8 @@ scratch install.
 
    ```sh
    install -d -m 0700 "$HOME/.config/smortress"
-   export COSIGN_PASSWORD="$(nix shell nixpkgs#openssl -c openssl rand -base64 32)"
-   nix shell nixpkgs#cosign -c cosign generate-key-pair \
+   export COSIGN_PASSWORD="$(openssl rand -base64 32)"
+   cosign generate-key-pair \
      --output-key-prefix "$HOME/.config/smortress/cosign"
    install -m 0644 "$HOME/.config/smortress/cosign.pub" image/cosign.pub
    gh api -X PUT "repos/smores56/homelab-platform/environments/server-image" \
@@ -2381,7 +2386,7 @@ scratch install.
    --write` is the only step that reads the uCore tag; review the diff it makes.
 
    ```sh
-   nix shell nixpkgs#skopeo -c scripts/refresh-pins.sh --write
+   scripts/refresh-pins.sh --write
    git diff image/pins.env
    gh workflow run publish-server-image.yml
    gh run list --workflow publish-server-image.yml --limit 1
@@ -2401,14 +2406,14 @@ scratch install.
    install -d -m 0700 ignition/operator
    install -m 0644 "$HOME/.ssh/id_ed25519.pub" ignition/operator/ssh_authorized_keys
    ( umask 077
-     nix shell nixpkgs#openssl -c openssl rand -base64 48 \
+     openssl rand -base64 48 \
        >ignition/operator/root-recovery-passphrase
-     nix shell nixpkgs#openssl -c openssl rand -base64 48 \
+     openssl rand -base64 48 \
        >ignition/operator/data-recovery-passphrase
    )
    curl -sf http://10.0.0.193:7654/adv >/tmp/tang-adv.json
-   nix shell nixpkgs#jose -c jose fmt -j /tmp/tang-adv.json -g payload -y -o - \
-     | nix shell nixpkgs#jose -c jose jwk thp -i - -a S256 \
+   jose fmt -j /tmp/tang-adv.json -g payload -y -o - \
+     | jose jwk thp -i - -a S256 \
      | head -n1 >ignition/operator/tang-thumbprint
    chmod 0600 ignition/operator/tang-thumbprint
    rm -f /tmp/tang-adv.json
@@ -2440,8 +2445,8 @@ scratch install.
 
    ```sh
    export SOPS_AGE_KEY_FILE=/path/to/admin-keys.txt   # the admin age identity
-   nix shell nixpkgs#butane nixpkgs#sops -c scripts/render-ignition.sh --check
-   nix shell nixpkgs#butane nixpkgs#sops -c scripts/render-ignition.sh
+   scripts/render-ignition.sh --check
+   scripts/render-ignition.sh
    stat -c '%a %n' ignition/smortress.ign
    ```
 
@@ -2487,7 +2492,7 @@ scratch install.
    signed digest.
 
    ```sh
-   nix shell nixpkgs#cosign -c cosign verify \
+   cosign verify \
      --key image/cosign.pub "$(cat ignition/operator/derived-image)"
    ```
 
@@ -2545,7 +2550,7 @@ scratch install.
     read -r hdd
     printf '%s\n' "$hdd" >/tmp/hdd-device
     sudo install -m 0644 -o root -g root /tmp/hdd-device /etc/smortress/hdd-device
-    nix shell nixpkgs#openssl -c openssl rand -base64 48 \
+    openssl rand -base64 48 \
       | sudo install -m 0600 -o root -g root /dev/stdin \
         /var/lib/homelab/keys/hdd.key
     sudo cryptsetup luksAddKey "$(cat /etc/smortress/hdd-device)" \
@@ -2653,11 +2658,11 @@ lives in the recovery kit only.
    ( umask 077
      read -rsp 'smores account password: ' password; echo
      printf 'hash: %s\n' \
-       "$(printf '%s\n' "$password" | nix shell nixpkgs#openssl -c openssl passwd -6 -stdin)" \
+       "$(printf '%s\n' "$password" | openssl passwd -6 -stdin)" \
        >secrets/server/smores-password-hash.yaml
      unset password
    )
-   nix shell nixpkgs#sops -c sops --encrypt --in-place secrets/server/smores-password-hash.yaml
+   sops --encrypt --in-place secrets/server/smores-password-hash.yaml
    head -1 secrets/server/smores-password-hash.yaml   # must be `hash: ENC[`
    ```
 
@@ -2730,7 +2735,7 @@ or reformats them.
    decrypt it:
 
    ```sh
-   nix shell nixpkgs#sops -c sops secrets/server/r2-credentials.yaml
+   sops secrets/server/r2-credentials.yaml
    ```
 
    Replace both values and save. Publish and deploy per section 37 step 2
@@ -2747,7 +2752,7 @@ or reformats them.
    ```sh
    ( umask 077
      printf 'restic-ping-url: %s\n' 'https://hc-ping.com/<uuid>' >/tmp/hc.yaml
-     nix shell nixpkgs#sops -c sops --encrypt --input-type yaml --output-type yaml \
+     sops --encrypt --input-type yaml --output-type yaml \
        --filename-override secrets/server/healthchecks.yaml /tmp/hc.yaml \
        >secrets/server/healthchecks.yaml
      rm -f /tmp/hc.yaml
@@ -4187,7 +4192,7 @@ sign-in below.
    collector uses, on the same volume:
 
    ```sh
-   cd ~/src/homelab-platform
+   cd /srv/git/github.com/smores56/homelab-platform/main
    sudo PYTHONPATH=libs python3 -m data_plane.collectors.raw \
      --root /var/lib/agent/local/replica/calendar calendar \
      --entities /var/lib/agent/local/quarantine/calendar
