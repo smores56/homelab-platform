@@ -194,7 +194,8 @@ jobs:
       - name: lint every tracked YAML file
         run: |
           yamllint --version
-          yamllint -c .yamllint.yaml $(git ls-files '*.yaml' '*.yml') provision/smortress/user-data
+          { git ls-files -z '*.yaml' '*.yml'; printf 'provision/smortress/user-data\0'; } \
+            | xargs -0 yamllint -c .yamllint.yaml
 
   tofu:
     name: tofu fmt and validate
