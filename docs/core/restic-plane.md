@@ -408,8 +408,9 @@ command.
 `tests/core/agent-recovery.sh` covers the two agent groups: it runs the real
 driver against stubs and requires a successful snapshot of each group on `ssd`,
 `hdd` and `r2` with exactly its own dataset as the path; then it breaks the tree
-in ten ways — a dropped group, a general unit carrying personal data, one dataset
-in two units, a general unit mounting the personal state, a collector writing to
-the general group, a writable model mount, a dropped destination timer, missing
-readiness ordering, a retention skip and a drill root inside a live dataset — and
-requires the finding each one names before the unbroken tree is allowed to pass.
+in eleven ways — a dropped group, a general unit carrying personal data, one
+dataset in two units, a general unit mounting the personal state, a collector
+writing to the general group, a unit mounting agent state without naming its side,
+a writable model mount, a dropped destination timer, missing readiness ordering, a
+retention skip and a drill root inside a live dataset — and requires the finding
+each one names before the unbroken tree is allowed to pass.

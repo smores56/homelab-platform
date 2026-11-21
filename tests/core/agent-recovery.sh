@@ -262,6 +262,13 @@ mount_findings() { # tree
         if [[ $key == state/agent-model ]] && ! readonly_of "$opts"; then
           emit agent-model-writable "$file mounts the model blob writable"
         fi
+        # An auxiliary unit has no side, so nothing under the agent state tree
+        # can be attributed to it. A unit that mounts one of the two deployments
+        # and does not say which it serves could be either, which is how a
+        # collector ends up writing personal data into the general group.
+        if [[ $class == aux && $key == state/agent-* && $key != state/agent-model ]]; then
+          emit agent-mount-unclassified "$file mounts $key but names no side"
+        fi
       done < <(mount_sources "$file")
     done < <(agent_units)
   )
@@ -465,6 +472,8 @@ expect general-mounts-personal-state 0 agent-mount-cross \
 expect collector-writes-to-the-general-group 0 agent-mount-cross \
   mutate units/systemd/smortress-agent-collect-finance.service \
   's|/var/lib/agent/local/replica:/replica:z|/var/lib/agent/general/replica:/replica:z|'
+expect nameless-unit-mounts-agent-state 0 agent-mount-unclassified \
+  sh -c 'mv units/systemd/smortress-agent-collect-finance.service units/systemd/smortress-agent-sync.service'
 expect model-mounted-writable 0 agent-model-writable \
   mutate units/quadlet/agent-model.container 's|/var/lib/agent/model:/models:ro,z|/var/lib/agent/model:/models:z|'
 expect r2-timer-dropped 0 plane-backend-missing \

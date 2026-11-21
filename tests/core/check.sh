@@ -140,10 +140,11 @@ else
   fail 'restic plane checks'
 fi
 
-# The agent recovery groups have their own harness: it breaks the tree ten ways
-# (a dropped group, a general unit carrying personal data, a cross-authority
-# mount, a missing destination, skipped retention, a drill over live state) and
-# requires the finding that names each, then proves the real tree clean.
+# The agent recovery groups have their own harness: it breaks the tree eleven
+# ways (a dropped group, a general unit carrying personal data, a cross-authority
+# mount, a unit that mounts agent state without naming its side, a missing
+# destination, skipped retention, a drill over live state) and requires the
+# finding that names each, then proves the real tree clean.
 checks=$((checks + 1))
 if tests/core/agent-recovery.sh; then
   pass 'agent recovery checks'
