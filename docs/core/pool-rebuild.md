@@ -34,11 +34,19 @@ dataset so `.zfs` automounts are never followed. State trees are not copied
 here: they have writers, and a live PGDATA or sqlite file copies into a corrupt
 tree. Phase B copies those after the units are stopped.
 
+`.zfs` gives way to `--one-file-system`, and `-X` is deliberately narrowed to
+`user.*`: rsync tries to remove `security.selinux` from every destination
+directory, ext4 answers `fremovexattr: Permission denied`, and the exit code is
+23 even though every byte landed. SELinux labels are not carried at all — they
+are rebuilt in phase E with `chcon`, exactly as section 40.18 does for a drill.
+ACLs still travel in `-A`; `-X` corrects xattrs, not permissions.
+
 ```sh
 sudo install -d -m 0755 /var/lib/restic/ssd/pool-copy
-sudo rsync -aHAX --numeric-ids /var/srv/git/ /var/lib/restic/ssd/pool-copy/srv/git/
+opts=(-aHA --numeric-ids --one-file-system -X '--xattrs-include=user.*')
+sudo rsync "${opts[@]}" /var/srv/git/ /var/lib/restic/ssd/pool-copy/srv/git/
 for d in files photos books music wallpapers apps repo-archive; do
-  sudo rsync -aHAX --numeric-ids --one-file-system "/var/srv/$d/" "/var/lib/restic/ssd/pool-copy/srv/$d/"
+  sudo rsync "${opts[@]}" "/var/srv/$d/" "/var/lib/restic/ssd/pool-copy/srv/$d/"
 done
 ```
 
@@ -79,7 +87,11 @@ done
 ```
 
 **Prove both halves before touching a partition.** A second pass that compares
-checksums over every copied tree must print nothing:
+checksums over every copied tree must report no content difference. Read the
+itemised output by its first column: a leading `.` is metadata only (directory
+times, or a file whose checksum matched anyway), and anything else would move
+data. `git` is the one tree that legitimately moves while the window is open — an automated fetch rewrites `FETCH_HEAD` and `.git/objects`
+— so its content diffs are a warning to re-sync rather than a failed gate.
 
 ```sh
 for t in srv/git srv/files srv/photos srv/books srv/music srv/wallpapers \
