@@ -3265,12 +3265,16 @@ lives in the recovery kit only.
 This section brings the three repositories up. It assumes section 37 finished:
 the derived image boots, the age identity is staged at
 `/var/lib/homelab/age/keys.txt`, and `secrets/server/restic-password.yaml`
-decrypts. The 970 and the 5 TB HDD are already wiped and formatted
-(`LABEL=restic-ssd`, `LABEL=restic-hdd`); nothing in this section repartitions
-or reformats them.
+decrypts. The 5 TB HDD is already wiped and formatted (`LABEL=restic-hdd`);
+nothing in this section repartitions or reformats it. The 970 carries
+`LABEL=restic-ssd` once it has been fitted and formatted (SDLC #796): on a host
+where that has not happened yet, the `ssd` steps below fail and the HDD and R2
+repositories are brought up alone.
 
-1. Confirm both mounts by UUID. A missing HDD is expected to be survivable; a
-   missing 970 is a failure of this step.
+1. Confirm both mounts by UUID. A missing HDD is expected to be survivable. A
+   missing 970 is a failure of this step only once #796 has fitted it; before
+   that, an empty `blkid -L restic-ssd` is the expected result and the backend
+   stays red until the disk exists.
 
    ```sh
    sudo blkid -L restic-ssd
@@ -3282,8 +3286,7 @@ or reformats them.
    ```
 
    The first must report a `by-label/restic-ssd` source and the second
-   `973b7492-bb88-43c7-bac3-772384e45220`. If the SSD is absent, `blkid -L
-   restic-ssd` is empty and only the SSD jobs and the freshness check fail. Four timers must be listed: SSD and
+   `973b7492-bb88-43c7-bac3-772384e45220`. Four timers must be listed: SSD and
    HDD hourly, R2 daily at midnight, and the verifier at `:40`.
 
 2. Confirm the R2 write credentials. The bucket `homelab-restic` and the path
