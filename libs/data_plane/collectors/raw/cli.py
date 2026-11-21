@@ -156,7 +156,7 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="the response was requested with pending items included",
     )
-    finance.add_argument("--window-days", type=int, default=38)
+    finance.add_argument("--window-days", type=int, default=37)
     finance.add_argument("--now", type=int, default=None, help="epoch seconds, for replay")
 
     brave = subparsers.add_parser("brave", help="a Brave History copy")

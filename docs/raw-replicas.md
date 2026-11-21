@@ -214,8 +214,8 @@ transition is visible instead of being hidden by a new row.
   transactions vanished.
 - Refuses `include_pending=False`: pending items are only in the response because
   the caller asked, so the request is explicit rather than assumed.
-- Bounds the window (`window_days`, default 38; the request plus its 7-day
-  overlap is clamped to SimpleFIN's 45-day recommendation, because a longer read
+- Bounds the window (`window_days`, default 37; the request plus its 7-day
+  overlap is 44 days, one inside SimpleFIN's 45-day recommendation, because a longer read
   puts "Requested date range exceeds recommended range of 45 days" in the
   AccountSet's `errors` and this collector refuses that) and keeps pending items
   regardless. A transaction that falls out of the window is carried forward as
