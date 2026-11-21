@@ -338,6 +338,19 @@ else
   bad "manual-steps.md says to reconcile the runtime mapping after an upgrade"
 fi
 
+# login is pinverification=1, so the lock screen's PIN prompt hands whatever is
+# typed to the token: eight wrong entries block it, and unblocking it is a reset
+# that erases every resident credential, the step-1 keyslot included. The
+# passage that meets a locked screen has to say so before it says how to fall
+# back, or an operator reads that prompt as an account-password prompt and
+# spends the keyslot's budget on it.
+if grep -q 'burns one of its attempts' docs/manual-steps.md; then
+  ok "manual-steps.md warns that a wrong lock-screen PIN spends a token attempt"
+else
+  bad "manual-steps.md warns that a wrong lock-screen PIN spends a token attempt" \
+    "the lock screen's PIN prompt goes to the token; only a failed pam_u2f reaches the password"
+fi
+
 # --- escalation (sudo: touch, password as fallback) --------------------------
 
 # Another repository gates sudo on its own stack (design #767), so this laptop's

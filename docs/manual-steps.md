@@ -171,14 +171,21 @@ before this feature:
 
 - With a per-user mapping and the key in: type the FIDO2 PIN, then touch. A touch alone fails, which is
   what keeps a docked token from unlocking the machine by itself.
-- The account password is the fallback, but Noctalia's lock screen supplies a
-  single answer per attempt, so the password path there needs a second attempt
-  in practice (design open question 1). A TTY asks twice and always falls back:
+- That PIN prompt is the token's, not the account's: whatever is typed there
+  goes to the key, and a wrong entry burns one of its attempts. Eight of them
+  block the token, and unblocking it is a reset that erases every resident
+  credential — the disk keyslot from step 1 among them. Never type the account
+  password into it.
+- The account password is reached only after `pam_u2f` gives up. Noctalia's lock
+  screen supplies a single answer per attempt, so the password path there takes
+  a second attempt in practice (design open question 1). Leave the PIN prompt
+  empty and let it fail, and the password prompt follows. A TTY asks twice and
+  always falls back:
 
 ```sh
 # Ctrl+Alt+F2, then log in as smores
-# the first prompt is pam_u2f asking for the FIDO2 PIN: type the account
-# password instead, let it fail, and answer the password prompt that follows
+# the first prompt is pam_u2f asking for the FIDO2 PIN: press Enter with
+# nothing typed, let it fail, and answer the password prompt that follows
 ```
 
 If the token is lost or its PIN is blocked, the lock screen still opens with the
