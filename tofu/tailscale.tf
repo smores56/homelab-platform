@@ -111,6 +111,13 @@ locals {
         accept = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:10000", "tag:smortress:22000", "tag:vps:22"]
       },
       {
+        # The owner reaches the edge login, never the edge's upstream ports and
+        # never the deploy receiver: 8446/8447 belong to tag:vps and 8484 to CI.
+        # A rule that widened either would fail here.
+        src  = var.tailscale_login
+        deny = ["tag:smortress:8446", "tag:smortress:8447", "tag:smortress:8484"]
+      },
+      {
         src  = "tag:untrusted"
         deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8446", "tag:smortress:8447", "tag:vps:22"]
       },
