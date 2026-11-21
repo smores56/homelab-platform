@@ -24,6 +24,7 @@ class ShippedConfigTest(unittest.TestCase):
             [
                 "cluster",
                 "github-agent",
+                "github-agent-apps",
                 "github-agent-push",
                 "github-apps",
                 "github-hooks",
@@ -50,6 +51,7 @@ class ShippedConfigTest(unittest.TestCase):
             "github-platform",
             "github-agent-push",
             "github-agent",
+            "github-agent-apps",
             "github-sdlc-git",
             "github-sdlc",
             "tinyfish",

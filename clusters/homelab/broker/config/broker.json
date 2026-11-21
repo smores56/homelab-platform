@@ -133,6 +133,47 @@
         "kind": "bearer"
       }
     },
+    "github-agent-apps": {
+      "scheme": "https",
+      "host": "api.github.com",
+      "port": 443,
+      "allow_private": false,
+      "github_app": {
+        "installation": "github-installation-id",
+        "repositories": [
+          "homelab-apps"
+        ],
+        "permissions": {
+          "contents": "read",
+          "metadata": "read",
+          "pull_requests": "write"
+        }
+      },
+      "inject": {
+        "kind": "bearer"
+      },
+      "allow_methods": [
+        "POST",
+        "PUT"
+      ],
+      "allow_paths": [
+        "^/repos/smores56/homelab-apps/pulls$",
+        "^/repos/smores56/homelab-apps/pulls/[0-9]+/merge$",
+        "^/graphql$"
+      ],
+      "body_guards": [
+        {
+          "methods": [
+            "POST"
+          ],
+          "paths": [
+            "^/graphql$"
+          ],
+          "field": "query",
+          "allow": "^mutation[\\s\\S]*enablePullRequestAutoMerge[\\s\\S]*$"
+        }
+      ]
+    },
     "github-hooks": {
       "scheme": "https",
       "host": "api.github.com",
