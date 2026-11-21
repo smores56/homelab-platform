@@ -10,7 +10,7 @@
 #   BACKREST_BOOTSTRAP_USER=bootstrap \
 #   BACKREST_BOOTSTRAP_PASSWORD=... \
 #   BACKREST_REPO_ID=r2 \
-#   CF_ACCESS_CLIENT_ID=... CF_ACCESS_CLIENT_SECRET=... \
+#   [CF_ACCESS_CLIENT_ID=... CF_ACCESS_CLIENT_SECRET=...] \
 #   RESTIC_REPOSITORY=s3:https://<account>.r2.cloudflarestorage.com/<bucket>/<path> \
 #   RESTIC_PASSWORD=... \
 #   R2_READ_ACCESS_KEY_ID=... R2_READ_SECRET_ACCESS_KEY=... \
@@ -24,6 +24,10 @@
 #   stream <path> [sha|tar] [hash]  one long download, 4h budget, optional content check
 #   cancel <path>              abort a stream, then prove the service still answers
 #   matrix                     verify + denial
+#
+# No Access application fronts the reader (docs/core/backrest.md), so the
+# service-token pair is optional: it is sent only when set, for a deployment that
+# has Access re-added as the fallback.
 #
 # `denial` needs the `restic` binary: the R2 token is tested directly, because
 # Backrest reports scheduled writes asynchronously with no status of their own.
@@ -47,8 +51,12 @@ die() {
 : "${BACKREST_BOOTSTRAP_USER:?}"
 : "${BACKREST_BOOTSTRAP_PASSWORD:?}"
 : "${BACKREST_REPO_ID:?}"
-: "${CF_ACCESS_CLIENT_ID:?an Access service token is required; a browser login cannot be automated}"
-: "${CF_ACCESS_CLIENT_SECRET:?}"
+access_headers=""
+if [[ -n ${CF_ACCESS_CLIENT_ID:-} ]]; then
+  : "${CF_ACCESS_CLIENT_SECRET:?CF_ACCESS_CLIENT_ID is set; the secret is required with it}"
+  access_headers=$(printf 'header = "CF-Access-Client-Id: %s"\nheader = "CF-Access-Client-Secret: %s"\n' \
+    "$CF_ACCESS_CLIENT_ID" "$CF_ACCESS_CLIENT_SECRET")
+fi
 
 BACKREST_URL=${BACKREST_URL%/}
 STREAM_TIMEOUT=${BACKREST_STREAM_TIMEOUT:-14400} # four hours
@@ -63,14 +71,12 @@ cat >"$work/auth.cfg" <<EOF
 silent
 show-error
 header = "Authorization: Basic $basic"
-header = "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID"
-header = "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET"
+$access_headers
 EOF
 cat >"$work/access.cfg" <<EOF
 silent
 show-error
-header = "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID"
-header = "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET"
+$access_headers
 EOF
 
 rpc() { # METHOD JSON -> writes $work/body.out and $work/code
@@ -185,9 +191,9 @@ cmd_verify() {
   if [[ $(curl --config "$work/access.cfg" -o /dev/null -w '%{http_code}' \
     -H 'Content-Type: application/json' --data '{}' \
     "$BACKREST_URL/v1.Backrest/GetConfig") == 2?? ]]; then
-    die "an Access-only request reached Backrest; password authentication is not enforced"
+    die "an anonymous request reached Backrest; password authentication is not enforced"
   fi
-  ok "anonymous (Access-only) request is refused by Backrest"
+  ok "anonymous request is refused by Backrest"
 
   # The refusal must stay text/plain. connect-web turns a text/plain 401 into
   # unauthenticated and shows its login form; a body relabelled application/json
@@ -228,7 +234,7 @@ cmd_verify() {
 
   url=$(download_url "$op" "$BACKREST_GATE_SMALL_FILE")
   [[ $url == "$BACKREST_URL"/download/* ]] ||
-    die "download URL $url is not same-origin; an Access cookie would not cover it"
+    die "download URL $url is not same-origin; the session cookie would not cover it"
   curl_url "$url" --max-filesize "$small_max" -o "$work/small"
   expected=$(size_of "$snap" "$BACKREST_GATE_SMALL_FILE")
   got=$(wc -c <"$work/small")

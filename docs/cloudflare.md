@@ -195,11 +195,12 @@ zone with no application of its own is reachable only by the owner's identity.
 
   | Hostname | Why public |
   | --- | --- |
-  | `photos.sammohr.dev` | mobile clients cannot complete an Access login |
-  | `music.sammohr.dev` | same, for the Navidrome clients |
-  | `opds.sammohr.dev` | OPDS readers and the web reader; app login and the per-IP rate limit are the gates |
+  | `photos.sammohr.dev` | mobile clients cannot complete an Access login; no edge rate limit since the slot moved to the reader |
+  | `music.sammohr.dev` | same, for the Navidrome clients; same slot loss |
+  | `opds.sammohr.dev` | OPDS readers and the web reader; the app's own login is the gate. Its per-IP edge budget went with the `http_ratelimit` slot (`docs/core/backrest.md`, "The single rate-limit slot") |
   | `agent-hooks.sammohr.dev` | GitHub delivers webhooks with no browser and no service token; the capability URL is the credential and the receiver verifies the source's HMAC (`docs/webhook.md`). Not rate limited |
   | `ntfy.sammohr.dev` | the notification bus (SDLC #649); the Android app cannot complete an Access login, and a service token cannot ride alongside the ntfy bearer the broker injects. ntfy's own auth is the gate — `deny-all` default, no signup, and its per-visitor request limiter |
+  | `recovery.sammohr.dev` | the hosted Backrest reader (#707). Design #701 opens it so family can use it with nothing set up in advance, so the reader's own password is the only login and the login endpoint is rate limited at 10 requests per 10 s per IP (`tofu/rate-limit.tf`). What makes this exposure acceptable is not a gate but write denial: the Worker refuses every write RPC and the R2 token cannot write, so the surface is a read-only browser (`docs/core/backrest.md`). Re-adding an Access application here is the documented fallback if that denial weakens |
 
   The set carries no `prevent_destroy`, deliberately. Removing a name deletes
   its bypass application and the name falls back to the wildcard deny on the
@@ -210,10 +211,10 @@ zone with no application of its own is reachable only by the owner's identity.
 - **Protected applications** keep the email allow policy and add a
   `non_identity` decision where an unattended client connects. One decision
   exists: `service auth`, which accepts `any_valid_service_token` in the account.
-  `memory` (the MCP wrapper's device), `agent` (a blessed device's proxy) and
-  `backrest` (the hosted recovery reader at `recovery.sammohr.dev`; its Worker
-  also refuses every write RPC and strips the repository credentials, see
-  `docs/core/backrest.md`) attach it. There is no `ssh` application: sshd is
+  `memory` (the MCP wrapper's device) and `agent` (a blessed device's proxy)
+  attach it. The reader at `recovery.sammohr.dev` is **not** one of them: it has
+  no application at all (#707 design delta) and reaches the origin through the
+  public bypass above. There is no `ssh` application either: sshd is
   tailnet-only (design #767), so no edge object names it.
   `kanbei` keeps the email policy alone and
   adds `allow_authenticate_via_warp`, so a device that already runs the
@@ -225,7 +226,7 @@ zone with no application of its own is reachable only by the owner's identity.
   Settings); it is an account-wide prerequisite, not something this repository
   can declare.
 - The `service auth` policy is account-wide: any service token minted in that
-  account is accepted by `memory`, `agent` and `backrest`. Scoping one per
+  account is accepted by `memory` and `agent`. Scoping one per
   application means replacing that include with a token-id or token-tag include
   in `tofu/access.tf`. The dedicated `ssh` token and its `service_auth_ssh`
   policy are deleted with the SSH route (#767 T6); the remaining tokens are
@@ -296,6 +297,32 @@ tofu -chdir=tofu state rm cloudflare_zero_trust_access_application.nanobot
 `docs/manual-steps.md` steps 17 and 20 have the surrounding steps (dashboard
 deletion, the nix-config ingress removal and the agent cutover).
 
+## The reader's gate is gone, on purpose
+
+`recovery.sammohr.dev` (#707) used to have its own application with the email
+policy and the `service auth` policy. Design #701 wants the name open so family
+can use it with nothing set up in advance, and the 2026-11-20 re-affirmation kept
+it password-only, so the application is removed and the name is in
+`local.public_apps`. It carried `prevent_destroy`, so its state entry goes first:
+
+```sh
+tofu -chdir=tofu state rm cloudflare_zero_trust_access_application.backrest
+```
+
+Two consequences worth knowing before the apply:
+
+- The wildcard would otherwise deny the name, so removing the application
+  **without** the public-set entry leaves it owner-only rather than open. The two
+  halves of this change ship together, and `tests/tofu/check.sh` asserts both.
+- The zone plan allows exactly one `http_ratelimit` rule (a second fails the
+  apply with "2 out of 1"), so `tofu/rate-limit.tf` spends its only slot on the
+  reader's login endpoint at 10 requests per 10 s and deletes the media rule
+  (`photos`/`music`/`opds`, 1000 per 10 s) rather than merging two populations
+  onto a threshold that fits neither. That deletion is a residual, not a
+  cleanup: those names are proxied and the rule was live. The cost, and the
+  trigger for revisiting the choice, are in `docs/core/backrest.md`
+  ("The single rate-limit slot").
+
 ## Token and agent
 
 `CLOUDFLARE_API_TOKEN` exists in exactly two places: the `cloudflare` Actions
@@ -313,7 +340,7 @@ Static half — no credentials, what CI runs:
 tests/tofu/check.sh
 ```
 
-Expected: `tofu: 183 passed, 0 failed` with `tofu` on `PATH`; 181 without it, because the fmt/validate pair skips (CI runs both). The count grows with the config.
+Expected: `tofu: 200 passed, 0 failed` with `tofu` on `PATH`; 198 without it, because the fmt/validate pair skips (CI runs both). The count grows with the config.
 
 Runtime half — needs a token that can read Access:
 

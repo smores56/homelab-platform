@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Offline shape tests for the hosted Backrest reader (#707).
 #
-# The gate needs a Cloudflare account, an Access service token, restic and
-# hours of streaming; this checks the half that does not: the deployment
-# config, the pinned image, the read-only surface, the redaction and
-# verified-only rules, and that no secret or falling-open default is committed.
+# The gate needs a Cloudflare account, restic and hours of streaming; this checks
+# the half that does not: the deployment config, the pinned image, the read-only
+# surface, the redaction and verified-only rules, and that no secret or
+# falling-open default is committed.
 #
 #   tests/backrest/check.sh
 # Several assertions grep the source for literal $VAR needles; that is the point.
@@ -166,14 +166,15 @@ has "download URL field is .value" "$gate" 'jq -er .value'
 has "download URL is resolved against the host" "$gate" 'value="$BACKREST_URL/${value#./}"'
 has "directory streams are checked as tar" "$gate" 'tar -tf -'
 has "same-origin download URL is asserted" "$gate" 'is not same-origin'
-has "anonymous access is probed" "$gate" 'Access-only'
+has "anonymous access is probed" "$gate" 'an anonymous request reached Backrest'
 has "redaction is asserted" "$gate" 'GetConfig still exposes repository credentials'
 has "the protobuf config path is probed" "$gate" 'protobuf GetConfig is redacted'
 has "the anonymous refusal keeps its content type" "$gate" 'text/plain refusal'
 has "four-hour stream budget" "$gate" 'BACKREST_STREAM_TIMEOUT:-14400'
 has "streamed files are hash-checked" "$gate" 'does not match $expected'
 has "cancellation is exercised" "$gate" 'context canceled'
-has "Access service token is required" "$gate" 'CF_ACCESS_CLIENT_ID'
+has "the Access service token is optional" "$gate" '[[ -n ${CF_ACCESS_CLIENT_ID:-} ]]'
+has "a set Access token is still sent" "$gate" 'CF-Access-Client-Secret'
 has "secrets never travel in argv" "$gate" 'url.cfg'
 
 # --- deterministic toolchain -------------------------------------------------
