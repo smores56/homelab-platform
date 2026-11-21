@@ -33,7 +33,9 @@ changes by pull request from a fork, so no PR workflow can read a secret.
 | `tests/backup/` | Offline argument/URL shape tests for the repository mirror (`tests/backup/check.sh`) |
 | `tests/digest/` | Digest builder fixtures and rendered contract (`tests/digest/check.sh`) |
 | `tests/access/` | Live Access default-deny probe (`tests/access/check.sh`, skips without a token) |
-| `tofu/` | Cloudflare OpenTofu (provider v5), Access default-deny, CAA (`docs/cloudflare.md`) |
+| `tests/edge/` | Offline checks for the public-edge probe (`tests/edge/check.sh`) |
+| `tofu/` | Cloudflare OpenTofu (provider v5), Access default-deny, CAA (`docs/cloudflare.md`), tailnet policy |
+| `provision/edge/` | The public edge VPS bootstrap, Caddyfile, firewall and on-box verify (`docs/core/public-edge.md`) |
 | `scripts/` | CI helpers, shellchecked |
 | `docs/` | Flux, tenancy, observability, broker, webhook, agent facade, runbook, negative tests, manual steps |
 

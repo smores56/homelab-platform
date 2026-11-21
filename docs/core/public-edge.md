@@ -14,7 +14,7 @@ the shape, the failure modes and the rebuild.
 | --- | --- |
 | Provider | RackNerd, 4 GB KVM VPS (Black Friday 2026), New York |
 | Resources | 4 vCPU, 4 GB RAM, 60 GB SSD, 10 TB transfer/month at 1 Gbps |
-| Address | one IPv4, no IPv6 allocation (a ticket exists, unused) |
+| Address | one IPv4; IPv6 is a support ticket and was not requested |
 | Price | $47.98/year, lifetime recurring |
 | Control plane | RackNerd `ctrl`: reboot, OS reinstall, HTML5 VNC, optional network firewall |
 | Not available | cloud-init, provider API, snapshots, hourly billing |
