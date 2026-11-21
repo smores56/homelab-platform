@@ -20,10 +20,12 @@ Before=shutdown.target
 [Service]
 Type=oneshot
 ExecStart=/usr/libexec/deploy-drain
-# The whole-drain bound. Every individual external command has its own deadline
-# (T2 onward); this is the net that stops one that hangs anyway from leaving the
-# unit active for ever with the deploy lock held.
-TimeoutStartSec=7200
+# The net under a wedged drain, not a budget: the longest honest run is the
+# snapshot gate's hour (3600 s) plus an apps apply's ninety minutes (5400 s) with
+# another request behind it, so the bound sits above 9000 s. Every individual
+# external command has its own deadline; this only stops one that hangs anyway
+# from holding the deploy lock for ever.
+TimeoutStartSec=12600
 UMask=0077
 User=root
 # The snapshot gate (T3) runs the Restic driver as a child, and that driver keeps

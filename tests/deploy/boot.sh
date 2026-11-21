@@ -99,6 +99,9 @@ commit=9f2c0d3b1a4e5f60718293a4b5c6d7e8f9012345
 digest_index=sha256:1111111111111111111111111111111111111111111111111111111111111111
 digest_manifest=sha256:2222222222222222222222222222222222222222222222222222222222222222
 digest_other=sha256:3333333333333333333333333333333333333333333333333333333333333333
+digest_prev_index=sha256:4444444444444444444444444444444444444444444444444444444444444444
+digest_prev_manifest=sha256:5555555555555555555555555555555555555555555555555555555555555555
+prev_commit=abcdef0123456789abcdef0123456789abcdef01
 image_ref=ghcr.io/smores56/homelab-platform/server
 digests=$(jq -nc --arg i "$digest_index" --arg m "$digest_manifest" '{index:$i,manifest:$m}')
 
@@ -114,7 +117,18 @@ printf '%s\n' "$*" >>"$STUB_LOG/bootc-calls"
 staged=$(sed -n 's/^staged=//p' "$STUB_BOOTC_STATE" 2>/dev/null)
 booted=$(sed -n 's/^booted=//p' "$STUB_BOOTC_STATE" 2>/dev/null)
 case ${1-} in
-  switch) exit "${STUB_BOOTC_SWITCH_EXIT:-0}" ;;
+  switch)
+    # A real switch stages the image it names. The default is to leave the entry
+    # alone so a test can simulate a switch that staged something else; setting
+    # STUB_BOOTC_STAGE_ON_SWITCH makes a switch to that digest stage it.
+    target=${*: -1}
+    if [[ -n ${STUB_BOOTC_STAGE_ON_SWITCH:-} &&
+      $target == *"@$STUB_BOOTC_STAGE_ON_SWITCH" ]]; then
+      printf 'staged=%s\nbooted=%s\n' "$STUB_BOOTC_STAGE_ON_SWITCH" "$booted" \
+        >"$STUB_BOOTC_STATE"
+    fi
+    exit "${STUB_BOOTC_SWITCH_EXIT:-0}"
+    ;;
   rollback) exit "${STUB_BOOTC_ROLLBACK_EXIT:-0}" ;;
   status)
     if [[ " $* " == *" --booted "* ]]; then
@@ -316,7 +330,7 @@ grub_flags() { # <jq path>
 seed_pending() { # <index> <manifest> <commit> [<booted>]
   jq -nc --arg i "$1" --arg m "$2" --arg c "$3" \
     '{schema:1,phase:"staged",commit:$c,digest:$i,digests:{index:$i,manifest:$m},
-      budget:3,stagedAt:"2026-11-20T00:00:00Z"}' | pending_write || return 1
+      stagedAt:"2026-11-20T00:00:00Z"}' | pending_write || return 1
   printf 'staged=%s\nbooted=%s\n' "$2" "$4" >"$STUB_BOOTC_STATE"
 }
 
@@ -334,7 +348,8 @@ reset_case() { # keep the fakes' healthy answers, drop every record
   : >"$log/apps-calls"
   : >"$log/gate-order"
   unset STUB_BOOTC_SWITCH_EXIT STUB_BOOTC_ROLLBACK_EXIT STUB_BOOTC_NO_STAGED \
-    STUB_ZPOOL_OK STUB_MOUNTPOINT_OK GRUB_EDITEV STUB_APPS_EXIT STUB_APPS_KEEP_APPLY
+    STUB_BOOTC_STAGE_ON_SWITCH STUB_ZPOOL_OK STUB_MOUNTPOINT_OK GRUB_EDITEV STUB_APPS_EXIT \
+    STUB_APPS_KEEP_APPLY
   # A two-second budget keeps the failed-health cases short while still proving
   # that the gate retries instead of deciding on the first look.
   export DEPLOY_BOOT_GATE_BUDGET=2 DEPLOY_BOOT_GATE_PAUSE=1
@@ -374,7 +389,11 @@ check_json "$pending" .phase staged "pending.json records a staged deploy"
 check_json "$pending" .commit "$commit" "pending.json records the commit"
 check_json "$pending" ".digests.index" "$digest_index" "pending.json records the index digest"
 check_json "$pending" ".digests.manifest" "$digest_manifest" "pending.json records the manifest digest"
-check_json "$pending" '.budget' 3 "pending.json records the boot budget"
+if [[ $(jq -r 'has("budget")' <<<"$pending" 2>/dev/null) == false ]]; then
+  ok "pending.json carries no unused boot budget"
+else
+  bad "pending.json carries no unused boot budget" "$pending"
+fi
 check_grep "$log/systemctl-calls" 'reboot pending=yes' \
   "pending.json is on disk before the reboot is requested"
 check_eq "$(journal_field stage-pending '.digest')" "$digest_index" "the stage is journaled"
@@ -408,7 +427,7 @@ check_eq "$(journal_field stage-digest-mismatch '.staged')" "$digest_other" \
   "the refusal journals the digest bootc reported"
 check_eq "$(journal_field stage-digest-mismatch '.digest')" "$digest_index" \
   "the refusal journals the digest that was verified"
-check_eq "$(cat "$log/curl-urls")" "$ping_url/fail" "a refused stage pages the deploy check"
+check_eq "$(head -n 1 "$log/curl-urls")" "$ping_url/fail" "a refused stage pages the deploy check"
 
 reset_case
 export STUB_BOOTC_NO_STAGED=1
@@ -417,6 +436,41 @@ unset STUB_BOOTC_NO_STAGED
 check_eq "$rc" 5 "a null staged entry is refused with exit 5"
 check_no_file "$state_dir/pending.json" "a null staged entry writes no pending record"
 check_no_grep "$log/systemctl-calls" 'reboot' "a null staged entry never reboots"
+
+# The switch is already on disk, so a mismatch that is only refused would leave
+# the next boot staging an image nobody verified. The other deployment is put back
+# and the read-back has to prove it.
+reset_case
+state_record_verified homelab-platform "$prev_commit" "$digest_prev_index" "$digest_prev_manifest"
+printf 'staged=%s\nbooted=%s\n' "$digest_other" "$digest_other" >"$STUB_BOOTC_STATE"
+export STUB_BOOTC_STAGE_ON_SWITCH=$digest_prev_manifest
+run_stage --commit "$commit" --digests "$digests"
+unset STUB_BOOTC_STAGE_ON_SWITCH
+check_eq "$rc" 5 "a refused stage still exits 5 after restoring the deployed image"
+check_eq "$(grep '^switch ' "$log/bootc-calls" | tail -n 1)" \
+  "switch --enforce-container-sigpolicy $image_ref@$digest_prev_manifest" \
+  "the refused stage switches back to the recorded deployed digest"
+check_eq "$(journal_field stage-restored '.from')" "$digest_other" \
+  "the restored staged entry is journaled with what bootc had staged"
+if [[ -n $(journal_field stage-restore-failed '.staged') ]]; then
+  bad "a restored stage is not journaled as a failed restore"
+else
+  ok "a restored stage is not journaled as a failed restore"
+fi
+check_no_file "$state_dir/pending.json" "a restored stage writes no pending record"
+check_no_grep "$log/systemctl-calls" 'reboot' "a restored stage never reboots"
+
+# A restore that also fails leaves the host one switch away from an unverified
+# boot, which the operator has to hear about.
+reset_case
+state_record_verified homelab-platform "$prev_commit" "$digest_prev_index" "$digest_prev_manifest"
+printf 'staged=%s\nbooted=%s\n' "$digest_other" "$digest_other" >"$STUB_BOOTC_STATE"
+run_stage --commit "$commit" --digests "$digests"
+check_eq "$rc" 5 "a stage whose restore does not take still refuses"
+check_eq "$(journal_field stage-restore-failed '.staged')" "$digest_other" \
+  "the failed restore is journaled with the digest still staged"
+check_eq "$(tail -n 1 "$log/curl-urls")" "$ping_url/fail" \
+  "a failed restore pages the deploy check"
 
 # --- 3. the gate on a boot that is the staged deployment --------------------
 reset_case
@@ -472,9 +526,9 @@ unhealthy() { # <label>
   check_eq "$(cat "$log/curl-urls")" "$ping_url/fail" "$label pages the deploy check"
   check_file "$state_dir/pending.json" "$label keeps the pending record for the next boot"
   check_no_file "$state_dir/state.json" "$label records no landed deployment"
-  check_eq "$(grub_flags '.boot_counter')" 3 "the abandon path resets the boot counter after $label"
-  check_eq "$(grub_flags '.boot_success')" 1 "the abandon path resets boot_success after $label"
-  check_eq "$(grub_flags '.default')" null "the abandon path unsets the GRUB default after $label"
+  check_eq "$(grub_flags '.boot_counter')" -1 "the abandon path spends the boot counter after $label"
+  check_eq "$(grub_flags '.boot_success')" 0 "the abandon path clears boot_success after $label"
+  check_eq "$(grub_flags '.default')" 0 "the abandon path selects entry 0 after $label"
   if [[ $(journal_field boot-gate-failed '.reason') == *"$label"* ]]; then
     ok "the failure is journaled with its reason after $label"
   else
@@ -561,6 +615,7 @@ check_no_file "$state_dir/pending.json" "a rolled-back deploy consumes the pendi
 check_eq "$(cat "$log/curl-urls")" "$ping_url/fail" "a rollback pages the deploy check"
 check_eq "$(grub_flags '.default')" null "a rolled-back boot resets the GRUB default"
 check_eq "$(grub_flags '.boot_counter')" 3 "a rolled-back boot resets the boot counter"
+check_eq "$(grub_flags '.boot_success')" 1 "a rolled-back boot marks the boot good"
 check_no_file "$state_dir/state.json" "a rolled-back deployment records nothing"
 check_no_grep "$log/systemctl-calls" 'is-active' "a rolled-back boot runs no health checks"
 
@@ -578,26 +633,23 @@ check_eq "$(journal_field apply-reverted '.by')" boot-gate \
   "the gate journals the reverted apply"
 check_no_file "$state_dir/apply.json" "the reverted apply clears the record"
 check_no_grep "$log/bootc-calls" 'rollback' "no pending deploy means no rollback"
-check_no_grep "$log/bootc-calls" 'status' "no pending deploy means no bootc comparison"
+check_eq "$(grub_flags '.boot_success')" 1 "a boot with no pending deploy marks the boot good"
+check_eq "$(grub_flags '.boot_counter')" 3 "a boot with no pending deploy resets the boot counter"
+check_eq "$(grub_flags '.default')" null "a boot with no pending deploy clears the GRUB default"
+# The operator's documented check reads this file, so it has to say what the
+# comment in the runbook says: the boot is good and the counter is whole.
+if grep -qx 'boot_success=1' "$GRUB_ENV" && grep -qx 'boot_counter=3' "$GRUB_ENV"; then
+  ok "the operator's 'boot_success=1 boot_counter=3' check is true after an ordinary boot"
+else
+  bad "the operator's 'boot_success=1 boot_counter=3' check is true after an ordinary boot" \
+    "$(cat "$GRUB_ENV")"
+fi
 if [[ -s $log/curl-urls ]]; then bad "a quiet boot notifies nothing"; else ok "a quiet boot notifies nothing"; fi
 if [[ -s $log/systemctl-calls ]]; then
   bad "a quiet boot runs no health checks" "$(cat "$log"/systemctl-calls)"
 else
   ok "a quiet boot runs no health checks"
 fi
-
-# A revert that cannot finish is a failed gate: the record stays for the next
-# boot and no platform decision is made on a tenant nobody restored.
-reset_case
-jq -nc '{schema:1,phase:"installing",previousUnits:[],intendedUnits:[]}' | apply_write
-export STUB_APPS_EXIT=1
-run_gate
-unset STUB_APPS_EXIT
-check_eq "$rc" 1 "a failed apps revert fails the gate"
-check_eq "$(journal_field apply-revert-failed '.by')" boot-gate \
-  "a failed apps revert is journaled"
-check_file "$state_dir/apply.json" "a failed revert keeps the record for the next boot"
-check_no_grep "$log/bootc-calls" 'rollback' "a failed revert makes no platform decision"
 
 # With a pending deployment the revert still comes first: the health gate must
 # judge the revision the recorded plan names, not a half-applied tenant.
@@ -614,6 +666,101 @@ else
   bad "the apps revert runs before the health checks" "revert='$revert_line' first-check='$first_check'"
 fi
 check_no_file "$state_dir/apply.json" "a pending boot clears the reverted apply"
+
+# An ordinary boot must not spend the counter: the GRUB snippet decrements it on
+# every boot before userspace, and a gate that only reset it for a pending deploy
+# would fall back to the previous deployment after three quiet reboots.
+reset_case
+for boot in 1 2 3; do
+  # What the GRUB snippet does before userspace: the boot is unproven, one attempt
+  # is spent, and at zero the previous entry is selected.
+  counter=$(grub_flags '.boot_counter')
+  [[ -n $counter ]] || counter=3
+  {
+    printf 'boot_success=0\n'
+    if ((counter > 0)); then
+      printf 'boot_counter=%s\n' "$((counter - 1))"
+      [[ $(grub_flags '.default') == null ]] ||
+        printf 'default=%s\n' "$(grub_flags '.default')"
+    else
+      printf 'boot_counter=-1\ndefault=1\n'
+    fi
+  } >"$GRUB_ENV"
+  run_gate
+  if [[ $(grub_flags '.default') == null && $(grub_flags '.boot_counter') == 3 &&
+    $(grub_flags '.boot_success') == 1 ]]; then
+    ok "ordinary boot $boot keeps the counter reset and the default cleared"
+  else
+    bad "ordinary boot $boot keeps the counter reset and the default cleared" "$(cat "$GRUB_ENV")"
+  fi
+done
+
+# --- 7b. a boot nobody recorded is paged, never rolled back ----------------
+# A crash between `bootc switch` and the pending record, or a staged entry a
+# refused stage left behind, boots an image state.json does not name. It is the
+# operator's image -- a hand-run switch is a choice -- but the state the poll
+# compares against is wrong, so it is journaled and paged.
+reset_case
+state_record_verified homelab-platform "$commit" "$digest_index" "$digest_manifest"
+printf 'staged=\nbooted=%s\n' "$digest_other" >"$STUB_BOOTC_STATE"
+run_gate
+check_eq "$rc" 0 "an unrecorded booted image is not a failure"
+check_eq "$(journal_field booted-unrecorded '.booted')" "$digest_other" \
+  "the unrecorded boot is journaled with the digest that booted"
+check_eq "$(cat "$log/curl-urls")" "$ping_url/fail" "an unrecorded boot pages the deploy check"
+check_no_grep "$log/bootc-calls" 'rollback' "an unrecorded boot is never rolled back"
+
+# The recorded form, either way round, is silent.
+reset_case
+state_record_verified homelab-platform "$commit" "$digest_index" "$digest_manifest"
+printf 'staged=\nbooted=%s\n' "$digest_manifest" >"$STUB_BOOTC_STATE"
+run_gate
+check_eq "$rc" 0 "a boot that matches the recorded digest passes"
+if [[ -s $log/curl-urls ]]; then
+  bad "a recorded boot notifies nothing" "$(cat "$log/curl-urls")"
+else
+  ok "a recorded boot notifies nothing"
+fi
+if [[ -n $(journal_field booted-unrecorded '.booted') ]]; then
+  bad "a recorded boot is not journaled as unrecorded"
+else
+  ok "a recorded boot is not journaled as unrecorded"
+fi
+
+# --- 7c. a failed apps revert still decides the platform -------------------
+# With no pending deploy the boot is fine and there is no platform decision: the
+# failure is journaled and paged, and the record stays for the next gate or drain.
+reset_case
+jq -nc '{schema:1,phase:"installing",previousUnits:[],intendedUnits:[]}' | apply_write
+export STUB_APPS_EXIT=1
+run_gate
+unset STUB_APPS_EXIT
+check_eq "$rc" 0 "a failed revert with no pending deploy leaves the boot alone"
+check_eq "$(journal_field apply-revert-failed '.by')" boot-gate \
+  "a failed revert is journaled"
+check_file "$state_dir/apply.json" "a failed revert keeps the record for the next run"
+check_eq "$(cat "$log/curl-urls")" "$ping_url/fail" \
+  "a failed revert with no pending deploy pages the deploy check"
+
+# With a pending deployment that is what booted, a tenant nobody restored is a
+# failed health gate: denylist the digest and roll back.
+reset_case
+seed_pending "$digest_index" "$digest_manifest" "$commit" "$digest_manifest"
+jq -nc '{schema:1,phase:"installing",previousUnits:[],intendedUnits:[]}' | apply_write
+export STUB_APPS_EXIT=1
+run_gate
+unset STUB_APPS_EXIT
+check_eq "$rc" 1 "a failed revert on the staged boot fails the gate"
+check_eq "$(journal_field boot-gate-failed '.reason')" apply-revert-failed \
+  "the failed revert names the gate failure"
+check_eq "$(tail -n 1 "$log/bootc-calls")" 'rollback --apply' \
+  "a failed revert on the staged boot rolls back"
+check_eq "$(cat "$log/curl-urls")" "$ping_url/fail" \
+  "a failed revert on the staged boot pages the deploy check"
+check_json "$(cat "$state_dir/denylist.json" 2>/dev/null || printf '{}')" \
+  ".digests[\"$digest_index\"].reason" boot-gate:apply-revert-failed \
+  "a failed revert on the staged boot denylists the digest"
+check_file "$state_dir/pending.json" "a failed gate keeps the pending record"
 
 # --- 8. a host without grub2-editenv says so instead of doing nothing ------
 # The counter is the only pre-userspace rollback; a host that cannot reset it

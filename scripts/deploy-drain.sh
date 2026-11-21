@@ -16,12 +16,15 @@
 # apply that installs the commit's units, secrets and Serve routes. The entry is
 # popped once that verdict is recorded, and on a platform deploy the reboot is the
 # exit: the record that the deployment landed is written by the boot gate on the
-# way up, not here. A rejection is final for that entry and is never retried,
-# because the hourly poll and the next event would fail identically; an
-# infrastructure failure leaves the entry queued and fails the unit, so the next
-# trigger retries it. A held deploy is popped too: the hold record is the resume
-# point, and `smortress-deploy release --force` plus the next request is what
-# carries it forward.
+# way up, not here, and a staged reboot ends the run: nothing behind that entry
+# may be started on a host that is going down. A rejection is final for that entry
+# and is never retried, because the hourly poll and the next event would fail
+# identically; an infrastructure failure leaves the entry queued with a
+# `retry_at` stamp and exits 0, because this drain is re-fired the moment it
+# exits and an immediate retry turns one 429 into a loop that spends the unit's
+# start limit. A held deploy is popped too: the hold record is the resume point,
+# and `smortress-deploy release --force` plus the next request is what carries it
+# forward.
 #
 # The drain also owns the crash state of an apps apply: it reverts an interrupted
 # one (apply.json) before it drains anything, because the next request would
@@ -58,6 +61,12 @@ source "$state_lib"
 # drained by the same run, and the path unit's re-trigger of an already-running
 # unit is not the only thing standing between an event and the next event.
 rescan_pause=${DEPLOY_DRAIN_RESCAN_PAUSE:-1}
+
+# How long a deferred entry waits before it is tried again. Five minutes is the
+# period of smortress-deploy-retry.timer, so a deferred entry is retried by the
+# timer when no event arrives, and the heartbeat pages long before a queue of
+# deferrals goes unnoticed.
+retry_delay=${DEPLOY_RETRY_DELAY:-300}
 
 # The verifier ships in the image rootfs beside the receiver rather than through
 # the `smortress-src` loop, which installs `.sh` files only.
@@ -127,7 +136,13 @@ drain_verify() {
   local id=$1 repo=$2 sha=$3 rc=0
   verify_reason=
   verify_verdict=
-  verify_verdict=$(timeout "$verify_deadline" "$verify_bin" --repo "$repo" --commit "$sha") || rc=$?
+  # An entry is verified against the tip main is at *now*: the verifier answers
+  # from a 120 s cache, and a commit pushed inside that window would fail the tip
+  # check for as long as the entry lives. The cache is worth having for one
+  # run's repeated calls, not across two requests.
+  cache_clear || warn "cannot clear the API cache; this verification may read a stale tip"
+  verify_verdict=$(timeout --signal=TERM --kill-after=60 "$(clamp_timeout "$verify_deadline")" \
+    "$verify_bin" --repo "$repo" --commit "$sha") || rc=$?
   case $rc in
     0)
       # A verifier that exits 0 without a parseable verdict is not a permission
@@ -168,6 +183,29 @@ drain_verify() {
   esac
 }
 
+# defer_entry <id> <reason>
+#
+# An infrastructure failure -- a 429, a dead tailnet, a full image store -- says
+# nothing about the commit, so the entry keeps its place in the queue. It does not
+# keep its turn: the path unit re-fires this drain as soon as it exits, so an
+# immediate retry is a loop that re-runs the verification, the snapshot gate and
+# `bootc switch` until systemd's start limit fails the unit and the queue freezes.
+# The entry carries the time it may be tried again, and the retry timer is what
+# brings that attempt when no event does. Exits 0: there is nothing to fail here.
+defer_entry() { # <id> <reason>
+  local id=$1 reason=$2
+  if ! queue_defer "$id" "$(($(date +%s) + retry_delay))" "$reason"; then
+    warn "cannot stamp a retry on $id; leaving it queued"
+    exit 1
+  fi
+  journal_append deferred "$(jq -nc --arg id "$id" --arg repo "$repo" --arg commit "$commit" \
+    --arg reason "$reason" --argjson retry "$retry_delay" \
+    '{id:$id,repo:$repo,commit:$commit,reason:$reason,retryIn:$retry}')" ||
+    warn "cannot journal the deferred entry $id"
+  say "$repo $commit: $reason; retrying in ${retry_delay}s"
+  exit 0
+}
+
 # Bounded wait, not an unbounded one: a wedged holder turns into a failing unit
 # instead of a drain that never returns.
 if ! deploy_lock_acquire; then
@@ -192,13 +230,25 @@ journal_append drain-start '{"source":"queue"}' || {
 # already journaled that it found the record.
 if record_exists apply; then
   apps_rc=0
-  timeout "$apps_timeout" "$apps_bin" revert || apps_rc=$?
+  timeout --signal=TERM --kill-after=60 "$(clamp_timeout "$apps_timeout")" "$apps_bin" revert ||
+    apps_rc=$?
   if ((apps_rc != 0)); then
     warn "an interrupted apps apply could not be reverted (exit $apps_rc); not draining"
     exit 1
   fi
   journal_append apply-reverted "$(jq -nc --arg by drain '{by:$by}')" ||
     warn "cannot journal the reverted apply"
+fi
+
+# Every work tree an apps apply leaves behind holds the decrypted tenant secrets,
+# and an interrupted one never gets to remove its own. They are swept here, under
+# the lock and before the queue, so the tree the next apply needs is the one
+# apply.json still names and every other one older than a day is garbage.
+sweep_rc=0
+timeout --signal=TERM --kill-after=60 "$(clamp_timeout "$apps_timeout")" "$apps_bin" sweep ||
+  sweep_rc=$?
+if ((sweep_rc != 0)); then
+  warn "cannot sweep the stale apps work trees (exit $sweep_rc)"
 fi
 
 drained=0
@@ -209,6 +259,7 @@ noop=0
 superseded=0
 invalid=0
 rescanned=0
+staged_reboot=0
 while :; do
   # Coalesce on every pass, not once at the start: an entry that landed while the
   # previous one was being handled is superseded by the same rule.
@@ -232,7 +283,20 @@ while :; do
   fi
   rescanned=0
 
-  id=${ids[0]}
+  # The first entry that is not waiting out a deferral. The rest keep their
+  # place: the retry timer is what brings the next attempt, and re-firing this
+  # drain for an entry it has just deferred is the storm the stamp exists to stop.
+  id=
+  for candidate in "${ids[@]}"; do
+    if queue_ready "$candidate"; then
+      id=$candidate
+      break
+    fi
+  done
+  if [[ -z $id ]]; then
+    say "every queued request is deferred; the retry timer brings the next attempt"
+    break
+  fi
   repo=
   commit=
   # A read that fails here is the same case as an unreadable entry: it must not
@@ -278,12 +342,11 @@ while :; do
         # from rebooting the host for a commit nobody checked the backups of.
         digests=$(jq -c '.digests // empty' <<<"$verify_verdict" 2>/dev/null) || digests=""
         if [[ -z $digests ]]; then
-          warn "$repo $commit: the verdict names no digests; leaving it queued"
-          exit 1
+          defer_entry "$id" verdict-without-digests
         fi
         gate_rc=0
-        timeout "$gate_timeout" "$platform_bin" prepare --commit "$commit" --digests "$digests" ||
-          gate_rc=$?
+        timeout --signal=TERM --kill-after=60 "$(clamp_timeout "$gate_timeout")" \
+          "$platform_bin" prepare --commit "$commit" --digests "$digests" || gate_rc=$?
         case $gate_rc in
           0)
             say "$repo $commit: snapshot gate green"
@@ -293,10 +356,16 @@ while :; do
             # successful stage has no verdict to journal -- the boot gate records
             # the deployment on the way back up.
             stage_rc=0
-            timeout "$gate_timeout" "$platform_bin" stage --commit "$commit" --digests "$digests" ||
-              stage_rc=$?
+            timeout --signal=TERM --kill-after=60 "$(clamp_timeout "$gate_timeout")" \
+              "$platform_bin" stage --commit "$commit" --digests "$digests" || stage_rc=$?
             case $stage_rc in
-              0) say "$repo $commit: staged; rebooting into it" ;;
+              0)
+                # The reboot is the deploy. Anything behind this entry would run
+                # on a host that is already shutting down, and an apps apply there
+                # would be half-applied with a reboot on its way.
+                say "$repo $commit: staged; rebooting into it"
+                staged_reboot=1
+                ;;
               5)
                 # The staged image is not the one the verifier resolved. Nothing
                 # was recorded and the same switch would fail identically, so the
@@ -317,8 +386,7 @@ while :; do
             held=$((held + 1))
             ;;
           *)
-            warn "$repo $commit: snapshot gate failed (exit $gate_rc); leaving it queued"
-            exit 1
+            defer_entry "$id" "snapshot-gate-exit-$gate_rc"
             ;;
         esac
       else
@@ -328,7 +396,8 @@ while :; do
         # this entry; anything else changed nothing (or was rolled back) and the
         # entry keeps its place.
         apps_rc=0
-        timeout "$apps_timeout" "$apps_bin" apply --commit "$commit" || apps_rc=$?
+        timeout --signal=TERM --kill-after=60 "$(clamp_timeout "$apps_timeout")" \
+          "$apps_bin" apply --commit "$commit" || apps_rc=$?
         case $apps_rc in
           0) say "$repo $commit: applied" ;;
           3)
@@ -336,8 +405,7 @@ while :; do
             rejected=$((rejected + 1))
             ;;
           *)
-            warn "$repo $commit: the apps apply failed (exit $apps_rc); leaving it queued"
-            exit 1
+            defer_entry "$id" "apps-apply-exit-$apps_rc"
             ;;
         esac
       fi
@@ -350,14 +418,18 @@ while :; do
       rejected=$((rejected + 1))
       ;;
     *)
-      warn "$repo $commit: cannot verify ($verify_reason); leaving it queued"
-      exit 1
+      defer_entry "$id" "$verify_reason"
       ;;
   esac
   queue_pop "$id" || {
     warn "cannot remove $id from the queue"
     exit 1
   }
+  if ((staged_reboot)); then
+    # pending.json is the record the boot gate resumes from, and the reboot is
+    # already requested: the loop stops here so no later entry is acted on.
+    break
+  fi
 done
 
 journal_append drain-finish "$(jq -nc --argjson drained "$drained" --argjson rejected "$rejected" \

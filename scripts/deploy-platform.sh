@@ -143,13 +143,12 @@ check_commit_digests() { # <commit> <digests-json>
 # plus the reboot. The switch is the only call in this script that pulls an
 # image, so it gets the design's 3600 s; nothing here runs under the snapshot
 # gate's budget, which is a different clock entirely.
-switch_timeout=${DEPLOY_SWITCH_TIMEOUT:-3600}
-stage_status_timeout=${DEPLOY_STAGE_STATUS_TIMEOUT:-60}
-stage_reboot_timeout=${DEPLOY_STAGE_REBOOT_TIMEOUT:-60}
+switch_timeout=$(clamp_timeout "${DEPLOY_SWITCH_TIMEOUT:-3600}")
+stage_status_timeout=$(clamp_timeout "${DEPLOY_STAGE_STATUS_TIMEOUT:-60}")
+stage_reboot_timeout=$(clamp_timeout "${DEPLOY_STAGE_REBOOT_TIMEOUT:-60}")
 bootc_bin=${BOOTC_BIN:-bootc}
 stage_systemctl=${SYSTEMCTL_BIN:-systemctl}
 image_repo=${DEPLOY_IMAGE_REPO:-ghcr.io/smores56/homelab-platform/server}
-boot_budget=${DEPLOY_BOOT_BUDGET:-3}
 
 budget_left() {
   local left=$((gate_deadline - $(date -u +%s)))
@@ -158,13 +157,16 @@ budget_left() {
 }
 
 # Every child gets the smaller of its own bound and what is left of the gate's:
-# without that, one 1800 s backup at the end of a budget overruns it.
+# without that, one 1800 s backup at the end of a budget overruns it. Both numbers
+# pass through clamp_timeout, because `timeout 0` is not a one-second bound -- it
+# is no bound at all, which is exactly what an exhausted budget must not grant.
 bounded() { # <cap> <command...>
-  local cap=$1 left
+  local cap left
+  cap=$(clamp_timeout "$1")
   shift
   left=$(budget_left)
   if ((left < cap)); then cap=$left; fi
-  timeout --signal=TERM --kill-after=60 "$cap" "$@"
+  timeout --signal=TERM --kill-after=60 "$(clamp_timeout "$cap")" "$@"
 }
 
 gate_query() { bounded "$gate_verify_timeout" "$verify_bin" --local --json; }
@@ -382,6 +384,42 @@ cmd_prepare() {
   return 0
 }
 
+# restore_staged_deployment: put the boot entry back on the digest the state says
+# is running, and prove bootc staged it.
+#
+# A refused stage has already written a BLS entry: refusing it and returning would
+# leave the next boot rolling into an image nobody verified. The other deployment
+# is the one the state recorded, and the read-back is what makes "restored" a fact
+# rather than an exit code.
+restore_staged_deployment() {
+  local doc index manifest target staged rc=0
+  doc=$(state_read 2>/dev/null) || return 1
+  index=$(jq -r '.repos["homelab-platform"].indexDigest // ""' <<<"$doc" 2>/dev/null) || index=""
+  manifest=$(jq -r '.repos["homelab-platform"].manifestDigest // ""' <<<"$doc" 2>/dev/null) ||
+    manifest=""
+  # The manifest form is what a switch can name; the index form is the fallback
+  # for a state written before both were recorded.
+  target=${manifest:-$index}
+  [[ -n $target ]] || {
+    warn "the state records no deployed digest; nothing to switch back to"
+    return 1
+  }
+  timeout --signal=TERM --kill-after=60 "$switch_timeout" "$bootc_bin" switch \
+    --enforce-container-sigpolicy "$image_repo@$target" || rc=$?
+  if ((rc != 0)); then
+    warn "switching back to $target failed (exit $rc)"
+    return 1
+  fi
+  staged=$(timeout --signal=TERM --kill-after=10 "$stage_status_timeout" \
+    "$bootc_bin" status --json 2>/dev/null |
+    jq -er '.status.staged.image.imageDigest // empty' 2>/dev/null) || staged=''
+  if [[ -z $staged || ($staged != "$index" && $staged != "$manifest") ]]; then
+    return 1
+  fi
+  say "restored the staged entry to $staged"
+  return 0
+}
+
 # stage: switch, prove what bootc staged, record it, reboot.
 #
 # `switch` and not `upgrade`: `--enforce-container-sigpolicy` exists only on
@@ -435,7 +473,8 @@ cmd_stage() {
   # What bootc staged is the only thing the boot gate can compare a boot to, so
   # a staged entry that is not one of the digests the verifier resolved means the
   # deploy would reboot into an image nobody checked. Nothing is recorded.
-  staged=$(timeout --signal=TERM "$stage_status_timeout" "$bootc_bin" status --json 2>/dev/null |
+  staged=$(timeout --signal=TERM --kill-after=10 "$stage_status_timeout" \
+    "$bootc_bin" status --json 2>/dev/null |
     jq -er '.status.staged.image.imageDigest // empty' 2>/dev/null) || staged=''
   if [[ -z $staged || ($staged != "$index" && $staged != "$manifest") ]]; then
     journal_append stage-digest-mismatch "$(jq -nc --arg commit "$commit" --arg staged "$staged" \
@@ -444,13 +483,31 @@ cmd_stage() {
       warn "cannot journal the staged digest mismatch"
     warn "bootc staged '${staged:-nothing}', not $index or $manifest; not rebooting"
     deploy_notify fail stage-digest-mismatch || warn "could not report the staged digest mismatch"
+    if restore_staged_deployment; then
+      journal_append stage-restored "$(jq -nc --arg commit "$commit" --arg digest "$index" \
+        --arg from "${staged:-}" \
+        '{commit:$commit,digest:$digest,from:$from}')" ||
+        warn "cannot journal the restored stage"
+    else
+      # The host is one switch, or one reboot, away from an image nothing
+      # verified: the refusal has to reach the operator, not just the journal.
+      journal_append stage-restore-failed "$(jq -nc --arg commit "$commit" --arg digest "$index" \
+        --arg staged "${staged:-}" \
+        '{commit:$commit,digest:$digest,staged:$staged}')" ||
+        warn "cannot journal the failed restore"
+      warn "the staged entry is still not the deployed deployment"
+      deploy_notify fail stage-restore-failed || warn "could not report the failed restore"
+    fi
     return 5
   fi
 
+  # No boot budget here: the counter is the GRUB snippet's and the gate resets it
+  # on every boot it reaches, so a number in this record would be a second, unused
+  # source of truth about the same three attempts.
   jq -nc --arg commit "$commit" --arg digest "$index" --arg manifest "$manifest" \
-    --argjson digests "$digests" --argjson budget "$boot_budget" --arg at "$(deploy_now)" \
+    --argjson digests "$digests" --arg at "$(deploy_now)" \
     '{schema:1,phase:"staged",commit:$commit,digest:$digest,digests:$digests,
-      budget:$budget,stagedAt:$at}' | pending_write || {
+      stagedAt:$at}' | pending_write || {
     journal_append stage-pending-failed "$(jq -nc --arg commit "$commit" \
       --arg manifest "$manifest" '{commit:$commit,manifest:$manifest}')" ||
       warn "cannot journal the failed pending record"
@@ -458,8 +515,8 @@ cmd_stage() {
     return 4
   }
   journal_append stage-pending "$(jq -nc --arg commit "$commit" --arg digest "$index" \
-    --arg manifest "$manifest" --arg staged "$staged" --argjson budget "$boot_budget" \
-    '{commit:$commit,digest:$digest,manifest:$manifest,staged:$staged,budget:$budget}')" ||
+    --arg manifest "$manifest" --arg staged "$staged" \
+    '{commit:$commit,digest:$digest,manifest:$manifest,staged:$staged}')" ||
     warn "cannot journal the pending record"
 
   # A released hold is not cleared here: it is cleared by the boot gate that sees

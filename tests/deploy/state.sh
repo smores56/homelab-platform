@@ -46,6 +46,9 @@ check_eq() { # got want label
 check_file() { # path label
   if [[ -f $1 ]]; then ok "$2"; else bad "$2" "missing $1"; fi
 }
+journal_field() { # <event> <jq path>
+  jq -r "select(.event==\"$1\") | $2" "$DEPLOY_STATE_DIR/journal.jsonl" 2>/dev/null
+}
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
@@ -239,6 +242,68 @@ check_eq "$dropped" "$id_c" "queue_coalesce reports the superseded entry"
 check_eq "$(queue_list | tr '\n' ' ')" "${id_b} ${id_a} " "queue_coalesce keeps the newest per repo"
 check_eq "$(queue_count)" 2 "queue_coalesce removes the superseded entry"
 
+# Two requests that land in the same second: queued_at is equal and the listener
+# and the poll both mint a random uuid, so only the file's own mtime says which
+# arrived last. The uuid order below is the wrong way round on purpose: ordering
+# by it would coalesce onto the older commit and deploy the one main had moved
+# past.
+id_d=99999999-9999-4999-8999-999999999999
+id_e=00000000-0000-4000-8000-000000000000
+for entry in "$DEPLOY_STATE_DIR"/queue/*.json; do rm -f "$entry"; done
+queue_seed "$id_d" homelab-platform 50 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+queue_seed "$id_e" homelab-platform 50 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+touch -d '2026-01-01 00:00:00.100000000' "$DEPLOY_STATE_DIR/queue/$id_d.json"
+touch -d '2026-01-01 00:00:00.900000000' "$DEPLOY_STATE_DIR/queue/$id_e.json"
+check_eq "$(queue_list | tr '\n' ' ')" "${id_d} ${id_e} " \
+  "a same-second queue is ordered by mtime, not by uuid"
+dropped=$(queue_coalesce)
+check_eq "$dropped" "$id_d" "the same-second older request is the one superseded"
+check_eq "$(queue_field "$id_e" commit 2>/dev/null)" bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
+  "the same-second newer commit is the one kept"
+check_eq "$(queue_count)" 1 "the same-second older entry is removed"
+
+# An infrastructure failure is not a verdict about the commit: the entry stays,
+# stamped with when it may be tried again, and the drain exits 0 so the path unit
+# is not re-fired into a loop that spends the start limit and freezes the queue.
+queue_seed "$id_a" homelab-platform 60
+retry_at=$(queue_field "$id_a" retry_at 2>/dev/null) || retry_at=""
+check_eq "$retry_at" "" "a fresh entry carries no retry stamp"
+if queue_defer "$id_a" "$(($(date +%s) + 300))" verify-infra-failure; then
+  ok "queue_defer stamps the entry"
+else
+  bad "queue_defer stamps the entry"
+fi
+check_eq "$(queue_field "$id_a" attempts 2>/dev/null)" 1 "a deferral counts the attempt"
+if queue_ready "$id_a"; then
+  bad "a deferred entry is not ready before its retry_at"
+else
+  ok "a deferred entry is not ready before its retry_at"
+fi
+queue_defer "$id_a" "$(($(date +%s) - 1))" verify-infra-failure
+if queue_ready "$id_a"; then
+  ok "a deferred entry is ready once its retry_at passes"
+else
+  bad "a deferred entry is ready once its retry_at passes"
+fi
+check_eq "$(queue_field "$id_a" attempts 2>/dev/null)" 2 "each deferral counts an attempt"
+
+# --- timers and caches ------------------------------------------------------
+# `timeout 0` is no limit at all, so a zeroed knob or an exhausted budget must
+# still reach the child as a one-second bound.
+check_eq "$(clamp_timeout 0)" 1 "a zero timeout is clamped to one second"
+check_eq "$(clamp_timeout -5)" 1 "a negative timeout is clamped to one second"
+check_eq "$(clamp_timeout 30)" 30 "a positive timeout is left alone"
+check_eq "$(clamp_timeout nonsense)" 1 "an unset timeout is clamped to one second"
+
+: >"$DEPLOY_STATE_DIR/cache.json"
+: >"$DEPLOY_STATE_DIR/poll-cache.json"
+cache_clear
+if [[ ! -e $DEPLOY_STATE_DIR/cache.json && ! -e $DEPLOY_STATE_DIR/poll-cache.json ]]; then
+  ok "cache_clear drops the verifier's and the poll's cache"
+else
+  bad "cache_clear drops the verifier's and the poll's cache"
+fi
+
 # --- the drain ---------------------------------------------------------------
 # Verification is an external program (T2), and this suite is about the queue
 # mechanics around it, so the drain is pointed at a stub that accepts everything:
@@ -289,13 +354,16 @@ export FAKE_APPS_LOG=$work/apps-calls
 for entry in "$DEPLOY_STATE_DIR"/queue/*.json; do rm -f "$entry"; done
 export DEPLOY_JOURNAL_MAX_BYTES=5242880
 : >"$DEPLOY_STATE_DIR/journal.jsonl"
-queue_seed "$id_a" homelab-platform 1
+# The apps entry goes first: a staged platform deploy ends the drain by design (the
+# host is rebooting), so the late entry this case is about has to be drainable
+# before it.
+queue_seed "$id_a" homelab-apps 1
 # The rescan window is what closes the exit race: a request that lands while the
 # drain is finishing must still be drained by the same run.
 DEPLOY_DRAIN_RESCAN_PAUSE=1 timeout 30 bash "$drain" &
 drain_pid=$!
 sleep 0.5
-queue_seed "$id_c" homelab-apps 2
+queue_seed "$id_c" homelab-platform 2
 if wait "$drain_pid"; then
   ok "the drain exits 0 on an empty queue"
 else
@@ -346,6 +414,144 @@ fi
 check_eq "$(queue_count)" 0 "an invalid entry is removed, not retried forever"
 check_eq "$(jq -r 'select(.event=="queue-invalid") | .id' "$DEPLOY_STATE_DIR/journal.jsonl")" "$id_b" \
   "the invalid entry is journaled with its id"
+# Every tree an interrupted apply left behind is plaintext secrets; the drain
+# sweeps the stale ones before it drains anything.
+if (($(grep -c '^sweep$' "$work/apps-calls" 2>/dev/null) >= 1)); then
+  ok "the drain sweeps the apps work trees"
+else
+  bad "the drain sweeps the apps work trees" "$(cat "$work/apps-calls")"
+fi
+
+# --- a staged reboot ends the drain ------------------------------------------
+# `stage` writes pending.json and asks for the reboot: every later entry would be
+# handled by a process the shutdown is about to kill, and an apps apply behind it
+# would be half-applied with the reboot already on its way.
+for entry in "$DEPLOY_STATE_DIR"/queue/*.json; do rm -f "$entry"; done
+printf '{"schema":1,"repos":{}}' | atomic_write "$DEPLOY_STATE_DIR/state.json"
+: >"$work/platform-calls"
+: >"$work/apps-calls"
+: >"$DEPLOY_STATE_DIR/journal.jsonl"
+queue_seed "$id_a" homelab-platform 80 cccccccccccccccccccccccccccccccccccccccc
+queue_seed "$id_b" homelab-apps 81 dddddddddddddddddddddddddddddddddddddddd
+if DEPLOY_DRAIN_RESCAN_PAUSE=0 timeout 30 bash "$drain" >/dev/null 2>&1; then
+  ok "the drain exits 0 after a staged platform deploy"
+else
+  bad "the drain exits 0 after a staged platform deploy"
+fi
+if grep -q '^stage ' "$work/platform-calls" 2>/dev/null; then
+  ok "the drain stages the platform entry"
+else
+  bad "the drain stages the platform entry" "$(cat "$work/platform-calls")"
+fi
+if grep -q 'apply --commit' "$work/apps-calls" 2>/dev/null; then
+  bad "a staged reboot applies no later apps entry" "$(cat "$work/apps-calls")"
+else
+  ok "a staged reboot applies no later apps entry"
+fi
+check_eq "$(queue_count)" 1 "the entry behind a staged reboot stays queued"
+check_eq "$(queue_field "$id_b" repo 2>/dev/null)" homelab-apps \
+  "the entry left queued is the later one"
+# Without the stop the drain reaches the reboot's own entry again and stages it
+# twice, so a reboot is requested while the host is going down.
+check_eq "$(grep -c '^stage ' "$work/platform-calls" 2>/dev/null)" 1 \
+  "a staged reboot is staged once"
+
+# --- an infrastructure failure defers the entry ------------------------------
+# A 429 or a dead tailnet says nothing about the commit, and retrying at once is
+# worse than waiting: the path unit re-fires the drain the moment it exits, so an
+# immediate retry is a loop that spends the unit's start limit and freezes the
+# queue behind it.
+cat >"$work/fake-verify-infra" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$FAKE_VERIFY_LOG"
+printf '{"verdict":"infra-failure","reason":"rate-limited"}\n'
+exit 4
+STUB
+chmod 0755 "$work/fake-verify-infra"
+export FAKE_VERIFY_LOG=$work/verify-calls
+for entry in "$DEPLOY_STATE_DIR"/queue/*.json; do rm -f "$entry"; done
+: >"$DEPLOY_STATE_DIR/journal.jsonl"
+: >"$work/verify-calls"
+queue_seed "$id_b" homelab-apps 85 eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+DEPLOY_VERIFY_BIN=$work/fake-verify-infra DEPLOY_DRAIN_RESCAN_PAUSE=0 \
+  timeout 30 bash "$drain" >/dev/null 2>&1
+check_eq "$?" 0 "an infrastructure failure defers the entry and exits 0"
+check_eq "$(queue_count)" 1 "a deferred entry keeps its place in the queue"
+check_eq "$(journal_field deferred '.reason')" rate-limited \
+  "the deferral is journaled with its reason"
+deferred_until=$(queue_field "$id_b" retry_at 2>/dev/null) || deferred_until=0
+if ((deferred_until >= $(date +%s) + 250)); then
+  ok "the deferral stamps a retry at least five minutes out"
+else
+  bad "the deferral stamps a retry at least five minutes out" "retry_at=$deferred_until"
+fi
+check_eq "$(queue_field "$id_b" attempts 2>/dev/null)" 1 "the deferral counts the attempt"
+: >"$work/verify-calls"
+DEPLOY_VERIFY_BIN=$work/fake-verify-infra DEPLOY_DRAIN_RESCAN_PAUSE=0 \
+  timeout 30 bash "$drain" >/dev/null 2>&1
+if [[ -s $work/verify-calls ]]; then
+  bad "a deferred entry is skipped until its retry_at" "$(cat "$work/verify-calls")"
+else
+  ok "a deferred entry is skipped until its retry_at"
+fi
+queue_defer "$id_b" "$(($(date +%s) - 1))" rate-limited
+DEPLOY_VERIFY_BIN=$work/fake-verify-infra DEPLOY_DRAIN_RESCAN_PAUSE=0 \
+  timeout 30 bash "$drain" >/dev/null 2>&1
+check_eq "$(grep -c 'rate-limited\|--commit' "$work/verify-calls" 2>/dev/null)" 1 \
+  "a deferred entry is verified again once its retry_at passes"
+
+# --- a verification looks at the tip, not at the cache ----------------------
+# The verifier answers from a 120 s cache; a commit pushed inside that window
+# would be rejected as a tip mismatch for every entry that arrived there. The
+# drain clears the cache before it verifies, so the second request in the same
+# second sees the tip main is at now.
+cat >"$work/fake-verify-cached" <<'STUB'
+#!/usr/bin/env bash
+repo= commit=
+while (($#)); do
+  case $1 in
+    --repo) repo=$2; shift 2 ;;
+    --commit) commit=$2; shift 2 ;;
+    *) shift ;;
+  esac
+done
+url=https://api.invalid/repos/smores56/$repo/git/ref/heads/main
+tip=
+if [[ -s $DEPLOY_STATE_DIR/cache.json ]]; then
+  tip=$(jq -r --arg u "$url" '.entries[$u].value.object.sha // ""' \
+    "$DEPLOY_STATE_DIR/cache.json" 2>/dev/null)
+fi
+if [[ -z $tip ]]; then
+  tip=$(cat "$FAKE_TIP_FILE")
+  jq -cn --arg u "$url" --arg sha "$tip" --argjson at "$(date +%s)" \
+    '{schema:1,entries:{($u):{at:$at,value:{object:{sha:$sha}}}}}' \
+    >"$DEPLOY_STATE_DIR/cache.json"
+fi
+if [[ $tip != "$commit" ]]; then
+  printf '{"verdict":"rejected","reason":"tip-mismatch","repo":"%s","commit":"%s"}\n' "$repo" "$commit"
+  exit 3
+fi
+printf '{"verdict":"verified","repo":"%s","commit":"%s","digests":null}\n' "$repo" "$commit"
+STUB
+chmod 0755 "$work/fake-verify-cached"
+export FAKE_TIP_FILE=$work/tip
+sha_old=1111111111111111111111111111111111111111
+sha_new=2222222222222222222222222222222222222222
+rm -f "$DEPLOY_STATE_DIR/cache.json"
+for entry in "$DEPLOY_STATE_DIR"/queue/*.json; do rm -f "$entry"; done
+: >"$DEPLOY_STATE_DIR/journal.jsonl"
+printf '%s\n' "$sha_old" >"$FAKE_TIP_FILE"
+queue_seed "$id_a" homelab-apps 90 "$sha_old"
+DEPLOY_VERIFY_BIN=$work/fake-verify-cached DEPLOY_DRAIN_RESCAN_PAUSE=0 \
+  timeout 30 bash "$drain" >/dev/null 2>&1
+printf '%s\n' "$sha_new" >"$FAKE_TIP_FILE"
+queue_seed "$id_b" homelab-apps 91 "$sha_new"
+DEPLOY_VERIFY_BIN=$work/fake-verify-cached DEPLOY_DRAIN_RESCAN_PAUSE=0 \
+  timeout 30 bash "$drain" >/dev/null 2>&1
+check_eq "$(grep -c '"event":"verified"' "$DEPLOY_STATE_DIR/journal.jsonl")" 2 \
+  "a second request in the same second sees the fresh tip"
+check_eq "$(grep -c '"event":"verify-rejected"' "$DEPLOY_STATE_DIR/journal.jsonl")" 0 \
+  "no request is rejected on a cached tip"
 
 # --- the deploy lock ---------------------------------------------------------
 # The drain unit, the hourly poll and the CLI all write state.json; the lock is

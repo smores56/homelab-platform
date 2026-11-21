@@ -2,10 +2,12 @@
 # Deploy state: the atomic record, journal, denylist, held/apply/pending
 # documents, the request queue and the single-writer lock (SDLC #798, T1).
 #
-# Sourced by deploy-drain and, from T2 on, by the verifier, the platform and
-# apps applies and the CLI; never run on its own. The receiver listener reads
-# the same files but writes only its own nonce ring, so two writers never
-# interleave inside state.json.
+# Sourced by the drain, the platform and apps applies, the poll, the heartbeat,
+# the boot gate and the CLI; never run on its own. The verifier is the Python
+# deploy-verify.py, which answers the same files but does not source this: it
+# writes only the API cache, while the drain holds the lock. The receiver
+# listener reads state.json but writes only its own nonce ring, so two writers
+# never interleave inside state.json.
 #
 # Every knob is environment-overridable so tests/deploy/*.sh can drive this
 # exact code against a throwaway directory. Production sets none of them: the
@@ -25,9 +27,12 @@ deploy_state_file=$deploy_state_dir/state.json
 deploy_journal=$deploy_state_dir/journal.jsonl
 deploy_journal_rotated=$deploy_state_dir/journal.1.jsonl
 deploy_denylist_file=$deploy_state_dir/denylist.json
-# The verifier's 120 s API cache. Written by deploy-verify while the drain holds
-# the lock, so no helper here writes it; only clearing it.
+# The verifier's 120 s API cache, written by deploy-verify while the drain holds
+# the lock, and the poll's own copy of the same rule under a separate name: the
+# poll runs outside the lock, so a shared file would lose one of the two. No
+# helper here writes either; cache_clear removes both.
 deploy_cache_file=$deploy_state_dir/cache.json
+deploy_poll_cache_file=$deploy_state_dir/poll-cache.json
 deploy_queue_dir=$deploy_state_dir/queue
 deploy_work_dir=$deploy_state_dir/work
 
@@ -297,20 +302,44 @@ denylist_remove() {
     atomic_write "$deploy_denylist_file"
 }
 
-# cache_clear drops the verifier's 120 s API cache, so the next verification
-# looks at GitHub again. The verifier is the only writer of that file; this is
-# the hand-run and test-side reset, not a second writer.
+# cache_clear drops both 120 s API caches, so the next verification looks at
+# GitHub again. The drain calls it before every verification: a cached tip is by
+# definition the tip of an earlier second, and a commit pushed inside the window
+# would be rejected as a tip mismatch for as long as the entry lives. The poll's
+# copy is dropped with the verifier's because they answer the same question about
+# the same URL -- leaving one would serve the stale answer this call exists to
+# avoid. Neither is written here; this is only the clear.
 cache_clear() {
-  rm -f -- "$deploy_cache_file" || return 1
+  rm -f -- "$deploy_cache_file" "$deploy_poll_cache_file" || return 1
   sync -- "$deploy_state_dir" 2>/dev/null || return 1
+}
+
+# clamp_timeout <seconds>
+#
+# `timeout 0` is not a one-second bound: it is no bound at all, so a computed
+# budget that reached zero (the snapshot gate's remaining time) or a knob a
+# caller zeroed would hand the child unlimited time instead of none. Every
+# deadline in this tree passes through here.
+clamp_timeout() {
+  local seconds=${1:-}
+  [[ $seconds =~ ^[0-9]+$ ]] || {
+    printf '1\n'
+    return 0
+  }
+  ((10#$seconds > 0)) || seconds=1
+  printf '%s\n' "$seconds"
 }
 
 # The queue is the listener's outbox: one file per accepted request, named by the
 # id it answered with. FIFO is the order the requests arrived in, which is why it
-# is ordered by queued_at and not by the random file name.
+# is ordered by queued_at and not by the random file name. queued_at has one-
+# second resolution and both the listener and the poll mint a random uuid, so two
+# requests that land in the same second have no order in either field: the file's
+# own nanosecond mtime is what says which one arrived last. Ordering those two by
+# uuid would let coalescing drop the newer commit and deploy the older one.
 queue_list() {
   [[ -d $deploy_queue_dir ]] || return 0
-  local file id queued
+  local file id queued written
   local -a rows=()
   while IFS= read -r file; do
     [[ -n $file ]] || continue
@@ -318,10 +347,42 @@ queue_list() {
     # An unreadable entry cannot be ordered: put it first so the drain reaches it
     # and drops it instead of leaving it behind every valid request forever.
     queued=$(jq -er '.queued_at | tonumber' "$file" 2>/dev/null) || queued=0
-    rows+=("$queued $id")
+    written=$(date -r "$file" +%s%N 2>/dev/null) || written=0
+    rows+=("$queued $written $id")
   done < <(find "$deploy_queue_dir" -maxdepth 1 -type f -name '*.json' | sort)
   ((${#rows[@]})) || return 0
-  printf '%s\n' "${rows[@]}" | sort -k1,1n -k2,2 | cut -d' ' -f2-
+  printf '%s\n' "${rows[@]}" | sort -k1,1n -k2,2n -k3,3 | cut -d' ' -f3-
+}
+
+# queue_ready <id>: an entry the drain deferred after an infrastructure failure
+# carries a retry_at, and until that passes it is not this drain's work. A missing
+# or malformed stamp is ready: only a recorded deferral holds an entry back.
+queue_ready() {
+  local at
+  at=$(queue_field "${1-}" retry_at 2>/dev/null) || return 0
+  [[ $at =~ ^[0-9]+$ ]] || return 0
+  (($(date +%s) >= at))
+}
+
+# queue_defer <id> <retry-at> <reason>
+#
+# An infrastructure failure -- a 429, a dead tailnet, a full image store -- says
+# nothing about the commit, so the entry keeps its place. It also may not be
+# retried at once: the path unit re-fires the drain the moment it exits, which
+# turns one unreachable API into a tight loop that spends the start limit and
+# freezes the queue. The stamp is written into the entry itself, so the deferral
+# survives both the drain that made it and a reboot.
+queue_defer() {
+  local id=${1-} retry_at=${2-} reason=${3:-} file attempts rc=0
+  [[ $id =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || return 2
+  [[ $retry_at =~ ^[0-9]+$ ]] || return 2
+  file=$deploy_queue_dir/$id.json
+  [[ -s $file ]] || return 1
+  attempts=$(jq -er '.attempts // 0 | tonumber' "$file" 2>/dev/null) || attempts=0
+  jq -c --argjson at "$retry_at" --argjson attempts "$((attempts + 1))" --arg reason "$reason" \
+    '. + {retry_at: $at, attempts: $attempts, deferred: $reason}' "$file" |
+    atomic_write "$file" || rc=$?
+  return "$rc"
 }
 
 queue_count() {

@@ -789,10 +789,75 @@ check_eq "$(journal_field apply-interrupted '.phase')" installing \
   "the gate journals the interrupted phase it found"
 check_eq "$(journal_field apply-reverted '.by')" boot-gate \
   "the gate journals the reverted apply"
-if [[ -s $log/bootc-calls ]]; then
-  bad "a boot with no pending deploy calls no bootc" "$(cat "$log/bootc-calls")"
+# The gate reads the booted digest even here, so a boot state.json does not name
+# is noticed (tests/deploy/boot.sh owns that check); it must not switch or roll
+# back on a boot with no pending deployment.
+if grep -qE '^(switch|rollback)' "$log/bootc-calls" 2>/dev/null; then
+  bad "a boot with no pending deploy switches nothing" "$(cat "$log/bootc-calls")"
 else
-  ok "a boot with no pending deploy calls no bootc"
+  ok "a boot with no pending deploy switches nothing"
+fi
+
+# --- 11b. work trees do not outlive their apply ----------------------------
+# A work tree holds the decrypted tenant secrets, so an exit that is not the
+# revert path has to take it with it -- including the exits nobody wrote a branch
+# for, which is what the trap on the way out is for.
+reset_case
+mkdir -p "$state_dir/work/apps-$c_v1/tree"
+printf '{"apps":{}}\n' >"$state_dir/work/apps-$c_v1/tree/secrets.json"
+printf 'plaintext\n' >"$state_dir/work/apps-$c_v1/secrets.json"
+# A journal that cannot be appended stops the apply before its first mutation.
+rm -f "$state_dir/journal.jsonl"
+mkdir -p "$state_dir/journal.jsonl"
+run_apply "$c_v1"
+rmdir "$state_dir/journal.jsonl"
+check_eq "$rc" 4 "an exit before the first mutation exits 4" "$out"
+if [[ -e $state_dir/work/apps-$c_v1 ]]; then
+  bad "a failed apply takes its work tree with it" "$(find "$state_dir/work/apps-$c_v1")"
+else
+  ok "a failed apply takes its work tree with it"
+fi
+
+# A tree an interrupted apply left behind is plaintext nothing will clean up, and
+# an unbounded state directory is a leak that grows with every failed deploy.
+reset_case
+run_apply "$c_v1"
+mkdir -p "$state_dir/work/apps-$c_pull/tree"
+printf '{"apps":{}}\n' >"$state_dir/work/apps-$c_pull/tree/secrets.json"
+printf 'plaintext\n' >"$state_dir/work/apps-$c_pull/secrets.json"
+touch -d '3 days ago' "$state_dir/work/apps-$c_pull"
+# The tree apply.json still names is the crash state a revert restores from: it
+# stays, however old it is.
+mkdir -p "$state_dir/work/apps-$c_v2/render.prev"
+jq -nc --arg work "$state_dir/work/apps-$c_v2" \
+  '{schema:1,phase:"installing",commit:"'"$c_v2"'",work:$work,
+    previousUnits:[],intendedUnits:[],previousPlan:true,previousState:true,
+    previousSecrets:{},intendedSecrets:[],startedAt:"2026-11-21T00:00:00Z"}' | apply_write
+touch -d '3 days ago' "$state_dir/work/apps-$c_v2"
+out=$(bash "$apps" sweep 2>&1)
+rc=$?
+check_eq "$rc" 0 "the sweep succeeds" "$out"
+if [[ -e $state_dir/work/apps-$c_pull ]]; then
+  bad "a stale work tree is swept" "$(find "$state_dir/work/apps-$c_pull")"
+else
+  ok "a stale work tree is swept"
+fi
+if [[ -d $state_dir/work/apps-$c_v2/render.prev ]]; then
+  ok "the tree apply.json names survives the sweep"
+else
+  bad "the tree apply.json names survives the sweep" "$(find "$state_dir/work")"
+fi
+check_eq "$(journal_field apps-work-swept '.removed')" 1 "the swept tree is journaled"
+# A tree younger than the grace period is a deploy that may still be in flight.
+reset_case
+run_apply "$c_v1"
+mkdir -p "$state_dir/work/apps-$c_changed"
+printf 'plaintext\n' >"$state_dir/work/apps-$c_changed/secrets.json"
+out=$(bash "$apps" sweep 2>&1)
+if [[ -d $state_dir/work/apps-$c_changed ]]; then
+  ok "a young work tree is left alone"
+else
+  bad "a young work tree is left alone"
 fi
 
 # --- 12. a revert with no record is a no-op ---------------------------------

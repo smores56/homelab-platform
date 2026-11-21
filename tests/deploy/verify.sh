@@ -602,19 +602,31 @@ check_eq "$(jq -r 'select(.event=="already-deployed") | .commit' "$state_dir/jou
   "the already-deployed entry is journaled"
 check_eq "$(wc -l <"$requests" | tr -d ' ')" 0 "an already-deployed entry spends no API call"
 
-# An infrastructure failure leaves the work queued for the next trigger.
+# An infrastructure failure leaves the work queued, deferred: the path unit re-fires
+# the drain the moment it exits, so retrying now would spin the 403 into a loop. The
+# entry carries when it may be tried again and the retry timer brings that attempt.
 scenario '.github_status = 403'
 # Back to a commit that is not the deployed one, or the drain would no-op.
 seed_state "$deployed" >/dev/null
 queue_seed "$id_c" homelab-platform "$commit"
 if drain_run; then
-  bad "an infrastructure failure fails the drain"
+  ok "an infrastructure failure defers the entry instead of failing the drain"
 else
-  ok "an infrastructure failure fails the drain"
+  bad "an infrastructure failure defers the entry instead of failing the drain" \
+    "$(cat "$work/drain.out")"
 fi
 check_eq "$(queue_count)" 1 "an entry that could not be verified stays queued"
 check_eq "$(jq -r 'select(.event=="verify-infra-failure") | .reason' "$state_dir/journal.jsonl")" \
   rate-limited "the infrastructure failure journals the reason"
+check_eq "$(jq -r 'select(.event=="deferred") | .reason' "$state_dir/journal.jsonl" | tail -n1)" \
+  rate-limited "the deferral journals the reason"
+check_eq "$(queue_field "$id_c" attempts 2>/dev/null)" 1 "the deferral counts the attempt"
+retry_at=$(queue_field "$id_c" retry_at 2>/dev/null) || retry_at=0
+if ((retry_at >= $(date +%s) + 250)); then
+  ok "the deferral stamps a retry five minutes out"
+else
+  bad "the deferral stamps a retry five minutes out" "retry_at=$retry_at"
+fi
 
 # The snapshot gate's own outcome decides the entry: a hold is a decision about
 # the deploy and is popped, a gate that could not run leaves the request queued
@@ -640,11 +652,14 @@ check_eq "$(jq -r 'select(.event=="drain-finish") | .held' "$state_dir/journal.j
 export FAKE_PLATFORM_EXIT=4
 queue_seed "$id_e" homelab-platform "$commit"
 if drain_run; then
-  bad "a gate that cannot run fails the drain"
+  ok "a gate that cannot run defers the entry instead of failing the drain"
 else
-  ok "a gate that cannot run fails the drain"
+  bad "a gate that cannot run defers the entry instead of failing the drain" \
+    "$(cat "$work/drain.out")"
 fi
 check_eq "$(queue_count)" 1 "an entry the gate could not clear stays queued"
+check_eq "$(jq -r 'select(.event=="deferred") | .reason' "$state_dir/journal.jsonl" | tail -n1)" \
+  snapshot-gate-exit-4 "the gate failure is journaled as a deferral"
 unset FAKE_PLATFORM_EXIT
 
 # An apps commit has no reboot: it goes straight to the apps apply, and that
@@ -661,7 +676,7 @@ else
   bad "a verified apps commit does not fail the drain" "$(cat "$work/drain.out")"
 fi
 check_eq "$(queue_count)" 0 "the applied apps entry is removed from the queue"
-check_eq "$(cat "$work/apps-calls")" "apply --commit $commit" \
+check_eq "$(grep -c '^apply --commit' "$work/apps-calls" 2>/dev/null)" 1 \
   "the drain hands the apps entry to the apps apply"
 check_eq "$(jq -r 'select(.event=="apps-deferred") | .commit' "$state_dir/journal.jsonl" | tail -n1)" \
   "" "the drain no longer defers the apps apply"
@@ -684,15 +699,18 @@ check_eq "$(queue_count)" 0 "a rejected apps entry is removed from the queue"
 check_eq "$(jq -r 'select(.event=="drain-finish") | .rejected' "$state_dir/journal.jsonl" | tail -n1)" 1 \
   "the drain counts the rejected apps commit"
 
-# A retryable or reverted failure leaves the entry queued so the next trigger
-# tries again; the apply changed nothing or put the previous revision back.
+# A retryable or reverted failure leaves the entry queued and deferred so the retry
+# timer tries again; the apply changed nothing or put the previous revision back.
 clear_queue
 queue_seed "$id_g" homelab-apps "$commit"
 if FAKE_APPS_EXIT=5 drain_run; then
-  bad "a reverted apps apply fails the drain"
+  ok "a reverted apps apply defers the entry instead of failing the drain"
 else
-  ok "a reverted apps apply fails the drain"
+  bad "a reverted apps apply defers the entry instead of failing the drain" \
+    "$(cat "$work/drain.out")"
 fi
 check_eq "$(queue_count)" 1 "an apps entry that changed nothing stays queued"
+check_eq "$(jq -r 'select(.event=="deferred") | .reason' "$state_dir/journal.jsonl" | tail -n1)" \
+  apps-apply-exit-5 "the apps failure is journaled as a deferral"
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 ((fail == 0))

@@ -4,7 +4,7 @@
 #   deploy-heartbeat
 #
 # The deploy check goes green only when the listener answers `/healthz` inside five
-# seconds *and* no queued request has waited more than half an hour. Anything else
+# seconds *and* no queued request has waited more than two hours. Anything else
 # -- a stopped listener, a 5xx, a drain wedged behind a stalled pull with the lock
 # held -- pings `/fail` with the reason.
 #
@@ -46,10 +46,12 @@ source "$state_lib"
 
 health_url=${DEPLOY_HEALTH_URL:-http://127.0.0.1:8484/healthz}
 health_timeout=${DEPLOY_HEALTH_TIMEOUT:-5}
-# Half an hour is longer than any single bounded step in the drain (the longest is
-# the snapshot gate's hour) and far longer than a healthy queue's lifetime, so a
-# request that old means the drain is not running rather than working.
-queue_max_age=${DEPLOY_QUEUE_MAX_AGE:-1800}
+# Two hours is longer than a drain can legitimately spend on one request with
+# another waiting behind it: the snapshot gate's hour plus an apps apply's ninety
+# minutes, and a healthy queue never comes near it. A request that old means the
+# drain is not running rather than working -- the limit has to sit above the
+# slowest honest deploy, or a healthy host pages on its own slow rollout.
+queue_max_age=${DEPLOY_QUEUE_MAX_AGE:-7200}
 
 say() { printf 'deploy-heartbeat: %s\n' "$*"; }
 warn() { printf 'deploy-heartbeat: %s\n' "$*" >&2; }

@@ -260,6 +260,34 @@ check_eq "$calls_after_first" 1 "the first poll calls the API once"
 check_eq "$calls_after_second" "$calls_after_first" "a second poll inside the cache window calls the API not at all"
 check_file "$DEPLOY_POLL_CACHE" "the poll keeps its own cache"
 
+# Each repository's write rewrites the file from what it just read, so a prune
+# that dropped the other repository's entry would make the next run pay for it
+# again -- and a filter that raised would empty the file outright.
+reset_case
+export DEPLOY_POLL_REPOS='homelab-platform homelab-apps'
+api_tip homelab-platform "$sha_ahead"
+seed_state homelab-platform "$sha_current"
+seed_state homelab-apps "$sha_current"
+run
+cached=$(jq -r '(.entries // {}) | keys | length' "$DEPLOY_POLL_CACHE" 2>/dev/null) || cached=0
+check_eq "$cached" 2 "both repositories' entries survive a refresh"
+check_eq "$(jq -r --argjson now "$(date +%s)" \
+  '[.entries[] | select($now - .at <= 120)] | length' "$DEPLOY_POLL_CACHE" 2>/dev/null)" 2 \
+  "both surviving entries are fresh"
+# A stamp that is not a number is one entry to drop, not a reason to lose the
+# cache: the poll would otherwise re-spend its whole budget on every run.
+jq -c --argjson now "$(date +%s)" \
+  '.entries["http://api.test/repos/smores56/homelab-platform/git/ref/heads/main"].at = "nonsense"' \
+  "$DEPLOY_POLL_CACHE" >"$work/cache.tmp" && mv "$work/cache.tmp" "$DEPLOY_POLL_CACHE"
+: >"$log"
+run
+check_eq "$(jq -r '.entries | has("http://api.test/repos/smores56/homelab-apps/git/ref/heads/main")' \
+  "$DEPLOY_POLL_CACHE" 2>/dev/null)" true \
+  "an unreadable entry does not empty the cache around it"
+check_eq "$(grep -c 'homelab-platform/git/ref' "$log" || true)" 1 \
+  "the dropped entry is the only one fetched again"
+export DEPLOY_POLL_REPOS=homelab-apps
+
 # --- the poll decides nothing ------------------------------------------------
 
 reset_case

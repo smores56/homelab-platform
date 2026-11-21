@@ -96,6 +96,8 @@ other_digests=$(jq -nc --arg i "$other_index" --arg m "$other_index" '{index:$i,
 cat >"$bin/smortress-restic-verify" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$STUB_LOG/verify-calls"
+# A verifier that outlives its bound: the gate's own deadline is what has to end it.
+[[ -z ${STUB_VERIFY_SLEEP:-} ]] || sleep "$STUB_VERIFY_SLEEP"
 if [[ -n ${STUB_VERIFY_EXIT:-} ]]; then
   printf '{"verdict":"infra-failure","reason":"stub"}\n'
   exit "$STUB_VERIFY_EXIT"
@@ -169,7 +171,7 @@ reset_gate() {
   : >"$log/verify-calls"
   : >"$log/backup-calls"
   : >"$log/curl-urls"
-  unset STUB_VERIFY_EXIT STUB_BACKUP_EXIT STUB_BACKUP_SLEEP STUB_CURL_EXIT
+  unset STUB_VERIFY_EXIT STUB_VERIFY_SLEEP STUB_BACKUP_EXIT STUB_BACKUP_SLEEP STUB_CURL_EXIT
   seed_doc true true "$all_fresh"
 }
 
@@ -391,7 +393,7 @@ seed_held "$digest_index" true
 jq -nc --arg d "$other_index" '{schema:1,commits:{},digests:{($d):{reason:"boot-gate",at:"2026-11-20T01:00:00Z"}}}' |
   atomic_write "$state_dir/denylist.json"
 jq -nc --arg c "$commit" --arg i "$digest_index" \
-  '{phase:"staged",commit:$c,digest:$i,budget:3}' | pending_write
+  '{phase:"staged",commit:$c,digest:$i}' | pending_write
 run_cli status
 check_eq "$rc" 0 "status runs"
 status=$out
@@ -502,6 +504,23 @@ rc=$?
 check_eq "$rc" 0 "both repositories can be bootstrapped"
 check_json "$(state_read)" '.repos["homelab-platform"] | has("indexDigest")' false \
   "a bootstrap records no digest it did not observe"
+
+# An exhausted budget is one second, not no limit: `timeout 0` would hand the child
+# unlimited time, which is the opposite of what a spent budget means.
+reset_gate
+started=$(date -u +%s)
+out=$(STUB_VERIFY_SLEEP=20 DEPLOY_GATE_BUDGET=0 bash "$platform" prepare \
+  --commit "$commit" --digests "$digests" 2>&1)
+rc=$?
+elapsed=$(($(date -u +%s) - started))
+check_eq "$rc" 4 "an exhausted budget fails the gate instead of waiting for the child"
+if ((elapsed < 10)); then
+  ok "an exhausted budget bounds the child to one second (${elapsed}s)"
+else
+  bad "an exhausted budget bounds the child to one second" "${elapsed}s"
+fi
+check_eq "$(journal_field gate-infra-failure '.reason')" query-failed \
+  "the bounded child that timed out is journaled as an infrastructure failure"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 ((fail == 0))

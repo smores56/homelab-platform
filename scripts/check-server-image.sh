@@ -834,7 +834,7 @@ check "the receiver refuses to start without the decrypt step" \
   grep -qE '^Requires=sops-decrypt\.service' "$receiver_unit"
 for unit in smortress-deploy-listener.service smortress-deploy.path \
   smortress-boot-gate.service smortress-deploy-poll.timer \
-  smortress-deploy-heartbeat.timer; do
+  smortress-deploy-heartbeat.timer smortress-deploy-retry.timer; do
   check "image enables $unit" has "$unit" image/Containerfile
 done
 check "the queue path triggers the drain" \
@@ -854,6 +854,12 @@ check "the poll timer starts the poll service" \
   grep -qxF 'Unit=smortress-deploy-poll.service' units/systemd/smortress-deploy-poll.timer
 check "the heartbeat timer starts the heartbeat service" \
   grep -qxF 'Unit=smortress-deploy-heartbeat.service' units/systemd/smortress-deploy-heartbeat.timer
+# A deferred entry is retried by this timer, not by the path unit re-firing the
+# drain: without it a rate-limited deploy would wait for the next event.
+check "the retry timer starts the drain service" \
+  grep -qxF 'Unit=smortress-deploy.service' units/systemd/smortress-deploy-retry.timer
+check "the retry timer fires every five minutes" \
+  grep -qxF 'OnCalendar=*-*-* *:0/5:00' units/systemd/smortress-deploy-retry.timer
 check "the tmpfiles entry creates the queue" \
   has 'd /var/lib/homelab/deploy/queue 0700 root root -' image/rootfs/etc/tmpfiles.d/smortress.conf
 

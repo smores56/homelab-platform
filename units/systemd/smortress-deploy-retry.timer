@@ -1,0 +1,18 @@
+[Unit]
+Description=Retry a queued deploy the drain deferred
+
+[Timer]
+# A deferred entry is one the drain could not act on for an infrastructure reason:
+# a rate-limited API, a tailnet that was down. Its own `retry_at` says when it may
+# be tried again, and the drain skips it until then. This timer is what makes that
+# attempt happen when no new request fires smortress-deploy.path -- without it a
+# deferred entry would wait for the next event, and with an immediate retry the
+# path unit would spin the drain into its start limit instead. Not persistent: a
+# stamp from before a reboot describes a network that no longer exists, and the
+# boot gate plus the next event are what decide after one.
+OnCalendar=*-*-* *:0/5:00
+AccuracySec=1min
+Unit=smortress-deploy.service
+
+[Install]
+WantedBy=timers.target

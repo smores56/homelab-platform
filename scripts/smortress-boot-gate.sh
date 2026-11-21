@@ -30,9 +30,22 @@
 #            GRUB counter is what protects the host.
 #
 # Ownership of the rollback is explicit: while `pending.json` exists the gate
-# decides, and its abandon path resets the flags so the counter cannot later
-# select the deployment that just failed. The GRUB counter acts only when the
-# gate cannot run at all (no userspace, a panicked kernel).
+# decides, and its abandon path spends the counter so it cannot later select the
+# deployment that just failed. The GRUB counter acts only when the gate cannot run
+# at all (no userspace, a panicked kernel).
+#
+# Reaching this program is itself the verdict on the boot: the GRUB snippet spends
+# an attempt on *every* boot, so the gate marks the boot good before it evaluates
+# anything. Only the pending path's failure actions override that mark. Without it
+# three ordinary reboots fall back to the previous deployment while state.json
+# still names the newer commit, and the host then polls, finds nothing to do and
+# reports healthy on an image it is not running.
+#
+# With no pending record the gate still compares the booted digest with what the
+# state records: a crash between `bootc switch` and the pending record, or a
+# staged entry a refused stage left behind, boots an image nothing recorded. That
+# is journaled and paged, never rolled back -- a hand-run `bootc switch` is the
+# operator's choice and the host is healthy.
 #
 # The health gate is retried inside its budget and fails closed: the units the
 # image declares must be active and none failed, the pool imported, /srv/apps a
@@ -43,7 +56,8 @@
 #
 # Exit codes: 0 nothing to do, or a deployment was recorded or rolled back;
 # 1 the gate could not finish (an unreadable bootc status, an unwritable record,
-# a failed rollback) or the health gate failed and the rollback was issued.
+# a failed rollback, an apps revert that could not run while a platform deployment
+# is pending) or the health gate failed and the rollback was issued.
 #
 # Every knob is environment-overridable so tests/deploy/boot.sh can drive this
 # exact code against fakes and a throwaway state directory. Production sets none
@@ -132,28 +146,49 @@ warn() { printf 'smortress-boot-gate: %s\n' "$*" >&2; }
 # The counter is the only rollback that exists before userspace, so an absent
 # grub2-editenv is a gap the journal has to name: a host that quietly fails to
 # reset it rolls back a healthy deployment after three good boots.
-grub_flags() { # <success|abandon>
-  local kind=$1
+grub_available() {
   if ! command -v "$grub_editev" >/dev/null 2>&1; then
     journal_append grub-tool-missing "$(jq -nc --arg tool "$grub_editev" '{tool:$tool}')" ||
       true
     warn "$grub_editev is missing: the boot counter cannot be reset"
     return 1
   fi
-  timeout --signal=TERM "$grub_timeout" "$grub_editev" "$grub_env" set \
-    "boot_success=1" "boot_counter=$boot_budget" || return 1
-  # Only the abandon path clears `default`: it was pointing at the previous
-  # deployment, and after a rollback that entry is the one that just failed.
-  if [[ $kind == abandon ]]; then
-    timeout --signal=TERM "$grub_timeout" "$grub_editev" "$grub_env" unset default || return 1
-  fi
+  return 0
+}
+
+# The snippet spends one attempt on every boot and the gate runs after
+# multi-user.target, so a boot the gate reached is a boot that got to userspace:
+# it is marked good and the counter is reset here, before anything is decided.
+# `default` is cleared with it -- a fallback entry left selected by an earlier
+# boot would otherwise pull the next reboot back to the older deployment while
+# this one is healthy.
+grub_mark_good() {
+  grub_available || return 1
+  timeout --signal=TERM --kill-after=5 "$(clamp_timeout "$grub_timeout")" "$grub_editev" \
+    "$grub_env" set "boot_success=1" "boot_counter=$boot_budget" || return 1
+  timeout --signal=TERM --kill-after=5 "$(clamp_timeout "$grub_timeout")" "$grub_editev" \
+    "$grub_env" unset default || return 1
+  return 0
+}
+
+# The one override of that mark: a deployment this gate rejects leaves the flags
+# spent. boot_success=0 stops the bootloader from treating the boot as good,
+# boot_counter=-1 spends the attempts, and default=0 selects the entry
+# `bootc rollback --apply` is about to make current. Resetting them to the
+# success values instead would re-arm the counter that must never pick the failed
+# deployment again.
+grub_abandon() {
+  grub_available || return 1
+  timeout --signal=TERM --kill-after=5 "$(clamp_timeout "$grub_timeout")" "$grub_editev" \
+    "$grub_env" set "boot_success=0" "boot_counter=-1" "default=0" || return 1
   return 0
 }
 
 # --- the bootc answer -------------------------------------------------------
 booted_digest() {
   local doc
-  doc=$(timeout --signal=TERM "$status_timeout" "$bootc_bin" status --booted --json 2>/dev/null) ||
+  doc=$(timeout --signal=TERM --kill-after=10 "$(clamp_timeout "$status_timeout")" \
+    "$bootc_bin" status --booted --json 2>/dev/null) ||
     return 1
   jq -er '.status.booted.image.imageDigest // empty' <<<"$doc" 2>/dev/null
 }
@@ -174,13 +209,14 @@ health_reason=
 # opens the connection, not by this shell, so no path here can be a hostname.
 # shellcheck disable=SC2016
 tcp_open() { # <port>
-  timeout --signal=TERM "$connect_timeout" bash -c 'exec 3<>"/dev/tcp/127.0.0.1/$1"' _ "$1" \
+  timeout --signal=TERM "$(clamp_timeout "$connect_timeout")" bash -c 'exec 3<>"/dev/tcp/127.0.0.1/$1"' _ "$1" \
     2>/dev/null
 }
 
 serve_status_paths() {
   local doc
-  doc=$(timeout --signal=TERM "$probe_timeout" "$tailscale_bin" serve status --json 2>/dev/null) ||
+  doc=$(timeout --signal=TERM --kill-after=10 "$(clamp_timeout "$probe_timeout")" \
+    "$tailscale_bin" serve status --json 2>/dev/null) ||
     return 1
   jq -r '.Web // {} | to_entries[]
     | select(.key | endswith(":443"))
@@ -215,7 +251,7 @@ health_plan() {
     fi
     # A user unit is reached through the tenant's own manager: the deploy runs as
     # root and cannot `--user` against a session it does not have.
-    if [[ $(timeout --signal=TERM "$ctl_timeout" "$systemctl_bin" --user \
+    if [[ $(timeout --signal=TERM "$(clamp_timeout "$ctl_timeout")" "$systemctl_bin" --user \
       --machine="$apps_user@.host" is-active "$unit" 2>/dev/null) != active ]]; then
       health_reason="tenant-unit-inactive:$name"
       return 1
@@ -246,7 +282,7 @@ health_check() {
     return 1
   }
   for unit in "${gate_units[@]}"; do
-    if [[ $(timeout --signal=TERM "$ctl_timeout" "$systemctl_bin" is-active "$unit" \
+    if [[ $(timeout --signal=TERM "$(clamp_timeout "$ctl_timeout")" "$systemctl_bin" is-active "$unit" \
       2>/dev/null) != active ]]; then
       health_reason="unit-inactive:$unit"
       return 1
@@ -255,18 +291,18 @@ health_check() {
   # `failed` is asked about the declared units only: an unrelated unit that
   # failed must not roll the host back.
   for unit in "${gate_units[@]}"; do
-    if [[ $(timeout --signal=TERM "$ctl_timeout" "$systemctl_bin" is-failed "$unit" \
+    if [[ $(timeout --signal=TERM "$(clamp_timeout "$ctl_timeout")" "$systemctl_bin" is-failed "$unit" \
       2>/dev/null) == failed ]]; then
       health_reason="unit-failed:$unit"
       return 1
     fi
   done
-  timeout --signal=TERM "$probe_timeout" "$zpool_bin" list -H -o name "$pool" \
+  timeout --signal=TERM "$(clamp_timeout "$probe_timeout")" "$zpool_bin" list -H -o name "$pool" \
     >/dev/null 2>&1 || {
     health_reason="zpool-not-imported"
     return 1
   }
-  timeout --signal=TERM "$probe_timeout" "$mountpoint_bin" -q "$apps_mount" \
+  timeout --signal=TERM "$(clamp_timeout "$probe_timeout")" "$mountpoint_bin" -q "$apps_mount" \
     >/dev/null 2>&1 || {
     health_reason="apps-not-mounted"
     return 1
@@ -315,9 +351,9 @@ succeed() { # <commit> <index> <manifest>
     warn "cannot journal the green gate"
     return 1
   }
-  grub_flags success || warn "the boot counter was not reset"
-  # The only writer of a landed deployment: nothing else may claim a commit is
-  # running, and this runs on the boot that proves it.
+  # The GRUB flags were marked good when this boot reached the gate; nothing here
+  # writes them again. This is the only writer of a landed deployment: nothing
+  # else may claim a commit is running, and it runs on the boot that proves it.
   state_record_verified homelab-platform "$commit" "$index" "$manifest" || {
     warn "cannot record the deployed commit"
     return 1
@@ -352,11 +388,11 @@ fail_gate() { # <reason> <commit> <index> <manifest>
     warn "cannot journal the gate failure"
   denylist_forms "$index" "$manifest" "boot-gate:$reason"
   # Before the rollback, not after: `bootc rollback --apply` reboots, and a
-  # counter left pointing at the failed deployment would select it again.
-  grub_flags abandon || warn "the GRUB flags were not reset"
+  # counter left armed would select the failed deployment again.
+  grub_abandon || warn "the GRUB flags were not abandoned"
   deploy_notify fail "boot-gate-$reason" || warn "could not report the failed boot"
-  timeout --signal=TERM --kill-after=30 "$rollback_timeout" "$bootc_bin" rollback --apply ||
-    rc=$?
+  timeout --signal=TERM --kill-after=30 "$(clamp_timeout "$rollback_timeout")" \
+    "$bootc_bin" rollback --apply || rc=$?
   if ((rc != 0)); then
     journal_append rollback-failed "$(jq -nc --argjson exit "$rc" '{exit:$exit}')" ||
       warn "cannot journal the failed rollback"
@@ -373,7 +409,10 @@ rolled_back() { # <booted> <commit> <index> <manifest>
     '{commit:$commit,digests:{index:$index,manifest:$manifest},booted:$booted}')" ||
     warn "cannot journal the rollback"
   denylist_forms "$index" "$manifest" rolled-back-by-bootloader
-  grub_flags abandon || warn "the GRUB flags were not reset"
+  # The boot itself is healthy -- it is just not the staged deployment -- so the
+  # flags are the good ones rather than the abandon ones. Re-asserted here so a
+  # write that failed earlier in the run cannot leave a spent counter behind.
+  grub_mark_good || warn "the GRUB flags were not reset"
   deploy_notify fail rolled-back-by-bootloader || warn "could not report the rollback"
   pending_clear || {
     warn "cannot clear the pending record"
@@ -393,7 +432,8 @@ reconcile_apply() {
   phase=$(record_field apply phase 2>/dev/null) || phase=unknown
   journal_append apply-interrupted "$(jq -nc --arg phase "$phase" '{phase:$phase}')" ||
     warn "cannot journal the interrupted apps apply"
-  timeout --signal=TERM --kill-after=60 "$apps_revert_timeout" "$apps_bin" revert || rc=$?
+  timeout --signal=TERM --kill-after=60 "$(clamp_timeout "$apps_revert_timeout")" \
+    "$apps_bin" revert || rc=$?
   if ((rc != 0)); then
     journal_append apply-revert-failed "$(jq -nc --arg phase "$phase" --argjson exit "$rc" \
       '{phase:$phase,exit:$exit,by:"boot-gate"}')" ||
@@ -407,8 +447,38 @@ reconcile_apply() {
   return 0
 }
 
+# A boot with no pending record still gets compared with the state. Two paths
+# reach it: a crash between `bootc switch` and the pending write, and the staged
+# entry a refused stage leaves behind. Either way the host is running an image
+# state.json does not name, and state.json is what the poll compares the tip
+# against -- silently wrong there means the poll stops deploying and nothing says
+# so. It is never rolled back: a hand-run `bootc switch` is the operator's
+# choice, and this boot is healthy.
+check_unrecorded_boot() {
+  local booted index manifest
+  [[ -s $deploy_state_file ]] || return 0
+  index=$(state_field 'repos.homelab-platform.indexDigest' 2>/dev/null) || index=""
+  manifest=$(state_field 'repos.homelab-platform.manifestDigest' 2>/dev/null) || manifest=""
+  # A state seeded by `bootstrap` records a commit and no digest: there is
+  # nothing to compare, which is a host awaiting its first deploy, not a fault.
+  [[ -n $index || -n $manifest ]] || return 0
+  if ! booted=$(booted_digest); then
+    journal_append bootc-status-failed '{"pending":false}' || true
+    warn "cannot read the booted deployment; nothing was compared"
+    return 0
+  fi
+  digest_matches "$booted" "$index" "$manifest" && return 0
+  journal_append booted-unrecorded "$(jq -nc --arg booted "$booted" --arg index "$index" \
+    --arg manifest "$manifest" \
+    '{booted:$booted,digests:{index:$index,manifest:$manifest}}')" ||
+    warn "cannot journal the unrecorded boot"
+  deploy_notify fail booted-unrecorded || warn "could not report the unrecorded boot"
+  warn "booted $booted, which $deploy_state_file does not name; left alone"
+  return 0
+}
+
 main() {
-  local doc commit index manifest booted
+  local doc commit index manifest booted revert_rc=0
   deploy_state_init || {
     warn "cannot create $deploy_state_dir"
     exit 1
@@ -421,9 +491,21 @@ main() {
   trap deploy_lock_release EXIT
 
   journal_append boot-gate-start '{}' || warn "cannot journal the gate start"
-  reconcile_apply || exit 1
+  # First, before any decision: this boot reached userspace, which is what a good
+  # boot means here. The GRUB snippet spends an attempt on every boot, so a gate
+  # that only marked the pending path good would let three ordinary reboots fall
+  # back to the previous deployment with state.json naming the newer one.
+  grub_mark_good || warn "the GRUB flags were not reset; the counter will fall back"
+  reconcile_apply || revert_rc=$?
 
   if ! record_exists pending; then
+    if ((revert_rc != 0)); then
+      # The tenant may be half of two revisions and nothing will repair it on
+      # this boot, so the operator hears about it even though the platform
+      # decision is "nothing to do".
+      deploy_notify fail apps-revert-failed || warn "could not report the failed revert"
+    fi
+    check_unrecorded_boot || true
     say "no staged deployment"
     exit 0
   fi
@@ -450,6 +532,14 @@ main() {
   fi
 
   if digest_matches "$booted" "$index" "$manifest"; then
+    # The staged deployment is running, so the tenant has to be the revision the
+    # plan names before the health gate judges it. A revert that could not run
+    # leaves half of two revisions under a plan nobody restored: that is a failed
+    # gate, and it takes the same denylist and rollback as any other.
+    if ((revert_rc != 0)); then
+      fail_gate apply-revert-failed "$commit" "$index" "$manifest" || exit 1
+      exit 1
+    fi
     if health_gate; then
       succeed "$commit" "$index" "$manifest" || exit 1
       exit 0
@@ -458,6 +548,11 @@ main() {
     exit 1
   fi
 
+  # Booted something else: the bootloader already fell back, or an operator did.
+  # Nothing is rolled back, and the record is consumed so a later manual reboot
+  # cannot roll a healthy host back either. A revert that did not finish is in the
+  # journal and the page names the rollback; the record it kept stays for the next
+  # boot gate or drain.
   rolled_back "$booted" "$commit" "$index" "$manifest" || exit 1
   exit 0
 }

@@ -265,6 +265,7 @@ RUN set -eux; \
       smortress-boot-gate.service \
       smortress-deploy-poll.timer \
       smortress-deploy-heartbeat.timer \
+      smortress-deploy-retry.timer \
       smortress-immich-dump.timer \
       smortress-agent-collect-finance.timer \
       smortress-agent-collect-calendar.timer \

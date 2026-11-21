@@ -138,8 +138,8 @@ check_eq "$(cat "$pings")" 'http://ping.test/deploy' "a fresh queue entry keeps 
 # --- a wedged drain is paged -------------------------------------------------
 
 reset_case
-queue_seed 22222222-2222-4222-8222-222222222222 "$(($(date +%s) - 1900))"
-if run; then bad "a queue entry older than 30 minutes fails the unit"; else ok "a queue entry older than 30 minutes fails the unit"; fi
+queue_seed 22222222-2222-4222-8222-222222222222 "$(($(date +%s) - 7300))"
+if run; then bad "a queue entry older than two hours fails the unit"; else ok "a queue entry older than two hours fails the unit"; fi
 if grep -qx 'http://ping.test/deploy/fail' "$pings"; then
   ok "an old queue entry pings /fail"
 else
@@ -152,12 +152,13 @@ else
 fi
 check_eq "$(journal_events heartbeat-failed)" 1 "the failure is journaled"
 
-# Twenty-nine minutes is inside the window: a five-minute timer must not page on
-# a deploy that is legitimately still running.
+# A slow but honest deploy is not a wedged one: the snapshot gate runs for an hour
+# and an apps apply behind it for ninety minutes, so the limit sits above both. A
+# host that paged on its own rollout would page on every healthy deploy.
 reset_case
-queue_seed 33333333-3333-4333-8333-333333333333 "$(($(date +%s) - 1740))"
-if run; then ok "a 29-minute-old queue entry is still inside the window"; else bad "a 29-minute-old queue entry is still inside the window"; fi
-check_eq "$(cat "$pings")" 'http://ping.test/deploy' "a 29-minute-old queue entry keeps the check green"
+queue_seed 33333333-3333-4333-8333-333333333333 "$(($(date +%s) - 5400))"
+if run; then ok "a 90-minute-old queue entry is still inside the window"; else bad "a 90-minute-old queue entry is still inside the window" "$(cat "$work/stderr")"; fi
+check_eq "$(cat "$pings")" 'http://ping.test/deploy' "a 90-minute-old queue entry keeps the check green"
 
 # --- a silent listener is paged ----------------------------------------------
 

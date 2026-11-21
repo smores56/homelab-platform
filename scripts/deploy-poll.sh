@@ -77,18 +77,29 @@ warn() { printf 'deploy-poll: %s\n' "$*" >&2; }
 cache_tip() { # <url> -> the cached document's sha, if the entry is fresh
   [[ -s $poll_cache ]] || return 1
   jq -er --arg url "$1" --argjson now "$(date +%s)" --argjson ttl "$poll_cache_ttl" \
-    '.entries[$url] | select(. != null) | select(($now - (.at | tonumber)) <= $ttl)
+    '.entries[$url]
+     | select(type == "object" and (.at | type) == "number")
+     | select(($now - .at) <= $ttl)
      | .value.object.sha' "$poll_cache" 2>/dev/null
 }
 
+# The prune is written so that one unreadable entry costs that entry and nothing
+# else. The whole document is rewritten from the one just read, so a filter that
+# raises -- a missing `at`, a string where a number belongs -- leaves jq with no
+# output at all and atomic_write would replace the cache with an empty file: the
+# next run then pays for every URL again, which is the budget this file exists to
+# protect. `.value` inside with_entries is the entry, so its stamp is `.value.at`.
 cache_put() { # <url> <document-json>
   local current
-  current=$(cat -- "$poll_cache" 2>/dev/null) || current='{}'
+  current=$(cat -- "$poll_cache" 2>/dev/null) || current=''
+  jq -e 'type == "object" and (.entries | type) == "object"' <<<"${current:-{\}}" \
+    >/dev/null 2>&1 || current='{}'
   jq -c --arg url "$1" --argjson now "$(date +%s)" --argjson ttl "$poll_cache_ttl" \
     --argjson value "$2" '
       {schema: 1,
        entries: ((.entries // {})
-         | with_entries(select(($now - (.value.at | tonumber)) <= $ttl))
+         | with_entries(select((.value.at? // null) as $at
+             | ($at | type) == "number" and ($now - $at) <= $ttl))
          | .[$url] = {at: $now, value: $value})}
     ' <<<"$current" | atomic_write "$poll_cache"
 }

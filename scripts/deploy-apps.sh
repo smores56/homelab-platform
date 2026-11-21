@@ -171,9 +171,11 @@ usage() {
   cat >&2 <<'EOF'
 usage: deploy-apps apply --commit <40-hex>
        deploy-apps revert
+       deploy-apps sweep
 
   apply   fetch, validate, render and install one homelab-apps commit
   revert  restore the revision recorded in apply.json, or do nothing
+  sweep   remove the work trees an interrupted apply left behind
 EOF
 }
 
@@ -288,6 +290,11 @@ secret_name_ok() {
 
 # --- work tree ---------------------------------------------------------------
 work_dir_for() { printf '%s/apps-%s\n' "$deploy_work_dir" "$1"; }
+
+# A work tree is a day old before it is garbage: a host that is still catching up
+# after a restore may be reverting one of them, and the cost of keeping a stale
+# tree one more day is nothing next to reverting a revision the operator needed.
+sweep_grace=${APPS_SWEEP_GRACE_MINUTES:-1440}
 
 # Only a path this script minted is ever removed: apply.json is a file an operator
 # can edit, and `rm -rf "$(jq -r .work apply.json)"` on a wrong path is how a
@@ -908,6 +915,40 @@ resolve_secret_values() { # <plan> <secrets json|"">
   return 0
 }
 
+# The trees an interrupted apply leaves behind hold the decrypted tenant secrets,
+# and the process that would have removed them is gone. Only the tree apply.json
+# still names is a crash state a revert restores from; every other one older than
+# the grace period is removed here, under the drain's lock.
+cmd_sweep() {
+  local keep='' dir rc=0 removed=0
+  deploy_state_init || {
+    warn "cannot create $deploy_state_dir"
+    return 4
+  }
+  if record_exists apply; then
+    keep=$(record_field apply work 2>/dev/null) || keep=""
+  fi
+  for dir in "$deploy_work_dir"/apps-*; do
+    [[ -d $dir ]] || continue
+    if [[ -n $keep && $dir == "$keep" ]]; then
+      continue
+    fi
+    # An unreadable mtime is not a reason to keep plaintext, but it is a reason
+    # not to remove blind: the tree is left for the next run.
+    [[ -n $(find "$dir" -maxdepth 0 -mmin "+$sweep_grace" 2>/dev/null) ]] || continue
+    if cleanup_work "$dir"; then
+      removed=$((removed + 1))
+    else
+      rc=1
+    fi
+  done
+  journal_append apps-work-swept "$(jq -nc --argjson removed "$removed" \
+    --arg kept "$keep" '{removed:$removed,kept:$kept}')" || warn "cannot journal the sweep"
+  ((rc == 0)) || return 1
+  say "swept $removed stale work tree(s)"
+  return 0
+}
+
 cmd_apply() {
   local commit_arg='' secrets='' rc=0 name ref image_ref reason='' pull_rc=0 apps_state=''
   local -a validate_args=()
@@ -953,6 +994,20 @@ cmd_apply() {
   fi
 
   work=$(work_dir_for "$commit")
+  # Every normal exit below removes the tree itself, except the one that keeps
+  # apply.json for a revert -- that revert restores from render.prev, so the tree
+  # has to stay. This covers the exits nobody wrote a branch for: the tree holds
+  # the decrypted tenant secrets, and leaving it behind is a plaintext leak that
+  # grows with every failed deploy.
+  # shellcheck disable=SC2329  # invoked through the trap below, not by name
+  apply_exit_cleanup() {
+    local status=$?
+    if ((status != 0)) && [[ -n ${work:-} ]] && ! record_exists apply; then
+      cleanup_work "$work" || warn "cannot remove $work"
+    fi
+    return 0
+  }
+  trap apply_exit_cleanup EXIT
   journal_append apps-start "$(jq -nc --arg commit "$commit" '{commit:$commit}')" || {
     warn "cannot journal the apply start"
     return 4
@@ -1169,6 +1224,12 @@ case ${1-} in
     shift
     rc=0
     cmd_revert "$@" || rc=$?
+    exit "$rc"
+    ;;
+  sweep)
+    shift
+    rc=0
+    cmd_sweep "$@" || rc=$?
     exit "$rc"
     ;;
   -h | --help)
