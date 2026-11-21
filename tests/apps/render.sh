@@ -81,7 +81,12 @@ if [[ -f $alpha ]]; then ok 'one Quadlet per app'; else bad 'one Quadlet per app
 contains "$alpha" "Image=ghcr.io/example/alpha@sha256:$digest" 'the image is the digest-pinned one'
 contains "$alpha" 'PublishPort=127.0.0.1:' 'the port is published on loopback'
 contains "$alpha" ':8080' 'the published port is the declared container port'
-contains "$alpha" 'Network=smortress-apps' 'egress none joins the internal network'
+# Quadlet links a container to a Quadlet network only when the value carries
+# the .network suffix, and it names the created network after NetworkName, so
+# both halves must agree or the container starts against a network that does
+# not exist and never pulls in the unit that creates it.
+contains "$alpha" 'Network=smortress-apps.network' 'egress none joins the internal network'
+contains "$out/smortress-apps.network" 'NetworkName=smortress-apps' 'the network keeps its planned name'
 contains "$out/smortress-apps.network" 'Internal=true' 'the internal network has no route out'
 contains "$alpha" 'Volume=/srv/apps/alpha:/data:Z' 'the only bind is the app data directory, relabelled'
 contains "$alpha" 'ReadOnly=true' 'the root filesystem is read-only'
