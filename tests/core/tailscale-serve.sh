@@ -152,7 +152,8 @@ core_status() {
     cat >"$status" <<'EOF'
 {
   "TCP": {"443": {"HTTPS": true}, "8443": {"HTTPS": true}, "10000": {"HTTPS": true},
-          "8444": {"HTTPS": true}, "8445": {"HTTPS": true}},
+          "8444": {"HTTPS": true}, "8445": {"HTTPS": true},
+          "8446": {"HTTPS": true}, "8447": {"HTTPS": true}},
   "Web": {
     "host:443": {"Handlers": {
       "/": {"Proxy": "http://127.0.0.1:2283"},
@@ -163,7 +164,9 @@ core_status() {
     "host:8443": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:8083"}}},
     "host:10000": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:8384"}}},
     "host:8444": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:18006"}}},
-    "host:8445": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:18007"}}}
+    "host:8445": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:18007"}}},
+    "host:8446": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:2283"}}},
+    "host:8447": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:8083"}}}
   }
 }
 EOF
@@ -194,6 +197,11 @@ serves() { # path target label
 serves host:443 / http://127.0.0.1:2283 '443 still fronts Immich'
 serves host:8443 / http://127.0.0.1:8083 '8443 still fronts OPDShelf'
 serves host:10000 / http://127.0.0.1:8384 '10000 still fronts Syncthing'
+# The public edge (design #725) is the reason these two exist: it may not use
+# 443, so Immich and OPDShelf are repeated on ports a port-scoped tailnet rule
+# can name without also publishing the agent gateways and `/wallpapers`.
+serves host:8446 / http://127.0.0.1:2283 '8446 fronts Immich for the public edge'
+serves host:8447 / http://127.0.0.1:8083 '8447 fronts OPDShelf for the public edge'
 
 # --- the deploy receiver's TCP forward is a core route -----------------------
 #
@@ -305,7 +313,7 @@ serves host:443 / http://127.0.0.1:2283 'no plan keeps the core root route'
 reset_case
 plan_with "$(jq -cn --argjson a "$(app_entry alpha 21234 4001 1G internet)" '{alpha: $a}')" >"$plan"
 if FAKE_STATUS_FAIL=1 run; then ok 'an unreadable status still applies the plan'; else bad 'an unreadable status still applies the plan' "$(cat "$work/stderr")"; fi
-if [[ $(grep -c -- '--bg --https=' "$log") == 9 ]]; then
+if [[ $(grep -c -- '--bg --https=' "$log") == 11 ]]; then
     ok 'the core routes, the two core paths, the wallpaper route and the app route are declared without status'
 else
     bad 'the core routes, the two core paths, the wallpaper route and the app route are declared without status' "$(cat "$log")"
@@ -331,7 +339,7 @@ if WALLPAPERS_DIR=$work/absent run; then
 else
     ok 'a missing wallpaper directory fails the run'
 fi
-if [[ $(grep -c -- '--bg --https=' "$log") == 7 ]]; then
+if [[ $(grep -c -- '--bg --https=' "$log") == 9 ]]; then
     ok 'a missing wallpaper directory still leaves the core routes declared'
 else
     bad 'a missing wallpaper directory still leaves the core routes declared' "$(cat "$log")"
@@ -392,7 +400,7 @@ if [[ -n $tenant_traffic ]]; then
 else
     ok 'a rejected plan changes no app route'
 fi
-if [[ $(grep -c -- '--bg --https=' "$log") == 8 ]]; then
+if [[ $(grep -c -- '--bg --https=' "$log") == 10 ]]; then
     ok 'a rejected plan still declares the core routes, the two core paths and the wallpapers route'
 else
     bad 'a rejected plan still declares the core routes and the wallpapers route' "$(cat "$log")"

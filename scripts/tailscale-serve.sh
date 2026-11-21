@@ -38,15 +38,20 @@ fail() {
 command -v jq >/dev/null 2>&1 || fail "jq is missing"
 
 # https port -> loopback port. 443 Immich, 8443 OPDShelf, 10000 Syncthing GUI,
-# 8444 the personal web UI, 8445 the general one. The wallpaper library is
-# deliberately absent: it is a directory published as static files under a path on
-# 443, not a loopback port with a root path.
+# 8444 the personal web UI, 8445 the general one. 8446 and 8447 repeat Immich and
+# OPDShelf for the public edge (design #725): the edge may not use 443, because
+# that port also carries the agent gateways and the wallpaper tree, and a
+# port-scoped tailnet rule cannot express a path. The wallpaper library is
+# absent here: it is a directory published as static files under a path on 443,
+# not a loopback port with a root path.
 declare -A core_routes=(
   [443]=2283
   [8443]=8083
   [10000]=8384
   [8444]=18006
   [8445]=18007
+  [8446]=2283
+  [8447]=8083
 )
 
 # https/443 path -> loopback port, for the two agent gateway APIs. A fixed path

@@ -1209,6 +1209,13 @@ check "Syncthing's QUIC port is permitted on the tailscale zone" \
 # to be open on the tailnet zone or the notify path silently times out.
 check "the deploy receiver's port is permitted on the tailscale zone" \
   has '<port port="8484" protocol="tcp"/>' image/rootfs/etc/firewalld/zones/tailscale.xml
+# The public edge (design #725) reaches Immich and OPDShelf through Serve's two
+# dedicated ports. An ACL accept that the zone drops is a route that never
+# works, and the failure looks like an edge bug rather than a firewall one.
+check "the edge's Immich route is permitted on the tailscale zone" \
+  has '<port port="8446" protocol="tcp"/>' image/rootfs/etc/firewalld/zones/tailscale.xml
+check "the edge's OPDShelf route is permitted on the tailscale zone" \
+  has '<port port="8447" protocol="tcp"/>' image/rootfs/etc/firewalld/zones/tailscale.xml
 
 # The apps tenant (#726) is named everywhere and numbered nowhere. sysusers
 # allocates its id, so anything that named 1001 — the dataset owner, the user
