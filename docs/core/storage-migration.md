@@ -190,8 +190,10 @@ filesystem: `photos` alone restores more than that, and the helper refuses a
 target without room instead of filling the disk.
 
 Re-link the dotfiles as `smores` (the absolute symlinks under `~` still point at
-`/var/home/core`), enrol the YubiKey for `sudo`, and confirm
-`sshd -T | grep allowusers` reports `smores`.
+`/var/home/core`) and confirm `sshd -T | grep allowusers` reports `smores`. The
+YubiKey needs no enrolment on the host: mint the sudo credential on a client,
+commit its public half to `image/rootfs/etc/ssh/sudo_authorized_keys`, deploy,
+and prove the tap with the drill in `docs/manual-steps.md` section 44.
 
 Two stores under `~` record the old home path as absolute state and fail after
 the rename, because `usermod -m` moves the tree without rewriting them:

@@ -2789,8 +2789,8 @@ or reformats them.
 
    To rotate, create a new Object Read & Write token scoped to `homelab-restic`
    and edit the ciphertext in place; sops applies the `secrets/server/*.yaml`
-   creation rule from `.sops.yaml` (host and admin keys), so the host can still
-   decrypt it:
+   creation rule from `.sops.yaml` (the machine identity, the admin identity and
+   the three YubiKeys), so the host can still decrypt it:
 
    ```sh
    sops secrets/server/r2-credentials.yaml

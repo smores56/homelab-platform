@@ -20,12 +20,19 @@ person, and the alternative — a ciphertext file nobody can edit — is worse.
 
 `secrets/server/*.yaml` holds values a host unit needs at boot, carried inside
 this repository instead of only in the recovery kit. `.sops.yaml` encrypts that
-path to two recipients: the host identity, staged root-only at
-`/var/lib/homelab/age/keys.txt` from the kit, and the admin identity, so the
-operator can edit a value without the host.
+path to five recipients: the shared machine identity that is the unattended root
+reader, staged root-only at `/var/lib/homelab/age/keys.txt` from the kit, and the
+admin identity plus the three YubiKeys, so the operator can edit a value without
+touching the host. No host or cluster identity can read `secrets/*.yaml`, and
+none of the five can read `clusters/**`.
 `sops-decrypt.service` writes each file into `/run/smortress/secrets` with the
 owner, mode and `format` named in
 `image/rootfs/etc/smortress/secrets.manifest`.
+
+The table below is a reference for the two consumers whose file shape or ordering
+is load-bearing, not an inventory: the directory holds 18 ciphertext files, and
+the rest are one value each, named by the unit or script that reads them (the
+manifest is the set).
 
 | File | Read by | Rule |
 | --- | --- | --- |
