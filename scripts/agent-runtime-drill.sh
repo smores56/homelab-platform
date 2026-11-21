@@ -46,7 +46,22 @@ layout=$here/storage-layout
 [[ -r $layout ]] || layout=$layout.sh
 
 readonly backends=(ssd hdd r2)
-readonly drill_root=${SMORTRESS_AGENT_DRILL_ROOT:-/var/tmp/agent-drill}
+# A restore writes tens of GiB. The default parent is a data disk, never /var/tmp:
+# the root filesystem holds the system, and a restore that fills it takes every
+# service with it (docs/core/pool-rebuild.md). The restore-drill helper picks the
+# same disks on its own; this mirrors it so the drill cannot re-point at root.
+default_drill_root() {
+  local candidate
+  for candidate in /var/lib/restic/ssd /var/lib/restic/hdd; do
+    if [[ -d $candidate ]]; then
+      printf '%s/drill' "$candidate"
+      return 0
+    fi
+  done
+  printf '%s' /var/lib/restic/ssd/drill
+}
+drill_root=${SMORTRESS_AGENT_DRILL_ROOT:-$(default_drill_root)}
+readonly drill_root
 readonly facade_tree=${AGENT_FACADE_TREE:-/usr/lib/agent-facade}
 
 cmd=""
@@ -102,7 +117,8 @@ performs no I/O.
 Environment:
   SMORTRESS_RESTIC_RESTORE_DRILL   path to the restore-drill helper
   SMORTRESS_AGENT_DRILL_ROOT       parent of the default restore target
-                                   (default: /var/tmp/agent-drill)
+                                   (default: the first mounted restic data disk,
+                                   /var/lib/restic/ssd/drill or /var/lib/restic/hdd/drill)
   AGENT_FACADE_TREE                the facade code tree (/usr/lib/agent-facade)
 EOF
 }

@@ -124,6 +124,12 @@ for backend in ssd hdd r2; do
 done
 check 'dry-run restore plans the restore-drill helper' \
   grep -qF 'smortress-restic-restore-drill' <<<"$out"
+# One restore writes tens of GiB. The default target belongs on a data disk: a
+# restore that fills the root filesystem takes every service down with it.
+check 'the default restore target is on a data disk' \
+  grep -qE 'restoring into /var/lib/restic/(ssd|hdd)/' <<<"$out"
+check 'the drill no longer roots its default target at /var/tmp' \
+  test -z "$(grep -n 'default: /var/tmp' <<<"$("$script" --help 2>&1)")"
 
 run_dry restore agent-general --target /var/tmp/agent-drill-proof
 check 'dry-run restore honours --target' \

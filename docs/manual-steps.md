@@ -3944,7 +3944,7 @@ snapshot recorded. Set the variables the rest of this section uses; `path` print
 the restored tree of one dataset.
 
 ```sh
-drill=/var/tmp/drill
+drill=/var/lib/restic/ssd/drill
 path() { printf '%s%s/.zfs/snapshot/ssd' "$drill" "$1"; }
 for unit in files photos books music wallpapers git apps repo-archive; do
   sudo /usr/libexec/smortress-restic-restore-drill ssd "$unit" --target "$drill/$unit"
@@ -3964,13 +3964,13 @@ steps before the application starts.
 survives a version change.
 
 ```sh
-sudo install -d -o 1000 -g 1000 -m 0700 /var/tmp/drill-pg
+sudo install -d -o 1000 -g 1000 -m 0700 /var/lib/restic/ssd/drill-pg
 sudo podman network create drillnet 2>/dev/null || true
 sudo podman run --rm -d --name drill-pg --network drillnet --network-alias drill-pg \
   --user 1000:1000 -e PGDATA=/data -e POSTGRES_USER=immich -e POSTGRES_DB=immich \
   -e POSTGRES_PASSWORD_FILE=/run/secrets/pw \
   --secret immich-db-password,type=mount,target=/run/secrets/pw \
-  -v /var/tmp/drill-pg:/data:z \
+  -v /var/lib/restic/ssd/drill-pg:/data:z \
   ghcr.io/smores56/homelab-platform/immich-postgres@sha256:79b95b795f0911e95ffa4d092a2162c4d81a984d5629bc8f786afe0bc0657671
 sudo podman cp "$(path /var/lib/immich/dumps)/immich.dump" drill-pg:/tmp/immich.dump
 sudo podman exec drill-pg pg_isready -U immich -d immich
@@ -4004,13 +4004,13 @@ both use `PGDATA=/data` with no subdirectory:
 
 ```sh
 sudo podman rm -f drill-immich drill-pg
-sudo rm -rf /var/tmp/drill-pg
-sudo install -d -o 1000 -g 1000 -m 0700 /var/tmp/drill-pg
-sudo cp -a "$(path /var/lib/immich/postgres)/." /var/tmp/drill-pg/
-sudo chown -R 1000:1000 /var/tmp/drill-pg
+sudo rm -rf /var/lib/restic/ssd/drill-pg
+sudo install -d -o 1000 -g 1000 -m 0700 /var/lib/restic/ssd/drill-pg
+sudo cp -a "$(path /var/lib/immich/postgres)/." /var/lib/restic/ssd/drill-pg/
+sudo chown -R 1000:1000 /var/lib/restic/ssd/drill-pg
 sudo podman run --rm -d --name drill-pg --network drillnet --network-alias drill-pg \
   --user 1000:1000 -e PGDATA=/data \
-  -v /var/tmp/drill-pg:/data:z \
+  -v /var/lib/restic/ssd/drill-pg:/data:z \
   ghcr.io/smores56/homelab-platform/immich-postgres@sha256:79b95b795f0911e95ffa4d092a2162c4d81a984d5629bc8f786afe0bc0657671
 sudo podman exec drill-pg psql -U immich -d immich -c 'select count(*) from asset;'
 ```
@@ -4063,7 +4063,7 @@ before the real service starts.
 ```sh
 sudo podman rm -f drill-syncthing drill-pg
 sudo podman network rm drillnet
-sudo rm -rf "$drill" /var/tmp/drill-pg
+sudo rm -rf "$drill" /var/lib/restic/ssd/drill-pg
 sudo systemctl start immich-postgres.service immich-valkey.service immich-machine-learning.service \
   immich-server.service opdshelf.service syncthing.service
 sudo systemctl start smortress-immich-dump.timer
@@ -6614,8 +6614,9 @@ the live mount namespaces, the root-only secrets, and a cold restore of an agent
 dataset from a real destination. `scripts/agent-runtime-drill.sh` runs them as
 root from a checkout and prints one PASS/FAIL line per observation.
 
-It prints secret names and file modes, never a value; it writes only under
-`/var/tmp/agent-drill` (or `SMORTRESS_AGENT_DRILL_ROOT`); and it stops nothing, so
+It prints secret names and file modes, never a value; it writes only under the
+restic data disk's `drill/` (`/var/lib/restic/ssd/drill`, or
+`SMORTRESS_AGENT_DRILL_ROOT`), never on the root filesystem; and it stops nothing, so
 the fencing below is yours. Rehearse the whole plan first — `--dry-run` prints
 every command and executes none, and it is the only mode that runs unprivileged:
 
@@ -6741,7 +6742,7 @@ collector's first run, because that journal is derived.
 The restored tree is throwaway and stays behind: compare a known file, then
 
 ```sh
-sudo rm -rf /var/tmp/agent-drill
+sudo rm -rf /var/lib/restic/ssd/drill/ssd-agent-*
 ```
 
 Start the writers again in the order section 40.9 gives, then section 40.9's

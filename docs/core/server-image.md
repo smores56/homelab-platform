@@ -489,11 +489,15 @@ encrypted storage volumes on the 980 — as:
 
 | Partition | Use |
 | --- | --- |
-| `p4` (`root`) | LUKS2 `luks-root`, XFS, 100 GiB; Clevis SSS Tang+TPM2 threshold 2, plus an offline recovery passphrase keyslot the operator adds after the install. |
+| `p4` (`root`) | LUKS2 `luks-root`, XFS, 300 GiB; Clevis SSS Tang+TPM2 threshold 2, plus an offline recovery passphrase keyslot the operator adds after the install. |
 | `p5` (`luks-data`) | LUKS2 `luks-data`, consumes the remainder; created unformatted by Ignition, formatted on the first boot with a key file the host generates, and opened from that key file. |
 
-Ignition resizes `p4` with `resize: true`/`size_mib: 102400` and creates `p5`
-with `size_mib: 0`. The 970 stays a separate ext4 Restic repository disk; the
+Ignition resizes `p4` with `resize: true`/`size_mib: 307200` and creates `p5`
+with `size_mib: 0`. Root is 300 GiB because it also carries the container images,
+the journal and any restore that does not name a data disk; the rebuild that
+takes an installed 100 GiB host to that layout, and why it cannot be done in
+place, is `docs/core/pool-rebuild.md`. The 970 stays a separate ext4 Restic
+repository disk; the
 5 TB HDD keeps its existing LUKS and is opened by
 `smortress-cryptsetup-hdd.service` with a keyfile and `nofail` semantics. Its
 absence cannot block boot; T3 alerts through backup staleness.
