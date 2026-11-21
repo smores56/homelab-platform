@@ -6591,3 +6591,164 @@ overwrite an existing record, refuses a repository the receiver does not deploy,
 and journals `bootstrap-recorded`. It is not a way to make a hand-run
 `bootc switch` look deployed (see `docs/core/server-image.md`, "What a hand-run
 switch still gives up").
+
+### 40.18 Run the agent runtime drill
+
+Three rows of the T6 cutover matrix behind #716 cannot be answered by a tree:
+the live mount namespaces, the root-only secrets, and a cold restore of an agent
+dataset from a real destination. `scripts/agent-runtime-drill.sh` runs them as
+root from a checkout and prints one PASS/FAIL line per observation.
+
+It prints secret names and file modes, never a value; it writes only under
+`/var/tmp/agent-drill` (or `SMORTRESS_AGENT_DRILL_ROOT`); and it stops nothing, so
+the fencing below is yours. Rehearse the whole plan first — `--dry-run` prints
+every command and executes none, and it is the only mode that runs unprivileged:
+
+```sh
+scripts/agent-runtime-drill.sh --dry-run mounts
+scripts/agent-runtime-drill.sh --dry-run credentials
+scripts/agent-runtime-drill.sh --dry-run restore agent-local --backend all
+```
+
+Anything else without `sudo` exits 1 and names the privilege it needs.
+
+**Fencing, before any restore.** A restore into a dataset a live process is
+writing into proves nothing, and the drill cannot stop that process. Stop every
+writer of both agent datasets, including the one-shot collectors and their
+timers, and give the running browser collector time to finish:
+
+```sh
+sudo systemctl stop smortress-agent-collect-finance.timer \
+  smortress-agent-collect-calendar.timer smortress-agent-collect-brave.path \
+  smortress-agent-collect-brave.timer
+sudo systemctl stop smortress-agent-mail-stream.service agent-tmail.service \
+  agent-brave.service syncthing.service
+sudo systemctl stop agent-webui-personal.service agent-webui-general.service \
+  agent-facade-personal.service agent-facade-general.service \
+  agent-local.service agent-general.service agent-proxy.service
+sudo systemctl is-active agent-local.service agent-general.service  # inactive
+```
+
+**Hostile mount probe (#716 row 5).**
+
+```sh
+sudo scripts/agent-runtime-drill.sh mounts
+```
+
+Five PASS lines, one per path, each carrying the error the namespace answered as
+uid 0 and as uid 1000:
+
+```
+PASS smortress-agent-general /var/srv/repo-archive
+     uid 0: absent: no such path in this namespace; uid 1000: absent: no such path in this namespace
+```
+
+A `FAIL` line is the finding, not a nuisance: `present and listable` means the
+mount exists in the namespace and the boundary is only a permission, and
+`present but not listable` means it exists at all. Either one means a Quadlet
+gained a `Volume=` it must not have; `tests/core/agent-recovery.sh` names the
+class of mistake (`agent-mount-cross`). `SKIP <container> is not running` means
+the probe had nothing to exec into — start the gateway and rerun.
+
+**Credential blast radius (#716 row 6).**
+
+```sh
+sudo scripts/agent-runtime-drill.sh credentials
+```
+
+The good shape, all of it `PASS`:
+
+```
+PASS restic-password is staged root-only
+     root-only 400
+PASS smortress-agent-general cannot read restic-password
+     uid 0: absent: no such path in this namespace; uid 1000: absent: no such path in this namespace
+...
+PASS no agent unit names a plane secret
+     19 unit definitions
+```
+
+`readable` on any line is the finding: a container that can read
+`/run/smortress/secrets/restic-password.yaml`, `/run/smortress/secrets/r2-credentials.yaml`
+or `/var/lib/homelab/age/keys.txt` can destroy every recovery point, including
+the ones it cannot reach over the network. `present but not readable` still
+fails, because a mount source that should not be there is one permission
+mistake from readable. The oneshot collectors (`smortress-agent-collect-*`,
+`smortress-agent-mail-stream`, `smortress-agent-brave-snapshot|seed`) exit between
+runs, so their containers print `SKIP` and the closing `no agent unit names a
+plane secret` line carries their half: it reads every
+`units/quadlet/agent-*.container` and `units/systemd/smortress-agent-*.service`
+for those three paths. A `FAIL … is staged root-only` line means the host copy is
+wrong (not root-owned, or not 0400) and the probes proved nothing.
+
+**Cold restore of an agent dataset (#716 row 1).** One subcommand per group and
+destination; `--backend all` walks `ssd`, `hdd` and `r2` with one target each.
+
+```sh
+sudo scripts/agent-runtime-drill.sh restore agent-local --backend ssd
+sudo scripts/agent-runtime-drill.sh restore agent-general --backend ssd
+sudo scripts/agent-runtime-drill.sh restore agent-local --backend all
+sudo scripts/agent-runtime-drill.sh restore agent-general --backend all
+```
+
+It calls `/usr/libexec/smortress-restic-restore-drill` (the verified snapshot
+only), which lands the tree at
+`<target>/var/lib/agent/<side>/.zfs/snapshot/<backend>`, then checks it:
+
+- gateway state: `.env` (with an `API_SERVER_KEY=` line, printed as a name and
+  never a value), `webui.env` (`HERMES_WEBUI_PASSWORD=`), `config.yaml`;
+- `webui/`, `webui/state` non-empty (the chats) and `webui/workspace`;
+- facade memory: `memory/local` on the personal side, `memory/external` on the
+  general one, with at least one record;
+- collector data, personal side only: `quarantine/` non-empty and at least one
+  `replica/<source>/published/<gen>/manifest.json`; the general tree must carry
+  no generation at all;
+- ownership: no uid outside `0`/`1000` came out of the archive, then the
+  documented `chown -R 1000:1000`, then uid 1000 can write `memory`, `webui` and
+  (personal) `quarantine`, `replica`, `index`;
+- the FTS index rebuilt from the restored records as uid 1000, reporting how many
+  records it indexed (`1 of 1 records indexed`); a missing index is not a lost
+  record — `apps/agent_facade/memory.py` rebuilds it — but a zero count with
+  records on disk is a finding;
+- a second restore into the same target, which the helper refuses with
+  `refusing to mix a drill into old data`.
+
+The good shape ends `0 failed`; the run prints `<n> passed, <n> failed, <n>
+skipped`. A `FAIL … restores` line carries the helper's own reason (no verified
+snapshot, no room on the target filesystem, repository not configured) and the
+remaining checks for that backend are skipped: a drill is only evidence once the
+contents were checked. A `FAIL …: restore target <dir> inside the live dataset
+<key>` line means `--target` names a path under a mounted dataset, which is the
+one thing a drill must never write into; pick a target under `/var/tmp`.
+`SKIP restored hledger projection is present` is expected before the finance
+collector's first run, because that journal is derived.
+
+The restored tree is throwaway and stays behind: compare a known file, then
+
+```sh
+sudo rm -rf /var/tmp/agent-drill
+```
+
+Start the writers again in the order section 40.9 gives, then section 40.9's
+listener checks:
+
+```sh
+sudo systemctl start agent-model.service agent-facade-personal.service \
+  agent-local.service agent-general.service agent-proxy.service \
+  agent-webui-personal.service agent-webui-general.service \
+  agent-facade-general.service
+sudo systemctl start agent-tmail.service smortress-agent-mail-stream.service \
+  syncthing.service
+sudo systemctl start smortress-agent-collect-finance.timer \
+  smortress-agent-collect-calendar.timer smortress-agent-collect-brave.path \
+  smortress-agent-collect-brave.timer
+```
+
+The static half of these rows needs no host. `tests/core/agent-recovery.sh` is
+run by CI and asserts what the tree can prove (per-unit datasets, retention and
+readiness on every destination, the mount table, the target rules);
+`tests/core/agent-drill.sh` asserts this drill itself and runs in the same
+checkout: it parses and refuses non-root, `--help` lists the three subcommands,
+`--dry-run` executes no `podman` or `restic` command under a recording `PATH`
+shim, and every probe script is a constant with the path passed as a positional
+argument.
