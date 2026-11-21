@@ -96,6 +96,18 @@ if grep -qF -- '-checkend 1209600' "$work/ossl.log"; then
 else
     bad 'the expiry check uses the default 14-day window' "$(cat "$work/ossl.log")"
 fi
+# The stub keys on the last argument, so a regression to plain HTTP or to a
+# hardcoded port would still look healthy; the argv is the only witness.
+if grep -qF -- 'https://photos.sammohr.dev/' "$work/curl.log"; then
+    ok 'every probe uses https on the name'
+else
+    bad 'every probe uses https on the name' "$(cat "$work/curl.log")"
+fi
+if grep -qF -- ':80' "$work/curl.log"; then
+    bad 'no probe addresses port 80' "$(cat "$work/curl.log")"
+else
+    ok 'no probe addresses port 80'
+fi
 
 # --- the failure this script exists to catch ----------------------------------
 
