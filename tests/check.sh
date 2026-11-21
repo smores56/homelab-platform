@@ -354,46 +354,13 @@ fi
 # --- escalation (sudo: touch, password as fallback) --------------------------
 
 # Another repository gates sudo on its own stack (design #767), so this laptop's
-# file is compared byte for byte with the design rather than by keyword: a
+# file is compared directive for directive with the design: a
 # dropped module or a jump index one line off is escalation an agent can reach,
-# and the failure is silent.
+# and the failure is silent. Comments are deliberately outside the comparison:
+# they carry the reasoning, and a rationale that needs no test edit gets written.
+directives() { grep -vE '^[[:space:]]*(#|$)' "$1"; }
 sudo_pam=image/rootfs/etc/pam.d/sudo
 expected=$(cat <<'EOT'
-# Escalation is a tap on a key listed in /etc/u2f_mappings (pam_u2f), and the
-# account password (pam_unix) behind it is the fallback: an absent, unplugged or
-# unmapped key costs typing rather than access. /etc/pam.d/login keeps its own
-# stack for the lock screen and a TTY, and that one still asks for the token's
-# FIDO2 PIN; this file must not.
-#
-# The fallback is a property of return codes, not of jump arithmetic we maintain:
-# default=ignore on the touch row drops every non-success pam_u2f returns,
-# whatever its code, and dispatch falls through to pam_unix. The codes differ
-# and no one of them covers the set: PAM_AUTH_ERR for a device or touch failure,
-# PAM_USER_UNKNOWN when the key holds no credential for this user (util.c:787),
-# PAM_AUTHINFO_UNAVAIL for a missing, unparsable or foreign-owned authfile
-# (util.c:683,748-756), and cfg_init can fail with PAM_SYSTEM_ERR.
-#
-# pinverification=0 is the point. The FIDO2 PIN is shared with the disk keyslot,
-# and eight wrong PINs block the token and wipe every credential on it, so a
-# sudo prompt that any process running as smores can trigger must never be able
-# to spend that budget.
-#
-# userpresence=1 makes the tap mandatory. No nouserok: a key holding no
-# credential for smores has to be reported as a failed authentication and fall
-# through to the password, not skipped silently.
-#
-# faillock: a bare sufficient on the touch row would be wrong. Success
-# terminates dispatch (pam_dispatch.c), so authsucc would never run and the
-# tally would never clear. success=2 skips pam_unix and authfail into authsucc,
-# and pam_unix's success=1 skips authfail the same way, so either factor clears
-# the tally. authfail therefore stays the password's row: default=ignore sends
-# a refused tap on to pam_unix, a refused tap records no faillock row at all,
-# and five refused taps lock nothing -- only five wrong passwords reach deny=5.
-#
-# try_first_pass on the pam_unix row is a no-op today: pam_u2f never sets
-# PAM_AUTHDATA, so pam_unix prompts regardless. It stays, and it is the reason
-# not to put a prompt-setting module ahead of this row: such a module would hand
-# pam_unix a stale token to reuse.
 auth required                   pam_faillock.so preauth deny=5 unlock_time=300
 auth [success=2 default=ignore] pam_u2f.so authfile=/etc/u2f_mappings cue userpresence=1 pinverification=0
 auth [success=1 default=ignore] pam_unix.so try_first_pass
@@ -405,13 +372,15 @@ session    optional pam_keyinit.so revoke
 session    required  pam_limits.so
 session    include system-auth
 EOT
+EOT
 )
-if [[ $(cat "$sudo_pam" 2>/dev/null) == "$expected" ]] \
-    && [[ $(wc -l <"$sudo_pam" 2>/dev/null) -eq 45 ]]; then
-  ok "the shipped sudo PAM stack is the design's file, byte for byte"
+if [[ $(directives "$sudo_pam" 2>/dev/null) == "$expected" ]] \
+    && [[ $(directives "$sudo_pam" 2>/dev/null | wc -l) -eq 10 ]]; then
+  ok "the shipped sudo PAM stack is the design's directives"
 else
-  bad "the shipped sudo PAM stack is the design's file, byte for byte" \
-    "$(diff <(printf '%s\n' "$expected") "$sudo_pam" 2>&1)"
+  bad "the shipped sudo PAM stack is the design's directives" \
+    "$(diff <(printf '%s
+' "$expected") <(directives "$sudo_pam") 2>&1)"
 fi
 
 # The tap first, in the order a human meets it, with the tally controls wrapping
@@ -537,21 +506,16 @@ else
 fi
 
 expected=$(cat <<'EOT'
-# /etc/sudoers.d/10-human-gate
-#
-# 30 minutes, cached per TTY. The ticket is keyed on the terminal device and the
-# session leader's start time (sudo's timestamp.c, start_time_matches), so a
-# session that later reuses the same pts number does not inherit it; anything
-# already in this session does, and `log_subcmds` records what it ran.
 Defaults timestamp_timeout=30
 Defaults timestamp_type=tty
 Defaults log_subcmds
 EOT
+EOT
 )
-if [[ $(cat image/rootfs/etc/sudoers.d/10-human-gate 2>/dev/null) == "$expected" ]]; then
-  ok "the shipped sudoers drop-in is the design's, byte for byte"
+if [[ $(directives image/rootfs/etc/sudoers.d/10-human-gate 2>/dev/null) == "$expected" ]]; then
+  ok "the shipped sudoers drop-in is the design's directives"
 else
-  bad "the shipped sudoers drop-in is the design's, byte for byte"
+  bad "the shipped sudoers drop-in is the design's directives"
 fi
 
 # /etc/u2f_mappings is public credential data: a key handle and a public key per
