@@ -659,6 +659,9 @@ has 'the policy keeps the owner in one group' '"group:owner"[[:space:]]*=[[:spac
 has 'the tailnet login is its own variable' 'variable "tailscale_login"'
 has 'the tests name the tailnet login, not the Access email' 'src[[:space:]]*=[[:space:]]*var\.tailscale_login'
 has 'the host tag is owned by the owner group' '"tag:smortress"[[:space:]]*=[[:space:]]*\["group:owner"\]'
+has 'the policy admits the deploy receiver' '"tag:smortress:8484"'
+has 'the deploy tag is owned by the owner group' '"tag:deploy"[[:space:]]*=[[:space:]]*\["group:owner"\]'
+has 'a test proves the deploy node reaches only the receiver' 'accept[[:space:]]*=[[:space:]]*\["tag:smortress:8484"\]'
 has 'the policy carries tests' 'tests[[:space:]]*=[[:space:]]*\['
 has 'a test proves every admitted port reaches the owner' \
   'accept[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:10000", "tag:smortress:22000"\]'

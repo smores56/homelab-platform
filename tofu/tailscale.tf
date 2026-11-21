@@ -39,6 +39,15 @@ locals {
         dst    = ["tag:smortress:443", "tag:smortress:8443", "tag:smortress:10000"]
       },
       {
+        # The deploy receiver (design #798). A CI job carries tag:deploy for the
+        # length of one run and may reach exactly one port: the receiver's
+        # tailnet-served TCP forward on loopback. Every other port on the host
+        # stays owner-only, and the deny test below keeps it that way.
+        action = "accept"
+        src    = ["tag:deploy"]
+        dst    = ["tag:smortress:8484"]
+      },
+      {
         # Syncthing syncs between the laptops and the host. It is not HTTP, so
         # Serve cannot front it; the port is in the tailscale firewalld zone.
         action = "accept"
@@ -59,6 +68,10 @@ locals {
     # the policy refuses to save if a rule ever makes it reachable.
     tagOwners = {
       "tag:untrusted" = ["group:owner"]
+      # The CI deploy node. An OAuth client can only mint a key carrying a tag
+      # its owner may apply, so the creator's group owns the tag; nothing else
+      # in the tailnet carries it.
+      "tag:deploy" = ["group:owner"]
       # The host's own tag. The ACL cannot name a device by hostname (the
       # validator wants an address), and a hosts alias pins the tailnet IP, so
       # the destination is a tag: it survives a reinstall that hands the node a
@@ -77,6 +90,15 @@ locals {
       },
       {
         src  = "tag:untrusted"
+        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:10000", "tag:smortress:22000"]
+      },
+      {
+        # The deploy node reaches the receiver and nothing else.
+        src    = "tag:deploy"
+        accept = ["tag:smortress:8484"]
+      },
+      {
+        src  = "tag:deploy"
         deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:10000", "tag:smortress:22000"]
       },
     ]
