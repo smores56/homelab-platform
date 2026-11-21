@@ -5804,3 +5804,388 @@ An output that exceeds 1 MiB is truncated and reported; a job that runs past 300
 seconds has its whole transient cgroup killed and any leftover container removed.
 Shell jobs are unsupervised YOLO by design: there is no command approval here.
 The only approval contract is the write broker's `libs/data_plane/approval.py`.
+
+## 48. Create the machine-user account and its scoped token
+
+SDLC #710, part of #702. The general shell agents act on GitHub as a dedicated
+machine account, never as `smores56` and never through the `dotfiles` work PAT.
+The ceiling is a Write collaborator role: it can push branches, open pull
+requests, and edit issues, and it cannot change rulesets, Environments, secrets,
+collaborators, or repository settings. The token is a classic PAT because a
+fine-grained PAT cannot act on another user's repositories as a collaborator
+([fine-grained limitations](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens#fine-grained-personal-access-tokens-limitations));
+a classic token's reach is exactly the machine user's own permissions, so the
+collaborator roles are the control.
+
+This is the shell's identity, not the broker's. The broker keeps
+`smores56-homelab-agent`: installation tokens minted per request and scoped per
+logical host (`docs/broker.md`), never placed in a shell job. GitHub recommends
+an App for long-lived integrations; the migration is recorded in 48.8, and the
+PAT is the approved T0 identity until the T5 dispatcher exists.
+
+### 48.1 Create the account
+
+Do this in a browser, not from an agent. Use an address that is not the one on
+`smores56` and is not a `+` alias of it; verify it.
+
+1. Sign up at <https://github.com/signup> with username `smores56-agent`,
+   display name `smores56 agent`, and bio `Machine account for automation.
+   Owner: smores56.` The Terms of Service permit one free machine account in
+   addition to the personal account, provided it is used only for automation
+   ([ToS §3](https://docs.github.com/en/site-policy/github-terms/github-terms-of-service#3-account-requirements)).
+2. Settings -> Password and authentication -> enable TOTP 2FA; store the
+   recovery codes. A passkey in the password manager is an account login
+   factor only and grants no repository authority.
+3. No SSH key, OAuth app, security key, or organisation. The PAT is the only
+   credential a job ever receives.
+4. Settings -> Emails shows the address verified.
+
+Recorded 2026-11-21: login `smores56-agent`, id `359421157`, type `User`,
+created `2026-11-21T05:25:30Z`; 2FA on, recovery codes and passkey in the
+password manager; no SSH key, OAuth app, or organisation.
+
+### 48.2 Create the classic PAT
+
+As `smores56-agent`, <https://github.com/settings/tokens/new>:
+
+- Note `homelab general shell`
+- Expiration: 90 days, or non-expiring by explicit owner decision. The token
+  created here is non-expiring (2026-11-21), an accepted deviation: the only
+  kill switch becomes manual revocation.
+- Scope: `repo` only. Do not add `workflow`, `admin:*`, `delete_repo`,
+  `write:packages`, `gist`, `read:org`, or `notifications`. Without `workflow`
+  the token cannot create or update `.github/workflows/**`, which is a control,
+  not an omission.
+
+Copy it once; the durable copy is the password-manager item
+`GitHub smores56-agent PAT`. For the probes below, keep a local 0600 copy
+outside every repository:
+
+```sh
+install -d -m 700 ~/.config/smores56-agent
+read -rsp 'machine PAT: ' T; printf '%s' "$T" > ~/.config/smores56-agent/token; unset T
+chmod 600 ~/.config/smores56-agent/token
+```
+
+Verify without printing the value:
+
+```sh
+GH_TOKEN=$(cat ~/.config/smores56-agent/token) gh api user --jq .login
+# expect: smores56-agent
+GH_TOKEN=$(cat ~/.config/smores56-agent/token) gh api -i user |
+  grep -i '^x-oauth-scopes:'
+# expect: x-oauth-scopes: repo
+```
+
+No `github-authentication-token-expiration` header means non-expiring.
+
+### 48.3 Make it a Write collaborator on every personal repository
+
+GitHub refuses a collaborator change on an archived repository
+(`Repository was archived so is read-only.`), and archived repositories are
+read-only anyway. The sweep therefore covers every active repository and
+records the archived refusals rather than hiding them.
+
+A transient owner classic PAT is needed because the owner's fine-grained token
+has no Administration permission. Create it as `smores56` with scope `repo` and
+a 7-day expiry, then store it 0600:
+
+```sh
+read -rsp 'owner classic PAT: ' T; printf '%s' "$T" > ~/.config/smores56-agent/owner-token; unset T
+chmod 600 ~/.config/smores56-agent/owner-token
+```
+
+Add the machine user as `push` (Write) on every repository. The loop prints one
+line per repository and tolerates the archived refusals:
+
+```sh
+OWNER=$(cat ~/.config/smores56-agent/owner-token)
+while read -r r; do
+  out=$(GH_TOKEN="$OWNER" gh api -X PUT \
+    "repos/smores56/$r/collaborators/smores56-agent" -f permission=push 2>&1) || {
+      printf 'skip %s: %s\n' "$r" "$(printf '%s' "$out" | tr '\n' ' ')"; continue; }
+  printf 'invited %s\n' "$r"
+done < <(gh repo list smores56 --limit 400 --json name --jq '.[].name')
+```
+
+Invitations are accepted by the machine user, not the owner:
+
+```sh
+MACHINE=$(cat ~/.config/smores56-agent/token)
+GH_TOKEN="$MACHINE" gh api user/repository_invitations --paginate \
+  --jq '.[] | [.id, .repository.full_name] | @tsv' |
+while IFS=$'\t' read -r id repo; do
+  GH_TOKEN="$MACHINE" gh api -X PATCH "user/repository_invitations/$id" >/dev/null &&
+    printf 'accepted %s\n' "$repo"
+done
+GH_TOKEN="$MACHINE" gh api user/repository_invitations --jq 'length'
+# expect: 0
+```
+
+Verify the role and that the repository permission is Write, never Admin or
+Maintain:
+
+```sh
+while read -r r; do
+  role=$(GH_TOKEN="$OWNER" gh api \
+    "repos/smores56/$r/collaborators/smores56-agent/permission" --jq .role_name)
+  perms=$(GH_TOKEN="$MACHINE" gh api "repos/smores56/$r" \
+    --jq '[.permissions.admin,.permissions.maintain,.permissions.push] | @tsv')
+  printf '%-24s %-6s %s\n' "$r" "$role" "$perms"
+done < <(gh repo list smores56 --limit 400 --json name,isArchived \
+  --jq '.[] | select(.isArchived|not) | .name')
+```
+
+Expected 2026-11-21: 20 active repositories at `role_name=write` with
+`admin=false`, `maintain=false`, `push=true`; `sdlc` is one of them and is the
+only active private repository. The 60 archived repositories returned
+`Repository was archived so is read-only.` and were skipped. Archived
+repositories are not writable; if a private archived history must be readable
+by the machine user, unarchive it, add the collaborator, and re-archive.
+
+### 48.4 Place every workflow secret in a main-only Environment
+
+Two rules bound the token's ability to run its own branch's workflows:
+
+1. There are no repository-level secrets. The machine user can list the names
+   (not the values) as a Write collaborator; the list must be empty:
+
+   ```sh
+   GH_TOKEN=$(cat ~/.config/smores56-agent/token) gh api \
+     repos/smores56/homelab-platform/actions/secrets --jq '.total_count'
+   # expect: 0
+   ```
+
+2. Every workflow secret lives in an Environment, and the two environments that
+   hold the write/signing credentials allow `main` only. `cloudflare-plan` is
+   the one deliberate exception: it holds the read-only plan pair and allows
+   `main` and `smores/*`, because the pre-merge plan runs on an owner-pushed
+   branch. It never allows `agent/*`.
+
+   `cloudflare` must already list `main`. On 2026-11-21 `cloudflare-plan` listed
+   zero branch policies and `server-image` had `deployment_branch_policy: null`,
+   so both were corrected:
+
+   ```sh
+   OWNER=$(cat ~/.config/smores56-agent/owner-token)
+
+   GH_TOKEN="$OWNER" gh api -X PUT \
+     repos/smores56/homelab-platform/environments/server-image --input - <<'JSON'
+   {"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}
+   JSON
+   GH_TOKEN="$OWNER" gh api -X POST \
+     repos/smores56/homelab-platform/environments/server-image/deployment-branch-policies \
+     -f name=main -f type=branch
+
+   for p in main 'smores/*'; do
+     GH_TOKEN="$OWNER" gh api -X POST \
+       repos/smores56/homelab-platform/environments/cloudflare-plan/deployment-branch-policies \
+       -f name="$p" -f type=branch
+   done
+   ```
+
+   Verify all three:
+
+   ```sh
+   for e in cloudflare cloudflare-plan server-image; do
+     printf '%-16s ' "$e"
+     GH_TOKEN="$OWNER" gh api \
+       "repos/smores56/homelab-platform/environments/$e/deployment-branch-policies" \
+       --jq '[.branch_policies[].name] | join(",")'
+   done
+   # expect:
+   # cloudflare       main
+   # cloudflare-plan  main,smores/*
+   # server-image     main
+   ```
+
+GitHub evaluates the environment policy before the job starts. A branch outside
+the list gets the job rejected with `Branch "<ref>" is not allowed to deploy to
+<environment> due to environment protection rules.` and no step runs, so no
+secret is injected. The runtime proof is in 48.5.
+
+### 48.5 Prove the ceiling
+
+Git's credential helper is the trap. `~/.config/git/config` contains
+`credential.https://github.com.helper = !gh auth git-credential`, so a plain
+`git push` in a repository cloned from GitHub authenticates as the owner even
+when the URL carries `x-access-token`. Every control then looks unenforced,
+because the owner is the ruleset bypass. Run the probes with every helper
+disabled and a dedicated askpass:
+
+```sh
+TOKEN_FILE="$HOME/.config/smores56-agent/token"
+cat > /tmp/askpass-machine.sh <<EOF
+#!/bin/sh
+cat "$TOKEN_FILE"
+EOF
+chmod 700 /tmp/askpass-machine.sh
+mkdir -p /tmp/empty-home
+
+gitm() {
+  env -i PATH=/usr/bin:/bin HOME=/tmp/empty-home GIT_CONFIG_NOSYSTEM=1 \
+    GIT_CONFIG_GLOBAL=/dev/null GIT_ASKPASS=/tmp/askpass-machine.sh \
+    GIT_TERMINAL_PROMPT=0 git -c credential.helper= \
+    -c user.name='smores56 agent' \
+    -c user.email='smores56-agent@users.noreply.github.com' "$@"
+}
+```
+
+Clone and test `homelab-platform` (repeat for `nix-config` and `kanbei`; both
+have the same `main` ruleset):
+
+```sh
+gitm clone --depth 1 https://x-access-token@github.com/smores56/homelab-platform.git
+cd homelab-platform
+git commit --allow-empty -m 't0 authority probe'
+gitm push origin HEAD:refs/heads/agent/t0-probe        # succeeds
+gitm push origin HEAD:main                            # rejected
+gitm push --force origin HEAD:main                    # rejected
+gitm push origin :main                                # rejected
+```
+
+Observed 2026-11-21 on all three repositories:
+
+```text
+! [remote rejected] HEAD -> main (push declined due to repository rule violations)
+error: failed to push some refs to 'https://github.com/smores56/homelab-platform.git'
+```
+
+The force push returns the same message. The deletion returns
+`! [remote rejected] main (refusing to delete the current branch:
+refs/heads/main)`, and `refs/heads/main` remains.
+
+A workflow-file push is refused by the token's scope before any ruleset:
+
+```sh
+mkdir -p .github/workflows
+printf 'name: t0-probe\non: workflow_dispatch\njobs: {}\n' > .github/workflows/t0-probe.yml
+git add .github/workflows/t0-probe.yml && git commit -m 't0 workflow probe'
+gitm push origin HEAD:refs/heads/agent/t0-wf-probe
+# expect:
+# ! [remote rejected] ... (refusing to allow a Personal Access Token to create
+# or update workflow '.github/workflows/t0-probe.yml' without 'workflow' scope)
+```
+
+Open a PR from the probe branch and try to merge it as the machine user:
+
+```sh
+MACHINE=$(cat ~/.config/smores56-agent/token)
+GH_TOKEN="$MACHINE" gh pr create --repo smores56/homelab-platform \
+  --head agent/t0-probe --base main --title 'T0 authority probe' --body 'probe'
+GH_TOKEN="$MACHINE" gh pr merge <n> --merge
+# expect: Pull request smores56/homelab-platform#<n> is not mergeable:
+#         the base branch policy prohibits the merge.
+GH_TOKEN="$MACHINE" gh pr merge <n> --merge --admin
+# expect: GraphQL: Repository rule violations found
+#         At least 1 approving review is required by reviewers with write access.
+#         Required status check "tofu plan" is failing.
+```
+
+Close the PR and delete the probe branch afterwards:
+
+```sh
+GH_TOKEN="$MACHINE" gh pr close <n> --repo smores56/homelab-platform --delete-branch
+GH_TOKEN="$MACHINE" gh api -X DELETE \
+  repos/smores56/homelab-platform/git/refs/heads/agent/t0-probe
+```
+
+Environment dispatch on the machine user's branch is refused for all three
+environments. The job has zero steps, so the secret is never read:
+
+```sh
+GH_TOKEN="$MACHINE" gh workflow run publish-app-images.yml \
+  --repo smores56/homelab-platform --ref agent/t0-probe
+GH_TOKEN="$MACHINE" gh workflow run tofu-apply.yml \
+  --repo smores56/homelab-platform --ref agent/t0-probe -f plan_only=true
+```
+
+Open a PR from the same branch to exercise `cloudflare-plan`. Observed
+2026-11-21, with the exact annotations:
+
+| Environment | Ref | Annotation |
+| --- | --- | --- |
+| `server-image` | `agent/t0-probe-machine` | `Branch "agent/t0-probe-machine" is not allowed to deploy to server-image due to environment protection rules.` |
+| `cloudflare` | `agent/t0-probe-machine` | `Branch "agent/t0-probe-machine" is not allowed to deploy to cloudflare due to environment protection rules.` |
+| `cloudflare-plan` | `refs/pull/93/merge` | `Branch "refs/pull/93/merge" is not allowed to deploy to cloudflare-plan due to environment protection rules.` |
+
+The recorded probe branch was `agent/t0-probe-machine`; the commands above
+use `agent/t0-probe`.
+
+Recorded runs: `actions/runs/44872248868` (server-image),
+`actions/runs/44872273360` (cloudflare), `actions/runs/44872279543`
+(cloudflare-plan). Each also carries `The deployment was rejected or didn't
+satisfy other protection rules.` and no job steps.
+
+Administration endpoints return `404` or `403`, never a mutation:
+
+```sh
+GH_TOKEN="$MACHINE" gh api repos/smores56/homelab-platform/branches/main/protection
+# {"message":"Not Found",...,"status":"404"}
+GH_TOKEN="$MACHINE" gh api -X PATCH repos/smores56/homelab-platform \
+  -f description="$(GH_TOKEN="$OWNER" gh api repos/smores56/homelab-platform --jq .description)"
+# {"message":"Not Found",...,"status":"404"}
+GH_TOKEN="$MACHINE" gh api -X PUT \
+  repos/smores56/homelab-platform/collaborators/t0-nonexistent-probe \
+  -f permission=push
+# {"message":"Not Found",...,"status":"404"}
+```
+
+`gh api .../actions/secrets` returns names only (`{"secrets":[],"total_count":0}`)
+and `.../environments` is readable; neither exposes a value or a write. The
+`admin=false` read-back in 48.3 is the same ceiling.
+
+### 48.6 SDLC approval is not yet bound to the owner
+
+`sdlc approve` adds `status:approved` and a comment with a design hash, but it
+does not compare the comment author to `smores56` (`sdlc_issues.py:569-593` in
+`dotfiles`). A Write collaborator can therefore post the same label and comment.
+Do not run `sdlc approve` as the machine user on a real feature; the claim that
+"an SDLC approval recorded by the machine user is not accepted" is false until
+that CLI change lands. The approval check lives outside this repository.
+
+### 48.7 Rotate and revoke
+
+- Machine PAT: revoke it at <https://github.com/settings/tokens> as
+  `smores56-agent`, create a replacement with scope `repo` only, update the
+  password manager, and replace the T5 dispatcher's copy. The broker is
+  untouched.
+- Owner transient PAT: revoke it immediately after 48.5 and remove the file:
+
+  ```sh
+  rm -f ~/.config/smores56-agent/owner-token
+  ```
+
+- Remove the local machine-token file when the T5 dispatcher owns the secret:
+
+  ```sh
+  rm -f ~/.config/smores56-agent/token
+  ```
+
+- The passkey, password, and recovery codes are account login factors. They
+  never enter a job, a manifest, or this repository.
+
+### 48.8 Residual and next step
+
+Accepted on 2026-11-21:
+
+- The PAT is non-expiring by owner decision; manual revocation is the only kill
+  switch.
+- `homelab-apps` has no ruleset and no branch protection, and `sdlc` is a
+  private repository on the free plan where GitHub refuses rulesets and branch
+  protection (`Upgrade to GitHub Pro or make this repository public`, HTTP 403).
+  The machine user can push `main` in both; this was not executed. Those two
+  repositories need protections before the Write ceiling is real.
+- The `main` rulesets cover only `~DEFAULT_BRANCH`. Non-main branches have no
+  force-push or deletion rule, and the app-gating ruleset described in section
+  1 item 3 is absent on `homelab-platform`, `nix-config`, and `kanbei`.
+- The 60 archived repositories are excluded; a private archived history is not
+  readable by the machine user.
+- The `sdlc` approval author check in 48.6 is missing.
+
+The standard-practice replacement is a GitHub App installation token minted by
+the trusted T5 dispatcher for each general job (1 hour, narrowed to one
+repository and `contents`/`pull_requests`/`issues`), with the App private key in
+the dispatcher and never in the job. That is a design delta to #702/#715, not
+part of this walkthrough; this section records the approved T0 identity and the
+controls that bound it.
