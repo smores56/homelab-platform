@@ -195,6 +195,19 @@ if grep -vE '^[[:space:]]*#' "$tailscale_up" | grep -qE -- '--ssh([= ]|$)'; then
 else
   ok "enrollment never passes --ssh"
 fi
+# The marker is a ConditionPathExists=! gate on the enrollment unit, so it has to
+# be the last thing the unit writes: access-lockdown is what moves the wired NICs
+# out of the `bootstrap` zone, and a marker written before a failed lockdown
+# would record the host as enrolled with sshd still answering the LAN.
+marker_line=$(grep -nF -m1 'ExecStart=/usr/bin/touch /var/lib/homelab/tailscale-enrolled' "$tailscale_up" |
+  cut -d: -f1 || true)
+lockdown_line=$(grep -nF -m1 'ExecStart=/usr/libexec/access-lockdown' "$tailscale_up" |
+  cut -d: -f1 || true)
+if [[ -n $marker_line && -n $lockdown_line ]] && ((marker_line > lockdown_line)); then
+  ok "the enrollment marker is written after the LAN is closed"
+else
+  bad "the enrollment marker is written after the LAN is closed"
+fi
 check "a unit re-asserts the preference at boot" has 'ExecStart=/usr/bin/tailscale set --ssh=false' "$tailscale_off"
 check "the preference is re-asserted after tailscaled starts" grep -qE '^Requires=tailscaled\.service' "$tailscale_off"
 check "the preference is re-asserted after enrollment" grep -qE '^After=.*smortress-tailscale-up\.service' "$tailscale_off"

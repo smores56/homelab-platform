@@ -29,8 +29,14 @@ ExecStart=/bin/sh -c 'umask 077; k=$(mktemp); sed -n "s/^authkey:[[:space:]]*//p
 # unit's enrollment marker live under /var/lib/homelab, and nothing inside may be
 # group- or world-accessible.
 ExecStart=/usr/bin/install -d -m 0711 /var/lib/homelab
-ExecStart=/usr/bin/touch /var/lib/homelab/tailscale-enrolled
+# The order below is load-bearing: access-lockdown is what moves the wired NICs
+# out of the `bootstrap` firewalld zone, so until it succeeds sshd still answers
+# the LAN with the shipped key. The marker is the ConditionPathExists=! gate on
+# this unit, so a marker written before a failed lockdown would record a host as
+# enrolled with its LAN side still open, and the unit would never run again on
+# its own. Lock the LAN first, then record that it happened.
 ExecStart=/usr/libexec/access-lockdown
+ExecStart=/usr/bin/touch /var/lib/homelab/tailscale-enrolled
 
 [Install]
 WantedBy=multi-user.target
