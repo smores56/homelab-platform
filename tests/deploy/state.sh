@@ -331,6 +331,9 @@ export DEPLOY_VERIFY_BIN=$work/fake-verify
 cat >"$work/fake-platform" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$FAKE_PLATFORM_LOG"
+# prepare and stage are separate decisions: the gate can be green while the
+# switch is an outage, and the drain must treat those differently.
+if [[ ${1:-} == stage ]]; then exit "${FAKE_STAGE_EXIT:-0}"; fi
 exit "${FAKE_PLATFORM_EXIT:-0}"
 STUB
 chmod 0755 "$work/fake-platform"
@@ -574,6 +577,27 @@ check_eq "$(grep -c '"event":"verify-rejected"' "$DEPLOY_STATE_DIR/journal.jsonl
   "a commit without an image is not a rejection"
 check_eq "$(find "$DEPLOY_STATE_DIR/queue" -name '*.json' | wc -l)" 0 \
   "the skipped entry is popped"
+
+# --- a staging outage is deferred, never a hot loop --------------------------
+# systemd re-fires a path-triggered service as soon as it exits, so exiting on a
+# stage failure re-ran verification, the gate and `bootc switch` every fourteen
+# seconds on the host until the entry was deferred.
+rm -f "$DEPLOY_STATE_DIR"/queue/*.json
+: >"$DEPLOY_STATE_DIR/journal.jsonl"
+queue_seed "$id_d" homelab-platform 93 "$sha_old"
+FAKE_STAGE_EXIT=4 DEPLOY_DRAIN_RESCAN_PAUSE=0 \
+  timeout 30 bash "$drain" >/dev/null 2>&1
+rc=$?
+check_eq "$rc" 0 "a staging outage ends the drain without failing it"
+check_eq "$(grep -c '"event":"deferred"' "$DEPLOY_STATE_DIR/journal.jsonl")" 1 \
+  "a staging outage is deferred"
+check_eq "$(find "$DEPLOY_STATE_DIR/queue" -name '*.json' | wc -l)" 1 \
+  "the deferred entry stays queued"
+if [[ -n $(queue_field "$id_d" retry_at 2>/dev/null) ]]; then
+  ok "the deferred entry carries a retry time"
+else
+  bad "the deferred entry carries a retry time"
+fi
 
 # --- the deploy lock ---------------------------------------------------------
 # The drain unit, the hourly poll and the CLI all write state.json; the lock is

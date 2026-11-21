@@ -48,6 +48,10 @@ ProtectSystem=strict
 ReadWritePaths=/var/lib/homelab/deploy
 ReadWritePaths=/boot
 ReadWritePaths=-/sysroot/ostree
+# `bootc rollback --apply` runs the same SELinux install_t probe the switch does,
+# so the gate needs the same private scratch as the drain.
+ReadWritePaths=/tmp
+ReadWritePaths=/var/tmp
 # A gate on a boot after an interrupted apps apply reverts it through
 # deploy-apps, which restores the tenant plan here and, as the tenant via
 # runuser, its units and secret values under /var/home/apps.

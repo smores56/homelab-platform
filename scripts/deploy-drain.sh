@@ -383,8 +383,11 @@ while :; do
                 refused=$((refused + 1))
                 ;;
               *)
-                warn "$repo $commit: staging failed (exit $stage_rc); leaving it queued"
-                exit 1
+                # A staging failure is an outage, not a verdict: the path unit
+                # re-fires this drain as soon as it exits, so exiting here would
+                # re-run verification, the gate and the switch in a tight loop.
+                # Defer the entry like every other infrastructure failure.
+                defer_entry "$id" "staging-exit-$stage_rc"
                 ;;
             esac
             ;;

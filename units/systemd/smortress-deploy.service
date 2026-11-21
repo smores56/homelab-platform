@@ -58,6 +58,13 @@ ReadWritePaths=-/var/lib/restic/hdd
 # own -- a read-only mount does not block a unix-socket connect.
 ReadWritePaths=/boot
 ReadWritePaths=-/sysroot/ostree
+# bootc probes its SELinux install_t policy by writing a temporary file under
+# /tmp, and staging does the same under /var/tmp; PrivateTmp=yes keeps the first
+# private to this unit, so opening it back up gives bootc a scratch tree without
+# exposing the host's. Measured: "Preparing for write: Ensuring selinux install_t
+# type ... Read-only file system ... /tmp/.tmpXXXX".
+ReadWritePaths=/tmp
+ReadWritePaths=/var/tmp
 # The apps apply (T5) atomically installs the tenant plan here, and restarts the
 # quota applier and Serve so both read it.
 ReadWritePaths=/var/lib/homelab/apps
