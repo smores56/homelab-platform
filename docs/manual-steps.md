@@ -5529,7 +5529,11 @@ spare must be enrolled too.
    ssh -A -t smortress 'sudo -k; sudo true'              # new tty, prompts again
    for _ in 1 2 3 4 5; do ssh -t smortress 'sudo -k; sudo -S true < /dev/null'; done
    ssh -A -t smortress 'sudo -k; sudo true'
-   # expect: refused before any prompt for 300 seconds, then a tap works again
+   # expect: every factor refused for 300 seconds. `preauth` is `required`, not
+   # `die`, so dispatch continues and the cue or the password prompt may still
+   # appear -- the refusal lands at the end, on the aggregate impression. The
+   # point is that a correct tap and the correct password both fail while the
+   # tally stands, and then a tap works again after --reset.
    ```
 
    Read the tally from a root shell opened before the lockout, or wait it out:
