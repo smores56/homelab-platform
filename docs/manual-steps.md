@@ -3492,10 +3492,11 @@ tofu -chdir=tofu state rm cloudflare_zero_trust_access_application.backrest
 
 Then apply. A merge of the change runs `tofu-apply` (it triggers on `tofu/**`
 changes to `main`); a manual dispatch is `gh workflow run tofu-apply.yml`. The
-same change adds a second rule to `tofu/rate-limit.tf` (10 requests per 10 s per
-IP on `/v1.Authentication/Login`); the zone has allowed a single rate-limit rule
-so far, so an apply that fails with `2 out of 1` means the zone still has one
-slot and the owner picks which rule keeps it (`docs/cloudflare.md`).
+same change replaces the media rule in `tofu/rate-limit.tf` with the login rule
+(10 requests per 10 s per IP on `/v1.Authentication/Login`), because the zone
+allows exactly one `http_ratelimit` rule and a second fails the apply with
+"2 out of 1". The plan therefore rewrites one rule in place; the media hosts lose
+their edge rate limit, a residual recorded in `docs/core/backrest.md`.
 
 Verify from a network that is not the tailnet, with no Cloudflare session:
 

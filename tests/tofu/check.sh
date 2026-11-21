@@ -331,7 +331,12 @@ for addr in cloudflare_pages_project.recovery cloudflare_r2_bucket_cors.restic \
   if [[ -n $(extract "$addr") ]]; then ok "preserved: $addr"; else bad "preserved: $addr"; fi
 done
 has 'tunnel health covers both tunnels' 'tunnel_id = compact\(\[var\.host_tunnel_id, var\.cluster_tunnel_id\]\)'
-has 'rate limit still covers the three public apps' 'http\.host eq \\"music\.\$\{var\.domain\}\\".*photos.*opds'
+# The zone plan allows exactly one http_ratelimit rule and the reader's login
+# takes it, so the media rule is gone rather than relocated or kept beside it.
+# The cost of losing it is recorded as a residual in docs/core/backrest.md, and
+# the assertions below pin both halves: absence here, the record there.
+hasnt 'no rate-limit rule covers the media hosts' 'http\.host eq \\"music\.\$\{var\.domain\}\\".*photos.*opds'
+hasnt 'no media host survives in the ruleset expression' 'http\.host eq \\"(photos|music|opds)\.\$\{var\.domain\}\\"'
 # The receiver is excluded on purpose: a shared per-IP budget would drop a
 # legitimate delivery burst, and the capability URL plus HMAC is the gate.
 if grep -q 'agent-hooks' <<<"$(extract cloudflare_ruleset.dav_rate_limit)"; then
@@ -341,10 +346,9 @@ else
 fi
 
 # The reader is public, so its login endpoint carries the brute-force control
-# the absent gate does not: the design's "Cloudflare login rate limit". It needs
-# its own rule, because the media budget above is sized for an Immich scroll and
-# is orders of magnitude too loose for a password. The two populations cannot
-# share one threshold, and a rate-limit rule carries exactly one.
+# the absent gate does not: the design's "Cloudflare login rate limit". It holds
+# the zone's only rate-limit slot, because a rule carries exactly one threshold
+# and the media budget is orders of magnitude too loose for a password.
 echo "== backrest login rate limit"
 rl=$(extract cloudflare_ruleset.dav_rate_limit)
 login_rule=$(awk '
@@ -381,7 +385,35 @@ if grep -qE '^[[:space:]]*period[[:space:]]*=[[:space:]]*10$' <<<"$login_rule"; 
 else
   bad "the login rule counts in the plan's 10-second window"
 fi
-eq "$(grep -c 'ratelimit = {' <<<"$rl")" "2" "the ruleset carries one rule per population"
+eq "$(grep -c 'ratelimit = {' <<<"$rl")" "1" "the zone's one rate-limit slot goes to the login rule"
+
+# Dropping the media rule is a real loss of an edge control, so the decision and
+# its trigger for revisiting have to be written down where the rationale lives.
+echo "== the dropped media rule is recorded as a residual"
+residual=$(awk '/^### The single rate-limit slot/ { f = 1 } f && /^## / { f = 0 } f' docs/core/backrest.md)
+if [[ -n $residual ]]; then
+  ok "backrest.md records the dropped media rule"
+else
+  bad "backrest.md records the dropped media rule" "expected a '### The single rate-limit slot' section"
+fi
+media_hosts=0
+for host in photos music opds; do [[ $residual == *"$host"* ]] && media_hosts=$((media_hosts + 1)); done
+eq "$media_hosts" "3" "the residual names every host the media rule covered"
+if grep -qiF 'bandwidth' <<<"$residual"; then
+  ok "the residual states the cost in bandwidth"
+else
+  bad "the residual states the cost in bandwidth"
+fi
+if grep -qiE 'observed abuse' <<<"$residual"; then
+  ok "the residual names observed abuse as the revisit trigger"
+else
+  bad "the residual names observed abuse as the revisit trigger"
+fi
+if grep -qF 'two `http_ratelimit` rules' docs/cloudflare.md; then
+  bad "cloudflare.md no longer claims two rate-limit rules"
+else
+  ok "cloudflare.md no longer claims two rate-limit rules"
+fi
 
 # The same contract in prose: the deployed model is password-only, and the
 # control that replaced the gate is write denial, not the gate.

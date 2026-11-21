@@ -195,9 +195,9 @@ zone with no application of its own is reachable only by the owner's identity.
 
   | Hostname | Why public |
   | --- | --- |
-  | `photos.sammohr.dev` | mobile clients cannot complete an Access login |
-  | `music.sammohr.dev` | same, for the Navidrome clients |
-  | `opds.sammohr.dev` | OPDS readers and the web reader; app login and the per-IP rate limit are the gates |
+  | `photos.sammohr.dev` | mobile clients cannot complete an Access login; no edge rate limit since the slot moved to the reader |
+  | `music.sammohr.dev` | same, for the Navidrome clients; same slot loss |
+  | `opds.sammohr.dev` | OPDS readers and the web reader; the app's own login is the gate. Its per-IP edge budget went with the `http_ratelimit` slot (`docs/core/backrest.md`, "The single rate-limit slot") |
   | `agent-hooks.sammohr.dev` | GitHub delivers webhooks with no browser and no service token; the capability URL is the credential and the receiver verifies the source's HMAC (`docs/webhook.md`). Not rate limited |
   | `ntfy.sammohr.dev` | the notification bus (SDLC #649); the Android app cannot complete an Access login, and a service token cannot ride alongside the ntfy bearer the broker injects. ntfy's own auth is the gate — `deny-all` default, no signup, and its per-visitor request limiter |
   | `recovery.sammohr.dev` | the hosted Backrest reader (#707). Design #701 opens it so family can use it with nothing set up in advance, so the reader's own password is the only login and the login endpoint is rate limited at 10 requests per 10 s per IP (`tofu/rate-limit.tf`). What makes this exposure acceptable is not a gate but write denial: the Worker refuses every write RPC and the R2 token cannot write, so the surface is a read-only browser (`docs/core/backrest.md`). Re-adding an Access application here is the documented fallback if that denial weakens |
@@ -314,13 +314,14 @@ Two consequences worth knowing before the apply:
 - The wildcard would otherwise deny the name, so removing the application
   **without** the public-set entry leaves it owner-only rather than open. The two
   halves of this change ship together, and `tests/tofu/check.sh` asserts both.
-- `tofu/rate-limit.tf` now carries two `http_ratelimit` rules — the media hosts at
-  1000 requests per 10 s and the reader's login endpoint at 10 per 10 s — because
-  a rule holds one threshold and a password budget cannot be the media budget.
-  The zone has been limited to a single rate-limit rule so far (a second failed
-  the apply with "2 out of 1"), so the apply needs a zone with two slots; if the
-  slot count has not changed, the owner decides which population keeps the one
-  slot rather than merging them onto a threshold that fits neither.
+- The zone plan allows exactly one `http_ratelimit` rule (a second fails the
+  apply with "2 out of 1"), so `tofu/rate-limit.tf` spends its only slot on the
+  reader's login endpoint at 10 requests per 10 s and deletes the media rule
+  (`photos`/`music`/`opds`, 1000 per 10 s) rather than merging two populations
+  onto a threshold that fits neither. That deletion is a residual, not a
+  cleanup: those names are proxied and the rule was live. The cost, and the
+  trigger for revisiting the choice, are in `docs/core/backrest.md`
+  ("The single rate-limit slot").
 
 ## Token and agent
 
@@ -339,7 +340,7 @@ Static half — no credentials, what CI runs:
 tests/tofu/check.sh
 ```
 
-Expected: `tofu: 194 passed, 0 failed` with `tofu` on `PATH`; 192 without it, because the fmt/validate pair skips (CI runs both). The count grows with the config.
+Expected: `tofu: 200 passed, 0 failed` with `tofu` on `PATH`; 198 without it, because the fmt/validate pair skips (CI runs both). The count grows with the config.
 
 Runtime half — needs a token that can read Access:
 

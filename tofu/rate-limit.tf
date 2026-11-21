@@ -1,6 +1,7 @@
-# Public hosts share one ruleset in the zone's `http_ratelimit` phase. A rule
-# carries exactly one threshold, and the two populations here need two, so the
-# ruleset holds one rule each rather than one shared budget.
+# Public hosts share one ruleset in the zone's `http_ratelimit` phase. The zone
+# plan allows exactly ONE rule (a second fails the apply with "2 out of 1"), and
+# a rule carries exactly one threshold, so the slot goes to the population with
+# no other control.
 #
 # `recovery` (#707) is public with no Access gate (design #701, re-affirmed
 # 2026-11-20), so the reader's own login endpoint is the only thing between the
@@ -12,19 +13,21 @@
 # bounds the guessing instead of the origin's CPU absorbing it. The 10 s counting
 # period and mitigation window are the only values the zone plan offers.
 #
-# The media hosts cannot share that budget and the reader cannot share theirs:
-# an Immich timeline scroll exceeds a few hundred requests per 10 s, and 1000 is
-# chosen for media. Splitting them is also what makes a password budget possible
-# at all — a shared 1000/10 s allowance is not a brute-force control.
+# What that slot costs: this ruleset used to hold a second rule — `music`,
+# `photos` and `opds` at 1000 requests per 10 s per IP, sized for an Immich
+# timeline scroll — and the slot count forced the choice. That rule was live, not
+# vestigial: the three names are in `local.public_apps` (access.tf) and resolve
+# through proxied CNAMEs to the cluster tunnel (dns.tf), `photos` fronting
+# `immich-server` (cluster.tf), so their traffic does reach this phase. Dropping
+# it removes a real edge control and leaves those hosts unpoliced at the edge;
+# `docs/core/backrest.md` records the residual, its cost and the trigger for
+# revisiting the choice.
 #
-# `agent-hooks` is deliberately absent from both: its deliveries are
-# individually authenticated and deduped, a shared per-IP budget would drop a
-# legitimate burst from one provider, and the source cannot be identified before
-# the request is parsed.
+# `agent-hooks` is deliberately absent: its deliveries are individually
+# authenticated and deduped, a shared per-IP budget would drop a legitimate burst
+# from one provider, and the source cannot be identified before the request is
+# parsed.
 #
-# Two rules cost two rate-limit slots, and this zone has been allowed one so far
-# (a second rule failed the apply with "2 out of 1"). The login rule therefore
-# needs the zone to carry two; confirm that before applying (docs/cloudflare.md).
 # Resource and ruleset names are historical; renaming forces a replacement,
 # which the lifecycle block forbids.
 resource "cloudflare_ruleset" "dav_rate_limit" {
@@ -34,17 +37,6 @@ resource "cloudflare_ruleset" "dav_rate_limit" {
   phase   = "http_ratelimit"
 
   rules = [
-    {
-      action      = "block"
-      description = "Rate limit the public app hosts per IP"
-      expression  = "(http.host eq \"music.${var.domain}\" or http.host eq \"photos.${var.domain}\" or http.host eq \"opds.${var.domain}\")"
-      ratelimit = {
-        characteristics     = ["ip.src", "cf.colo.id"]
-        period              = 10
-        requests_per_period = 1000
-        mitigation_timeout  = 10
-      }
-    },
     {
       action      = "block"
       description = "Rate limit the Backrest login endpoint per IP"
