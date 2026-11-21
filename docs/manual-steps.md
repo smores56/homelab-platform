@@ -145,10 +145,8 @@ sudo -k; sudo true      # one touch, no PIN
 A stale mapping fails the same silent way as everything else in this stack: the
 sudo prompt falls through to the password, or — when the old entry carries
 `+pin` — starts asking for the FIDO2 PIN that `pinverification=0` exists to keep
-out of sudo's reach. More `cue` lines than touches means `pam_u2f` is walking
-handles the key does not answer for, and each one costs libfido2's device
-timeout. `bootc rollback` brings the previous deployment's copy back the same
-way.
+out of sudo's reach. `bootc rollback` brings the previous deployment's copy
+back the same way.
 
 The `printf` is not decoration: `pamu2fcfg` ends its line without a newline, so
 writing its output directly would give a one-credential file with no terminator
