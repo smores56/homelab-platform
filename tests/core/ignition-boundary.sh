@@ -82,6 +82,17 @@ else
   bad 'the renderer decrypts only the account hash' "sops invocations: $sops_calls"
 fi
 
+# Root is 300 GiB and p5 takes the rest. A ZFS vdev cannot shrink, so an
+# installed host cannot reach this size without recreating the pool
+# (docs/core/pool-rebuild.md); the test pins the template so a reinstall does
+# not quietly hand the space back to the data partition.
+if grep -qE '^[[:space:]]*size_mib: 307200$' "$template" &&
+  grep -qE '^[[:space:]]*size_mib: 0$' "$template"; then
+  ok 'root is 300 GiB and the data partition takes the remainder'
+else
+  bad 'root is 300 GiB and the data partition takes the remainder'
+fi
+
 # The data partition is Ignition's to create and the oneshot's to format.
 if grep -qE '^[[:space:]]*- name: data$' "$template"; then
   bad 'ignition does not format the data partition'

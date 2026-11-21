@@ -333,8 +333,11 @@ paths the backup recorded. It refuses a non-empty target and only accepts
 The default target is `<drill root>/<backend>-<unit>-<time>`, where the drill
 root is the first mounted of `/var/lib/restic/hdd` and `/var/lib/restic/ssd`
 (`RESTIC_DRILL_ROOT` overrides it). It is **not** `/var/tmp`: the root
-filesystem is 100 GiB and `photos` restores more than that, so a drill there can
-only end in ENOSPC after filling a disk other services need. Before writing
+filesystem carries the system and the container images, and a media unit
+restores more than root can spare, so a drill there can only end in ENOSPC
+after filling a disk other services need. `scripts/agent-runtime-drill.sh` makes
+the same choice for its own default target (`SMORTRESS_AGENT_DRILL_ROOT`
+overrides it). Before writing
 anything the helper asks restic for the snapshot's restore size and refuses a
 target whose filesystem cannot hold it plus a 2 GiB margin, naming `--target`
 and `RESTIC_DRILL_ROOT` in the message.

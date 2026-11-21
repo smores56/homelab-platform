@@ -9,10 +9,11 @@
 # fresh directory and verifies the written data. It never restores over a live
 # dataset and never touches retention.
 #
-# The target defaults to a data disk, not /var/tmp: the root filesystem is
-# 100 GiB and the `photos` unit alone restores 116 GiB, so the old default could
-# only ever end in ENOSPC. The snapshot's restore size is compared with the
-# target filesystem before anything is written, and a target without room is
+# The target defaults to a data disk, not /var/tmp: the root filesystem carries
+# the system and the container images, and the `photos` unit alone restores
+# 116 GiB, so a drill there can only end in ENOSPC against a disk other services
+# need (docs/core/pool-rebuild.md). The snapshot's restore size is compared with
+# the target filesystem before anything is written, and a target without room is
 # refused.
 # shellcheck disable=SC2154  # variables and helpers come from restic-plane-common
 # shellcheck disable=SC2016  # the bash -c script takes its values as positional parameters
