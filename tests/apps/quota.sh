@@ -73,7 +73,7 @@ case $1 in
         elif $check; then
             [[ ${current%% *} == "$id" ]] || printf '%s\n' "$dir"
         else
-            printf '%s I\n' "$id" >"$state/project/$(basename "$dir")"
+            printf '%s P\n' "$id" >"$state/project/$(basename "$dir")"
         fi ;;
     set)
         prop=$2 target=$3
@@ -161,8 +161,8 @@ reset_case
 plan_with "$(jq -cn --argjson a "$(app_entry alpha 21234 4001 5G)" \
   --argjson b "$(app_entry beta 22999 4002 512M)" '{alpha: $a, beta: $b}')" >"$plan"
 if run; then ok 'a valid plan applies'; else bad 'a valid plan applies' "$(cat "$work/stderr")"; fi
-is "$(project_of alpha)" '4001 I' 'alpha gets its project id and inherit flag'
-is "$(project_of beta)" '4002 I' 'beta gets its project id and inherit flag'
+is "$(project_of alpha)" '4001 P' 'alpha gets its project id and inherit flag'
+is "$(project_of beta)" '4002 P' 'beta gets its project id and inherit flag'
 is "$(quota_of 4001)" $((5 * 1024 * 1024 * 1024)) 'alpha gets its quota in exact bytes'
 is "$(quota_of 4002)" $((512 * 1024 * 1024)) 'beta gets its quota in exact bytes'
 if grep -q -- "-r -s $apps/alpha" "$work/log"; then
@@ -192,6 +192,13 @@ reset_case
 plan_with "$(jq -cn --argjson a "$(app_entry alpha 21234 4001 5G)" '{alpha: $a}')" >"$plan"
 if run --check; then bad '--check fails when nothing was applied'; else ok '--check fails when nothing was applied'; fi
 
+# `zfs project` prints P for a directory whose id was set explicitly and I for
+# an inherited one; a state written by an older run carries I and must not read
+# as drift.
+run >/dev/null 2>&1
+printf '4001 I\n' >"$work/state/project/alpha"
+if run --check; then ok '--check accepts an inherited flag'; else bad '--check accepts an inherited flag'; fi
+
 # A tree that lost the inherit flag would let new files escape the quota.
 run >/dev/null 2>&1
 printf '4001 -\n' >"$work/state/project/alpha"
@@ -200,7 +207,7 @@ if run --check; then bad '--check reports a lost inherit flag'; else ok '--check
 # A retained id must not be handed to a new app.
 reset_case
 mkdir -p "$apps/orphan"
-printf '4001 I\n' >"$work/state/project/orphan"
+printf '4001 P\n' >"$work/state/project/orphan"
 plan_with "$(jq -cn --argjson a "$(app_entry alpha 21234 4001 5G)" '{alpha: $a}')" >"$plan"
 if run; then bad 'a project id collision is refused'; else ok 'a project id collision is refused'; fi
 if grep -q 'already stamped' "$work/stderr"; then ok 'the collision names the other tree'; else bad 'the collision names the other tree' "$(cat "$work/stderr")"; fi

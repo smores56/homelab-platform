@@ -119,6 +119,11 @@ LOOPBACK_SPAN = 10000
 #: from a foreign unit in the target directory.
 MARKER = "# Rendered from apps/"
 INTERNAL_NETWORK = "smortress-apps"
+#: Fixed so the egress policy can name it. The tenant bridge lives inside
+#: 10.0.0.0/8, which the LAN drop covers, so the rule that protects the
+#: tenant from the LAN would otherwise drop rootlessport's forward to its
+#: own container and every published port would time out.
+TENANT_SUBNET = "10.89.0.0/24"
 APPS_POLICY = "/usr/share/smortress/apps-policy.json"
 #: Resource limits are properties of each rendered app unit. They used to live in
 #: a drop-in on `user-<uid>.slice`, which stopped applying the moment sysusers
@@ -459,6 +464,7 @@ def render_network() -> str:
         # The unit stem would otherwise become `systemd-smortress-apps`, while
         # every consumer names the network `smortress-apps`.
         f"NetworkName={INTERNAL_NETWORK}\n"
+        f"Subnet={TENANT_SUBNET}\n"
         # No route out of the namespace; the loopback publish for Serve remains.
         "Internal=true\n"
     )

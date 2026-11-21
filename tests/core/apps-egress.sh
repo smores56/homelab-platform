@@ -126,12 +126,26 @@ else
   bad 'the tenant chain keeps the public internet reachable'
 fi
 explicit=$(grep -E '(udp|tcp) dport 53 accept' "$rules" || true)
+net=$(grep -E 'ip daddr 10\.89\.0\.0/24 accept' "$rules" || true)
 others=$(grep -E '\baccept\b' "$rules" | grep -v 'policy accept' \
-  | grep -vE '(udp|tcp) dport 53 accept' || true)
-if [[ $(printf '%s\n' "$explicit" | grep -c .) == 2 && -z $others ]]; then
-  ok 'only the DNS exception is explicitly accepted'
+  | grep -vE '(udp|tcp) dport 53 accept' \
+  | grep -vE 'ip daddr 10\.89\.0\.0/24 accept' || true)
+if [[ $(printf '%s\n' "$explicit" | grep -c .) == 2 &&
+  $(printf '%s\n' "$net" | grep -c .) == 1 && -z $others ]]; then
+  ok 'only the DNS and tenant-network exceptions are explicitly accepted'
 else
-  bad 'only the DNS exception is explicitly accepted' "$others"
+  bad 'only the DNS and tenant-network exceptions are explicitly accepted' "$others"
+fi
+
+# The tenant's own bridge sits inside 10.0.0.0/8, so the LAN drop would also
+# drop rootlessport's forward to its own container: the exception must be
+# evaluated first or every published port times out.
+net_line=$(grep -nE 'ip daddr 10\.89\.0\.0/24 accept' "$rules" | head -1 | cut -d: -f1)
+lan_line=$(grep -nE '^[[:space:]]*10\.0\.0\.0/8,?[[:space:]]*$' "$rules" | head -1 | cut -d: -f1)
+if [[ -n $net_line && -n $lan_line ]] && ((net_line < lan_line)); then
+  ok 'the tenant network exception is evaluated before the LAN drop'
+else
+  bad 'the tenant network exception is evaluated before the LAN drop' "net=$net_line lan=$lan_line"
 fi
 
 # Loading twice must be a no-op: a plain `delete` aborts a reload when the
