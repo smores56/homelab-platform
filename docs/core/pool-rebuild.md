@@ -91,9 +91,6 @@ for t in srv/git srv/files srv/photos srv/books srv/music srv/wallpapers \
 done
 ```
 
-Copy immich's state and syncthing's config only now, not in phase A, if any of
-them was still writing when the loop ran.
-
 ## C. Rebuild p5, grow p4
 
 ```sh
