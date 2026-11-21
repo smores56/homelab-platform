@@ -87,6 +87,7 @@ fi
 # (docs/core/pool-rebuild.md); the test pins the template so a reinstall does
 # not quietly hand the space back to the data partition.
 if grep -qE '^[[:space:]]*size_mib: 307200$' "$template" &&
+  grep -qE '^[[:space:]]*resize: true$' "$template" &&
   grep -qE '^[[:space:]]*size_mib: 0$' "$template"; then
   ok 'root is 300 GiB and the data partition takes the remainder'
 else

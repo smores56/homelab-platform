@@ -52,13 +52,15 @@ readonly backends=(ssd hdd r2)
 # same disks on its own; this mirrors it so the drill cannot re-point at root.
 default_drill_root() {
   local candidate
-  for candidate in /var/lib/restic/ssd /var/lib/restic/hdd; do
-    if [[ -d $candidate ]]; then
+  for candidate in /var/lib/restic/hdd /var/lib/restic/ssd; do
+    if mountpoint -q "$candidate"; then
       printf '%s/drill' "$candidate"
       return 0
     fi
   done
-  printf '%s' /var/lib/restic/ssd/drill
+  # Nothing is mounted: name the same disk the helper prefers. restore_one refuses
+  # a target that resolves onto the root filesystem, so this cannot become /var/tmp.
+  printf '%s' /var/lib/restic/hdd/drill
 }
 drill_root=${SMORTRESS_AGENT_DRILL_ROOT:-$(default_drill_root)}
 readonly drill_root
@@ -713,6 +715,10 @@ restore_one() { # restore_one <backend>
   fi
   if guard=$(live_dataset_for "$tgt"); then
     record FAIL "$b/$unit: restore target $tgt" "inside the live dataset $guard"
+    return 0
+  fi
+  if [[ $(findmnt -no TARGET -T "$tgt" 2>/dev/null) == / ]]; then
+    record FAIL "$b/$unit: restore target $tgt" 'resolves to the root filesystem'
     return 0
   fi
   root=$tgt$(dataset_mountpoint "state/$unit")/.zfs/snapshot/$b

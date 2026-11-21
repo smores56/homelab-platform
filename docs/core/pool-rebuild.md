@@ -29,18 +29,16 @@ git clone --origin origin git@github.com:smores56/homelab-platform.git ~/homelab
 cd ~/homelab-platform
 ```
 
-Copy the git dataset first (it is small), then every dataset root, one rsync per
-dataset so `.zfs` automounts are never followed:
+Copy the git dataset first (it is small), then the media trees, one rsync per
+dataset so `.zfs` automounts are never followed. State trees are not copied
+here: they have writers, and a live PGDATA or sqlite file copies into a corrupt
+tree. Phase B copies those after the units are stopped.
 
 ```sh
 sudo install -d -m 0755 /var/lib/restic/ssd/pool-copy
-sudo rsync -aHAX /var/srv/git/ /var/lib/restic/ssd/pool-copy/srv/git/
+sudo rsync -aHAX --numeric-ids /var/srv/git/ /var/lib/restic/ssd/pool-copy/srv/git/
 for d in files photos books music wallpapers apps repo-archive; do
   sudo rsync -aHAX --numeric-ids --one-file-system "/var/srv/$d/" "/var/lib/restic/ssd/pool-copy/srv/$d/"
-done
-for d in immich/postgres immich/dumps syncthing/config opdshelf agent/local agent/general agent/model; do
-  sudo install -d -m 0755 "/var/lib/restic/ssd/pool-copy/lib/$(dirname "$d")"
-  sudo rsync -aHAX --numeric-ids --one-file-system "/var/lib/$d/" "/var/lib/restic/ssd/pool-copy/lib/$d/"
 done
 ```
 
@@ -48,18 +46,19 @@ Space: the tree is ~270 GiB logical (`zfs list -o logicalused`) because the pool
 compresses with zstd, and the 970 has 661 GiB free. The restic repository stays
 on the same disk as the second copy.
 
-**Prove the copy before touching a partition.** A second pass that compares
-checksums must print nothing:
+Take a copy of the partition table before anything is deleted; it is the one
+artefact a wrong `parted` cannot be talked out of:
 
 ```sh
-sudo rsync -aHAX --numeric-ids --checksum -ni /var/srv/photos/ /var/lib/restic/ssd/pool-copy/srv/photos/
+sudo sgdisk --backup="/var/lib/restic/ssd/gpt-$(date -u +%Y%m%dT%H%M%SZ).bin" /dev/nvme0n1
 ```
 
 ## B. Stop the writers
 
-A live PGDATA or sqlite file copies into a corrupt tree, and a timer that fires
-against the empty pool snapshots nothing, tags it `verified`, and leaves the
-verifier green. Stop the timers first, then the applications:
+Stop the timers first, then the applications. A timer that fires after the pool
+is recreated but before the tree is back snapshots an empty dataset, and that
+snapshot is tagged `verified` and enters the retention window as the newest good
+restore point:
 
 ```sh
 sudo systemctl stop smortress-restic-backup-ssd.timer smortress-restic-backup-hdd.timer \
@@ -67,6 +66,29 @@ sudo systemctl stop smortress-restic-backup-ssd.timer smortress-restic-backup-hd
 sudo systemctl stop immich-server.service immich-machine-learning.service immich-postgres.service \
   immich-valkey.service opdshelf.service syncthing.service
 sudo systemctl stop 'smortress-agent-*'
+```
+
+Only now copy the state trees. `opdshelf` and both gateways keep state of their
+own; they are the reason this is a separate phase, not a footnote:
+
+```sh
+for d in immich/postgres immich/dumps syncthing/config opdshelf agent/local agent/general agent/model; do
+  sudo install -d -m 0755 "/var/lib/restic/ssd/pool-copy/lib/$(dirname "$d")"
+  sudo rsync -aHAX --numeric-ids --one-file-system "/var/lib/$d/" "/var/lib/restic/ssd/pool-copy/lib/$d/"
+done
+```
+
+**Prove both halves before touching a partition.** A second pass that compares
+checksums over every copied tree must print nothing:
+
+```sh
+for t in srv/git srv/files srv/photos srv/books srv/music srv/wallpapers \
+  srv/apps srv/repo-archive lib/immich/postgres lib/immich/dumps \
+  lib/syncthing/config lib/opdshelf lib/agent/local lib/agent/general lib/agent/model; do
+  src=${t#srv/}; src=${src#lib/}
+  case $t in srv/*) src=/var/srv/$src ;; *) src=/var/lib/$src ;; esac
+  sudo rsync -aHAX --numeric-ids --one-file-system --checksum -ni "$src/" "/var/lib/restic/ssd/pool-copy/$t/"
+done
 ```
 
 Copy immich's state and syncthing's config only now, not in phase A, if any of
@@ -85,7 +107,7 @@ sudo parted /dev/nvme0n1 resizepart 4 307200MiB
 sudo partx -u /dev/nvme0n1
 sudo cryptsetup resize root
 sudo xfs_growfs /var
-df -h /var                                 # expect 300G
+df -h /var                                 # expect ~299G: p4 starts after /boot
 ```
 
 Clear the labels before the partition goes, not just the LUKS header:
@@ -93,8 +115,10 @@ Clear the labels before the partition goes, not just the LUKS header:
 label under the new partition's tail is what makes it try to import a pool that
 is not there and exit 1.
 
-If `partx` refuses because a partition is in use, reboot instead: dracut resizes
-the root mapping on open, and the `xfs_growfs` above runs after it.
+If `partx` refuses because a partition is in use, reboot instead. Nothing on
+the host grows the filesystem on the way up: dracut resizes the mapping when it
+opens root, and the `xfs_growfs` above still has to be run afterwards or the
+filesystem stays 100 GiB on a 300 GiB partition.
 
 ## D. Bring the pool back empty
 
@@ -121,17 +145,21 @@ and a stale table silently skips `repo-archive` and the `agent-*` datasets.
 sudo /usr/libexec/zfs-ready raw-files
 ```
 
-Then confirm the offline recovery passphrase still opens the data volume. Ignition
-wrote `/etc/luks/data` as the recovery passphrase, but a host that ever ran
-`scripts/init-data-luks.sh` on a missing key file holds a random key instead, and
-a re-format keeps only the keyslot that key forms:
+Then add the offline recovery passphrase back. Ignition carries no key for the
+data volume at all: `scripts/init-data-luks.sh` generates 64 random bytes into
+`/etc/luks/data` on the first boot, and the passphrase in
+`docs/core/recovery-kit.md` is a separate keyslot the operator adds by hand. A
+re-format keeps only the keyfile's slot, so the kit stops opening the volume
+until it is added again:
 
 ```sh
+sudo cryptsetup luksAddKey /dev/disk/by-partlabel/luks-data
 sudo cryptsetup open --test-passphrase --key-file /etc/luks/data /dev/disk/by-partlabel/luks-data
+sudo cryptsetup open --test-passphrase /dev/disk/by-partlabel/luks-data
 ```
 
-If the kit's passphrase is not that value, add it as a second keyslot now, before
-anything else is written.
+Both opens must succeed: the first proves the key file the boot path uses, the
+second proves the kit still opens the volume without it.
 
 ## E. Move the tree back
 
