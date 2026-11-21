@@ -245,8 +245,8 @@ encrypted storage volumes on the 980 — as:
 
 | Partition | Use |
 | --- | --- |
-| `p4` (`root`) | LUKS2 `luks-root`, XFS, 100 GiB; Clevis SSS Tang+TPM2 threshold 2 plus an offline recovery passphrase keyslot. |
-| `p5` (`luks-data`) | LUKS2 `luks-data`, consumes the remainder; opened with a root-only keyfile stored on the encrypted root. |
+| `p4` (`root`) | LUKS2 `luks-root`, XFS, 100 GiB; Clevis SSS Tang+TPM2 threshold 2, plus an offline recovery passphrase keyslot the operator adds after the install. |
+| `p5` (`luks-data`) | LUKS2 `luks-data`, consumes the remainder; created unformatted by Ignition, formatted on the first boot with a key file the host generates, and opened from that key file. |
 
 Ignition resizes `p4` with `resize: true`/`size_mib: 102400` and creates `p5`
 with `size_mib: 0`. The 970 stays a separate ext4 Restic repository disk; the
@@ -254,16 +254,24 @@ with `size_mib: 0`. The 970 stays a separate ext4 Restic repository disk; the
 `smortress-cryptsetup-hdd.service` with a keyfile and `nofail` semantics. Its
 absence cannot block boot; T3 alerts through backup staleness.
 
-Ignition writes a key file for every LUKS device under `/etc/luks/<name>`,
-including the Clevis root, and generates a `/etc/crypttab` entry for each. The
-root passphrase therefore exists as `/etc/luks/root` on the encrypted root and
-as the recovery keyslot; the keyslot is what the kit needs. The file is inside
-the container, so it is not an at-rest bypass by itself — the residual risk is
+No secret enters Ignition or the installer media (design #701). Root is bound
+to Clevis and nothing else: with no key file in the config, Ignition formats the
+volume with a key it generates, binds the SSS pin, then removes the generated
+key slot, so the only slot left is Tang+TPM2 at threshold 2. The recovery
+passphrase does not exist until the operator adds it with
+`cryptsetup luksAddKey` (section 37 step 8.1, which also test-opens with it).
+Because root has no key file, its generated `/etc/crypttab` entry carries `none`
+as the key field and there is no `/etc/luks/root`.
+
+The data key file is the host's own: `smortress-data-init.service` generates
+`/etc/luks/data` from the kernel RNG at mode `0400 root`, runs `luksFormat` on
+`p5` with it, writes the data `/etc/crypttab` entry and opens the device that
+`smortress-zpool.service` creates the pool on. The key stays inside the
+encrypted root, so it is not an at-rest bypass by itself — the residual risk is
 Dracut copying it into the unencrypted `/boot` initramfs on a later ostree
-update, which section 37 step 8.1 checks for. The data keyfile at
-`/etc/luks/data` is deliberate: it is how the pool opens without a second
-prompt, and it is why the data crypttab entry must stay out of the initramfs.
-Secure Boot stays off.
+update, which section 37 step 8.2 checks for. The entry is also why the data
+crypttab line must stay out of the initramfs: the device only needs to open
+after root. Secure Boot stays off.
 
 ## ZFS, readiness and Quadlets
 
@@ -337,8 +345,9 @@ yamllint -c .yamllint.yaml .github/workflows/server-image-static.yml \
 `check-server-image.sh` fails on a floating base or Quadlet image, a wildcard
 `PublishPort`, an unpinned workflow action, a PR workflow that references a
 secret, a policy that does not default-reject, a plaintext secret, a private key
-in the tree, or an Ignition template missing threshold 2, both rebase stages,
-the two keyfiles or the policy install.
+in the tree, a LUKS key file or recovery passphrase in the Ignition template, or
+an Ignition template missing threshold 2, both rebase stages or the policy
+install.
 
 ## Known unverified steps
 
@@ -351,6 +360,8 @@ These require the physical host and are not claimed as proven by this task:
 - Ignition resizing the FCOS root partition and adding `p5` on the live disk.
 - Firewalld binding `tailscale0` after Tailscale creates it, and a non-Tailscale
   LAN peer being unable to reach SSH or any application port.
+- `smortress-data-init.service` generating `/etc/luks/data` and formatting `p5`
+  on the first boot of the derived image.
 - Root-only `/etc/luks/data` unlocking the data LUKS on a non-first boot, and
   ZFS import/mount ordering on a cold boot.
 - GHCR serving the cosign signature as an OCI referrer and `bootc

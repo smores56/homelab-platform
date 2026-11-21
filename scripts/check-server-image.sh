@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC2154  # dataset values come from the storage table
+# shellcheck disable=SC2016,SC2154  # the storage table's values and the source text quoted below are literal
 # Static checks for the derived image, Ignition template, Quadlets and SOPS
 # layout. No registry, no cosign key and no operator secret is required.
 set -euo pipefail
@@ -479,6 +479,16 @@ for key in "${dataset_order[@]}"; do
 done
 check "decrypt unit is ordered after local-fs" has 'After=local-fs.target' units/systemd/sops-decrypt.service
 check "zpool unit follows the data cryptsetup unit" has 'After=systemd-cryptsetup@data.service' units/systemd/smortress-zpool.service
+check "zpool unit requires the data formatting oneshot" has 'Requires=smortress-data-init.service' units/systemd/smortress-zpool.service
+check "the data formatting oneshot runs before the pool" has 'Before=smortress-zpool.service' units/systemd/smortress-data-init.service
+check "the data formatting oneshot is installed" has 'ExecStart=/usr/libexec/init-data-luks' units/systemd/smortress-data-init.service
+check "the image enables the data formatting oneshot" has 'smortress-data-init.service' image/Containerfile
+check "the image installs the data formatting helper" has 'scripts/init-data-luks.sh' image/Containerfile
+check "the data key is generated on the host" has 'head -c 64 /dev/urandom' scripts/init-data-luks.sh
+check "the data key is root-only" has 'chmod 0400 "$keyfile.new"' scripts/init-data-luks.sh
+check "the data partition is formatted by the oneshot" has 'cryptsetup luksFormat' scripts/init-data-luks.sh
+check "the data crypttab entry stays out of the initramfs" lacks 'x-initrd.attach' scripts/init-data-luks.sh
+check "the data crypttab entry cannot block boot" has 'luks,discard,nofail' scripts/init-data-luks.sh
 check "HDD unlock cannot block boot" has 'ExecStart=-/usr/libexec/open-hdd' units/systemd/smortress-cryptsetup-hdd.service
 
 # Restic plane (T3). A mount unit that is not installed, a retention filter
@@ -554,7 +564,16 @@ check "root unlock is Tang+TPM2 threshold 2" has 'threshold: 2' ignition/smortre
 check "root clevis enables tpm2" has 'tpm2: true' ignition/smortress.bu
 check "root clevis configures Tang" has "url: '@TANG_URL@'" ignition/smortress.bu
 check "root clevis pins the Tang thumbprint" has "thumbprint: '@TANG_THUMBPRINT@'" ignition/smortress.bu
-check "both storage devices carry an inline key" test "$(count 'key_file:' ignition/smortress.bu)" -eq 2
+# Design #701: no secret enters Ignition or the installer media. An inline or
+# local key_file is a LUKS keyslot keyed from the config; the recovery
+# passphrases are added on the host after the install instead. The data
+# partition is created here unformatted and formatted by the first-boot oneshot.
+check "ignition carries no LUKS key file" lacks 'key_file:' ignition/smortress.bu
+check "ignition carries no root recovery passphrase" lacks 'ROOT_RECOVERY_PASSPHRASE' ignition/smortress.bu
+check "ignition carries no data recovery passphrase" lacks 'DATA_RECOVERY_PASSPHRASE' ignition/smortress.bu
+check "ignition labels the root LUKS volume" has 'label: luks-root' ignition/smortress.bu
+check "ignition does not format the data partition" lacks 'device: /dev/disk/by-partlabel/luks-data' ignition/smortress.bu
+check "ignition still creates the data partition" has '- label: luks-data' ignition/smortress.bu
 check "ignition has no mutable git checkout" lacks 'git clone' ignition/smortress.bu
 check "ignition installs the verification policy" has '/etc/containers/policy.json' ignition/smortress.bu
 check "ignition creates the autorebase marker directory" has '/etc/ucore-autorebase' ignition/smortress.bu

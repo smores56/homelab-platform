@@ -10,9 +10,10 @@
 # command appends `ip=dhcp rd.neednet=1` so dracut can reach Tang before root
 # is opened; no mutable network manager unit or sync unit is configured here.
 #
-# Rendered by scripts/render-ignition.sh. The rendered file contains the two
-# LUKS recovery passphrases and must be mode 0600, used once, then destroyed.
-# FCOS removes /boot/ignition after provisioning.
+# Rendered by scripts/render-ignition.sh. No secret enters this file (design
+# #701): the only key slots are the Clevis binding and a key the host generates
+# for itself. The render is still mode 0600 because it carries the account
+# password hash; FCOS removes /boot/ignition after provisioning.
 variant: fcos
 version: 1.7.0
 
@@ -54,32 +55,26 @@ storage:
         - label: luks-data
           number: 5
           size_mib: 0
+  # Root unlock is the Clevis SSS binding and nothing else. With no key file,
+  # Ignition formats the volume with a key it generates, binds Clevis, then
+  # removes the generated key slot (ignition internal/exec/stages/disks/luks.go),
+  # so the only slot left is SSS Tang+TPM2 threshold 2. The offline recovery
+  # passphrase does not exist yet: the operator adds it with `cryptsetup
+  # luksAddKey` after the install (docs/manual-steps.md section 37 step 8.1),
+  # which is why a host that skips that step has no offline recovery.
+  # The data partition (p5) is created here and stays unformatted: Ignition must
+  # not carry a key for it. smortress-data-init.service generates the key file
+  # on the host and runs luksFormat on the first boot.
   luks:
-    # Root unlock: Clevis SSS with Tang and TPM2, threshold 2, plus a recovery
-    # passphrase keyslot. Ignition does not persist the inline keyfile for a
-    # Clevis device, so the passphrase exists only in the kit and this config.
     - name: root
       label: luks-root
       device: /dev/disk/by-partlabel/root
-      key_file:
-        inline: '@ROOT_RECOVERY_PASSPHRASE@'
       clevis:
         tang:
           - url: '@TANG_URL@'
             thumbprint: '@TANG_THUMBPRINT@'
         tpm2: true
         threshold: 2
-      discard: true
-      wipe_volume: true
-    # Data unlock: a root-only keyfile stored on the encrypted root. Ignition
-    # writes it to /etc/luks/data (0600 root) and generates the crypttab entry,
-    # so the data LUKS opens after root without a second prompt. The same value
-    # is the offline data recovery passphrase in the kit.
-    - name: data
-      label: luks-data
-      device: /dev/disk/by-partlabel/luks-data
-      key_file:
-        inline: '@DATA_RECOVERY_PASSPHRASE@'
       discard: true
       wipe_volume: true
   filesystems:

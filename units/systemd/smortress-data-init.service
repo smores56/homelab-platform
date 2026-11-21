@@ -1,0 +1,18 @@
+[Unit]
+Description=Generate the data key file and format the data LUKS container
+# Ignition creates p5 unformatted and carries no key for it (design #701), so the
+# format has to happen on this host, before the pool exists. DefaultDependencies
+# is off because smortress-zpool.service, which requires this unit, also runs
+# before basic.target.
+DefaultDependencies=no
+After=systemd-udevd.service
+Before=smortress-zpool.service
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/init-data-luks
+
+[Install]
+WantedBy=multi-user.target

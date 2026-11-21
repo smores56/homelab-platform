@@ -45,7 +45,10 @@ attachments for files (age identity, host key, cosign key). The paper copy
 carries the passphrases and the item name, not the files.
 
 The current and the new root passphrases are separate rows on purpose: the old
-one unlocks the disk being wiped, the new one is created by the T2 install.
+one unlocks the disk being wiped, the new one is generated at T2 and only
+reaches the new disk when the operator adds it with `cryptsetup luksAddKey`
+after the install (section 37 step 8.1). The data passphrase is added the same
+way, with the data key file as the existing key.
 
 ## Drill
 

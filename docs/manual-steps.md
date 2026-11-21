@@ -2400,16 +2400,19 @@ scratch install.
    `<registry>/<repo>@sha256:<64 hex>`.
 
 3. Stage the operator values. None of these files is committed
-   (`ignition/operator/` is gitignored).
+   (`ignition/operator/` is gitignored), and the two recovery passphrases are
+   not staged for the renderer at all: no secret enters Ignition or the
+   installer media (design #701), so they go straight into the recovery kit.
 
    ```sh
    install -d -m 0700 ignition/operator
    install -m 0644 "$HOME/.ssh/id_ed25519.pub" ignition/operator/ssh_authorized_keys
+   install -d -m 0700 /tmp/smortress-kit
    ( umask 077
      openssl rand -base64 48 \
-       >ignition/operator/root-recovery-passphrase
+       >/tmp/smortress-kit/root-recovery-passphrase
      openssl rand -base64 48 \
-       >ignition/operator/data-recovery-passphrase
+       >/tmp/smortress-kit/data-recovery-passphrase
    )
    curl -sf http://10.0.0.193:7654/adv >/tmp/tang-adv.json
    jose fmt -j /tmp/tang-adv.json -g payload -y -o - \
@@ -2422,9 +2425,18 @@ scratch install.
    printf '%s\n' "$disk" >ignition/operator/disk
    ```
 
-   Put the two passphrase files and the account password in the recovery kit
-   before the install. The disk path must be the 931.5G 980's `/dev/disk/by-id`
-   name; the 970 and the 5 TB HDD are not install targets.
+   Move both passphrase files, and the account password, into the Bitwarden item
+   and onto paper with the rest of the kit, then take them off this machine:
+
+   ```sh
+   shred -u /tmp/smortress-kit/root-recovery-passphrase \
+     /tmp/smortress-kit/data-recovery-passphrase
+   rmdir /tmp/smortress-kit
+   ```
+
+   They are needed after the install, in step 8.1, not before it. The disk path
+   must be the 931.5G 980's `/dev/disk/by-id` name; the 970 and the 5 TB HDD are
+   not install targets.
 
 3.1 Check the `smores` account password ciphertext. It is not an operator file:
    the hash ships as ciphertext, because bootc never reconciles `/var` and a
@@ -2440,8 +2452,9 @@ scratch install.
    password changes; the mint steps live in "Changing the smores account
    password" below.
 
-4. Render and validate Ignition. The rendered file contains the passphrases:
-   keep it mode 0600 and remove it after the install.
+4. Render and validate Ignition. No kit secret is in the result: root is bound
+   to Clevis only and the data partition is left unformatted. It still carries
+   the account password hash, so keep it mode 0600 and remove it after install.
 
    ```sh
    export SOPS_AGE_KEY_FILE=/path/to/admin-keys.txt   # the admin age identity
@@ -2496,32 +2509,77 @@ scratch install.
      --key image/cosign.pub "$(cat ignition/operator/derived-image)"
    ```
 
-8. Prove Tang+TPM2 and console recovery.
+8. Prove the two encrypted volumes exist as designed. Ignition bound root to
+   Clevis only, and the first boot of the derived image formatted p5 from a key
+   that never left the host.
 
    ```sh
    sudo clevis luks list -d /dev/disk/by-partlabel/root
-   sudo cryptsetup luksDump /dev/disk/by-partlabel/root
+   sudo cryptsetup luksDump /dev/disk/by-partlabel/root | grep -cE '^[0-9]+: luks2'
+   sudo cryptsetup status data
+   sudo cryptsetup luksDump /dev/disk/by-partlabel/luks-data | grep -cE '^[0-9]+: luks2'
+   stat -c '%a %U %n' /etc/luks/data
    ```
 
-   The Clevis list must show one `sss` binding with threshold 2, and the LUKS
-   dump must show the recovery keyslot. Then reboot with the wired NIC unplugged (Tang unreachable) and enter the root
-   recovery passphrase at the console prompt; the system must boot and the data
-   LUKS must open from `/etc/luks/data` without a second prompt.
+   The Clevis list must show one `sss` binding with threshold 2. Both counts
+   print `1` before step 8.1 (root: the Clevis binding; data: the key file).
+   `cryptsetup status data` must name `/dev/disk/by-partlabel/luks-data`, and the
+   key file must be `400 root`. If the data device is missing, the formatting
+   oneshot failed: `sudo journalctl -u smortress-data-init.service -b`.
 
-8.1 Confirm the LUKS key files stayed off `/boot`. Ignition writes
-   `/etc/luks/{root,data}`; Dracut must not copy either into the unencrypted
-   initramfs, or the passphrase and the pool key sit on an unencrypted
-   partition.
+8.1 Add the offline recovery passphrases. This is the only step that gives the
+   host a way in when Tang is unreachable and the TPM is gone; skipping it
+   leaves smortress with **no offline recovery**, so a dead TPM, a dead Tang Pi
+   and a reinstall from the kit become the only way back to the data.
+
+   Root has no passphrase slot to authenticate the new one with, so the Clevis
+   slot's key is recovered from the running host and destroyed immediately:
+
+   ```sh
+   slot=$(sudo clevis luks list -d /dev/disk/by-partlabel/root | awk -F: 'NR==1 {print $1}')
+   test -n "$slot"
+   sudo sh -c "clevis luks pass -d /dev/disk/by-partlabel/root -s $slot >/run/root-clevis.key && chmod 0400 /run/root-clevis.key"
+   sudo test -s /run/root-clevis.key
+   sudo cryptsetup luksAddKey --key-file /run/root-clevis.key /dev/disk/by-partlabel/root
+   sudo shred -u /run/root-clevis.key
+   sudo cryptsetup luksAddKey --key-file /etc/luks/data /dev/disk/by-partlabel/luks-data
+   ```
+
+   Each `luksAddKey` prompts for the new passphrase twice: paste the
+   `root-recovery-passphrase` from the kit at the first, the
+   `data-recovery-passphrase` at the second (step 3). `clevis luks pass` needs
+   both Tang and the TPM, so run this while the host is still on the network it
+   was installed on and its TPM is healthy.
+
+   Verify each passphrase by test-opening with it:
+
+   ```sh
+   sudo cryptsetup open --test-passphrase /dev/disk/by-partlabel/root
+   sudo cryptsetup open --test-passphrase /dev/disk/by-partlabel/luks-data
+   sudo cryptsetup luksDump /dev/disk/by-partlabel/root | grep -cE '^[0-9]+: luks2'
+   sudo cryptsetup luksDump /dev/disk/by-partlabel/luks-data | grep -cE '^[0-9]+: luks2'
+   ```
+
+   Each `open --test-passphrase` prompts once and exits 0 with no output when the
+   passphrase opens the slot; a wrong one exits non-zero. Both counts must now
+   print `2`: root is Clevis plus passphrase, data is key file plus passphrase.
+   Then prove console recovery: reboot with the wired NIC unplugged (Tang
+   unreachable, threshold 2 unmet), enter the root recovery passphrase at the
+   prompt, and confirm the system boots and the data LUKS opens from
+   `/etc/luks/data` without a second prompt.
+
+8.2 Confirm the data key file stayed off `/boot`. `smortress-data-init.service`
+   generates `/etc/luks/data` on the encrypted root; Dracut must not copy it
+   into the unencrypted initramfs.
 
    ```sh
    sudo lsinitrd /boot/ostree/*/initramfs-*.img | grep -E '/etc/luks|/etc/crypttab' || true
    ```
 
-   Neither path may appear. If `/etc/luks/root` does, delete the file, change the
-   root crypttab key field to `none` (Clevis still unlocks it), and rebuild:
-   `sudo dracut -f`. If `/etc/luks/data` does, move the key to
-   `/var/lib/homelab/luks-data`, point the data crypttab entry at it with
-   `noauto`, open it after root with
+   `/etc/luks/data` may not appear, and no data `/etc/crypttab` entry may appear;
+   the root entry is Dracut's own and is expected. If `/etc/luks/data` does,
+   move the key to `/var/lib/homelab/luks-data`, point the data crypttab entry at
+   it with `noauto`, open it after root with
    `sudo systemctl start systemd-cryptsetup@data.service` from a unit ordered
    before `smortress-zpool.service`, and recheck. Repeat the check after every
    kernel update.
