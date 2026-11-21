@@ -465,6 +465,80 @@ unset RESTIC_HEALTHCHECK_URL
 run scripts/smortress-restic-verify.sh
 if ((rc != 0)); then ok "a missing Healthchecks URL refuses to claim freshness"; else bad "a missing Healthchecks URL refuses to claim freshness"; fi
 if [[ -s $log/curl-urls ]]; then bad "no ping without a configured URL"; else ok "no ping without a configured URL"; fi
+unset STUB_SNAPSHOTS_JSON
+
+# --- 5b. the deploy gate's local query -----------------------------------
+# `--local --json` is read-only and answers per restore unit, per local
+# repository, because the caller owns the fallback: an unusable repository is a
+# payload fact, freshness is a payload fact, and only a query that cannot run at
+# all is an exit code. It never pings, so it works before the check exists.
+reset_state
+seed_all_healthy
+export RESTIC_HEALTHCHECK_URL=https://hc.invalid/ping/abc
+run scripts/smortress-restic-verify.sh --local --json
+eq "$rc" 0 "a healthy plane answers the local query"
+eq "$(jq -r '.ssd.usable' <<<"$out")" true "the SSD is reported usable"
+eq "$(jq -r '.hdd.usable' <<<"$out")" true "the HDD is reported usable"
+eq "$(jq -r '.ssd.units.photos.fresh' <<<"$out")" true "a fresh SSD unit is reported fresh"
+eq "$(jq -r '.hdd.units["repo-archive"].fresh' <<<"$out")" true "a fresh HDD unit is reported fresh"
+eq "$(jq -r '.ssd.units | length' <<<"$out")" "${#units[@]}" "every restore unit is reported"
+eq "$(jq -r 'has("r2")' <<<"$out")" false "the local query covers only the two local repositories"
+if [[ -s $log/curl-urls ]]; then
+  bad "the local query never pings Healthchecks" "$(cat "$log/curl-urls")"
+else
+  ok "the local query never pings Healthchecks"
+fi
+unset RESTIC_HEALTHCHECK_URL
+run scripts/smortress-restic-verify.sh --local --json
+eq "$rc" 0 "the local query needs no Healthchecks URL"
+
+# A verdict is freshness, not an exit code: the gate decides what a stale unit
+# means (back it up, or hold the deploy).
+reset_state
+seed_all_healthy
+stale_time=$(date -u -d "@$(($(date -u +%s) - 9000))" +%Y-%m-%dT%H:%M:%SZ)
+STUB_SNAPSHOTS_JSON=$(jq -cn --arg t "$stale_time" --argjson p "$(unit_paths_json photos ssd)" \
+  '[{id: "old1", time: $t, hostname: "smortress", paths: $p,
+     tags: ["unit:photos", "host:smortress", "verified"]}]')
+export STUB_SNAPSHOTS_JSON
+run scripts/smortress-restic-verify.sh --local --json
+eq "$rc" 0 "a stale snapshot is a verdict, not a failure of the query"
+eq "$(jq -r '.ssd.units.photos.fresh' <<<"$out")" false "a snapshot past the max age is not fresh"
+eq "$(jq -r '.ssd.units.photos.reason' <<<"$out")" stale "a stale snapshot says why"
+
+STUB_SNAPSHOTS_JSON=$(jq -cn --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --argjson p "$(unit_paths_json photos ssd)" \
+  '[{id: "nv1", time: $t, hostname: "smortress", paths: $p,
+     tags: ["unit:photos", "host:smortress"]}]')
+export STUB_SNAPSHOTS_JSON
+run scripts/smortress-restic-verify.sh --local --json
+eq "$(jq -r '.ssd.units.photos.reason' <<<"$out")" unverified "an untagged snapshot is not fresh"
+unset STUB_SNAPSHOTS_JSON
+
+# The 970 is the preferred repository and the HDD is the fallback when it is
+# absent, so "no SSD" must be a usable=false payload and not a broken query.
+reset_state
+seed_all_healthy
+sed -i "\|$repos/ssd|d" "$work/mountinfo"
+run scripts/smortress-restic-verify.sh --local --json
+eq "$rc" 0 "an absent SSD does not break the local query"
+eq "$(jq -r '.ssd.usable' <<<"$out")" false "an absent SSD is reported unusable"
+eq "$(jq -r '.hdd.usable' <<<"$out")" true "the HDD stays usable"
+eq "$(jq -r '.ssd.units.photos.fresh' <<<"$out")" false "no unit is fresh on an unusable repository"
+printf '36 25 8:1 / %s rw,relatime - ext4 /dev/sdb1 rw\n' "$repos/ssd" >>"$work/mountinfo"
+
+# Nothing to join against is the one thing the query cannot answer.
+reset_state
+rm -rf "${state:?}"
+run scripts/smortress-restic-verify.sh --local --json
+if ((rc != 0)); then ok "missing plane state fails the local query"; else bad "missing plane state fails the local query"; fi
+
+reset_state
+seed_all_healthy
+run scripts/smortress-restic-verify.sh --json
+eq "$rc" 2 "the aggregate mode takes no --json"
+run scripts/smortress-restic-verify.sh --local
+eq "$rc" 2 "the local mode requires --json"
 
 # --- 6. repository init --------------------------------------------------
 reset_state

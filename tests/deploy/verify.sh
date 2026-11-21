@@ -510,6 +510,18 @@ check_eq "$(requests_matching "/v2/")" 0 "an apps deploy never touches the regis
 # --- the drain's verification action ---------------------------------------
 export DEPLOY_VERIFY_BIN=$root/$verify
 export DEPLOY_JOURNAL_MAX_BYTES=5242880
+# The platform snapshot gate is T3 and has its own suite (tests/deploy/platform.sh);
+# what this suite proves is that a verified platform entry reaches it with the
+# digests the verdict resolved.
+cat >"$work/fake-platform" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$FAKE_PLATFORM_LOG"
+exit "${FAKE_PLATFORM_EXIT:-0}"
+STUB
+chmod 0755 "$work/fake-platform"
+export DEPLOY_PLATFORM_BIN=$work/fake-platform
+export FAKE_PLATFORM_LOG=$work/platform-calls
+: >"$work/platform-calls"
 
 queue_seed() { # <id> <repo> <commit>
   jq -nc --arg id "$1" --arg repo "$2" --arg commit "$3" --argjson at "$(date +%s)" \
@@ -541,6 +553,14 @@ check_eq "$(jq -r 'select(.event=="verified") | .verdict.digests.manifest' "$sta
   "$manifest_digest" "the verified entry journals the resolved manifest digest"
 check_eq "$(jq -r 'select(.event=="verified") | .commit' "$state_dir/journal.jsonl")" "$commit" \
   "the verified entry journals its commit"
+if grep -q "^prepare --commit $commit --digests " "$work/platform-calls"; then
+  ok "a verified platform entry is handed to the snapshot gate"
+else
+  bad "a verified platform entry is handed to the snapshot gate" "$(cat "$work/platform-calls")"
+fi
+gate_digests=$(sed -n 's/.*--digests \(.*\)$/\1/p' "$work/platform-calls" | head -n1)
+check_json "$gate_digests" .index "$index_digest" "the gate receives the resolved index digest"
+check_json "$gate_digests" .manifest "$manifest_digest" "the gate receives the resolved manifest digest"
 
 # A rejection is final for that entry: the same commit is popped, not retried.
 scenario '.tip["homelab-platform"] = "89abcdef0123456789abcdef0123456789abcdef"'
@@ -585,5 +605,55 @@ check_eq "$(queue_count)" 1 "an entry that could not be verified stays queued"
 check_eq "$(jq -r 'select(.event=="verify-infra-failure") | .reason' "$state_dir/journal.jsonl")" \
   rate-limited "the infrastructure failure journals the reason"
 
+# The snapshot gate's own outcome decides the entry: a hold is a decision about
+# the deploy and is popped, a gate that could not run leaves the request queued
+# so the next trigger retries it.
+clear_queue() {
+  for entry in "$state_dir"/queue/*.json; do rm -f "$entry"; done
+}
+clear_queue
+scenario .
+seed_state "$deployed" >/dev/null
+: >"$work/platform-calls"
+id_e=55555555-5555-4555-8555-555555555555
+queue_seed "$id_e" homelab-platform "$commit"
+export FAKE_PLATFORM_EXIT=5
+if drain_run; then
+  ok "a held deploy does not fail the drain"
+else
+  bad "a held deploy does not fail the drain" "$(cat "$work/drain.out")"
+fi
+check_eq "$(queue_count)" 0 "a held deploy is removed from the queue"
+check_eq "$(jq -r 'select(.event=="drain-finish") | .held' "$state_dir/journal.jsonl" | tail -n1)" 1 \
+  "the drain counts the held deploy"
+export FAKE_PLATFORM_EXIT=4
+queue_seed "$id_e" homelab-platform "$commit"
+if drain_run; then
+  bad "a gate that cannot run fails the drain"
+else
+  ok "a gate that cannot run fails the drain"
+fi
+check_eq "$(queue_count)" 1 "an entry the gate could not clear stays queued"
+unset FAKE_PLATFORM_EXIT
+
+# An apps commit has no reboot, so it never reaches the snapshot gate.
+clear_queue
+seed_state "$deployed" "$deployed" >/dev/null
+: >"$work/platform-calls"
+id_g=77777777-7777-4777-8777-777777777777
+queue_seed "$id_g" homelab-apps "$commit"
+if drain_run; then
+  ok "a verified apps commit does not fail the drain"
+else
+  bad "a verified apps commit does not fail the drain" "$(cat "$work/drain.out")"
+fi
+check_eq "$(queue_count)" 0 "the deferred apps entry is removed from the queue"
+check_eq "$(jq -r 'select(.event=="apps-deferred") | .commit' "$state_dir/journal.jsonl" | tail -n1)" \
+  "$commit" "the apps apply is journaled as deferred"
+if [[ -s $work/platform-calls ]]; then
+  bad "an apps commit never reaches the snapshot gate" "$(cat "$work/platform-calls")"
+else
+  ok "an apps commit never reaches the snapshot gate"
+fi
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 ((fail == 0))

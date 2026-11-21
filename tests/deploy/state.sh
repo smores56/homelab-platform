@@ -253,10 +253,25 @@ while (($#)); do
     *) shift ;;
   esac
 done
-printf '{"verdict":"verified","repo":"%s","commit":"%s","digests":null}\n' "$repo" "$commit"
+digests=null
+if [[ $repo == homelab-platform ]]; then
+  digests='{"index":"sha256:1111111111111111111111111111111111111111111111111111111111111111","manifest":"sha256:2222222222222222222222222222222222222222222222222222222222222222"}'
+fi
+printf '{"verdict":"verified","repo":"%s","commit":"%s","digests":%s}\n' "$repo" "$commit" "$digests"
 STUB
 chmod 0755 "$work/fake-verify"
 export DEPLOY_VERIFY_BIN=$work/fake-verify
+# The platform snapshot gate (T3) is driven by tests/deploy/platform.sh; what
+# this suite proves is that the drain hands a verified platform entry to it.
+cat >"$work/fake-platform" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$FAKE_PLATFORM_LOG"
+exit "${FAKE_PLATFORM_EXIT:-0}"
+STUB
+chmod 0755 "$work/fake-platform"
+export DEPLOY_PLATFORM_BIN=$work/fake-platform
+export FAKE_PLATFORM_LOG=$work/platform-calls
+: >"$work/platform-calls"
 for entry in "$DEPLOY_STATE_DIR"/queue/*.json; do rm -f "$entry"; done
 export DEPLOY_JOURNAL_MAX_BYTES=5242880
 : >"$DEPLOY_STATE_DIR/journal.jsonl"

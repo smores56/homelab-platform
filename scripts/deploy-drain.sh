@@ -9,12 +9,16 @@
 # and rescans once before exiting so the window between "queue empty" and "unit
 # inactive" cannot drop an event.
 #
-# The action is verification (T2): the queued shape, then the host's own checks
-# -- tip, descendancy, tag-to-digest, revision label, denylist -- and the entry
-# is popped once that verdict is recorded. A rejection is final for that entry
-# and is never retried, because the hourly poll and the next event would fail
-# identically; an infrastructure failure leaves the entry queued and fails the
-# unit, so the next trigger retries it. Applying what was verified is T3-T5.
+# The action is verification (T2) then the platform snapshot gate (T3): the
+# queued shape, the host's own checks -- tip, descendancy, tag-to-digest,
+# revision label, denylist -- and, for a platform commit, the pre-reboot gate.
+# The entry is popped once that verdict is recorded. A rejection is final for
+# that entry and is never retried, because the hourly poll and the next event
+# would fail identically; an infrastructure failure leaves the entry queued and
+# fails the unit, so the next trigger retries it. A held deploy is popped too:
+# the hold record is the resume point, and `smortress-deploy release --force`
+# plus the next request is what carries it forward. Applying a verified apps
+# commit is T5.
 #
 # Every knob is environment-overridable so tests/deploy/*.sh can drive this
 # exact code. Production sets none of them.
@@ -59,6 +63,18 @@ fi
 # The verifier bounds each HTTP call (30 s) itself; this bounds the call as a
 # whole, so a wedged process cannot hold the deploy lock until TimeoutStartSec.
 verify_deadline=${DEPLOY_VERIFY_DEADLINE:-300}
+
+# The platform gate ships the same way and owns its own 3600 s budget and every
+# child's deadline; this is only the net under a wedged gate.
+platform_bin=${DEPLOY_PLATFORM_BIN:-}
+if [[ -z $platform_bin ]]; then
+  if [[ -x /usr/libexec/deploy-platform ]]; then
+    platform_bin=/usr/libexec/deploy-platform
+  else
+    platform_bin=$self_dir/deploy-platform.sh
+  fi
+fi
+gate_timeout=${DEPLOY_GATE_DEADLINE:-4200}
 
 say() { printf 'deploy-drain: %s\n' "$*"; }
 warn() { printf 'deploy-drain: %s\n' "$*" >&2; }
@@ -150,6 +166,8 @@ journal_append drain-start '{"source":"queue"}' || {
 
 drained=0
 rejected=0
+held=0
+deferred=0
 noop=0
 superseded=0
 invalid=0
@@ -216,9 +234,42 @@ while :; do
   case $verdict_rc in
     0)
       say "$repo $commit: verified"
+      if [[ $repo == homelab-platform ]]; then
+        # The gate before any reboot: every restore unit must have a fresh
+        # verified local snapshot, or the host holds instead of staging.
+        # T4 attaches here: once the gate is green it calls
+        # `deploy-platform stage --commit "$commit" --digests "$digests"`, which
+        # stages, writes pending.json and reboots.
+        digests=$(jq -c '.digests // empty' <<<"$verify_verdict" 2>/dev/null) || digests=""
+        if [[ -z $digests ]]; then
+          warn "$repo $commit: the verdict names no digests; leaving it queued"
+          exit 1
+        fi
+        gate_rc=0
+        timeout "$gate_timeout" "$platform_bin" prepare --commit "$commit" --digests "$digests" ||
+          gate_rc=$?
+        case $gate_rc in
+          0) say "$repo $commit: snapshot gate green" ;;
+          5)
+            # Held is a decision, not an outage: the entry is popped and the
+            # hold record is what the operator releases.
+            say "$repo $commit: deploy held"
+            held=$((held + 1))
+            ;;
+          *)
+            warn "$repo $commit: snapshot gate failed (exit $gate_rc); leaving it queued"
+            exit 1
+            ;;
+        esac
+      else
+        # Apps has no reboot and therefore no snapshot gate; its apply is T5.
+        journal_append apps-deferred "$(jq -nc --arg id "$id" --arg repo "$repo" \
+          --arg commit "$commit" '{id:$id,repo:$repo,commit:$commit}')" ||
+          warn "cannot journal the deferred apps deploy"
+        say "$repo $commit: apps apply deferred to T5"
+        deferred=$((deferred + 1))
+      fi
       drained=$((drained + 1))
-      # T3 attaches here: the verified verdict names the digests to stage, so the
-      # apply runs inside this iteration, before the entry is popped.
       ;;
     3)
       # Popped, not retried: the same commit would fail every check identically
@@ -238,7 +289,9 @@ while :; do
 done
 
 journal_append drain-finish "$(jq -nc --argjson drained "$drained" --argjson rejected "$rejected" \
-  --argjson noop "$noop" --argjson superseded "$superseded" --argjson invalid "$invalid" \
-  '{drained:$drained,rejected:$rejected,noop:$noop,superseded:$superseded,invalid:$invalid}')" ||
+  --argjson held "$held" --argjson deferred "$deferred" --argjson noop "$noop" \
+  --argjson superseded "$superseded" --argjson invalid "$invalid" \
+  '{drained:$drained,rejected:$rejected,held:$held,deferred:$deferred,noop:$noop,
+    superseded:$superseded,invalid:$invalid}')" ||
   warn "cannot journal the drain finish"
-say "drained $drained, rejected $rejected, no-op $noop, superseded $superseded, invalid $invalid"
+say "drained $drained, rejected $rejected, held $held, deferred $deferred, no-op $noop, superseded $superseded, invalid $invalid"

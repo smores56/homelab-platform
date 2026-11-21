@@ -194,6 +194,45 @@ journal_append() {
   return 0
 }
 
+# deploy_notify <success|fail> [<reason>]
+#
+# The deploy check is the only notification path the receiver has, and its URL is
+# the capability to keep that check green: it is read from the decrypted secret
+# and never echoed, journaled or put in a log line. An absent secret is a
+# journaled skip rather than a failure, because a host without the secret is a
+# host mid-bootstrap, not a broken deploy -- and the caller must not treat a
+# missing page as a failed deploy.
+deploy_ping_secret=${DEPLOY_PING_SECRET:-/run/smortress/secrets/deploy-ping-url.yaml}
+deploy_notify_timeout=${DEPLOY_NOTIFY_TIMEOUT:-10}
+deploy_curl_bin=${DEPLOY_CURL_BIN:-curl}
+
+deploy_notify() {
+  local kind=$1 reason=${2:-} url
+  case $kind in
+    success | fail) ;;
+    *) return 2 ;;
+  esac
+  # `value` format: sops-decrypt writes the scalar alone, so the first non-empty
+  # line is the URL and there is no YAML to parse here.
+  url=$(sed -n 's/^[[:space:]]*//; s/[[:space:]]*$//; /^$/d; p; q' "$deploy_ping_secret" 2>/dev/null) ||
+    url=""
+  if [[ -z $url ]]; then
+    journal_append notify-skipped "$(jq -nc --arg kind "$kind" --arg reason "${reason:-no ping url}" \
+      '{kind:$kind,reason:$reason}')" || true
+    return 0
+  fi
+  if [[ $kind == fail ]]; then url=${url%/}/fail; fi
+  if ! "$deploy_curl_bin" --fail --silent --show-error --max-time "$deploy_notify_timeout" \
+    "$url" >/dev/null 2>&1; then
+    journal_append notify-failed "$(jq -nc --arg kind "$kind" --arg reason "${reason:-}" \
+      '{kind:$kind,reason:$reason}')" || true
+    return 1
+  fi
+  journal_append notify-sent "$(jq -nc --arg kind "$kind" --arg reason "${reason:-}" \
+    '{kind:$kind,reason:$reason}')" || true
+  return 0
+}
+
 # denylist_add <commit|digest> <value> [<reason>]
 #
 # Platform digests and apps commits live in one file with two tables: a gate
