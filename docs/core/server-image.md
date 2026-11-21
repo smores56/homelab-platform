@@ -358,14 +358,19 @@ repository can take the snapshot, or the budget runs out, the deploy **holds**:
 `smortress-deploy release --force`, run by hand as root, releases it.
 
 `deploy-platform stage` follows a green gate: `bootc switch
---enforce-container-sigpolicy ghcr.io/smores56/homelab-platform/server@<manifest
-digest>` (stage only, never `--apply`), then `.status.staged.image.imageDigest`
-must equal one of the two recorded forms — a staged entry nobody verified means
-nothing is recorded and nothing reboots — then `pending.json` and `systemctl
-reboot`.
+--enforce-container-sigpolicy ghcr.io/smores56/homelab-platform/server:latest`
+(stage only, never `--apply`), then `.status.staged.image.imageDigest` must
+equal one of the two digest forms the verifier resolved for the commit — a tag
+that moved between the resolution and the switch therefore stages an image
+nobody verified, and that means nothing is recorded and nothing reboots — then
+`pending.json` and `systemctl reboot`.
 
-`switch` and not `upgrade`: `--enforce-container-sigpolicy` exists only on
-`switch`/install, and a digest-pinned host never moves on `upgrade`.
+The reference is the tag on purpose: the host then follows `:latest`, so a
+hand-run `bootc switch :latest` and a later `bootc upgrade` both work. What the
+tag does not weaken is the deploy decision: the commit, its digest forms and the
+signature are still verified before the switch, and the staged digest is still
+read back. A hand-run switch or upgrade bypasses only the descendancy check,
+which is why the receiver remains the authoritative path.
 
 ### The boot gate
 

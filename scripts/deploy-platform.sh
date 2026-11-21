@@ -136,6 +136,9 @@ stage_reboot_timeout=$(clamp_timeout "${DEPLOY_STAGE_REBOOT_TIMEOUT:-60}")
 bootc_bin=${BOOTC_BIN:-bootc}
 stage_systemctl=${SYSTEMCTL_BIN:-systemctl}
 image_repo=${DEPLOY_IMAGE_REPO:-ghcr.io/smores56/homelab-platform/server}
+# The reference the host tracks. A tag keeps `bootc upgrade` usable; the stage
+# still refuses a tag that does not resolve to the verified digest.
+image_tag=${DEPLOY_IMAGE_TAG:-latest}
 
 budget_left() {
   local left=$((gate_deadline - $(date -u +%s)))
@@ -446,13 +449,17 @@ cmd_stage() {
     return 4
   }
 
+  # The host tracks the tag, so `bootc upgrade` and a hand-run switch both work
+  # later. The digest is still what was verified and what the denylist and the
+  # boot gate name: the read-back below refuses a tag that moved between the
+  # resolution and this switch.
   timeout --signal=TERM --kill-after=60 "$switch_timeout" "$bootc_bin" switch \
-    --enforce-container-sigpolicy "$image_repo@$manifest" || rc=$?
+    --enforce-container-sigpolicy "$image_repo:$image_tag" || rc=$?
   if ((rc != 0)); then
     journal_append stage-failed "$(jq -nc --arg commit "$commit" --arg manifest "$manifest" \
       --argjson exit "$rc" '{commit:$commit,manifest:$manifest,exit:$exit}')" ||
       warn "cannot journal the failed switch"
-    warn "bootc switch $image_repo@$manifest failed (exit $rc); nothing was staged"
+    warn "bootc switch $image_repo:$image_tag failed (exit $rc); nothing was staged"
     deploy_notify fail stage-failed || warn "could not report the failed stage"
     return 4
   fi

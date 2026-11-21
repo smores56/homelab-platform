@@ -395,8 +395,8 @@ printf 'staged=%s\nbooted=%s\n' "$digest_manifest" "$digest_manifest" >"$STUB_BO
 run_stage --commit "$commit" --digests "$digests"
 check_eq "$rc" 0 "a stage whose digest bootc reports passes"
 check_eq "$(head -n 1 "$log/bootc-calls")" \
-  "switch --enforce-container-sigpolicy $image_ref@$digest_manifest" \
-  "stage pins the manifest digest and enforces the signature policy"
+  "switch --enforce-container-sigpolicy $image_ref:latest" \
+  "stage switches to the tracked tag and enforces the signature policy"
 check_no_grep "$log/bootc-calls" '--apply' "stage never applies the deployment"
 check_grep "$log/bootc-calls" 'status --json' "stage reads the staged entry back"
 pending=$(cat "$state_dir/pending.json" 2>/dev/null) || pending='{}'
