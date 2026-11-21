@@ -71,6 +71,11 @@ locals {
     # the policy refuses to save if a rule ever makes it reachable.
     tagOwners = {
       "tag:untrusted" = ["group:owner"]
+      # The host's own tag. The ACL cannot name a device by hostname (the
+      # validator wants an address), and a hosts alias pins the tailnet IP, so
+      # the destination is a tag: it survives a reinstall that hands the node a
+      # new address.
+      "tag:smortress" = ["group:owner"]
     }
 
     # The Tailscale API evaluates these every time the policy is saved, so a rule

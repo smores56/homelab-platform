@@ -547,6 +547,7 @@ has 'the policy admits the owner to sshd' '"smortress:22"'
 has 'the policy admits Serve traffic' '"smortress:443", "smortress:8443", "smortress:10000"'
 has 'the policy admits Syncthing' '"smortress:22000"'
 has 'the policy keeps the owner in one group' '"group:owner"[[:space:]]*=[[:space:]]*\[var\.email\]'
+has 'the host tag is owned by the owner group' '"tag:smortress"[[:space:]]*=[[:space:]]*\["group:owner"\]'
 has 'the policy carries tests' 'tests[[:space:]]*=[[:space:]]*\['
 has 'a test proves every admitted port reaches the owner' \
   'accept[[:space:]]*=[[:space:]]*\["smortress:22", "smortress:443", "smortress:8443", "smortress:10000", "smortress:22000"\]'
