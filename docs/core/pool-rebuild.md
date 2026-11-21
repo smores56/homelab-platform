@@ -72,20 +72,25 @@ restore point:
 
 ```sh
 sudo systemctl stop smortress-restic-backup-ssd.timer smortress-restic-backup-hdd.timer \
-  smortress-restic-backup-r2.timer smortress-restic-verify.timer smortress-immich-dump.timer
+  smortress-restic-backup-r2.timer smortress-restic-verify.timer smortress-immich-dump.timer \
+  'smortress-agent-collect-*.timer' 'smortress-agent-collect-*.path'
 sudo systemctl stop immich-server.service immich-machine-learning.service immich-postgres.service \
   immich-valkey.service opdshelf.service syncthing.service
 sudo systemctl stop 'smortress-agent-*'
 ```
+
+The collectors matter as much as the applications: they write into
+`/var/lib/agent/local/quarantine`, which is a state tree below.
 
 Only now copy the state trees. `opdshelf` and both gateways keep state of their
 own; they are the reason this is a separate phase, not a footnote:
 
 ```sh
 for d in immich/postgres immich/dumps syncthing/config opdshelf agent/local agent/general agent/model; do
-  sudo install -d -m 0755 "/var/lib/restic/ssd/pool-copy/lib/$(dirname "$d")"
-  sudo rsync -aHAX --numeric-ids --one-file-system "/var/lib/$d/" "/var/lib/restic/ssd/pool-copy/lib/$d/"
+  sudo install -d -m 0755 "/var/lib/restic/ssd/pool-copy/lib/$d"
+  sudo rsync -aHA --numeric-ids --one-file-system "/var/lib/$d/" "/var/lib/restic/ssd/pool-copy/lib/$d/"
 done
+sudo sync   # the pool is destroyed next; do not leave the copy in page cache
 ```
 
 **Prove both halves before touching a partition.** A second pass that compares
@@ -101,7 +106,7 @@ for t in srv/git srv/files srv/photos srv/books srv/music srv/wallpapers \
   lib/syncthing/config lib/opdshelf lib/agent/local lib/agent/general lib/agent/model; do
   src=${t#srv/}; src=${src#lib/}
   case $t in srv/*) src=/var/srv/$src ;; *) src=/var/lib/$src ;; esac
-  sudo rsync -aHAX --numeric-ids --one-file-system --checksum -ni "$src/" "/var/lib/restic/ssd/pool-copy/$t/"
+  sudo rsync -aHA --numeric-ids --one-file-system --checksum -ni "$src/" "/var/lib/restic/ssd/pool-copy/$t/"
 done
 ```
 
@@ -176,12 +181,12 @@ second proves the kit still opens the volume without it.
 
 ```sh
 for d in files photos books music wallpapers apps repo-archive; do
-  sudo rsync -aHAX --numeric-ids "/var/lib/restic/ssd/pool-copy/srv/$d/" "/var/srv/$d/"
+  sudo rsync -aHA --numeric-ids "/var/lib/restic/ssd/pool-copy/srv/$d/" "/var/srv/$d/"
 done
 for d in immich/postgres immich/dumps syncthing/config opdshelf agent/local agent/general agent/model; do
-  sudo rsync -aHAX --numeric-ids "/var/lib/restic/ssd/pool-copy/lib/$d/" "/var/lib/$d/"
+  sudo rsync -aHA --numeric-ids "/var/lib/restic/ssd/pool-copy/lib/$d/" "/var/lib/$d/"
 done
-sudo rsync -aHAX /var/lib/restic/ssd/pool-copy/srv/git/ /var/srv/git/
+sudo rsync -aHA --numeric-ids /var/lib/restic/ssd/pool-copy/srv/git/ /var/srv/git/
 ```
 
 Then, in order:
