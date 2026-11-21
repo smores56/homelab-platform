@@ -302,12 +302,16 @@ def collect_mailbox(
     generation: StagingGeneration,
     previous: RawReplica | None,
     captured_at: str,
+    progress: Callable[[str], None] | None = None,
 ) -> CollectReport:
     """Enumerate every folder into ``generation``; never commit it.
 
     ``objects`` counts the messages the mailbox currently holds; ``carried`` is
     the subset whose body came from the previous generation, so the two numbers
-    describe one pass without being disjoint.
+    describe one pass without being disjoint. ``progress`` is told what each
+    folder produced: the first pass over a real mailbox is tens of thousands of
+    bodies and publishes nothing until the last one lands, so without a line per
+    folder a working pass and a wedged one look alike.
     """
 
     folders = [validate_folder(name) for name in mailbox.folders()]
@@ -334,12 +338,21 @@ def collect_mailbox(
     counts: dict[str, int] = {}
     carried = 0
     deleted = 0
-    for folder in folders:
+    total = len(folders)
+    for index, folder in enumerate(folders, start=1):
+        started = time.monotonic()
+        if progress is not None:
+            progress(f"folder {index}/{total} {folder}: collecting")
         report = collect_folder(mailbox, folder, generation, previous, captured_at)
         epochs[folder] = report.uidvalidity
         counts[folder] = report.objects
         carried += report.carried
         deleted += report.deleted
+        if progress is not None:
+            progress(
+                f"folder {index}/{total} {folder}: {report.objects} messages, "
+                f"{report.carried} carried, {time.monotonic() - started:.1f}s"
+            )
 
     generation.put(
         UIDVALIDITY_OBJECT,
@@ -713,7 +726,9 @@ class StreamCollector:
             previous = previous_replica(generation)
             mailbox = self.connect()
             try:
-                report = collect_mailbox(mailbox, generation, previous, _captured_at())
+                report = collect_mailbox(
+                    mailbox, generation, previous, _captured_at(), self._progress
+                )
             finally:
                 mailbox.close()
             published = generation.commit_next(complete=True)
@@ -734,6 +749,10 @@ class StreamCollector:
         }
         print(json.dumps(payload, sort_keys=True), flush=True)
         return list(report.details.get("folders", {}))
+
+    @staticmethod
+    def _progress(line: str) -> None:
+        print(f"mail-stream: {line}", file=sys.stderr, flush=True)
 
     def _retrying(
         self, action: Callable[[], list[str]], label: str
@@ -867,7 +886,7 @@ class StreamCollector:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="data_plane.collectors.stream.imap",
+        prog="data_plane.collectors.stream",
         description=(
             "Collect Tuta mail from the local IMAP bridge, publishing one "
             "generation per pass, woken by IDLE."
