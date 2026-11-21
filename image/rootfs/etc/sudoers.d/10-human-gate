@@ -4,6 +4,11 @@
 # window does not prompt; a different TTY does. This is the deliberate soft spot
 # of the design — anything running in that TTY inherits root for up to 30
 # minutes — and `log_subcmds` is what makes what it ran readable afterwards.
+#
+# A ticket is keyed on the device *and* the session leader's start time (sudo's
+# timestamp.c, start_time_matches), so a process that later reopens the same pts
+# number in a new session does not inherit it: only what is already in this
+# session does, which is the soft spot above.
 Defaults timestamp_timeout=30
 Defaults timestamp_type=tty
 Defaults log_subcmds
