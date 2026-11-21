@@ -5444,6 +5444,7 @@ spare must be enrolled too.
    | `SSH agent socket address not configured` | no `SSH_AUTH_SOCK` in sudo's environment: the session forwarded no agent (`ssh -A` with no agent running does this), or `env_keep` is missing |
    | `Broken pipe (os error 32)` | the variable is set and the socket is dead: a multiplexed session, or an agent that exited |
    | `Failed to authenticate key N: SSH-Agent reports failure` then `None of these keys passed authentication` | the socket is live and the token is absent, or the touch was refused; one `cue` per credential tried |
+   | `None of these keys passed authentication` with **no** per-key lines | the socket is live and the agent holds no credentials: a client whose agent started empty after a reboot, or one where `ssh-add` never ran |
 
    A working tap logs nothing here, because the module reports success below its
    default warn level.
