@@ -42,6 +42,7 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from urllib.parse import quote
 from pathlib import Path
 from typing import Callable, Iterable
 
@@ -85,27 +86,36 @@ _IDLE_TAGS = itertools.count(1)
 
 
 def validate_folder(folder: str) -> str:
-    """A folder name this replica can carry as part of an object id.
+    """A folder name this replica can carry, as itself, in metadata.
 
-    ``StagingGeneration`` refuses an object id containing ``/``, and ``::`` is the
-    separator between an id's parts, so a folder that contains either has no
-    unambiguous key. That is a refusal, not an escape: guessing which of two
-    folder names a key meant is how a replica loses a folder.
+    The name is recorded verbatim: it is what a reader searches and what the
+    epoch map is keyed by. Only the *key* has constraints, and those are
+    ``folder_key``'s.
     """
 
     if not isinstance(folder, str) or not folder.strip():
         raise ValidationError("an IMAP folder name is empty")
     if folder in {".", ".."}:
         raise ValidationError(f"folder name {folder!r} is a path segment")
-    for separator in ("/", "::"):
-        if separator in folder:
-            raise ValidationError(
-                f"folder {folder!r} contains {separator!r}; an object id may not, "
-                "and the folder is half of one"
-            )
     if "\x00" in folder:
         raise ValidationError(f"folder {folder!r} contains NUL")
     return folder
+
+
+def folder_key(folder: str) -> str:
+    """The folder as it appears inside an object id.
+
+    A provider nests folders, so the name may contain ``/`` or ``:``; an id may
+    carry neither raw -- ``StagingGeneration`` refuses a ``/`` outright, and a
+    ``::`` inside a folder makes one id match two folders' prefixes, which is
+    how a folder gets silently emptied. Such a name is percent-encoded behind a
+    leading ``%``, which no plain name can start with, so the encoded and the
+    plain forms cannot collide and every flat folder keeps the id it had before.
+    """
+
+    if not any(character in folder for character in ("/", ":", "%")):
+        return folder
+    return "%" + quote(folder, safe="")
 
 
 def _uids(values: Iterable[str]) -> set[str]:
@@ -225,7 +235,7 @@ def collect_folder(
             "every UID was renumbered, so reconcile the source as a new epoch"
         )
 
-    prefix = f"mail::{folder}::"
+    prefix = f"mail::{folder_key(folder)}::"
     previous_ids = set(previous.object_ids()) if previous is not None else set()
     previous_uids = [
         object_id[len(prefix) :]

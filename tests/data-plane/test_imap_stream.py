@@ -27,6 +27,7 @@ from data_plane.collectors.stream import (
     IdleLine,
     Mailbox,
     collect_mailbox,
+    folder_key,
     message_headers,
     pinned_tls_context,
     normalize_flags,
@@ -302,18 +303,18 @@ class MailCollectionTests(unittest.TestCase):
             for object_id in RawReplica(root).object_ids():
                 self.assertNotIn("/", object_id)
 
-    def test_a_folder_name_that_cannot_be_an_object_id_is_refused(self) -> None:
+    def test_a_nested_folder_collects_under_an_encoded_key(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
-            mailbox = ScriptedMailbox(
-                {"Lists/News": ScriptedFolder(1, {"1": _message("1")})}
+            report = _publish(
+                root,
+                ScriptedMailbox({"Lists/News": ScriptedFolder(1, {"1": _message("1")})}),
             )
-            generation = StagingGeneration(root, "gen-0001", source_id=SOURCE_ID)
-            with self.assertRaises(ValidationError):
-                collect_mailbox(mailbox, generation, previous_replica(generation), CAPTURED)
-            generation.abort()
-            self.assertEqual(mailbox.fetched, [])
-            self.assertIsNone(RawReplica.latest_generation(root))
+            self.assertEqual(report.details["folders"], {"Lists/News": 1})
+            published = RawReplica(root)
+            self.assertIn("mail::%Lists%2FNews::1", published.object_ids())
+            metadata = published.metadata("mail::%Lists%2FNews::1")
+            self.assertEqual(metadata["folder"], "Lists/News")
 
     def test_flags_are_stored_sorted(self) -> None:
         with tempfile.TemporaryDirectory() as work:
@@ -348,9 +349,21 @@ class PureRuleTests(unittest.TestCase):
     def test_folder_names_that_cannot_be_keys_are_refused(self) -> None:
         self.assertEqual(validate_folder("INBOX"), "INBOX")
         self.assertEqual(validate_folder("Archive 2026"), "Archive 2026")
-        for name in ("", " ", ".", "..", "Lists/News", "Lists::News", "a\x00b"):
+        for name in ("", " ", ".", "..", "a\x00b"):
             with self.assertRaises(ValidationError):
                 validate_folder(name)
+
+    def test_a_nested_folder_keeps_its_name_and_gets_an_encoded_key(self) -> None:
+        # Tuta nests folders, and the bridge lists them with the separator the
+        # provider uses. The name is what the replica records; only the key is
+        # encoded, because an object id may not carry `/` or `::`.
+        self.assertEqual(validate_folder("Gmail/sammohr97"), "Gmail/sammohr97")
+        self.assertEqual(folder_key("INBOX"), "INBOX")
+        self.assertEqual(folder_key("Archive 2026"), "Archive 2026")
+        self.assertEqual(folder_key("Gmail/sammohr97"), "%Gmail%2Fsammohr97")
+        self.assertEqual(folder_key("Lists::News"), "%Lists%3A%3ANews")
+        # A flat folder spelled like the encoded form cannot collide with it.
+        self.assertEqual(folder_key("%Gmail%2Fsammohr97"), "%%25Gmail%252Fsammohr97")
 
     def test_flags_are_normalized_sorted_and_deduplicated(self) -> None:
         self.assertEqual(
