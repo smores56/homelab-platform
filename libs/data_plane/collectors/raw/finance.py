@@ -94,8 +94,19 @@ def _connection_id(account: Mapping[str, Any], connections: Mapping[str, Mapping
             value = nested.get(key)
             if value not in (None, ""):
                 return str(value)
+    # The beta bridge sends no `connections` array at all: an account names its
+    # institution in `org` instead, and the domain is the part that survives a
+    # renamed organization.
+    org = account.get("org")
+    if isinstance(org, Mapping):
+        for key in ("domain", "id", "name"):
+            value = org.get(key)
+            if value not in (None, ""):
+                return str(value)
     if len(connections) == 1:
         return next(iter(connections))
+    if not connections:
+        raise ValidationError("account names no connection and the document has none")
     raise ValidationError("account names no connection and the document has several")
 
 

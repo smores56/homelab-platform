@@ -426,6 +426,29 @@ class FinanceTests(unittest.TestCase):
             ],
         }
 
+    def test_an_accountset_without_connections_keys_by_institution(self) -> None:
+        # The beta bridge sends no `connections` array at all; each account
+        # carries `org` instead. Refusing there would fail every real read.
+        accountset = self._accountset()
+        del accountset["connections"]
+        accountset["accounts"][0]["org"] = {"domain": "schwab.com", "name": "Schwab"}
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            generation = _generation(root / "replica")
+            collect_simplefin(
+                accountset,
+                generation,
+                accountset_url="https://sfin.example/access",
+                captured_at=CAPTURED,
+                include_pending=True,
+                now=1763500000,
+            )
+            _publish(generation)
+            metadata = RawReplica(root / "replica").metadata(
+                "finance::txn::acct-1::txn-1"
+            )
+            self.assertEqual(metadata["conn_id"], "schwab.com")
+
     def test_stores_raw_records_keyed_and_hashed(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
