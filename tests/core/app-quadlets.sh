@@ -1067,6 +1067,76 @@ else
   bad "$stream exists"
 fi
 
+# 8d. The egress gate: an internal network with exactly two peers, and a policy
+#     that lives in the image. A collector's reach is a reviewed fact, not
+#     something a container can edit, and nothing is published.
+brave_net=units/quadlet/agent-brave.network
+if [[ -f $brave_net ]] && grep -qxF 'Internal=true' "$brave_net" &&
+   grep -qE '^Subnet=' "$brave_net"; then
+  ok "the browsing network is internal and addressed"
+else
+  bad "the browsing network is internal and addressed"
+fi
+policy=image/rootfs/etc/smortress/agent/egress-policy.json
+if python3 - "$policy" <<'PYJSON'
+import json, sys
+document = json.load(open(sys.argv[1], encoding="utf-8"))
+allow = document["sources"]["brave"]["allow"]
+assert "sync-v2.brave.com:443" in allow
+PYJSON
+then
+  ok "the egress policy is a document that grants exactly the sync host"
+else
+  bad "the egress policy is a document that grants exactly the sync host"
+fi
+for gate in proxy dns; do
+  unit=units/quadlet/agent-egress-$gate.container
+  if [[ ! -f $unit ]]; then
+    bad "$unit exists"
+    continue
+  fi
+  ok "$unit exists"
+  eq "$(sed -n 's/^Network=agent-brave\.network.*//p' "$unit" | grep -c .)" 0 \
+    "$unit joins the internal network"
+  if grep -qE '^Network=agent-brave\.network(:ip=[0-9.]+)?$' "$unit"; then
+    ok "$unit is on the internal network"
+  else
+    bad "$unit is on the internal network"
+  fi
+  if grep -qxF 'Network=agent-collect.network' "$unit"; then
+    ok "$unit reaches upstream on the collectors' network"
+  else
+    bad "$unit reaches upstream on the collectors' network"
+  fi
+  if grep -qF 'egress-policy.json:/etc/smortress/agent/egress-policy.json:ro' "$unit"; then
+    ok "$unit reads the policy read-only"
+  else
+    bad "$unit reads the policy read-only"
+  fi
+  if grep -qE '^PublishPort=' "$unit"; then
+    bad "$unit publishes nothing"
+  else
+    ok "$unit publishes nothing"
+  fi
+  image=$(grep -oE '^Image=.*' "$unit" | cut -d= -f2-)
+  if app_image_matches "$image"; then
+    ok "$unit runs a pinned image from the table"
+  else
+    bad "$unit runs a pinned image from the table" "$image"
+  fi
+  if grep -qF "units/quadlet/$(basename "$unit")" image/Containerfile; then
+    ok "the image installs $(basename "$unit")"
+  else
+    bad "the image installs $(basename "$unit")"
+  fi
+done
+if grep -qxF 'AddCapability=NET_BIND_SERVICE' units/quadlet/agent-egress-dns.container &&
+   grep -qxF 'DropCapability=ALL' units/quadlet/agent-egress-dns.container; then
+  ok "the DNS responder holds only the capability it needs"
+else
+  bad "the DNS responder holds only the capability it needs"
+fi
+
 if grep -qF 'units/quadlet/agent-collect.network' image/Containerfile; then
   ok "the collector network ships in the image"
 else

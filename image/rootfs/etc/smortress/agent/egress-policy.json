@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "sources": {
+    "brave": {
+      "allow": ["sync-v2.brave.com:443"]
+    }
+  }
+}

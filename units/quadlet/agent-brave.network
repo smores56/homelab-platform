@@ -1,0 +1,17 @@
+# The browsing collector's only network, and the reason its reach is one hostname.
+#
+# `Internal=true` means no default route and no NAT: a container here can reach
+# its peers on this bridge and nothing else -- not the collectors' network, not
+# the LAN, not the internet. Two peers answer: the allowlist proxy and the
+# allowlist DNS responder, both dual-homed onto agent-collect.network for their
+# own upstream.
+#
+# The subnet is explicit because the proxy and the resolver are addressed by IP:
+# Chromium's `--dns` and `--proxy-server` take addresses, and a name would have to
+# be resolved by the very resolver that exists to refuse names it does not know.
+[Unit]
+Description=Smortress agent-brave network (no egress; proxy and resolver only)
+
+[Network]
+Subnet=10.89.73.0/24
+Internal=true
