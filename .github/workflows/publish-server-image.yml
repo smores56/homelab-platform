@@ -143,29 +143,29 @@ jobs:
           # and only from main, so a dispatch from a branch can never point it at
           # a build that would not have deployed.
           moved_latest=false
-          if [[ $GITHUB_REF == refs/heads/main ]]; then
-            # A rerun of an older main push still reports refs/heads/main but
-            # carries the old sha, so the ref alone would let a rerun walk the
-            # tag backwards. Compare against main's current head instead.
-            main_head=$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)
-            if [[ $main_head != "$GITHUB_SHA" ]]; then
-              echo "::notice::not moving :latest; $GITHUB_SHA is not main's head ($main_head)"
-            else
-              # Copy the signed manifest by digest instead of re-pushing by tag:
-              # --all copies the exact manifest, so the resulting digest cannot
-              # drift from the one that was verified.
-              skopeo copy --all --authfile "$REGISTRY_AUTH_FILE" \
-                "docker://${IMAGE_REPO}@${digest}" "docker://${IMAGE_REPO}:latest"
-              latest_digest=$(skopeo inspect --format '{{.Digest}}' \
-                "docker://${IMAGE_REPO}:latest")
-              if [[ $latest_digest != "$digest" ]]; then
-                echo "::error::latest resolves to $latest_digest, not $digest"
-                exit 1
-              fi
-              moved_latest=true
-            fi
-          else
+          # Builds are serialised in push order, so the newest push is the last
+          # to run. Comparing against main's head instead skipped the tag
+          # whenever a merge landed mid-build: four fixes in one hour produced
+          # four images and moved `latest` once, leaving the host on an image
+          # that predated the fix. The one way to walk the tag backwards is a
+          # rerun of an older push, so a rerun does not move it.
+          if [[ $GITHUB_REF != refs/heads/main ]]; then
             echo "::notice::not moving :latest; this run is $GITHUB_REF, not main"
+          elif [[ $GITHUB_RUN_ATTEMPT != 1 ]]; then
+            echo "::notice::not moving :latest; attempt $GITHUB_RUN_ATTEMPT is a rerun"
+          else
+            # Copy the signed manifest by digest instead of re-pushing by tag:
+            # --all copies the exact manifest, so the resulting digest cannot
+            # drift from the one that was verified.
+            skopeo copy --all --authfile "$REGISTRY_AUTH_FILE" \
+              "docker://${IMAGE_REPO}@${digest}" "docker://${IMAGE_REPO}:latest"
+            latest_digest=$(skopeo inspect --format '{{.Digest}}' \
+              "docker://${IMAGE_REPO}:latest")
+            if [[ $latest_digest != "$digest" ]]; then
+              echo "::error::latest resolves to $latest_digest, not $digest"
+              exit 1
+            fi
+            moved_latest=true
           fi
           {
             echo "### Derived server image"
