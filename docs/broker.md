@@ -101,13 +101,15 @@ every other branch (docs/manual-steps.md step 1).
 `github-platform` asks for `contents: write` because merging a pull request is a
 contents write in the REST API; `pull_requests: write` alone is not enough and
 the merge call fails with `403 Resource not accessible by integration`. The
-scope is still bounded by the rulesets, not by this file: `agent-branch-gate`
-allows create/update only on `refs/heads/agent/**`, and `main` requires a pull
+scope is still bounded by the rulesets, not by this file: `main` requires a pull
 request with an approving review, so the token can merge what a human approved
-and nothing else.
+and nothing else. There is no `agent/**` containment ruleset; that requirement
+was dropped on 2026-11-21 (docs/manual-steps.md step 3), so the identity may push
+any non-default branch.
 
 `github-agent-push` and `github-agent` are the same pair for the agent's own
-repositories: `nix-config` and `kanbei`. They exist so the agent can propose
+repositories: `nix-config` and `kanbei`. Both repositories are archived, so these
+hosts are historical; they go when this file next changes. They exist so the agent can propose
 changes there the way it does for `homelab-platform` — push an `agent/*`
 branch, open a pull request — without a second credential. The repositories are
 listed on both hosts and the installation token is minted per request, so the

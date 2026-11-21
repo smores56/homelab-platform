@@ -62,34 +62,25 @@ main-gated environment secrets), and the ruleset in item 3.
    on a logical host goes into one token request, so a repository that is in
    `broker.json` but not in the installation fails the whole host with a 422:
    add it to the installation first.
-3. Contain the identity to `agent/**`: Settings -> Rules -> Rulesets -> New
-   branch ruleset:
-   - Target branches: **Include all branches**, exclude by pattern `agent/*`.
-     Agent branches are exactly one segment (`agent/<slug>`): measured
-     2026-11-12, a nested `agent/nested/probe` was refused even with the
-     exclude written as `agent/**`, so do not assume `**` crosses `/` here.
-     An **empty include** is inert: the ruleset is listed and
-     `GET /rules/branches/...` reports its rules, but pushes are not blocked —
-     verified live, so set the include explicitly.
-   - Rules: Restrict creations, Restrict updates, Restrict deletions.
-   - Bypass list: Repository admins (the human); leave the app out.
-   Branch protection on `main` (step 5) requires a PR, passing checks, and a
-   Code Owners review, so the app can neither merge nor force-push and a
-   `.github/` or `*.tf` change needs a human review. Do not rely on the
-   description: read the API's view back:
-   `gh api repos/smores56/homelab-platform/rulesets --jq '.[] | select(.target=="branch") | .id'`,
-   then that id's `conditions.ref_name` (`include ["~ALL"]`,
-   `exclude ["agent/**"]`), `rules[].type` (`creation`, `update`, `deletion`)
-   and `bypass_actors`. The acceptance script also probes both refusals live
-   (a push outside `agent/**` and a push touching `.github/workflows/`), so a
-   silently removed control fails the run instead of waiting for an incident.
-   The same two rulesets must exist on `nix-config` and `kanbei`, where the
-   branch gate is named `agent-gating`: the broker's `github-agent-push` host
-   can write `contents` on both, so the rulesets, not the token, are what keep
-   the app off `main` and off every branch outside `agent/**`. The same gate
-   applies to `sdlc`, which is also private and agent-maintained: without an
-   `agent/**`-only ruleset, the `github-sdlc-git` host's `contents: write` could
-   reach `main`.
+3. Branch containment is the `main` ruleset, not an `agent/**` ruleset. The
+   requirement for a ruleset that confines the identity to `agent/*` was dropped
+   on 2026-11-21: the machine user may push any non-default branch, and what
+   bounds it is that `main` requires a pull request with an approving review for
+   every account except the owner, with deletion and force-push blocked.
+   `nix-config` and `kanbei` are archived and out of scope; their
+   `github-agent-push` / `github-agent` broker hosts are historical and go when
+   the broker config next changes.
+   What still has to be true, and is worth reading back from the API:
+   - `main` blocks deletion and force-push, requires a pull request, and requires
+     the named status checks — `tofu plan` on `homelab-platform`, `apps-schema`
+     on `homelab-apps`.
+   - The app holds **Workflows: No access**, so a push touching
+     `.github/workflows/**` is refused by GitHub itself
+     (`refusing to allow a GitHub App to create or update workflow ... without
+     workflows permission`, verified 2026-11-12). That refusal is independent of
+     any ruleset and must stay verified in the acceptance run.
+   - Read the rulesets back rather than trusting the description:
+     `gh api repos/smores56/<repo>/rulesets --jq '.[] | "\(.id) \(.name) \(.conditions.ref_name.include)"'`.
 4. The mirror's `github-backup-read-pat` (step 22) is not the agent's identity;
    it stays an operator-owned fine-grained PAT.
 
