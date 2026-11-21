@@ -6880,7 +6880,14 @@ tailscale serve status
 ```
 
 Expected: the previous routes unchanged, plus 8446 → `http://127.0.0.1:2283`
-and 8447 → `http://127.0.0.1:8083`.
+and 8447 → `http://127.0.0.1:8083`. Confirm the pair from the edge:
+
+```sh
+ssh root@edge EXPECT_UPSTREAM=1 /root/edge/verify.sh
+```
+
+That run must be green before `§50.8`; the plain bootstrap run skips the
+upstream checks because it predates this step.
 
 ### 50.7 Prove it before touching the zone
 

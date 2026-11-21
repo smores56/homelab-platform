@@ -19,6 +19,9 @@ bad() {
   [[ -n ${2:-} ]] && printf '     %s\n' "${2//$'\n'/$'\n'     }"
   return 0
 }
+note() {
+  printf 'skip %s\n' "$1"
+}
 check() { # description command...
   local name=$1
   shift
@@ -97,18 +100,26 @@ check "the node carries tag:vps" jq -e '.Self.Tags // [] | index("tag:vps")' <<<
 check "the path to smortress is direct" \
   timeout 30 tailscale ping --c 3 --until-direct=true smortress
 
-# The upstream is the tailnet's own certificate on Serve's dedicated ports.
-# Caddy verifies that chain against the public roots, so a chain that does not
-# verify here would be a 502 on every public request, not a warning.
-upstream_cert=$(openssl s_client -connect "$SMORTRESS_FQDN:8446" \
-  -servername "$SMORTRESS_FQDN" -verify_return_error </dev/null 2>&1 || true)
-check "the upstream certificate verifies" grep -qF 'Verify return code: 0 (ok)' <<<"$upstream_cert"
-check "Serve fronts Immich on 8446" curl -sS -o /dev/null --max-time 10 \
-  "https://$SMORTRESS_FQDN:8446/"
-check "Serve fronts OPDShelf on 8447" curl -sS -o /dev/null --max-time 10 \
-  "https://$SMORTRESS_FQDN:8447/"
-check_not "the edge cannot reach the host on 443" curl -sS -o /dev/null --max-time 5 \
-  "https://$SMORTRESS_FQDN:443/"
+# The upstream half is a property of the pair, not of this box, and until the
+# image that declares Serve 8446/8447 is on smortress it cannot pass. It is
+# therefore opt-in and explicit: EXPECT_UPSTREAM=1 is the gate before a cutover,
+# and an ordinary bootstrap run does not pretend to have proven it.
+if [[ ${EXPECT_UPSTREAM:-0} == 1 ]]; then
+    # The upstream is the tailnet's own certificate on Serve's dedicated ports.
+    # Caddy verifies that chain against the public roots, so a chain that does not
+    # verify here would be a 502 on every public request, not a warning.
+    upstream_cert=$(openssl s_client -connect "$SMORTRESS_FQDN:8446" \
+      -servername "$SMORTRESS_FQDN" -verify_return_error </dev/null 2>&1 || true)
+    check "the upstream certificate verifies" grep -qF 'Verify return code: 0 (ok)' <<<"$upstream_cert"
+    check "Serve fronts Immich on 8446" curl -sS -o /dev/null --max-time 10 \
+      "https://$SMORTRESS_FQDN:8446/"
+    check "Serve fronts OPDShelf on 8447" curl -sS -o /dev/null --max-time 10 \
+      "https://$SMORTRESS_FQDN:8447/"
+    check_not "the edge cannot reach the host on 443" curl -sS -o /dev/null --max-time 5 \
+      "https://$SMORTRESS_FQDN:443/"
+else
+  note "upstream checks skipped; run EXPECT_UPSTREAM=1 $0 before a cutover"
+fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 exit $((fail > 0))
