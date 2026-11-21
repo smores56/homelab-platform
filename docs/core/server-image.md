@@ -98,7 +98,12 @@ CI is `.github/workflows/publish-server-image.yml`: a push to `main` touching
 1. verifies that `secrets.COSIGN_PRIVATE_KEY` corresponds to the committed
    `image/cosign.pub` before building anything;
 2. builds with `scripts/build-image.sh` (the base and every tool are
-   digest/hash-pinned);
+   digest/hash-pinned), around a layer cache at
+   `ghcr.io/smores56/homelab-platform-cache/server` — a cache key covers the
+   parent layer and the instruction text, not the repositories it reads, so the
+   `sudo-build` stage and the package layer are reused until the pinned base
+   digest or the `RUN` line changes. A failing cache push fails the build, which
+   is why the login precedes it;
 3. pushes `sha-<first 12 of the commit>`, reads the registry digest from
    Podman's `--digestfile`, signs that digest with
    `cosign sign --key env://COSIGN_PRIVATE_KEY`, and verifies it against the

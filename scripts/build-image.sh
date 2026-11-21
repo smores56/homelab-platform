@@ -35,6 +35,16 @@ done
 tag="sha-$(git -C "$repo" rev-parse --short=12 HEAD)"
 image="${IMAGE_REPO}:${tag}"
 
+# Remote layer cache, used only by CI. Unset locally, so a local build neither
+# reads nor writes the registry cache and stays offline-safe.
+cache_args=()
+if [[ -n ${CACHE_FROM:-} ]]; then
+  cache_args+=(--cache-from "$CACHE_FROM")
+fi
+if [[ -n ${CACHE_TO:-} ]]; then
+  cache_args+=(--cache-to "$CACHE_TO")
+fi
+
 "$engine" build \
   --build-arg "BASE_IMAGE=$UCORE_IMAGE" \
   --build-arg "SOPS_VERSION=$SOPS_VERSION" \
@@ -46,6 +56,7 @@ image="${IMAGE_REPO}:${tag}"
   --build-arg "PAM_RSSH_VERSION=$PAM_RSSH_VERSION" \
   --build-arg "PAM_RSSH_COMMIT=$PAM_RSSH_COMMIT" \
   --label "org.opencontainers.image.revision=$(git -C "$repo" rev-parse HEAD)" \
+  "${cache_args[@]}" \
   -f "$repo/image/Containerfile" \
   -t "$image" \
   "$repo"

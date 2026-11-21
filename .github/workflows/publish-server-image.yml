@@ -65,7 +65,28 @@ jobs:
           mkdir -p "$HOME/.config/containers"
           printf '%s' '{"default":[{"type":"insecureAcceptAnything"}]}' \
             >"$HOME/.config/containers/policy.json"
+      # The build pushes its layer cache to the same registry, so the credential
+      # has to exist before the build; the push and cosign below reuse it.
+      - name: log in to ghcr.io
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          authfile="$RUNNER_TEMP/auth.json"
+          export DOCKER_CONFIG="$RUNNER_TEMP/docker-config"
+          mkdir -p "$DOCKER_CONFIG"
+          printf '%s' "$GH_TOKEN" | podman login --authfile "$authfile" \
+            ghcr.io -u "${{ github.actor }}" --password-stdin
+          cp "$authfile" "$DOCKER_CONFIG/config.json"
+          echo "REGISTRY_AUTH_FILE=$authfile" >>"$GITHUB_ENV"
+          echo "DOCKER_CONFIG=$DOCKER_CONFIG" >>"$GITHUB_ENV"
       - name: build
+        env:
+          # A sibling package, never IMAGE_REPO: the cache is a pile of unsigned
+          # intermediate manifests and must not sit where a pullable image is
+          # expected.
+          CACHE_FROM: ghcr.io/smores56/homelab-platform-cache/server
+          CACHE_TO: ghcr.io/smores56/homelab-platform-cache/server
         run: scripts/build-image.sh
       - name: push, sign and verify the pushed digest
         env:
@@ -77,13 +98,7 @@ jobs:
           . image/pins.env
           tag="sha-${GITHUB_SHA::12}"
           image="${IMAGE_REPO}:${tag}"
-          authfile="$RUNNER_TEMP/auth.json"
-          export DOCKER_CONFIG="$RUNNER_TEMP/docker-config"
-          mkdir -p "$DOCKER_CONFIG"
-          printf '%s' "$GH_TOKEN" | podman login --authfile "$authfile" \
-            ghcr.io -u "${{ github.actor }}" --password-stdin
-          cp "$authfile" "$DOCKER_CONFIG/config.json"
-          podman push --authfile "$authfile" --digestfile "$RUNNER_TEMP/digest" "$image"
+          podman push --authfile "$REGISTRY_AUTH_FILE" --digestfile "$RUNNER_TEMP/digest" "$image"
           digest=$(cat "$RUNNER_TEMP/digest")
           [[ $digest =~ ^sha256:[0-9a-f]{64}$ ]]
           # bootc/containers-image reads the legacy lookaside tag, not the OCI 1.1
@@ -111,7 +126,7 @@ jobs:
               # Copy the signed manifest by digest instead of re-pushing by tag:
               # --all copies the exact manifest, so the resulting digest cannot
               # drift from the one that was verified.
-              skopeo copy --all --authfile "$authfile" \
+              skopeo copy --all --authfile "$REGISTRY_AUTH_FILE" \
                 "docker://${IMAGE_REPO}@${digest}" "docker://${IMAGE_REPO}:latest"
               latest_digest=$(skopeo inspect --format '{{.Digest}}' \
                 "docker://${IMAGE_REPO}:latest")
