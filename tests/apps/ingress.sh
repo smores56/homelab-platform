@@ -72,6 +72,12 @@ cat >"$work/bin/socat" <<'EOF'
 #!/usr/bin/env bash
 printf 'socat %s\n' "$*" >>"$FAKE_LOG"
 EOF
+# The host has the tenant account; CI does not. Only the uid lookup needs it.
+cat >"$work/bin/id" <<'EOF'
+#!/usr/bin/env bash
+if [[ ${1-} == -u ]]; then printf '1000\n'; exit 0; fi
+exec /usr/bin/id "$@"
+EOF
 cat >"$work/bin/schema" <<'EOF'
 #!/usr/bin/env bash
 printf 'schema %s\n' "$*" >>"$FAKE_LOG"
