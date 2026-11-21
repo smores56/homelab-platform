@@ -184,12 +184,12 @@ class FinanceWindowTests(unittest.TestCase):
         self.assertEqual(end, 1_800_000_000)
         self.assertEqual(start, 1_800_000_000 - 37 * 86400)
 
-    def test_the_window_never_exceeds_the_providers_cap(self) -> None:
-        # "Requested date range exceeds limit of 90 days and was capped." The
-        # overlap is inside the cap, not on top of it.
+    def test_the_window_never_exceeds_the_providers_recommendation(self) -> None:
+        # "Requested date range exceeds recommended range of 45 days." A longer
+        # read lands in the AccountSet's `errors`, which the collector refuses.
         start, end = raw_cli._window(1_800_000_000, 90)
         self.assertEqual(end, 1_800_000_000)
-        self.assertEqual(start, 1_800_000_000 - 90 * 86400)
+        self.assertEqual(start, 1_800_000_000 - 45 * 86400)
 
 
 class EntryPointTests(unittest.TestCase):

@@ -47,7 +47,7 @@ The reasons are fixed strings:
 
 | Reason | Used by | Means |
 | --- | --- | --- |
-| `provider-window` | finance | outside the requested 90-day window; it was never asked about |
+| `provider-window` | finance | outside the requested window (45 days at most, the provider's recommendation); it was never asked about |
 | `provider-supplies-no-tombstone` | calendar | the SDK lists events and never says one was deleted |
 | `provider-retention-expiry` | Brave | retention, user deletion and profile recreation look identical |
 
@@ -214,7 +214,10 @@ transition is visible instead of being hidden by a new row.
   transactions vanished.
 - Refuses `include_pending=False`: pending items are only in the response because
   the caller asked, so the request is explicit rather than assumed.
-- Bounds the window (`window_days`, default 90) and keeps pending items
+- Bounds the window (`window_days`, default 38; the request plus its 7-day
+  overlap is clamped to SimpleFIN's 45-day recommendation, because a longer read
+  puts "Requested date range exceeds recommended range of 45 days" in the
+  AccountSet's `errors` and this collector refuses that) and keeps pending items
   regardless. A transaction that falls out of the window is carried forward as
   `provider-window`, never deleted: they are a provider subset, not a statement
   about what exists.

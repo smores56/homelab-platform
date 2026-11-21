@@ -39,9 +39,11 @@ from .simplefin import AccessUrl, fetch_accountset
 EXIT_REFUSED = 3
 #: Days of overlap on the provider request, so a boundary transaction is not lost.
 _WINDOW_OVERLAP_DAYS = 7
-#: SimpleFIN caps a read at 90 days: "Requested date range exceeds limit of 90
-#: days and was capped." The overlap is part of the cap, not added to it.
-_WINDOW_CAP_DAYS = 90
+#: SimpleFIN answers a longer read with an entry in the AccountSet's `errors`
+#: ("Requested date range exceeds recommended range of 45 days. In the future,
+#: this may be capped."), and this collector refuses an AccountSet that carries
+#: one. The overlap is part of the span, not added to it.
+_WINDOW_CAP_DAYS = 45
 
 _SOURCE_IDS = {
     "mail": MAIL_SOURCE,
@@ -154,7 +156,7 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="the response was requested with pending items included",
     )
-    finance.add_argument("--window-days", type=int, default=90)
+    finance.add_argument("--window-days", type=int, default=38)
     finance.add_argument("--now", type=int, default=None, help="epoch seconds, for replay")
 
     brave = subparsers.add_parser("brave", help="a Brave History copy")
