@@ -398,16 +398,12 @@ jobs:
       # pass on a policy whose expression is vacuous. This job boots etcd plus
       # kube-apiserver (tests/policies/apiserver.sh) and drives every fixture and
       # RBAC row through real admission and authorisation decisions.
-      - name: Install Nix
-        uses: cachix/install-nix-action@91f6a0f59e94dfb2cfed0f4000f36a68ead1d20c # v31
-        with:
-          extra_nix_config: |
-            experimental-features = nix-command flakes
-      - name: admission and authorisation against a throwaway control plane
+      - name: install pinned tools
         run: |
-          nix shell nixpkgs#etcd nixpkgs#kubernetes nixpkgs#kubectl nixpkgs#kustomize \
-            nixpkgs#yq-go nixpkgs#jq nixpkgs#openssl -c \
-            tests/policies/check.sh --runtime
+          scripts/install-ci-tools.sh "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
+      - name: admission and authorisation against a throwaway control plane
+        run: tests/policies/check.sh --runtime
       # check.sh stops the control plane on exit; this runs even when it is
       # killed mid-run (cancel, timeout) so no etcd/apiserver survives the job.
       # The logs are printed here because a runner's TMPDIR is discarded, and a

@@ -245,7 +245,7 @@ restore_sample() { # restore_sample <snap> <target>
   fi
   if [[ -z $pg_restore || ! -x $pg_restore ]]; then
     record FAIL "pg_restore --list" \
-      "pg_restore absent; run 'nix shell nixpkgs#postgresql --command pg_restore --list $dump'"
+      "pg_restore absent; install postgresql-client, then run 'pg_restore --list $dump'"
     return
   fi
   entries=$("$pg_restore" --list "$dump" 2>/dev/null | grep -c '^[0-9]' || true)

@@ -11,7 +11,7 @@ source "$repo/image/pins.env"
 
 engine=${ENGINE:-podman}
 if ! command -v "$engine" >/dev/null 2>&1; then
-  echo "build-image: $engine is not installed; use 'nix shell nixpkgs#podman -c scripts/build-image.sh'" >&2
+  echo "build-image: $engine is not installed; install it or set ENGINE" >&2
   exit 1
 fi
 
