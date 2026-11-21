@@ -19,6 +19,9 @@ HOOK_URL = "https://agent-hooks.sammohr.dev/kanbei"
 
 SHIPPED = pathlib.Path(__file__).resolve().parents[3] / "clusters/homelab/broker/config/broker.json"
 
+PULLS = "/repos/smores56/homelab-apps/pulls"
+MERGE = "/repos/smores56/homelab-apps/pulls/17/merge"
+
 
 def hook_guard() -> BodyGuard:
     return BodyGuard(
@@ -227,3 +230,54 @@ class ShippedHookEnrollmentTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GithubAgentAppsTest(unittest.TestCase):
+    """The tenant repository's PR route (SDLC #726).
+
+    The agent may open a pull request and enable auto-merge on it; it may not
+    push to the branch (contents is read), merge directly by a different path,
+    or reach another repository through this enrollment.
+    """
+
+    def setUp(self) -> None:
+        self.config = load_config(SHIPPED, env={})
+        self.host = self.config.hosts["github-agent-apps"]
+
+    def allowed(self, method: str, path: str, body: bytes = b"") -> None:
+        check_request(self.host, method, path, body)
+
+    def denied(self, method: str, path: str, body: bytes = b"") -> None:
+        with self.assertRaises(Denied):
+            check_request(self.host, method, path, body)
+
+    def test_requests_only_pull_request_scope(self) -> None:
+        grant = self.host.app
+        self.assertIsNotNone(grant)
+        assert grant is not None
+        self.assertEqual(grant.repositories, ("homelab-apps",))
+        permissions = dict(grant.permissions)
+        self.assertEqual(permissions["pull_requests"], "write")
+        self.assertEqual(permissions["contents"], "read")
+
+    def test_opens_a_pull_request(self) -> None:
+        self.allowed("POST", PULLS)
+
+    def test_merges_only_a_numbered_pull_request(self) -> None:
+        self.allowed("PUT", MERGE)
+        self.denied("PUT", "/repos/smores56/homelab-apps/pulls/abc/merge")
+
+    def test_refuses_other_repositories_and_paths(self) -> None:
+        self.denied("POST", "/repos/smores56/homelab-platform/pulls")
+        self.denied("POST", "/repos/smores56/homelab-apps/issues")
+        self.denied("GET", PULLS)
+
+    def test_auto_merge_needs_the_mutation(self) -> None:
+        query = json.dumps(
+            {
+                "query": "mutation { enablePullRequestAutoMerge(input: {pullRequestId: \"x\", mergeMethod: MERGE}) { pullRequest { number } } }"
+            }
+        ).encode()
+        self.allowed("POST", "/graphql", query)
+        self.denied("POST", "/graphql", json.dumps({"query": "mutation { deleteBranch() }"}).encode())
+        self.denied("POST", "/graphql", b"not json")
