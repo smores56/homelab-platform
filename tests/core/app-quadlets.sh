@@ -605,13 +605,37 @@ else
 fi
 local_disabled=$(sed -n '/^  disabled_toolsets:/,/^[^ -]/p' image/rootfs/etc/smortress/agent/local-config.yaml)
 for toolset in web search browser terminal file memory code_execution catalog \
-  computer_use cronjob delegation skills image_gen connections; do
+  computer_use cronjob skills image_gen connections; do
   if grep -qE "^[[:space:]]+- ${toolset}$" <<<"$local_disabled"; then
     ok "the personal config disables the $toolset toolset"
   else
     bad "the personal config disables the $toolset toolset"
   fi
 done
+
+# Subagents are wanted, and they are the one runtime default the personal side
+# keeps on purpose: a child inherits this process's provider and MCP toolsets, so
+# it adds concurrency, not authority. The cap is what keeps it inside four llama.cpp
+# slots, and the flat depth is what stops a spawn tree.
+if grep -qE '^delegation:$' image/rootfs/etc/smortress/agent/local-config.yaml; then
+  ok 'the personal config enables subagents'
+else
+  bad 'the personal config enables subagents'
+fi
+local_delegation=$(sed -n '/^delegation:/,/^[^ ]/p' image/rootfs/etc/smortress/agent/local-config.yaml)
+if grep -qE '^  max_concurrent_children: [1-2]$' <<<"$local_delegation" &&
+  grep -qE '^  max_spawn_depth: 1$' <<<"$local_delegation"; then
+  ok 'the personal subagents are capped at two concurrent and one level'
+else
+  bad 'the personal subagents are capped at two concurrent and one level' "$local_delegation"
+fi
+general_delegation=$(sed -n '/^delegation:/,/^[^ ]/p' image/rootfs/etc/smortress/agent/general-config.yaml)
+if grep -qE '^  max_concurrent_children: [1-3]$' <<<"$general_delegation" &&
+  grep -qE '^  max_spawn_depth: 1$' <<<"$general_delegation"; then
+  ok 'the general subagents are capped at three concurrent and one level'
+else
+  bad 'the general subagents are capped at three concurrent and one level' "$general_delegation"
+fi
 
 # The runtime has no _FILE variant, so the key reaches it through .env written by
 # the seed unit -- from the decrypted ciphertext, at the container's uid. The unit

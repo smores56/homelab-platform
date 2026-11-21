@@ -25,6 +25,15 @@ approvals:
 # credential worth reaching: the closure in the personal config is about
 # authority, not about a network that is already sealed.
 
+# Subagents are on by default here and stay on, but the runtime's default cap is
+# ten concurrent children against a hosted, metered provider. Three is the cap this
+# deployment is willing to pay for; depth stays flat.
+delegation:
+  max_concurrent_children: 3
+  max_spawn_depth: 1
+  child_timeout_seconds: 1800
+  inherit_mcp_toolsets: true
+
 # The general deployment's source facade
 # (units/quadlet/agent-facade-general.container), reached by container name on
 # agent-general.network; it publishes nothing. Same shape as the personal one with

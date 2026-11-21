@@ -409,8 +409,13 @@ the runtime takes its `API_SERVER_KEY` from the environment or from
 `$HERMES_HOME/.env`, and neither the image nor Podman's secret plumbing supplies a
 key without a trailing newline (a Bearer token that never compares equal). The
 `agent` template's `disabled_toolsets` list closes web, search, browser, terminal,
-file, memory, code execution, catalog, computer use, cron jobs, delegation,
-skills, image generation and connections.
+file, memory, code execution, catalog, computer use, cron jobs, skills, image
+generation and connections. `delegation` is deliberately left on: a child runs in
+the same process with the same provider and the same MCP toolsets, so it adds
+concurrency and nothing else, and the template caps it at two concurrent children
+and one level of depth -- the 3090 serves four llama.cpp slots. The general
+template keeps the runtime's default scope but caps it at three concurrent
+children, because there every child is metered hosted tokens.
 
 `agent-proxy` is the only container that holds the hosted key and the only one that
 may dial the provider: `apps/agent_proxy/proxy.py`, stdlib only, one pinned host,
@@ -617,8 +622,11 @@ successful start — it is proven by serving representative data from it.
 - The runtime's defaults are broad: `computer_use`, `cronjob`, `delegation`,
   `skills`, `image_gen`, `connections` and `session_search` are enabled unless the
   config says otherwise, and disabling is per toolset with no per-tool switch.
-  The personal template closes them; the general one deliberately does not, and
-  the difference is a decision recorded in the template, not an oversight.
+  The personal template closes all of them but `delegation`; the general one
+  leaves them open. The difference is a decision recorded in each template, not an
+  oversight, and subagent concurrency is capped in both because the runtime's
+  default of ten is unbounded spend on the hosted side and more parallel streams
+  than the local model has slots.
 - The two gateways do not set `User=`. The pinned image's entrypoint rejects an
   arbitrary uid outright (`container started with --user 1000 ... not supported`,
   exit 1) and offers `HERMES_UID`/`HERMES_GID` instead, which remap its internal

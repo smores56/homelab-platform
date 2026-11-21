@@ -36,10 +36,23 @@ agent:
     - catalog
     - computer_use
     - cronjob
-    - delegation
     - skills
     - image_gen
     - connections
+
+# One level of subagents, deliberately. A child is not a new authority: it runs in
+# this process, with this deployment's provider and this deployment's MCP toolsets
+# (the `personal` facade and its one token), so it can reach exactly what the
+# parent can and nothing more -- and `disabled_toolsets` above applies to it too.
+# What it does add is concurrency, which is bounded here because the 3090 serves
+# four llama.cpp slots and the queue is shared with every other turn. Spawn depth
+# stays at 1 so the graph is flat; a child cannot spawn.
+delegation:
+  max_concurrent_children: 2
+  oneshot_max_children: 2
+  max_spawn_depth: 1
+  child_timeout_seconds: 1200
+  inherit_mcp_toolsets: true
 
 # The personal deployment's source facade (units/quadlet/agent-facade-personal.container),
 # reached by container name on agent-local.network: it publishes nothing, so this

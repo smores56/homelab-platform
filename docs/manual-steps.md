@@ -4244,6 +4244,21 @@ which means `smortress-selinux-nvidia-map.service` did not load its rule.
 nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv
 ```
 
+A template change does not reach a deployment that is already seeded:
+`smortress-agent-config.service` copies `config.yaml` in once and never rewrites
+it, because the runtime and the operator own that copy. To take the current
+template -- the `delegation` block, for example -- discard the copy and re-run the
+seeder; an edit made in place would survive every boot instead.
+
+```sh
+sudo rm /var/lib/agent/local/config.yaml
+sudo systemctl restart smortress-agent-config.service agent-local.service
+sudo grep -A6 '^delegation:' /var/lib/agent/local/config.yaml
+```
+
+The same for the general side with `/var/lib/agent/general/config.yaml` and
+`agent-general.service`.
+
 The proxy and the two gateways answer on loopback. The proxy check is also the only
 proof the provider key works: `200` on `/v1/models` means the key was accepted by the
 provider, `401` means the ciphertext still holds the seeded random value (40.7).
