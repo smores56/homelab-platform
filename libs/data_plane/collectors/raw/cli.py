@@ -39,6 +39,9 @@ from .simplefin import AccessUrl, fetch_accountset
 EXIT_REFUSED = 3
 #: Days of overlap on the provider request, so a boundary transaction is not lost.
 _WINDOW_OVERLAP_DAYS = 7
+#: SimpleFIN caps a read at 90 days: "Requested date range exceeds limit of 90
+#: days and was capped." The overlap is part of the cap, not added to it.
+_WINDOW_CAP_DAYS = 90
 
 _SOURCE_IDS = {
     "mail": MAIL_SOURCE,
@@ -177,7 +180,8 @@ def _window(now: int, window_days: int) -> tuple[int, int]:
     posts just after the start boundary must not fall between two runs.
     """
 
-    return now - (window_days + _WINDOW_OVERLAP_DAYS) * 86400, now
+    span = min(window_days + _WINDOW_OVERLAP_DAYS, _WINDOW_CAP_DAYS)
+    return now - span * 86400, now
 
 
 def _fetched_accountset(access: AccessUrl, args: argparse.Namespace) -> Mapping:

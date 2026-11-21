@@ -180,9 +180,16 @@ class FinanceWindowTests(unittest.TestCase):
     def test_the_window_is_asked_for_in_epoch_seconds(self) -> None:
         # SimpleFIN refuses `start-date=2026-08-21` with
         # "Invalid start-date provided. It must be a UNIX timestamp integer."
+        start, end = raw_cli._window(1_800_000_000, 30)
+        self.assertEqual(end, 1_800_000_000)
+        self.assertEqual(start, 1_800_000_000 - 37 * 86400)
+
+    def test_the_window_never_exceeds_the_providers_cap(self) -> None:
+        # "Requested date range exceeds limit of 90 days and was capped." The
+        # overlap is inside the cap, not on top of it.
         start, end = raw_cli._window(1_800_000_000, 90)
         self.assertEqual(end, 1_800_000_000)
-        self.assertEqual(start, 1_800_000_000 - 97 * 86400)
+        self.assertEqual(start, 1_800_000_000 - 90 * 86400)
 
 
 class EntryPointTests(unittest.TestCase):
