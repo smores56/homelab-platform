@@ -101,7 +101,8 @@ COPY scripts/storage-layout.sh scripts/zfs-ready.sh scripts/sops-decrypt.sh scri
      scripts/smortress-restic-verify.sh scripts/smortress-restic-init.sh \
      scripts/smortress-restic-restore-drill.sh \
      scripts/app-secrets.sh scripts/immich-dump.sh scripts/tailscale-serve.sh \
-     scripts/apps-quota.sh scripts/apps-user.sh scripts/agent-config-seed.sh \
+     scripts/apps-quota.sh scripts/apps-user.sh scripts/apps-ingress.sh \
+     scripts/agent-config-seed.sh \
      scripts/smortress-password.sh \
      /usr/libexec/smortress-src/
 # Application Quadlets. The generator scans /usr/share/containers/systemd at

@@ -287,6 +287,8 @@ jobs:
         run: tests/apps/render.sh
       - name: apps quota checks
         run: tests/apps/quota.sh
+      - name: apps ingress tests
+        run: tests/apps/ingress.sh
 
   action-pins:
     name: action SHA pins

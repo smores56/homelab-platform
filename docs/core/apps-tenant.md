@@ -36,7 +36,7 @@ consumer re-reads it rather than trusting an environment variable:
 
 | Field | Used by |
 | --- | --- |
-| `basePath`, `loopbackPort` | Serve route generator |
+| `basePath`, `loopbackPort` | Serve route generator, root-owned ingress proxy |
 | `projectId`, `quota` | quota applier |
 | `image`, `dataPath`, `network`, `mcs`, `secretNames`, `unitName` | the deploy's own apply step |
 
@@ -96,7 +96,19 @@ cannot yet open the PR it is meant to auto-merge.
   tenant dropped rather than open (see Boot order).
 - **Ingress.** Only Serve: core apps own the root paths on 443, 8443 and 10000,
   so `tailscale-serve` puts each app on `/apps/<name>` at 443 and
-  removes a path the plan no longer names. Nothing is published off loopback.
+  removes a path the plan no longer names. Serve proxies to the app's
+  `loopbackPort` on the host, and that listener belongs to
+  `smortress-app-ingress@<name>`, a root unit: `scripts/apps-ingress.sh` binds
+  `127.0.0.1:<loopbackPort>` and forwards over a unix socket into the
+  container's network namespace, where it connects to `127.0.0.1:<port>`.
+
+  A rendered unit publishes **nothing**. A rootless publish is performed by a
+  forwarder running as the tenant uid, and the tenant egress table drops tenant
+  traffic, so every published port timed out while that table was loaded —
+  measured on the host for the tenant's own network and for plain pasta. The
+  helper is root at both ends, listens only on loopback, and re-verifies the
+  plan before it creates either end. A container restart destroys the namespace
+  it joined, the unit exits, and systemd restarts it against the new pid.
 
 ## Boot order
 
@@ -160,6 +172,9 @@ CPU and task limits are unit settings, so they bound each container's cgroup
 directly. The tenant user's `/var` home (image layers, container storage) is not
 on a dataset and has no quota yet — the accepted gap until a dataset or quota is
 designed for it.
+
+The deploy starts `smortress-app-ingress@<name>` for every app in the plan and
+stops the instances for apps that left it.
 
 The receiver task (#798) owns the remaining half: fetch the pushed commit, require it
 to be the tip of `homelab-apps` `main`, descend from the deployed commit, and

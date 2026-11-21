@@ -22,8 +22,10 @@ and it reads the tenant SOPS file's *key names* only, never a value.
 
 ``render`` emits one rootless Podman Quadlet per app and ``plan.json``; it
 validates first and writes nothing when any definition is rejected. The
-Quadlets are user units for the unprivileged ``apps`` user: they publish on
-loopback only, receive pasta networking for ``egress = "internet"`` and the
+Quadlets are user units for the unprivileged ``apps`` user: they publish
+nothing — ingress is the root-owned proxy in ``scripts/apps-ingress.sh``,
+because a rootless publish forwards as the tenant uid and the tenant's egress
+table drops tenant traffic — receive pasta networking for ``egress = "internet"`` and the
 tenant's internal (routeless) network otherwise, mount exactly their own data
 directory read-write,
 drop every capability, run a read-only root with no-new-privileges, carry
@@ -68,8 +70,8 @@ EGRESS_CLASSES = {"internet", "none"}
 QUOTA_CEILING = "50G"
 
 #: The container port is never published on the host: the platform assigns its
-#: own loopback port for the reverse proxy. Any port the image listens on is
-#: therefore legal, because every rendered unit lowers
+#: own loopback port for the root-owned ingress proxy. Any port the image
+#: listens on is therefore legal, because every rendered unit lowers
 #: `net.ipv4.ip_unprivileged_port_start` in its own namespace: every capability
 #: is dropped, including the one that would otherwise be needed for ports below
 #: 1024.
@@ -111,10 +113,10 @@ PROJECT_MIN = 1
 PROJECT_MAX = 2**32 - 1
 LOOPBACK_BASE = 20000
 LOOPBACK_SPAN = 10000
-#: The tenant network for `egress = "none"`. Podman discards published ports on
-#: `--network=none`, so no-egress apps get an internal network instead: they can
-#: reach nothing outside their own namespace and the loopback publish still
-#: exists for Serve.
+#: The tenant network for `egress = "none"`. A `none` network would give the
+#: app nothing to bind, and no-egress apps still need a listener for Serve, so
+#: they get an internal network: nothing routes out of it, and the root-owned
+#: ingress proxy reaches the app from inside its namespace.
 #: First line of everything this renderer writes, so it can tell its own output
 #: from a foreign unit in the target directory.
 MARKER = "# Rendered from apps/"
@@ -411,7 +413,6 @@ def render_unit(name: str, data: dict[str, Any], loopback: int, level: tuple[int
         f"Image={data['image']}",
         f"ContainerName=smortress-app-{name}",
         f"Network={quadlet_network(data['egress'])}",
-        f"PublishPort=127.0.0.1:{loopback}:{data['port']}",
         f"Volume={DATA_ROOT}/{name}:/data:Z",
         "ReadOnly=true",
         # The tenant may run any digest-pinned image; the schema refuses tags.
@@ -459,7 +460,8 @@ def render_network() -> str:
         # The unit stem would otherwise become `systemd-smortress-apps`, while
         # every consumer names the network `smortress-apps`.
         f"NetworkName={INTERNAL_NETWORK}\n"
-        # No route out of the namespace; the loopback publish for Serve remains.
+        # No route out of the namespace; the app still listens for the ingress
+        # proxy, which reaches it from inside this namespace.
         "Internal=true\n"
     )
 

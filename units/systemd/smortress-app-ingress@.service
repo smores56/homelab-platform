@@ -1,0 +1,13 @@
+[Unit]
+Description=Root ingress for apps tenant app: %i
+# The app is a user unit under the tenant's lingering manager, and a system unit
+# cannot require or order against one. The helper waits for the container to
+# appear, and exits for systemd to restart it when the namespace it joined is
+# gone, which is what a container restart looks like from here.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/apps-ingress %i
+Restart=always
+RestartSec=2
