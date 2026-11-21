@@ -306,7 +306,7 @@ if grep -q 'test -s /etc/u2f_mappings' image/Containerfile \
     && grep -q 'stat -c %U:%G /etc/u2f_mappings' image/Containerfile \
     && grep -q 'stat -c %a /etc/u2f_mappings' image/Containerfile \
     && grep -qF "grep -qE '^[^#:]+:[^:]*,.*' /etc/u2f_mappings" image/Containerfile \
-    && grep -q "grep -qF '+pin' /etc/u2f_mappings" image/Containerfile; then
+    && grep -qF "! grep -qF '+pin' /etc/u2f_mappings" image/Containerfile; then
   ok "the build proves the shipped mapping is root-owned 0644, populated and PIN-free"
 else
   bad "the build proves the shipped mapping is root-owned 0644, populated and PIN-free"

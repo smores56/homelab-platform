@@ -160,8 +160,15 @@ RUN set -eux; \
 # boot. A missing pam_u2f.so would not fail sudo at all: pam_unix is the
 # fallback row and reaches authsucc on its own, so escalation would quietly stop
 # offering the tap while the password kept working. Fail the build instead.
+#
+# The other two modules the sudo stack names are Fedora's own, and they fail the
+# other way: pam_faillock.so and pam_unix.so are `required` rows, so a base that
+# dropped either locks every non-root account out of sudo rather than degrading
+# to one factor. Assert all three by path.
 RUN set -eux; \
     test -f /usr/lib64/security/pam_u2f.so; \
+    test -f /usr/lib64/security/pam_faillock.so; \
+    test -f /usr/lib64/security/pam_unix.so; \
     command -v pamu2fcfg systemd-cryptenroll cryptsetup >/dev/null
 
 # The escalation gate's other half is the shipped /etc/u2f_mappings. Every
