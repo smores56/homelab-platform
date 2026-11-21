@@ -6381,37 +6381,50 @@ a failed decrypt is a unit that answers nothing rather than one that accepts
 unsigned requests. `sudo systemctl status smortress-deploy-listener` is where
 that shows up, and the heartbeat pages for it.
 
-### 49.5 Install the boot counter into GRUB
+### 49.5 The boot counter is not installable on this host
 
 `bootc` has no boot counting and the post-boot gate only runs if userspace
 starts, so the image ships
-`/usr/lib/bootupd/grub2-static/configs.d/10-smortress-count.cfg`; `bootupd`
-copies it into `/boot/grub2/grub.cfg` on one command. Until that command runs,
-the feature claims no pre-userspace rollback.
+`/usr/lib/bootupd/grub2-static/configs.d/10-smortress-count.cfg` in the hope
+that `bootupd` would copy it into `/boot/grub2/grub.cfg`. On smortress it does
+not, and this is the measured result, not an assumption:
 
 ```sh
-command -v bootupctl   # the base ships bootupd; nothing is layered for this
+sudo bootupctl status
+# Component BIOS: At latest version
+# Component EFI:  At latest version
+# No components are adoptable.
 sudo bootupctl update
+# No update available for any component.
 sudo grep -c 'boot_counter' /boot/grub2/grub.cfg
-# expect: a non-zero count
-sudo grep -q 'boot_counter=-1' /boot/grub2/grub.cfg && echo snippet-installed
-# expect: snippet-installed
+# expect: 0
 ```
 
-`grub.cfg` is regenerated from the static configs, so re-run `bootupctl update`
-after any base rebase that rewrites it. After the next reboot, prove the counter
-is live and the gate cleared it:
+`bootupctl update` only regenerates `grub.cfg` when it installs a bootloader
+component, and there is no `--force`; every component is already current, so the
+static snippet is never copied. **The host therefore has no pre-userspace
+rollback today.** Do not claim one, and do not enable `kernel.panic`: a panic
+that reboots without a counter loops the same image forever. The image ships no
+`kernel.panic` sysctl for that reason. `RuntimeWatchdogSec=1min` stays armed as a
+liveness measure, with the same caveat: a PID 1 that hangs every boot would
+reboot into the same image until an operator intervenes.
+
+What does exist is the userspace gate: a deployment that boots but fails its
+health check is denylisted and `bootc rollback --apply` reverts it. The gate
+journals `boot-counting-absent` on every boot where `grub.cfg` does not read the
+counter, so the gap is visible without reading this page.
 
 ```sh
-sudo grub2-editenv /boot/grub2/grubenv list
-# expect: boot_success=1 and boot_counter=3 on a healthy boot
 journalctl -u smortress-boot-gate.service --no-pager -n 20
-# expect: "healthy after N attempt(s)" on a boot that deployed nothing
+# expect: "healthy after N attempt(s)" when a deployment was owed
+# expect: boot-counting-absent when it was not installed
 ```
 
-If the snippet cannot be installed, say so where the rollback is claimed: a
-deployment that never reaches userspace then stays on the failed image until an
-operator rolls back by hand.
+Revisit this step if the mechanism changes: a bootc install that runs bootupd
+after the snippet exists, a systemd-boot host, or a packaged greenboot that
+regenerates the bootloader. Until then, a host that will not boot is recovered
+from the console, and the recovery point is the pre-reboot snapshot the deploy
+gate took.
 
 ### 49.6 The operator view: `status`, `/healthz`, and the journal
 

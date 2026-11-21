@@ -52,8 +52,8 @@ rollback path. Operator-only actions are in `docs/manual-steps.md` section 37.
 | `/usr/lib/systemd/system/smortress-deploy.path`, `/usr/lib/systemd/system/smortress-deploy.service` | The queue trigger (`DirectoryNotEmpty=/var/lib/homelab/deploy/queue`) and the one drain of it, `TimeoutStartSec=12600`. |
 | `/usr/lib/systemd/system/smortress-deploy-poll.timer`, `/usr/lib/systemd/system/smortress-deploy-poll.service`, `/usr/lib/systemd/system/smortress-deploy-heartbeat.timer`, `/usr/lib/systemd/system/smortress-deploy-heartbeat.service`, `/usr/lib/systemd/system/smortress-deploy-retry.timer`, `/usr/lib/systemd/system/smortress-boot-gate.service` | The hourly backstop, the dead-man beat for the `deploy` Healthchecks check, the five-minute retry of a deferred queue entry, and the gate that runs `Before=boot-complete.target`. |
 | `/usr/share/smortress/deploy-units.txt` | The units the boot gate requires: what "serving" means for this host. The receiver's own units are deliberately absent — a missing deploy secret must page, not roll the host back. |
-| `/usr/lib/bootupd/grub2-static/configs.d/10-smortress-count.cfg` | The three-attempt boot counter, installed into `grub.cfg` by `bootupctl update`; the only rollback that exists before userspace. |
-| `/etc/systemd/system.conf.d/10-watchdog.conf`, `/etc/sysctl.d/10-panic.conf` | `RuntimeWatchdogSec=1min` and `kernel.panic=10`, so a hung PID 1 or a panic becomes a reboot the counter can act on. |
+| `/usr/lib/bootupd/grub2-static/configs.d/10-smortress-count.cfg` | The three-attempt boot counter. It is **not active on this host**: `bootupd` reports every component current and has no way to force a regeneration, so the snippet never reaches `grub.cfg` (`docs/manual-steps.md` §49.5). The gate journals `boot-counting-absent` each boot. |
+| `/etc/systemd/system.conf.d/10-watchdog.conf` | `RuntimeWatchdogSec=1min`, so a hung PID 1 becomes a reboot. No `kernel.panic`: without a bootloader counter, a panic reboot would loop the same image. |
 | `/etc/tmpfiles.d/smortress.conf` | Creates `/var/lib/homelab/deploy`, `queue` and `work` at `0700 root`: the receiver's state tree, outside every recovery group because the journal and `bootc status` rebuild it. |
 
 `units/quadlet/pattern.container` is the canonical copy in the repository; the
@@ -398,13 +398,22 @@ counter cannot re-select the deployment that just failed.
 
 `bootc` has no boot counting and the gate only runs if userspace starts, so the
 image ships `/usr/lib/bootupd/grub2-static/configs.d/10-smortress-count.cfg`: on
-every boot it sets `boot_success=0` and decrements `boot_counter` from 3, and at
-zero selects the previous deployment (`default=1`) and marks the counter spent.
-`RuntimeWatchdogSec=1min` and `kernel.panic=10` turn a hung PID 1 or a panic into
-the reboot that counter acts on. The snippet reaches `/boot/grub2/grub.cfg` only
-after one `bootupctl update` on the host, which is a named step, not an
-assumption: `docs/manual-steps.md` section 49 asserts the text is in `grub.cfg`.
-Without that step the feature claims no pre-userspace rollback.
+every boot it would set `boot_success=0`, decrement `boot_counter` from 3, and at
+zero select the previous deployment (`default=1`).
+
+**On this host that mechanism is not active.** `bootupctl status` reports every
+component at its latest version and `bootupctl update` has no way to force a
+regeneration, so the snippet never reaches `/boot/grub2/grub.cfg`; the host was
+measured, not assumed (`docs/manual-steps.md` §49.5). The gate therefore journals
+`boot-counting-absent` on every boot and writes no GRUB flags, and the image ships
+no `kernel.panic`: a panic that reboots with no counter would loop the same image
+forever. `RuntimeWatchdogSec=1min` stays armed, with the same caveat for a PID 1
+that hangs on every boot.
+
+The rollback guarantee is the userspace one: a deployment that boots but fails the
+health gate is denylisted and `bootc rollback --apply` reverts it. A host that
+fails before userspace is a console recovery, and the recovery point is the
+pre-reboot snapshot the gate requires.
 
 ### The two backstops
 

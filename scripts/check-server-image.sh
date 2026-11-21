@@ -28,6 +28,7 @@ has() { grep -rqF -- "$1" "$2"; }
 lacks() { ! grep -rqF -- "$1" "$2"; }
 count() { grep -cF -- "$1" "$2" || true; }
 probe() { local name=$1; shift; if "$@" >/dev/null 2>&1; then ok "$name"; else bad "$name"; fi; }
+no_file_exists() { [[ ! -e $1 ]]; }
 
 # The base is the moving uCore stream tag, not a digest: upstream publishes new
 # streams constantly and ghcr garbage-collects superseded digests within hours, so
@@ -960,7 +961,9 @@ check "the snippet counts three attempts" has 'set boot_counter=3' "$count_cfg"
 check "the snippet selects the previous deployment at zero" has 'set default=1' "$count_cfg"
 check "a hung PID 1 reboots" \
   has 'RuntimeWatchdogSec=1min' image/rootfs/etc/systemd/system.conf.d/10-watchdog.conf
-check "a panic reboots" has 'kernel.panic=10' image/rootfs/etc/sysctl.d/10-panic.conf
+# A panic must not reboot until a bootloader counter can fall back: otherwise a
+# kernel panic loops the same image forever with no userspace to roll back.
+check "no panic reboot without a counter" no_file_exists image/rootfs/etc/sysctl.d/10-panic.conf
 
 # The feature installs no distribution package: graph and signature questions are
 # answered by the GitHub API and bootc's own policy, so the only dnf run in the
