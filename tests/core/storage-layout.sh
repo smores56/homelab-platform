@@ -47,6 +47,9 @@ done
 eq "$(dataset_owner_for raw/files)" 1000:1000 'core datasets belong to uid 1000'
 eq "$(dataset_mode_for raw/files)" 0750 'core datasets are unreadable by the tenant'
 eq "${dataset_acl_mode:-}" passthrough 'a chmod cannot discard an operator ACL'
+eq "$(dataset_owner_for raw/git)" smores:smores 'the operator owns the git dataset'
+eq "$(dataset_owner_for raw/repo-archive)" smores:smores 'the operator owns the repo archive'
+eq "$(dataset_owner_for raw/wallpapers)" smores:smores 'the operator owns the wallpapers'
 eq "$(dataset_owner_for raw/apps)" apps:apps 'the tenant dataset belongs to the tenant account by name'
 eq "$(dataset_mode_for raw/apps)" 0700 'the tenant dataset is private to the tenant'
 owner_orphan=0
