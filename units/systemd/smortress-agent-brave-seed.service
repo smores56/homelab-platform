@@ -54,3 +54,6 @@ ExecStart=/usr/bin/podman run --rm --replace --name smortress-agent-brave-seed \
 # and writes nothing. Restarting would only repeat it; the journal names the reason
 # and docs/manual-steps.md section 40.17 says what to do about it.
 Restart=no
+
+[Install]
+WantedBy=multi-user.target

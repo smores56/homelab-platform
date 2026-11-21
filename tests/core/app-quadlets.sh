@@ -1395,5 +1395,24 @@ else
   bad "brave-sync-seed becomes a Podman secret"
 fi
 
+# `systemctl enable` on a unit with no [Install] section is a silent no-op: the
+# build succeeds, `is-enabled` reports "static", and nothing starts it at boot.
+# The mail stream and the Brave seed shipped that way and stayed dead until an
+# operator started them by hand on every boot, so every unit the image enables
+# has to be enableable. Template instances in the list come from packaged units
+# and are skipped.
+enable_block=$(sed -n '/systemctl enable \\$/,/;[[:space:]]*\\$/p' image/Containerfile)
+never_starts=()
+while read -r unit; do
+  [[ $unit == *@* ]] && continue
+  [[ -f units/systemd/$unit ]] || continue
+  grep -qx '\[Install\]' "units/systemd/$unit" || never_starts+=("$unit")
+done < <(grep -oE 'smortress-[a-z0-9.-]+\.(service|timer|path)' <<<"$enable_block" | sort -u)
+if ((${#never_starts[@]} == 0)); then
+  ok 'every smortress unit the image enables declares [Install]'
+else
+  bad 'every smortress unit the image enables declares [Install]' "${never_starts[*]}"
+fi
+
 printf '\n%d checks, %d failed\n' "$((pass + fail))" "$fail"
 ((fail == 0))
