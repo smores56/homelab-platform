@@ -88,5 +88,11 @@ locals {
 resource "tailscale_acl" "this" {
   count = var.tailnet == "" ? 0 : 1
 
+  # This resource is the whole policy, not a patch: the provider refuses to
+  # replace a policy it did not write unless that is said out loud, and the
+  # design's admitted set is the point of the apply. Rules dropped here are
+  # dropped from the tailnet.
+  overwrite_existing_content = true
+
   acl = jsonencode(local.tailnet_policy)
 }
