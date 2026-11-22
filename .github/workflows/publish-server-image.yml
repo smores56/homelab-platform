@@ -177,7 +177,9 @@ jobs:
   notify:
     name: notify the deploy receiver
     needs: publish
-    if: github.ref == 'refs/heads/main'
+    # A main push builds and signs the image; deploying it is a deliberate
+    # release, so the receiver is told only by an explicit workflow_dispatch.
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     environment: deploy-notify
