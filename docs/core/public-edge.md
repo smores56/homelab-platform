@@ -64,8 +64,10 @@ validates `photos.sammohr.dev` and `opds.sammohr.dev` by resolving them: while
 they are proxied CNAMEs to the cluster tunnel, Let's Encrypt reaches Cloudflare
 and the challenge fails (`Cannot negotiate ALPN protocol "acme-tls/1"`). Caddy
 keeps retrying, and the first successful order is seconds after the `A` records
-appear. The pre-cutover probe therefore proves reachability and the path leaks through
-`EDGE_IP` (curl `-k`, certificate probes skipped), not the certificate.
+appear. Before the cutover there is nothing public to probe: the names resolve
+elsewhere and no certificate exists here. The pre-cutover proof is the box's own
+`verify.sh` with `EXPECT_UPSTREAM=1`, which proves the firewall, both origins
+answering, and that this box cannot reach smortress's 443 at all.
 
 The ACME account key and the certificates live in Caddy's data directory
 (`/var/lib/caddy/.local/share/caddy`). Losing them costs only a re-issue; keep
@@ -101,14 +103,11 @@ authoritative, which is a data decision, not a DNS one. Rollback is the same two
 commits in reverse — drop `edge_ipv4` (the `A` records go, names fall to the
 deny), then restore `cluster_hosts` (the CNAMEs return).
 
-Before the cutover the reachability and path-leak probes run against the box
-without touching the zone. That mode is a routing check: it runs curl with `-k`
-and **skips** the two certificate probes, because nothing can have issued before
-the names resolve here. The certificate probes are the first post-cutover check.
+The public probe is a post-cutover step, run once Caddy has ordered:
 
 ```sh
-EDGE_IP=<vps-ipv4> scripts/verify-public-edge.sh   # pre-cutover: 8 ok, 2 skipped
-scripts/verify-public-edge.sh                      # post-cutover: all ten ok
+ssh root@smoresnet EXPECT_UPSTREAM=1 /root/edge/verify.sh   # before the zone moves
+scripts/verify-public-edge.sh                               # after it moves
 ```
 
 ## Metering
@@ -147,8 +146,8 @@ the rebuild, run once and timed before the cutover:
 3. From the HTML5 console, re-run `provision/edge/bootstrap.sh` with a fresh
    `tag:vps` key (`docs/manual-steps.md` §50.2). It sets the hostname, appends
    the repository login key, and realigns the tailnet name.
-4. Reconnect over the tailnet, run `provision/edge/verify.sh`, then
-   `scripts/verify-public-edge.sh` with `EDGE_IP`.
+4. Reconnect over the tailnet and run `provision/edge/verify.sh` with
+   `EXPECT_UPSTREAM=1`.
 5. If the IPv4 changed, update `edge_ipv4` and apply; otherwise nothing to do.
 6. Record the elapsed time. If it is not minutes, T2 does not move Backrest
    here.
@@ -172,7 +171,7 @@ what the repository *cannot* reproduce, with what is done about each item.
 | SSH host key (ed25519 only) | Kit row plus `EDGE_HOST_KEY`; omitted, the box generates a new one and every `known_hosts` entry goes stale. The template's rsa and ecdsa pairs are deleted, because they are in no kit and would be a second, never-verified identity. |
 | Caddy's data directory (ACME account, certificates) | Not restored. A rebuild re-issues, which costs seconds and needs nothing from the kit; the account it replaces is not pinned by CAA, so a new one is valid immediately. |
 | Panel network firewall | Manual per *service*: `tcp/443`, `udp/41641`, ICMP echo. It survives an OS reinstall and must be set again only for a replacement VPS. Console/VNC bypasses it, so it cannot lock the box out. |
-| The public IPv4 | May change on a replacement (not on a reinstall). Cutover and probes take `EDGE_IP`, and DNS is `var.edge_ipv4` in tofu. |
+| The public IPv4 | May change on a replacement (not on a reinstall). DNS takes it in `var.edge_ipv4`; the probes resolve the names, so only the cutover needs the value. |
 | Hostname | Closed: the bootstrap sets `smoresnet` on the OS and on the tailnet. |
 | Package versions | Distro packages plus unattended upgrades; deliberately unpinned, so a rebuild may pick up newer Caddy. The bootstrap's 2.6 gate is the only floor. |
 | Time, sshd policy, firewall, Serve routes on smortress | Closed: bootstrap for the box, the image for smortress, tofu for the tailnet. |
@@ -184,6 +183,8 @@ Both halves are outside the repository:
 - `provision/edge/verify.sh` on the box: firewall shape, sshd, no port 80,
   Caddy listening, tailnet up with `tag:vps`; and with `EXPECT_UPSTREAM=1`, the
   upstream certificate, both Serve ports and the 443 refusal.
-- `scripts/verify-public-edge.sh` from anywhere: both names over valid TLS,
-  certificate life above 14 days, and the six paths (three per name) that must
-  answer 404.
+- `scripts/verify-public-edge.sh` from anywhere, after the cutover: both names
+  over valid TLS with life above 14 days, and each path answering as its own
+  application — Immich's HTML shell, OPDShelf's 401 challenge — never as the
+  agent gateway, a text/plain 404, or the wallpaper listing. A status code alone
+  cannot prove that: Immich answers 200 and OPDShelf 401 for any path.

@@ -2,9 +2,10 @@
 # Behavioural checks for scripts/verify-public-edge.sh (design #725).
 #
 # The probe cannot reach the VPS from CI, so the script's own contract is what
-# is tested here: it resolves the names to EDGE_IP when one is given, it fails
-# when a public name is down, it fails when a path that must not be published
-# answers anything but 404, and it fails when the certificate check fails.
+# is tested here: it fails when a name is down, when Immich's paths answer as
+# anything but the app (a wallpaper listing, the agent gateway's 404), when
+# OPDShelf's paths lose their auth challenge, and when a certificate does not
+# verify or is close to expiry.
 #
 #   tests/edge/check.sh
 set -uo pipefail
@@ -37,17 +38,49 @@ eq() {
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-# The stubs stand in for the two tools, so every case is offline. curl records
-# its argv and answers from STUB_ROOT_CODE/STUB_LEAK_CODE; openssl records its
-# argv and fails when STUB_CERT_FAIL is set.
+# The curl stub records argv, then writes the body and headers the script asks
+# for and prints a status. STUB_MODE is the failure each case injects.
 cat >"$work/curl" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$STUB_LOG"
-for last; do :; done
-case $last in
-    *'/apps/'*|*/wallpapers/) printf '%s' "${STUB_LEAK_CODE:-404}" ;;
-    *) printf '%s' "${STUB_ROOT_CODE:-200}" ;;
+url= body=/dev/null hdr=/dev/null
+while (($#)); do
+    case $1 in
+        --output) body=$2; shift ;;
+        --dump-header) hdr=$2; shift ;;
+        --*) ;;
+        *) url=$1 ;;
+    esac
+    shift
+done
+code=200
+printf '%s' '<!doctype html><html class="dark"></html>' >"$body"
+printf 'HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n' >"$hdr"
+case $STUB_MODE in
+    down)
+        [[ $url == https://photos.sammohr.dev/ ]] && code=502
+        ;;
+    leak)
+        if [[ $url == https://photos.sammohr.dev/wallpapers/ ]]; then
+            printf '%s' '<!doctype html><pre><a href="Reddit-Wallpapers/">x</a></pre>' >"$body"
+        fi
+        ;;
+    noauth)
+        ;;
 esac
+case $url in
+    https://opds.sammohr.dev/*)
+        if [[ ${STUB_MODE:-} == noauth ]]; then
+            printf '%s' '<!doctype html><html></html>' >"$body"
+            printf 'HTTP/1.1 200 OK\r\n\r\n' >"$hdr"
+        else
+            code=401
+            : >"$body"
+            printf 'HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm="opdshelf"\r\n\r\n' >"$hdr"
+        fi
+        ;;
+esac
+printf '%s' "$code"
 EOF
 cat >"$work/openssl" <<'EOF'
 #!/usr/bin/env bash
@@ -60,10 +93,8 @@ chmod +x "$work/curl" "$work/openssl"
 run() {
     : >"$work/curl.log"
     : >"$work/ossl.log"
-    EDGE_IP=${EDGE_IP-203.0.113.7} \
-        EDGE_CERT_MIN_DAYS=${EDGE_CERT_MIN_DAYS:-14} \
-        STUB_ROOT_CODE=${STUB_ROOT_CODE:-} \
-        STUB_LEAK_CODE=${STUB_LEAK_CODE:-} \
+    EDGE_CERT_MIN_DAYS=${EDGE_CERT_MIN_DAYS:-14} \
+        STUB_MODE=${STUB_MODE:-} \
         STUB_CERT_FAIL=${STUB_CERT_FAIL:-0} \
         STUB_LOG=$work/curl.log STUB_OSSL_LOG=$work/ossl.log \
         CURL_BIN=$work/curl OPENSSL_BIN=$work/openssl \
@@ -74,29 +105,8 @@ run() {
 
 run
 eq "$?" 0 'a healthy edge exits 0'
-eq "$(grep -c '^ok' "$work/out")" 8 'both names are probed for reachability and three paths each'
-eq "$(grep -c '^skip' "$work/out")" 2 'the certificate probes are skipped before issuance'
+eq "$(grep -c '^ok' "$work/out")" 10 'two names, two certificates and three paths each'
 eq "$(grep -c '^FAIL' "$work/out")" 0 'nothing fails on a healthy edge'
-if grep -qF -- '--insecure' "$work/curl.log"; then
-    ok 'EDGE_IP mode is a routing check and says so in argv'
-else
-    bad 'EDGE_IP mode is a routing check and says so in argv' "$(cat "$work/curl.log")"
-fi
-if grep -qF -- '--resolve photos.sammohr.dev:443:203.0.113.7' "$work/curl.log"; then
-    ok 'EDGE_IP pins the photos name for the pre-cutover probe'
-else
-    bad 'EDGE_IP pins the photos name for the pre-cutover probe' "$(cat "$work/curl.log")"
-fi
-if grep -qF -- '--resolve opds.sammohr.dev:443:203.0.113.7' "$work/curl.log"; then
-    ok 'EDGE_IP pins the opds name for the pre-cutover probe'
-else
-    bad 'EDGE_IP pins the opds name for the pre-cutover probe' "$(cat "$work/curl.log")"
-fi
-# Certificate checks only exist in public-DNS mode: EDGE_IP is a routing check
-# because nothing can have issued before the name resolves here.
-EDGE_IP=
-run
-eq "$?" 0 'public DNS mode exits 0'
 if grep -qF -- '-verify_hostname opds.sammohr.dev' "$work/ossl.log"; then
     ok 'the certificate is verified for the name, not just for any name'
 else
@@ -107,8 +117,8 @@ if grep -qF -- '-checkend 1209600' "$work/ossl.log"; then
 else
     bad 'the expiry check uses the default 14-day window' "$(cat "$work/ossl.log")"
 fi
-# The stub keys on the last argument, so a regression to plain HTTP or to a
-# hardcoded port would still look healthy; the argv is the only witness.
+# The stub keys on the URL, so a regression to plain HTTP or a hardcoded port
+# would still look healthy; the argv is the only witness.
 if grep -qF -- 'https://photos.sammohr.dev/' "$work/curl.log"; then
     ok 'every probe uses https on the name'
 else
@@ -120,10 +130,9 @@ else
     ok 'no probe addresses port 80'
 fi
 
-# --- the failure this script exists to catch ----------------------------------
+# --- the failures this script exists to catch ---------------------------------
 
-STUB_ROOT_CODE=502
-EDGE_IP=203.0.113.7
+STUB_MODE=down
 run
 eq "$?" 1 'an origin returning 502 fails the run'
 if grep -qF 'FAIL photos.sammohr.dev answers over TLS' "$work/out"; then
@@ -132,20 +141,26 @@ else
     bad 'the failure names the name that did not answer' "$(cat "$work/out")"
 fi
 
-STUB_ROOT_CODE=
-STUB_LEAK_CODE=200
-EDGE_IP=203.0.113.7
+STUB_MODE=leak
 run
-eq "$?" 1 'a published /wallpapers fails the run'
-if grep -qF 'FAIL /wallpapers/ is not published on opds.sammohr.dev' "$work/out"; then
+eq "$?" 1 'a published wallpaper listing fails the run'
+if grep -qF 'FAIL /wallpapers/ answers as Immich on photos.sammohr.dev' "$work/out"; then
     ok 'the leak names the path and the name it leaked on'
 else
     bad 'the leak names the path and the name it leaked on' "$(cat "$work/out")"
 fi
 
-STUB_LEAK_CODE=
+STUB_MODE=noauth
+run
+eq "$?" 1 'OPDShelf answering without its challenge fails the run'
+if grep -qF "FAIL /apps/agent-local/v1 answers as OPDShelf's auth" "$work/out"; then
+    ok 'the failure names the path and the name'
+else
+    bad 'the failure names the path and the name' "$(cat "$work/out")"
+fi
+
+STUB_MODE=
 STUB_CERT_FAIL=1
-EDGE_IP=
 run
 eq "$?" 1 'a certificate that fails verification fails the run'
 if grep -qF 'FAIL photos.sammohr.dev presents a certificate' "$work/out"; then
@@ -156,30 +171,11 @@ fi
 
 STUB_CERT_FAIL=0
 EDGE_CERT_MIN_DAYS=3
-EDGE_IP=
 run
 if grep -qF -- '-checkend 259200' "$work/ossl.log"; then
     ok 'the expiry window is configurable'
 else
     bad 'the expiry window is configurable' "$(cat "$work/ossl.log")"
-fi
-
-# --- the cutover mode ---------------------------------------------------------
-
-EDGE_CERT_MIN_DAYS=
-EDGE_IP=
-run
-eq "$?" 0 'an unset EDGE_IP still probes through public DNS'
-eq "$(grep -c '^ok' "$work/out")" 10 'public DNS mode probes the certificates too'
-if grep -qF -- '--insecure' "$work/curl.log"; then
-    bad 'public DNS mode verifies TLS' "$(cat "$work/curl.log")"
-else
-    ok 'public DNS mode verifies TLS'
-fi
-if grep -qF -- '--resolve' "$work/curl.log"; then
-    bad 'an unset EDGE_IP adds no resolve override' "$(cat "$work/curl.log")"
-else
-    ok 'an unset EDGE_IP adds no resolve override'
 fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

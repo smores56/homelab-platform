@@ -6892,15 +6892,16 @@ upstream checks because it predates this step.
 
 ### 50.7 Prove it before touching the zone
 
+The names still resolve to the cloud edge here, so the public probe cannot run
+and no certificate can exist. What can be proven is the pair:
+
 ```sh
-EDGE_IP=<vps-ipv4> scripts/verify-public-edge.sh
+ssh root@smoresnet EXPECT_UPSTREAM=1 /root/edge/verify.sh
 ```
 
-The two certificate probes are skipped here: certificates are issued only once
-the names resolve to the box (`§50.8`), because Let's Encrypt validates them by
-resolution. This mode is a routing check (curl `-k`), so the rest must pass —
-both names answering through `EDGE_IP`, and 404 for `/apps/agent-local/v1`,
-`/apps/agent-general/v1` and `/wallpapers/` on both names.
+Every line must read `ok`: the firewall shape, both Serve ports answering, the
+upstream certificate verifying, and this box being unable to reach smortress on
+443 (the ACL deny list's runtime proof).
 
 ### 50.8 The cutover (after #709's gate)
 
@@ -6937,6 +6938,10 @@ has. Then, once Caddy has ordered:
 ```sh
 scripts/verify-public-edge.sh   # all ten green, certificates included
 ```
+
+That probe checks each name answers *as its application*: Immich's own HTML
+shell for any path, OPDShelf's 401 challenge for any path. It cannot be a status
+code alone — Immich answers 200 and OPDShelf 401 for paths that do not exist.
 
 Rollback is the same two commits in reverse: drop `edge_ipv4` (the `A` records
 go, names fall to the deny), then restore `cluster_hosts` (the CNAMEs return).

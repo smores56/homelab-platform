@@ -1,34 +1,34 @@
 #!/usr/bin/env bash
 # Prove the public edge (design #725) answers for the two names and for nothing
-# else. Runs from anywhere: before the DNS cutover, set EDGE_IP to the VPS
-# address and every probe resolves the names to it; after the cutover, leave it
-# unset and the probes use public DNS.
+# else. Run it after the DNS cutover; before that the names do not resolve here
+# and no certificate can exist, so the pre-cutover proof is the box's own
+# `provision/edge/verify.sh` with EXPECT_UPSTREAM=1.
 #
-# The probes are the design's own claims, not a smoke test:
+# The probes are the design's claims, not a smoke test:
 #
 #   - both names answer over TLS, with a certificate valid for the name;
 #   - that certificate is not within EDGE_CERT_MIN_DAYS of expiry;
-#   - the agent gateway APIs and the wallpaper library are absent on both names,
-#     because the edge proxies to dedicated Serve ports and never to 443.
+#   - each name answers as *its application*, not as anything else that lives
+#     on smortress's 443. That port carries the agent gateway APIs and
+#     /wallpapers, and the edge proxies to dedicated ports so those never
+#     appear here. A status code cannot prove it: Immich's SPA answers 200 for
+#     any path and OPDShelf answers 401 for any path. The signatures are:
+#       Immich  -> 200 and its own HTML shell;
+#       OPDShelf-> 401 with a WWW-Authenticate challenge.
+#     Serve's wallpaper tree is a bare <pre> listing and the agent gateway is a
+#     text/plain 404, so neither can satisfy those.
 #
-# Exit 0 only when all of them pass. No repository check can see the VPS, so
-# this script and provision/edge/verify.sh are the gate.
+# Exit 0 only when every probe passes. No repository check can see the VPS, so
+# this script and `provision/edge/verify.sh` are the gate.
 #
-#   EDGE_IP=203.0.113.7 scripts/verify-public-edge.sh
+#   scripts/verify-public-edge.sh
 #
-# EDGE_IP makes this a routing check, not a TLS one: Let's Encrypt can only
-# issue once the names resolve to the box, so before the DNS cutover there is no
-# certificate to verify. In that mode the probes run with -k, the two
-# certificate checks are skipped, and the run still proves that both names reach
-# the edge and that the agent paths and /wallpapers stay unpublished.
-#
-# Knobs: EDGE_IP, EDGE_TIMEOUT (10 s), EDGE_CERT_MIN_DAYS (14), EDGE_CAFILE,
-# CURL_BIN and OPENSSL_BIN (tests/edge/check.sh drives the same code).
+# Knobs: EDGE_TIMEOUT (10 s), EDGE_CERT_MIN_DAYS (14), EDGE_CAFILE, CURL_BIN
+# and OPENSSL_BIN (tests/edge/check.sh drives the same code).
 set -uo pipefail
 
 photos=photos.sammohr.dev
 opds=opds.sammohr.dev
-edge_ip=${EDGE_IP:-}
 timeout_s=${EDGE_TIMEOUT:-10}
 min_days=${EDGE_CERT_MIN_DAYS:-14}
 cafile=${EDGE_CAFILE:-/etc/ssl/certs/ca-certificates.crt}
@@ -47,9 +47,6 @@ bad() {
   [[ -n ${2:-} ]] && printf '     %s\n' "$2"
   return 0
 }
-note() {
-  printf 'skip %s\n' "$1"
-}
 
 for tool in "$curl_bin" "$openssl_bin"; do
   command -v "$tool" >/dev/null 2>&1 || {
@@ -58,42 +55,33 @@ for tool in "$curl_bin" "$openssl_bin"; do
   }
 done
 
-# The status code, or 000 when the connection never got an answer. A resolve
-# override keeps the probe honest before the cutover: it proves the box answers
-# for the name without touching the zone.
-http_code() { # <name> <url>
-  local args=(
-    --silent --show-error --output /dev/null
-    --max-time "$timeout_s" --write-out '%{http_code}'
-  )
-  if [[ -n $edge_ip ]]; then
-    # Routing check only: nothing has issued for this name yet.
-    args+=(--resolve "$1:443:$edge_ip" --insecure)
-  fi
-  "$curl_bin" "${args[@]}" "$2" 2>/dev/null
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+# <url> <body file> <header file> -> status code. The body and headers are what
+# the signature checks read; the code alone says nothing about which handler
+# answered.
+fetch() {
+  "$curl_bin" --silent --show-error --output "$2" --dump-header "$3" \
+    --max-time "$timeout_s" --write-out '%{http_code}' "$1" 2>/dev/null
 }
 
 certificate_ok() { # <name>
-  local name=$1 connect=$1 out
-  if [[ -n $edge_ip ]]; then
-    connect=$edge_ip
-  fi
-  out=$("$openssl_bin" s_client -connect "$connect:443" -servername "$name" \
+  local name=$1 out
+  out=$("$openssl_bin" s_client -connect "$name:443" -servername "$name" \
     -verify_hostname "$name" -CAfile "$cafile" \
     -checkend "$((min_days * 86400))" </dev/null 2>/dev/null) || return 1
   grep -q 'Verify return code: 0 (ok)' <<<"$out"
 }
 
 for host in "$photos" "$opds"; do
-  code=$(http_code "$host" "https://$host/")
+  code=$(fetch "https://$host/" "$work/body" "$work/hdr")
   if [[ $code =~ ^(2|3)[0-9][0-9]$ || $code == 401 ]]; then
     ok "$host answers over TLS ($code)"
   else
     bad "$host answers over TLS" "got '$code'"
   fi
-  if [[ -n $edge_ip ]]; then
-    note "$host certificate: skipped, Let's Encrypt issues only after the name resolves here"
-  elif certificate_ok "$host"; then
+  if certificate_ok "$host"; then
     ok "$host presents a certificate valid for the name for $min_days more days"
   else
     bad "$host presents a certificate valid for the name for $min_days more days" \
@@ -101,17 +89,26 @@ for host in "$photos" "$opds"; do
   fi
 done
 
-# 443 on smortress also carries the agent gateway APIs and the wallpaper tree.
-# A 404 here is the proof that the edge did not proxy that port.
-for host in "$photos" "$opds"; do
-  for path in /apps/agent-local/v1 /apps/agent-general/v1 /wallpapers/; do
-    code=$(http_code "$host" "https://$host$path")
-    if [[ $code == 404 ]]; then
-      ok "$path is not published on $host"
-    else
-      bad "$path is not published on $host" "got '$code', want 404"
-    fi
-  done
+# Immich: any path is the app's own shell, never the wallpaper tree (a <pre>
+# listing) and never the agent gateway (text/plain 404 on 443).
+for path in /apps/agent-local/v1 /apps/agent-general/v1 /wallpapers/; do
+  code=$(fetch "https://$photos$path" "$work/body" "$work/hdr")
+  if [[ $code == 200 ]] && grep -q '<html' "$work/body"; then
+    ok "$path answers as Immich on $photos"
+  else
+    bad "$path answers as Immich on $photos" \
+      "got '$code' and '$(head -c 60 "$work/body" 2>/dev/null | tr -d '\n')'"
+  fi
+done
+
+# OPDShelf: its own auth challenge, never a status-page or a listing.
+for path in /apps/agent-local/v1 /apps/agent-general/v1 /wallpapers/; do
+  code=$(fetch "https://$opds$path" "$work/body" "$work/hdr")
+  if [[ $code == 401 ]] && grep -qi '^www-authenticate:' "$work/hdr"; then
+    ok "$path answers as OPDShelf's auth on $opds"
+  else
+    bad "$path answers as OPDShelf's auth on $opds" "got '$code'"
+  fi
 done
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
