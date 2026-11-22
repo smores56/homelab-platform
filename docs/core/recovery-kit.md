@@ -37,7 +37,7 @@ needs `pg_restore`.
 | Restic password — new repositories | one password for `ssd`, `hdd`, `r2` | T3 | — |
 | Repository URIs — new | `ssd`, `hdd`, `r2` locations, including the R2 bucket | T3 | — |
 | R2 read-only recovery token | Backrest's only credential; cannot delete offsite data | T4 | — |
-| Backrest login | recovery UI at `recovery.sammohr.dev` (replaces the static letter). No Cloudflare account or login: the URL opens in any browser and the password is the only credential | T4 | — |
+| Backrest login | recovery UI at `recovery.sammohr.dev` (replaces the static letter). No Cloudflare account or login: the URL opens in any browser, the username is `operator`, and a local password is the only credential | T4 | — |
 | RackNerd ctrl login + 2FA recovery codes | the only way to reinstall the edge VPS or open its console; without them a dead edge is a support ticket | T1 | — |
 | Tailscale admin login + 2FA recovery codes | a reinstall destroys the edge's node identity, and rejoining needs a new preauthorized `tag:vps` key minted in that console | T1 | — |
 | Edge SSH host private key | pins the VPS identity across a reinstall; `provision/edge/bootstrap.sh` installs it when `EDGE_HOST_KEY` names it | T1 | — |
