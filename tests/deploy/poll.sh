@@ -378,10 +378,13 @@ timer=units/systemd/smortress-deploy-poll.timer
 service=units/systemd/smortress-deploy-poll.service
 if [[ -s $timer ]]; then ok "the poll timer ships"; else bad "the poll timer ships"; fi
 if [[ -s $service ]]; then ok "the poll service ships"; else bad "the poll service ships"; fi
-if grep -qE '^OnCalendar=\*-\*-\* [0-9*:]+$' "$timer" 2>/dev/null; then
-  ok "the poll runs on an hourly calendar"
+# One window a day, in local time, and not persistent: a missed window must not
+# turn into a deploy on the way up.
+if grep -qxF 'OnCalendar=*-*-* 03:00:00 America/New_York' "$timer" 2>/dev/null &&
+  grep -qxF 'Persistent=false' "$timer" 2>/dev/null; then
+  ok "the poll runs its daily window in local time and never on the way up"
 else
-  bad "the poll runs on an hourly calendar" "$(cat "$timer" 2>/dev/null)"
+  bad "the poll runs its daily window in local time and never on the way up" "$(cat "$timer" 2>/dev/null)"
 fi
 if grep -qE '^ExecStart=/usr/libexec/deploy-poll$' "$service" 2>/dev/null; then
   ok "the service runs the installed script"

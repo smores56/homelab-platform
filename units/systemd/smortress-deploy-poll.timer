@@ -1,15 +1,16 @@
 [Unit]
-Description=Hourly backstop poll for a newer main
+Description=Daily 03:00 window that deploys whatever has been published
 
 [Timer]
-# :20 sits between the hourly backup driver (:05) and the freshness verifier
-# (:40), so the poll never competes with either for the network or the budget it
-# shares with the verifier's anonymous API calls.
-OnCalendar=*-*-* *:20:00
+# One window a day, in the operator's local time rather than the host's UTC: the
+# host takes whatever image is newest when the window opens, so a bad publish
+# that lands mid-day is deployed once, unattended, at a time its owner chose.
+OnCalendar=*-*-* 03:00:00 America/New_York
 AccuracySec=1min
-# A host that was off through its slot polls once on the way up: that is exactly
-# the case the backstop exists for.
-Persistent=true
+# Not persistent: a host that was off at 03:00 is not owed a deploy on the way
+# up. Firing a missed window at boot is a reboot nobody scheduled, which is the
+# behaviour this timer replaced.
+Persistent=false
 Unit=smortress-deploy-poll.service
 
 [Install]
