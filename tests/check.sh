@@ -202,6 +202,29 @@ else
   bad "no package the session never calls"
 fi
 
+# Chromium and every other PulseAudio client in the session link libpulse. With
+# no server they fall back to pipewire-alsa, which still plays but drops stream
+# restore, pactl and the PA interface; the fallback is a log line, not a
+# failure, so anchor the check to the install line and the preset-enabled
+# socket rather than to a comment.
+if grep -qE '^ +pipewire .*pipewire-pulseaudio' image/Containerfile \
+    && grep -q 'test -L /etc/systemd/user/sockets.target.wants/pipewire-pulse.socket' image/Containerfile; then
+  ok "the image ships the PulseAudio server the session's clients expect"
+else
+  bad "the image ships the PulseAudio server the session's clients expect"
+fi
+
+# Intel Xe has no VA-API driver in mesa: iHD is a separate package. Without it
+# vaInitialize fails and Chromium cannot hardware-decode HEVC at all, which
+# shows up as a black video element rather than an error.
+if grep -qE '^ +libva-intel-media-driver' image/Containerfile \
+    && grep -q 'test -f /usr/lib64/dri/iHD_drv_video.so' image/Containerfile \
+    && grep -q 'test -f /usr/lib64/libva.so.2' image/Containerfile; then
+  ok "the image ships the iHD VA-API driver Xe needs"
+else
+  bad "the image ships the iHD VA-API driver Xe needs"
+fi
+
 if grep -qE '^u[[:space:]]+greeter[[:space:]]' image/rootfs/usr/lib/sysusers.d/smorespro-greeter.conf 2>/dev/null; then
   ok "the image creates the greeter user greetd validates"
 else

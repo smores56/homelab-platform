@@ -109,7 +109,8 @@ Then, in the session:
 | Passwordless keyring | see below, once |
 | WiFi | connects on its own; `nmcli device status` |
 | Bluetooth | Noctalia's control center toggles it; `bluetoothctl` |
-| Audio | `wpctl status`; volume keys work |
+| Audio | `wpctl status`; volume keys work; a browser tab plays, with its own stream in Noctalia's mixer |
+| Video decode | `chrome://gpu` in Brave lists VA-API; an x265 video plays instead of showing a black frame |
 | Brightness | brightness keys work |
 | Fingerprint | `fprintd-enroll` then lock and unlock |
 | sudo gate | `sudo -k; sudo true` opens on a touch alone; with the key unplugged it asks for the account password instead |
