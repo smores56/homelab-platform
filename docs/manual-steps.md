@@ -3597,10 +3597,13 @@ refusal. The two `stream` runs are the four-hour budget; the `sha` run must
 print the seeded hash, and the `tar` run must parse the whole stream.
 
 Interruption is the one check that needs the platform: start the 100 GiB stream,
-find the container with `(cd backrest && mise x node@22 -- npx wrangler
-containers list)`, open a shell with `wrangler containers ssh <ID>`, and run
-`kill 1`. The client must see a truncated, failed download — never a silent
-success — and the next request must start cleanly.
+find the application with `(cd backrest && mise x node@22 -- npx wrangler
+containers list)`, list its live instances with `containers instances <APP_ID>`,
+open a shell on one with `containers ssh <INSTANCE_ID>`, and run
+`kill 1`. `ssh` takes an instance id, not the application id the list prints;
+the app id is only the argument to `instances`. The client must see a truncated,
+failed download — never a silent success — and the next request must start
+cleanly.
 
 ### 39.7 Record the verdict
 
