@@ -860,6 +860,9 @@ for program in $(libexec_programs units image/rootfs scripts/*.sh); do
       has 'scripts/deploy-cli.sh /usr/libexec/smortress-src/smortress-deploy.sh' image/Containerfile
   elif grep -qF "/usr/libexec/$program" image/Containerfile; then
     ok "the image installs /usr/libexec/$program"
+  elif grep -qF "/usr/libexec/$program" images/agent-runtime/Containerfile; then
+    # The agent programs ship in their own image (publish-agent-runtime).
+    ok "the runtime image installs /usr/libexec/$program"
   else
     check "the image installs /usr/libexec/$program" has "scripts/$program.sh" image/Containerfile
   fi
@@ -1105,12 +1108,13 @@ for name in $(app_image_names); do
   fi
 done
 # Agent deployments (#711). The hosted proxy is the one program that holds a
-# provider credential, so the checks that matter are that it is the program the
-# image ships, that its upstream cannot be moved at runtime, and that the GPU
+# provider credential, so the checks that matter are that it is the program its
+# own image ships, that its upstream cannot be moved at runtime, and that the GPU
 # device is declared with the SELinux type the driver needs.
-check "image installs the agent proxy" \
-  has 'apps/agent_proxy/proxy.py /usr/libexec/agent-proxy' image/Containerfile
-check "the image makes the agent proxy executable" has 'chmod 0755 /usr/libexec/apps-schema /usr/libexec/agent-proxy' image/Containerfile
+check "the runtime image installs the agent proxy" \
+  has 'apps/agent_proxy/proxy.py /usr/libexec/agent-proxy' images/agent-runtime/Containerfile
+check "the runtime image makes the agent proxy executable" \
+  has 'chmod 0755 /usr/libexec/agent-proxy' images/agent-runtime/Containerfile
 # `COPY image/rootfs/ /` is what puts these in the image, so a template that is
 # missing from the tree is missing from the image.
 check "image rootfs carries the agent config templates" \
@@ -1162,45 +1166,26 @@ check "the image installs the seed script" has 'scripts/agent-config-seed.sh' im
 check "the seed unit runs the installed script" \
   has 'ExecStart=/usr/libexec/agent-config-seed' units/systemd/smortress-agent-config.service
 
-# The source facades (T2b). They run in the agent-runtime image, which carries
-# neither the program nor the libraries it imports, so the image installs both under
-# /usr/lib/agent-facade and the Quadlets bind-mount that tree read-only. Every
-# module is listed: a new file that is not in the COPY list is an import error in
-# the container, and tests/ must not reach the host image.
-check "image installs the facade libraries" \
-  has 'libs/data_plane/ /usr/lib/agent-facade/libs/data_plane/' image/Containerfile
-for module in apps/agent_facade/*.py; do
-  check "image installs ${module#apps/agent_facade/}" has "$module" image/Containerfile
+# The source facades (T2b), the collectors and the hosted proxy live in the
+# agent-runtime image (images/agent-runtime/Containerfile, publish-agent-runtime.yml),
+# not here: this image must carry no copy of them, which is what keeps an agent-code
+# change off the OS rebuild path. The units import them from the image and mount
+# nothing from the host, so there is no second copy to drift.
+for path in 'apps/agent_facade' 'apps/brave_ingest' 'apps/agent_proxy' \
+  'libs/data_plane' '/usr/lib/agent-facade' '/usr/libexec/agent-proxy'; do
+  check "the host image ships no $path" lacks "$path" image/Containerfile
 done
-if grep -qF 'apps/agent_facade/tests' image/Containerfile; then
-  bad "the image ships no facade test suite"
-else
-  ok "the image ships no facade test suite"
-fi
 for q in units/quadlet/agent-facade-personal.container units/quadlet/agent-facade-general.container; do
   check "$q mounts no host copy of the facade" lacks 'Volume=/usr/lib/agent-facade' "$q"
 done
-# The program lives in the runtime image now, so a mount from the host would be a
-# second copy that can drift from the one the pin names.
 check "the proxy unit mounts no host copy of its program" \
   lacks 'Volume=/usr/libexec/agent-proxy' units/quadlet/agent-proxy.container
-# The browsing collector's provider half (`apps/brave_ingest/`: the seed planter and
-# the History snapshot) runs in the same agent-runtime image and imports nothing
-# outside that tree, so it ships beside the facade modules for the same reason: a
-# program the image installs on the host has to be mounted into the container that
-# runs it, and a module left out of the COPY list is an import error at first boot.
-for module in apps/brave_ingest/*.py; do
-  check "image installs ${module#apps/brave_ingest/}" has "$module" image/Containerfile
-done
 for unit in units/systemd/smortress-agent-brave-seed.service \
   units/systemd/smortress-agent-collect-brave.service; do
   check "$unit mounts no host copy of the tree" lacks '--volume /usr/lib/agent-facade' "$unit"
 done
-# The same programs are being moved out of this image and into the runtime image
-# (images/agent-runtime/Containerfile, publish-agent-runtime.yml), so an agent
-# change rebuilds a container instead of the OS. The list has to match there for
-# the same reason it matches here: a module left out is an import error at the
-# first start.
+# The programs' own list has to be complete in the image that does carry them: a
+# module left out is an import error at the first start.
 for module in apps/agent_facade/*.py apps/brave_ingest/*.py; do
   check "the runtime image installs ${module#apps/}" \
     has "$module" images/agent-runtime/Containerfile
@@ -1255,6 +1240,18 @@ copied=$(awk '/^COPY / { for (i = 2; i <= NF; i++) print $i }' image/Containerfi
 for directory in $copied; do
   check "the publish workflow rebuilds on ${directory}/ changes" \
     publish_covers .github/workflows/publish-server-image.yml "$directory"
+done
+# And the reverse, because this is how the reboot loop started: `apps/**` and
+# `libs/**` were on that path filter, so every app commit rebuilt and redeployed
+# the OS image. Nothing in this Containerfile copies from them any more (the agent
+# programs build into agent-runtime, every other app has its own publish workflow),
+# so listing them again would republish the host for code it does not carry.
+for directory in apps libs; do
+  if grep -qF "\"$directory/**\"" .github/workflows/publish-server-image.yml; then
+    bad "the publish workflow does not rebuild on ${directory}/ changes"
+  else
+    ok "the publish workflow does not rebuild on ${directory}/ changes"
+  fi
 done
 
 # Repository-wide CI rules that new files must not evade.

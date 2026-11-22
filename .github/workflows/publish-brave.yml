@@ -10,9 +10,8 @@
 # table row for a human to commit.
 #
 # The image is rebuilt when the browser's pin or this workflow changes. The seed
-# and snapshot programs are not in it: they run in the `agent-runtime` image, shipped
-# by the bootc build under /usr/lib/agent-facade, so a change to them does not move
-# this digest. It is deliberately not built on pull requests: the signing key is an
+# and snapshot programs are not in it: they are baked into the `agent-runtime` image
+# by images/agent-runtime/Containerfile, so a change to them moves that pin instead. It is deliberately not built on pull requests: the signing key is an
 # environment secret and a fork PR never receives one.
 name: publish-brave
 

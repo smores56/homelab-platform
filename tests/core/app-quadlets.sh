@@ -581,7 +581,8 @@ else
   ok 'no agent config template carries an api key'
 fi
 if grep -q '^Exec=/usr/libexec/agent-proxy$' "$agent_proxy" &&
-  grep -qF 'apps/agent_proxy/proxy.py /usr/libexec/agent-proxy' image/Containerfile; then
+  grep -qF 'apps/agent_proxy/proxy.py /usr/libexec/agent-proxy' \
+    images/agent-runtime/Containerfile; then
   ok 'the proxy unit runs the shipped program'
 else
   bad 'the proxy unit runs the shipped program'
@@ -1516,10 +1517,10 @@ else
   bad "the seeder creates the profile 0700 and the copy 0750, personal only"
 fi
 for module in apps/brave_ingest/*.py; do
-  if grep -qF "$module" image/Containerfile; then
-    ok "the image installs ${module#apps/brave_ingest/}"
+  if grep -qF "$module" images/agent-runtime/Containerfile; then
+    ok "the runtime image installs ${module#apps/brave_ingest/}"
   else
-    bad "the image installs ${module#apps/brave_ingest/}"
+    bad "the runtime image installs ${module#apps/brave_ingest/}"
   fi
 done
 if grep -qE '^brave-sync-seed\.yaml[[:space:]]+root[[:space:]]+root[[:space:]]+0400[[:space:]]+value' \

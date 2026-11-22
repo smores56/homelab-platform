@@ -137,28 +137,12 @@ COPY image/cosign.pub /etc/pki/containers/smortress.pub
 
 # The hosted-model proxy is a python program, not a shell helper, so it keeps its
 # name and needs its own mode: the smortress-src loop below only strips `.sh`.
+#
+# The agent runtime's own programs -- the hosted-model proxy, the source facades,
+# the collectors -- are not here. They are built into `agent-runtime` by
+# images/agent-runtime/Containerfile and pinned by scripts/app-images.sh, so a
+# change to them rebuilds that container image instead of this one.
 COPY scripts/apps-schema.py /usr/libexec/apps-schema
-COPY apps/agent_proxy/proxy.py /usr/libexec/agent-proxy
-# The source facade (apps/agent_facade/) runs in the agent-runtime image, which
-# does not carry it and cannot be rebuilt here. The image therefore installs the
-# program and the data-plane libraries it imports under /usr/lib/agent-facade, and
-# the two facade Quadlets bind-mount that tree read-only -- the same delivery as
-# /usr/libexec/agent-proxy above, one directory instead of one file. The modules
-# are listed one by one rather than as a directory: tests/ must not reach the host
-# image, and a new module that is not listed here fails at import time in the
-# container instead of shipping silently.
-COPY libs/data_plane/ /usr/lib/agent-facade/libs/data_plane/
-COPY apps/agent_facade/__init__.py apps/agent_facade/__main__.py \
-     apps/agent_facade/contracts.py apps/agent_facade/memory.py \
-     apps/agent_facade/server.py apps/agent_facade/sources.py \
-     apps/agent_facade/replica_sources.py apps/agent_facade/source_index.py \
-     /usr/lib/agent-facade/apps/agent_facade/
-# The browsing collector's provider half, `apps/brave_ingest/` (seed and snapshot),
-# runs in the same agent-runtime image and imports nothing this tree lacks. It is
-# listed module by module for the same reason the facade is: a new file that is not
-# here is an import error at the first boot, not at review time.
-COPY apps/brave_ingest/__init__.py apps/brave_ingest/seed.py \
-     apps/brave_ingest/snapshot.py /usr/lib/agent-facade/apps/brave_ingest/
 # The base ships %sudo ALL=(ALL) NOPASSWD: ALL in /etc/sudoers.d/coreos-sudo-group.
 # A NOPASSWD line reaches authsucc without consulting pam_authenticate, so the
 # touch, the password fallback and the faillock tally all stop applying: the
@@ -171,7 +155,7 @@ RUN set -eux; \
     for f in /usr/libexec/smortress-src/*.sh; do install -m 0755 "$f" "/usr/libexec/$(basename "${f%.sh}")"; done; \
     rm -rf /usr/libexec/smortress-src; \
     ln -sf /usr/libexec/smortress-deploy /usr/bin/smortress-deploy; \
-    chmod 0755 /usr/libexec/apps-schema /usr/libexec/agent-proxy; \
+    chmod 0755 /usr/libexec/apps-schema; \
     chmod 0644 /etc/pki/containers/smortress.pub /etc/smortress/secrets.manifest; \
     chmod 0600 /etc/smortress/secrets/*.yaml; \
     chmod 0644 /etc/pam.d/sudo; \
