@@ -350,11 +350,12 @@ target whose filesystem cannot hold it plus a 2 GiB margin, naming `--target`
 and `RESTIC_DRILL_ROOT` in the message.
 
 `agent-local` will not fit that default deadline. The helper pipes `restic dump`
-into `tar`, and `dump` emits no hardlink entries, so a tree that is 444 GiB
-summed per path but 36 GiB unique arrives as 444 GiB of distinct files. On
-2026-11-22 the drill wrote 39 GiB and 383,794 of 4,438,112 files in 24 minutes
-before it was stopped: the restored 43 GiB of unique bytes already exceeded the
-36.7 GiB the source occupies in total, which is the arithmetic proof that the
+into `tar`, and `dump` emits no hardlink entries, so a tree that is 519.8 GB
+summed per path but 36.8 GB unique arrives as 519.8 GB of distinct files. On
+2026-11-22 the drill wrote 39 GiB and 383,794 of 4,592,084 files in 24 minutes
+before it was stopped: the restored 43.8 GB of unique bytes was already 118 % of
+the 36.8 GB the whole source occupies, and the restored portion held zero
+multi-link files against 4,365,676 in the source — the arithmetic proof that the
 links were expanded. Budget hours and a full-size target for that unit, and do
 not read `RESTIC_DEADLINE_DRILL` (14400 s) as enough for it.
 
