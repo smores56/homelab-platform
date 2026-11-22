@@ -1,0 +1,274 @@
+{
+  "listen": "0.0.0.0:8080",
+  "deny_addresses": [],
+  "github_app": {"key_secret": "github-app-private-key", "id_secret": "github-app-id"},
+  "logical_hosts": {
+    "neuralwatt": {
+      "scheme": "https",
+      "host": "api.neuralwatt.com",
+      "port": 443,
+      "allow_private": false,
+      "secret": "neuralwatt-api-key",
+      "inject": {
+        "kind": "bearer"
+      }
+    },
+    "github-apps": {
+      "scheme": "https",
+      "host": "github.com",
+      "port": 443,
+      "allow_private": false,
+      "github_app": {
+        "installation": "github-installation-id",
+        "repositories": ["homelab-apps"],
+        "permissions": {
+          "contents": "write"
+        }
+      },
+      "inject": {
+        "kind": "basic",
+        "username": "x-access-token"
+      }
+    },
+    "github-platform-push": {
+      "scheme": "https",
+      "host": "github.com",
+      "port": 443,
+      "allow_private": false,
+      "github_app": {
+        "installation": "github-installation-id",
+        "repositories": ["homelab-platform"],
+        "permissions": {
+          "contents": "write"
+        }
+      },
+      "inject": {
+        "kind": "basic",
+        "username": "x-access-token"
+      }
+    },
+    "github-platform": {
+      "scheme": "https",
+      "host": "api.github.com",
+      "port": 443,
+      "allow_private": false,
+      "github_app": {
+        "installation": "github-installation-id",
+        "repositories": ["homelab-platform"],
+        "permissions": {
+          "contents": "write",
+          "pull_requests": "write"
+        }
+      },
+      "inject": {
+        "kind": "bearer"
+      }
+    },
+    "github-agent-push": {
+      "scheme": "https",
+      "host": "github.com",
+      "port": 443,
+      "allow_private": false,
+      "github_app": {
+        "installation": "github-installation-id",
+        "repositories": ["nix-config", "kanbei"],
+        "permissions": {
+          "contents": "write",
+          "workflows": "write"
+        }
+      },
+      "inject": {
+        "kind": "basic",
+        "username": "x-access-token"
+      }
+    },
+    "github-agent": {
+      "scheme": "https",
+      "host": "api.github.com",
+      "port": 443,
+      "allow_private": false,
+      "github_app": {
+        "installation": "github-installation-id",
+        "repositories": ["nix-config", "kanbei"],
+        "permissions": {
+          "contents": "read",
+          "pull_requests": "write"
+        }
+      },
+      "inject": {
+        "kind": "bearer"
+      }
+    },
+    "github-sdlc-git": {
+      "scheme": "https",
+      "host": "github.com",
+      "port": 443,
+      "allow_private": false,
+      "github_app": {
+        "installation": "github-installation-id",
+        "repositories": ["sdlc"],
+        "permissions": {
+          "contents": "write"
+        }
+      },
+      "inject": {
+        "kind": "basic",
+        "username": "x-access-token"
+      }
+    },
+    "github-sdlc": {
+      "scheme": "https",
+      "host": "api.github.com",
+      "port": 443,
+      "allow_private": false,
+      "github_app": {
+        "installation": "github-installation-id",
+        "repositories": ["sdlc"],
+        "permissions": {
+          "issues": "write",
+          "metadata": "read"
+        }
+      },
+      "inject": {
+        "kind": "bearer"
+      }
+    },
+    "github-agent-apps": {
+      "scheme": "https",
+      "host": "api.github.com",
+      "port": 443,
+      "allow_private": false,
+      "github_app": {
+        "installation": "github-installation-id",
+        "repositories": [
+          "homelab-apps"
+        ],
+        "permissions": {
+          "contents": "read",
+          "metadata": "read",
+          "pull_requests": "write"
+        }
+      },
+      "inject": {
+        "kind": "bearer"
+      },
+      "allow_methods": [
+        "POST",
+        "PUT"
+      ],
+      "allow_paths": [
+        "^/repos/smores56/homelab-apps/pulls$",
+        "^/repos/smores56/homelab-apps/pulls/[0-9]+/merge$",
+        "^/graphql$"
+      ],
+      "body_guards": [
+        {
+          "methods": [
+            "POST"
+          ],
+          "paths": [
+            "^/graphql$"
+          ],
+          "field": "query",
+          "allow": "^mutation[\\s\\S]*enablePullRequestAutoMerge[\\s\\S]*$"
+        }
+      ]
+    },
+    "github-hooks": {
+      "scheme": "https",
+      "host": "api.github.com",
+      "port": 443,
+      "allow_private": false,
+      "github_app": {
+        "installation": "github-installation-id",
+        "repositories": ["sdlc", "homelab-apps"],
+        "permissions": {
+          "repository_hooks": "write",
+          "metadata": "read"
+        }
+      },
+      "inject": {
+        "kind": "bearer"
+      },
+      "allow_methods": ["POST"],
+      "allow_paths": ["^/repos/[^/]+/[^/]+/hooks$"],
+      "body_guards": [
+        {
+          "methods": ["POST"],
+          "paths": ["^/repos/[^/]+/[^/]+/hooks$"],
+          "field": "config.url",
+          "allow": "^https://agent-hooks\\.sammohr\\.dev/"
+        }
+      ]
+    },
+    "tinyfish": {
+      "scheme": "https",
+      "host": "api.search.tinyfish.ai",
+      "port": 443,
+      "allow_private": false,
+      "secret": "tinyfish-api-key",
+      "inject": {
+        "kind": "header",
+        "header": "X-Api-Key"
+      }
+    },
+    "notify": {
+      "scheme": "https",
+      "host": "ntfy.sammohr.dev",
+      "port": 443,
+      "allow_private": false,
+      "secret": "notify-token",
+      "optional_secret": true,
+      "inject": {
+        "kind": "bearer"
+      },
+      "allow_methods": ["POST"],
+      "allow_paths": ["^/[a-z0-9_-]{1,64}$"],
+      "max_body_bytes": 4096
+    },
+    "loki": {
+      "scheme": "http",
+      "host": "loki-gateway.observability.svc.cluster.local",
+      "port": 3100,
+      "allow_private": true,
+      "secret": "loki-gateway-token",
+      "inject": {
+        "kind": "bearer"
+      },
+      "headers": {
+        "X-Scope-OrgID": "data"
+      }
+    },
+    "memory": {
+      "scheme": "http",
+      "host": "memory-mcp.graphiti.svc.cluster.local",
+      "port": 8182,
+      "allow_private": true,
+      "secret": "memory-mcp-token",
+      "optional_secret": true,
+      "inject": {
+        "kind": "bearer"
+      }
+    },
+    "self": {
+      "scheme": "http",
+      "host": "agent-control.tenant-apps.svc.cluster.local",
+      "port": 8081,
+      "allow_private": true,
+      "path_prefix": "/self"
+    },
+    "cluster": {
+      "scheme": "http",
+      "host": "agent-control.tenant-apps.svc.cluster.local",
+      "port": 8081,
+      "allow_private": true,
+      "path_prefix": "/cluster"
+    },
+    "status": {
+      "scheme": "http",
+      "host": "status-exporter.observability.svc.cluster.local",
+      "port": 9101,
+      "allow_private": true
+    }
+  }
+}

@@ -1,6 +1,6 @@
-# Builds the one data-plane image used by deploy/data-plane and prints its
-# digest for a human to pin in images.yaml. It never writes the pin itself and
-# never receives a provider, cluster, or restic credential.
+# Builds the one data-plane image and prints its digest. It never writes a pin
+# itself and never receives a provider, cluster, or restic credential; no tree in
+# this repository consumes the image, so the step summary is the record.
 name: publish-data-plane
 
 on:
@@ -46,7 +46,5 @@ jobs:
             echo
             echo "- \`$IMAGE:$tag\`"
             echo "- \`$IMAGE@$digest\`"
-            echo
-            echo "Pin this digest in \`deploy/data-plane/images.yaml\`."
           } >>"$GITHUB_STEP_SUMMARY"
           echo "pin: $IMAGE@$digest"

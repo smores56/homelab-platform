@@ -7,8 +7,9 @@ resolves and pins the address itself, strips whatever credential the agent sent,
 injects exactly one enrolled credential, refuses redirects that leave the
 enrolled endpoint, and logs metadata only.
 
-Source: `apps/broker/` (Python stdlib, 102 unit tests). Manifests:
-`clusters/homelab/broker/`. Applied by the Flux stage `platform-broker`.
+Source: `apps/broker/` (Python stdlib, 123 unit tests). The reviewed
+enrollment ships beside it at `apps/broker/config/broker.json`; the k3s/Flux
+manifests were retired with the cluster tree.
 
 ## Trust boundary and non-goals
 
@@ -60,7 +61,7 @@ TINYFISH_BASE_URL=http://broker.broker.svc.cluster.local:8080/tinyfish
 
 ## Logical-host enrollment
 
-`clusters/homelab/broker/config/broker.json` is the reviewed, non-secret
+`apps/broker/config/broker.json` is the reviewed, non-secret
 enrollment. Static credentials are files in the `broker-credentials` Secret;
 GitHub App enrollments name the app id, private key and installation id files
 instead, and the broker mints a short-lived, scoped installation token for

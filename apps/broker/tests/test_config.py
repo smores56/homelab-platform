@@ -11,7 +11,7 @@ from broker.config import ConfigError, load_app_signing, load_config, load_secre
 
 KEY_PEM = "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----\n"
 
-SHIPPED = pathlib.Path(__file__).resolve().parents[3] / "clusters/homelab/broker/config/broker.json"
+SHIPPED = pathlib.Path(__file__).resolve().parents[1] / "config/broker.json"
 
 
 class ShippedConfigTest(unittest.TestCase):

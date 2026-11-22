@@ -114,9 +114,9 @@ The parent chain stays `0700`, so the numeric gid is not a host group. The copy
 owns the final owner and mode, so a drift is corrected on the next run, and a
 rotation restarts only a running unit whose content changed
 (`systemctl try-restart`); a stopped or fenced unit stays stopped. The host
-backup units read `/etc/homelab/secrets/restic` directly. The cluster Secrets
-are created by the operator from `deploy/data-plane/README.md`, because this
-tree creates no Secret.
+backup units read `/etc/homelab/secrets/restic` directly. There is no cluster
+Secret to create: the data-plane base that mounted one was retired with the
+k3s/Flux tree, so the host files above are the only copy of each value.
 
 Until each row moves, the same value may exist in two stores. The host copy stays
 authoritative for the host reader; the platform copy is written with the host

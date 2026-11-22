@@ -2115,49 +2115,57 @@ prunes. A missing repository is reported by name, not created.
    uid; `/srv/books` stays host-owned, so a general-source write needs an owner
    match before cutover.
 
-4. Create every repository, one group at a time. `backup-init` is idempotent and
-   creates only the tiers the group lists:
+4. Create the repositories. There is nothing to create per group: the per-group
+   `<repository_root>/<group id>` model, `data_plane backup-init` and the
+   `/opt/data-plane/lib` tree it ran from are retired with the Ansible data
+   plane. A repository is one of the three destinations (`ssd`, `hdd`, `r2`) and
+   `smortress-restic-init` creates all three once, refusing an unmounted or
+   non-empty local mountpoint and never re-initialising an existing one. Section
+   38 item 4 is the command and its expected output; a second run prints
+   "already initialised" for each backend and changes nothing.
+
+5. Run one real cadence. The driver runs every unit for one backend, in order,
+   taking one recursive ZFS snapshot per unit and tagging it `verified` only
+   after restic exits 0; forget, prune and the weekly `check --read-data-subset`
+   follow in the same pass:
 
    ```sh
-   sudo sh -c '. /etc/homelab/secrets/restic/r2.env &&
-     PYTHONPATH=/opt/data-plane/lib python3 -m data_plane backup-init \
-       --plan /etc/homelab/backup.json --group notes --dry-run'   # argv only
-   sudo sh -c '. /etc/homelab/secrets/restic/r2.env &&
-     PYTHONPATH=/opt/data-plane/lib python3 -m data_plane backup-init \
-       --plan /etc/homelab/backup.json --group notes'
+   sudo /usr/libexec/smortress-restic-backup ssd
+   sudo /usr/libexec/smortress-restic-backup hdd
+   sudo /usr/libexec/smortress-restic-backup r2
+   for b in ssd hdd; do
+     sudo env RESTIC_PASSWORD_FILE=/run/smortress/secrets/restic-password.yaml \
+       restic -r "/var/lib/restic/$b/restic" snapshots --host smortress \
+       --tag unit:notes --tag verified
+   done
    ```
 
-   Repeat per group (books, memory-external, memory-local, music, notes, photos,
-   wallpapers, data-plane-state, browsing, finance, mail, host-keys), or omit
-   `--group` to cover the whole plan.
+   The run fails on an unmounted dataset (`readiness`), on a repository that is
+   not its mountpoint (`repo-not-mounted`), on a missing `.zfs/snapshot`, and on
+   a copy that does not land; it never backs up the previous tree. A second
+   concurrent run fails on the per-job lock after `RESTIC_LOCK_WAIT`. Every
+   attempt is recorded under `/var/lib/homelab/restic`, so a SIGKILL shows up as
+   a stale `running` record rather than a silent gap.
 
-5. Run one real cadence. Start with the fastest group; the runner takes one
-   recursive ZFS snapshot, writes every due group's primary, copies outward and
-   prunes after the copies land:
+6. Prove structure, then payload, then freshness. `smortress-restic-verify` is
+   the freshness join: it fails closed unless the recorded attempt is a success,
+   its snapshot is the newest for that unit's `host,paths`, it carries
+   `unit:<unit>`, `host:smortress` and `verified`, and it is inside the backend's
+   maximum age.
 
    ```sh
-   /usr/local/sbin/homelab-backup --config /etc/homelab/backup.json --cadence fast
-   restic --repo /var/backups/primary/restic/notes \
-     --password-file /etc/homelab/secrets/restic/data-plane.password snapshots
+   sudo /usr/libexec/smortress-restic-verify; echo "verify exit $?"
+
+   # Structure and payload, bounded: a bare `restic check` reads metadata only.
+   sudo env RESTIC_PASSWORD_FILE=/run/smortress/secrets/restic-password.yaml \
+     restic -r /var/lib/restic/hdd/restic check --read-data-subset=1/30
    ```
 
-   The run fails on an unmounted or empty stage, on a copy that does not land,
-   and on a leftover bind mount; it never backs up the previous tree. A second
-   concurrent run fails on the lock.
-
-6. Prove structure, then payload, then freshness:
-
-   ```sh
-   export PYTHONPATH=/opt/data-plane/lib
-   python3 -m data_plane backup-check --plan /etc/homelab/backup.json --group notes
-   python3 -m data_plane backup-freshness --plan /etc/homelab/backup.json --json
-   python3 -m data_plane.migration preflight --plan /etc/homelab/backup.json --no-read-data
-   python3 -m data_plane.migration preflight --plan /etc/homelab/backup.json
-   ```
-
-   The last command reads every pack on each group's primary; never skip it
-   before cutover. Every failure line names `<group>/<tier>`, so one run shows
-   every gap. `restic check` and `--read-data` do not modify a repository.
+   Neither command modifies a repository. The verifier names the failing
+   `<backend>/<unit>` and the reason (`repo-not-mounted`, `exit-<n>`,
+   `not-configured`, an expired `running` record, a snapshot mismatch), so one
+   run shows every gap; `tests/core/restic-plane.sh` proves the same join with
+   stubs.
 
 7. Restore a unit to a dedicated scratch mount. The Ansible recovery play that
    fenced every writer and restored nvme→hdd→r2 is retired with `ansible/`; the

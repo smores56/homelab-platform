@@ -17,7 +17,7 @@ from broker.policy import Denied, check_request
 HOOK_PATH = "/repos/smores56/kanbei/hooks"
 HOOK_URL = "https://agent-hooks.sammohr.dev/kanbei"
 
-SHIPPED = pathlib.Path(__file__).resolve().parents[3] / "clusters/homelab/broker/config/broker.json"
+SHIPPED = pathlib.Path(__file__).resolve().parents[1] / "config/broker.json"
 
 PULLS = "/repos/smores56/homelab-apps/pulls"
 MERGE = "/repos/smores56/homelab-apps/pulls/17/merge"

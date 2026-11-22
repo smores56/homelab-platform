@@ -2,13 +2,17 @@
 #
 # Two stores, two audiences, no overlap:
 #
-#   secrets/*.yaml            operator tooling (tofu runs, scripted applies)
-#                             encrypted to the admin identity and the three
-#                             YubiKeys; no host and no cluster identity can
-#                             decrypt it
-#   clusters/**/*.sops.yaml   manifests Flux decrypts in-cluster
-#                             encrypted to the flux-system `sops-age` identity,
-#                             so the controller can read what it deploys
+#   secrets/*.yaml            operator tooling (tofu runs, scripted applies,
+#                             the host-secret bundles the operator unpacks).
+#                             Encrypted to the admin identity and the three
+#                             YubiKeys; no host identity can decrypt it, so a
+#                             secret reaches the host only after an operator
+#                             unpacks it.
+#   secrets/server/*.yaml     image-carried ciphertext the host decrypts at boot.
+#                             Encrypted to the machine identity as well, because
+#                             `sops-decrypt.service` on the host has to read it;
+#                             admin and the YubiKeys stay in the rule so the
+#                             files remain editable without the host.
 #
 # The admin identity is the operator's passphrase-wrapped age key, listed first
 # in every rule so a no-token decrypt prompts once. The three YubiKeys are
