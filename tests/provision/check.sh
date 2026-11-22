@@ -83,6 +83,7 @@ check "the bootstrap sets the OS hostname" has 'hostnamectl set-hostname smoresn
 check "the bootstrap installs the repository login key" has 'authorized_keys' "$edge/bootstrap.sh"
 check "the bootstrap validates the ruleset before applying it" has 'nft -c -f /etc/nftables.conf' "$edge/bootstrap.sh"
 check "the bootstrap validates the Caddyfile before enabling Caddy" has 'caddy validate --config /etc/caddy/Caddyfile' "$edge/bootstrap.sh"
+check "the Caddy config directory is traversable by the caddy user" has 'install -d -m 0755 /etc/caddy' "$edge/bootstrap.sh"
 check "sshd hardening sorts before cloud-init" has '05-edge-hardening.conf' "$edge/bootstrap.sh"
 check "the bootstrap refuses a Caddy older than 2.6" has 'is too old; the Caddyfile needs 2.6' "$edge/bootstrap.sh"
 check "the bootstrap unmasks the packaged Caddy unit" has 'systemctl unmask caddy' "$edge/bootstrap.sh"

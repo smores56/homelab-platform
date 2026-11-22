@@ -128,7 +128,10 @@ fi
 # Caddy: the two names, no admin API, no port 80. The environment file carries
 # the two values the Caddyfile substitutes; caddy.service reads it through a
 # drop-in because the package ships no EnvironmentFile of its own.
-install -d -m 0750 /etc/caddy
+# The directory has to be traversable by the caddy user, which the environment
+# file's own 0640 root:caddy does not make it: a 0750 root:root directory locks
+# the service out of the Caddyfile it is told to read.
+install -d -m 0755 /etc/caddy
 install -m 0644 "$here/Caddyfile" /etc/caddy/Caddyfile
 (
   # A subshell: the umask must not leak into every file written afterwards.
