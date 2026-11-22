@@ -296,6 +296,12 @@ if [[ -n ${FAKE_SYSTEMCTL_TRANSPORT_ONCE:-} && " $* " == *"$FAKE_SYSTEMCTL_TRANS
   printf 'Failed to connect to user scope bus\n' >&2
   exit 1
 fi
+if [[ -n ${FAKE_SYSTEMCTL_RESET_ONCE:-} && " $* " == *"$FAKE_SYSTEMCTL_RESET_ONCE"* &&
+  ! -e $FAKE_LOG/reset-once ]]; then
+  : >"$FAKE_LOG/reset-once"
+  printf 'Connection reset by peer\n' >&2
+  exit 1
+fi
 if [[ -n ${FAKE_SYSTEMCTL_NOTLOADED:-} && " $* " == *"$FAKE_SYSTEMCTL_NOTLOADED"* ]]; then
   printf 'Unit %s not loaded.\n' "$unit" >&2
   exit 5
@@ -503,7 +509,7 @@ reset_case() {
   unset FAKE_SYSTEMCTL_FAIL FAKE_SYSTEMCTL_FAIL_ONCE FAKE_PULL_FAIL FAKE_CURL_EXIT \
     FAKE_SOPS_EXIT FAKE_UNIT_INACTIVE FAKE_UNIT_FAILED FAKE_UNIT_SLOW FAKE_UNIT_RESTART \
     FAKE_SHOW_DOWN FAKE_SHOW_TRANSPORT_ONCE FAKE_SYSTEMCTL_TRANSPORT \
-    FAKE_SYSTEMCTL_TRANSPORT_ONCE FAKE_SYSTEMCTL_NOTLOADED
+    FAKE_SYSTEMCTL_TRANSPORT_ONCE FAKE_SYSTEMCTL_RESET_ONCE FAKE_SYSTEMCTL_NOTLOADED
   export APPS_HEALTH_SETTLE=0 APPS_CTL_RETRIES=3
 }
 
@@ -950,6 +956,18 @@ unset FAKE_SYSTEMCTL_TRANSPORT_ONCE
 check_eq "$rc" 0 "a transport blip on restart does not fail the apply" "$out"
 check_eq "$(grep -c 'user restart alpha.service' "$log/actions")" 2 \
   "the restart is retried once"
+
+# --- 9m. a connection reset on a control call is asked again ----------------
+reset_case
+run_apply "$c_v1"
+check_eq "$rc" 0 "the two-app revision applies" "$out"
+set_secrets "$secrets_v1b"
+export FAKE_SYSTEMCTL_RESET_ONCE='restart alpha.service'
+run_apply "$c_v2"
+unset FAKE_SYSTEMCTL_RESET_ONCE
+check_eq "$rc" 0 "a connection reset on restart does not fail the apply" "$out"
+check_eq "$(grep -c 'user restart alpha.service' "$log/actions")" 2 \
+  "the restart is retried after a reset"
 
 # --- 10. a Serve failure after the commit does not revert --------------------
 reset_case

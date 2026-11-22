@@ -123,7 +123,7 @@ ctl_timeout=${APPS_CTL_TIMEOUT:-120}
 # Transport failures are retried while the tenant manager starts; the count is a
 # knob because a suite that has to prove the exhausted case cannot wait 30 s for
 # every call.
-ctl_retries=${APPS_CTL_RETRIES:-30}
+ctl_retries=${APPS_CTL_RETRIES:-60}
 serve_timeout=${APPS_SERVE_TIMEOUT:-180}
 # How long a started app may take to come up, and how long it must then stay up:
 # a container that exits is restarted, so one active sample is not health.
@@ -267,7 +267,8 @@ user_ctl() { # <args...>; retry transport failures while the manager starts
     }
     rc=$?
     case $out in
-      *"Transport endpoint is not connected"* | *"Failed to connect to user scope bus"* | *"Connection refused"*)
+      *"Transport endpoint is not connected"* | *"Failed to connect to user scope bus"* | \
+        *"Connection refused"* | *"Connection reset"* | *"Broken pipe"*)
         sleep 1
         ;;
       *)
