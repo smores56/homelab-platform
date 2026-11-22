@@ -97,6 +97,13 @@ class Handler(BaseHTTPRequestHandler):
         return self.send(200, b"<html>app</html>", "text/html")
 
     def do_POST(self):
+        # Backrest answers 415 without a media type; an internal call that omits
+        # it reads as an empty operation list, which hides the bug.
+        ctype = self.headers.get("Content-Type") or ""
+        if "json" not in ctype and "proto" not in ctype:
+            length = int(self.headers.get("Content-Length") or 0)
+            self.rfile.read(length)
+            return self.send(415, b"", "text/plain")
         length = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(length)
         if self.path == "/v1.Backrest/GetConfig":

@@ -349,13 +349,9 @@ class Handler(BaseHTTPRequestHandler):
         return conn, response
 
     def rpc(self, method, payload, auth_headers):
-        conn, response = self.upstream(
-            "POST", "/v1.Backrest/%s" % method, json.dumps(payload).encode(), auth_headers
-        )
-        try:
-            return as_json(response.read())
-        finally:
-            conn.close()
+        # api_call, not upstream: an internal request without Content-Type is a
+        # 415 from Backrest, and the guard then reads an empty operation list.
+        return api_call(method, payload, auth_headers)
 
     def auth_headers(self):
         headers = {}
