@@ -235,5 +235,14 @@ else
   note "unit tests: run 'cd backrest && npm test' (node not installed here)"
 fi
 
+# The guard is the only thing refusing the admin RPCs on a host without the
+# Worker, so its refusals and rewrites run here rather than being asserted from
+# source shape alone.
+if out=$(bash tests/backrest/guard.sh 2>&1); then
+  ok "guard refusals and rewrites ($(grep -c '^ok' <<<"$out") checks)"
+else
+  bad "guard refusals and rewrites" "$out"
+fi
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]

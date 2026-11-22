@@ -6,12 +6,19 @@ FROM ghcr.io/garethgeorge/backrest:v1.14.1@sha256:b852979754281026230cc69fb11428
 
 # jq renders the config inside the image so a container run and a VPS run share
 # one implementation. The package is resolved at build time; the base image and
-# the bundled restic are what the deploy pins.
-RUN apk add --no-cache jq
+# the bundled restic are what the deploy pins. python3 carries the read-only
+# guard, because a host without the Cloudflare Worker has nothing else refusing
+# the admin RPCs (design #725, T2).
+RUN apk add --no-cache jq python3
 
 # The stock entrypoint only defaults env vars; this one also renders the
 # ephemeral config from the environment before Backrest starts.
 COPY --chmod=0755 entrypoint.sh /usr/local/bin/smortress-backrest-entrypoint
+
+# The guard owns the public port and starts Backrest itself on loopback, so a
+# host cannot expose an unguarded reader by forgetting a flag. The Cloudflare
+# deployment keeps CMD=/backrest and the Worker's own guard.
+COPY --chmod=0755 guard.py /usr/local/bin/backrest-guard
 
 ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/smortress-backrest-entrypoint"]
 CMD ["/backrest"]
