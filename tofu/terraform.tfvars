@@ -27,6 +27,11 @@ acme_account_id = ""
 
 cluster_hosts = ["agent", "agent-hooks", "memory", "music", "ntfy"]
 
+# The public edge VPS (#725). Setting it creates the two grey-cloud A
+# records; the previous commit already took both names off the cluster
+# tunnel. Rollback: drop this value, then restore cluster_hosts.
+edge_ipv4 = "192.236.188.99"
+
 # The tailnet's name: the label before `.ts.net` MagicDNS names everything on
 # it. Naming it is what creates the ACL in tofu/tailscale.tf; an empty value
 # plans nothing about the tailnet.
