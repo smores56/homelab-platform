@@ -349,6 +349,15 @@ anything the helper asks restic for the snapshot's restore size and refuses a
 target whose filesystem cannot hold it plus a 2 GiB margin, naming `--target`
 and `RESTIC_DRILL_ROOT` in the message.
 
+`agent-local` will not fit that default deadline. The helper pipes `restic dump`
+into `tar`, and `dump` emits no hardlink entries, so a tree that is 444 GiB
+summed per path but 36 GiB unique arrives as 444 GiB of distinct files. On
+2026-11-22 the drill wrote 39 GiB and 383,794 of 4,438,112 files in 24 minutes
+before it was stopped: the restored 43 GiB of unique bytes already exceeded the
+36.7 GiB the source occupies in total, which is the arithmetic proof that the
+links were expanded. Budget hours and a full-size target for that unit, and do
+not read `RESTIC_DEADLINE_DRILL` (14400 s) as enough for it.
+
 The raw equivalent, for any machine:
 
 ```sh

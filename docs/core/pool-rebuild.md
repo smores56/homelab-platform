@@ -246,6 +246,25 @@ Then, in order:
    `smortress-restic-verify` go green, then delete
    `/var/lib/restic/ssd/pool-copy`.
 
+### What the 2026-11-22 window proved for `agent-local`
+
+The full `agent-runtime-drill.sh restore agent-local --backend ssd` was stopped,
+not passed: it wrote 39 GiB of 444 GiB in 24 minutes, which cannot finish inside
+the helper's four-hour deadline. What stands in its place:
+
+- `scripts/retirement-gate.sh` cold-restores every unit from each destination
+  and matches one sample file per dataset against the live tree. That matrix is
+  the retirement evidence.
+- 400 files spread across the first 383,794 restored files of `agent-local`
+  matched byte for byte, with owner and mode, against `/var/lib/agent/local`.
+- the restore expands hardlinks (`restic dump` emits none): 43 GiB of unique
+  bytes for 8.6 % of the files against a 36.7 GiB source, so a full drill of that
+  unit needs an hours-long run and a 444 GiB target
+  (`docs/core/restic-plane.md`, "Restore by hand").
+
+Record a deferred drill as deferred. `smortress-restic-verify` going green says
+the snapshots are fresh; it does not say this unit was restored in full.
+
 ## Rollback
 
 There is no rollback past phase C: `p5` is gone. The two copies that exist by
