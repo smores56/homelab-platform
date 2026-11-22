@@ -242,14 +242,54 @@ tenant_remove() { # <path>
   tenant rm -f -- "$1"
 }
 
-# `systemctl --user` reaches the tenant's manager over its private socket, which
-# needs no session bus: that is why the unit can widen /run/user and stop there.
-user_ctl() { # <args...>
-  tenant_bounded "$(cap_of "$ctl_timeout")" "$systemctl_bin" --user "$@"
+# The machine transport is the system bus's route to the tenant manager, so this
+# works from the drain and from a root shell alike. `runuser -- systemctl --user`
+# races the manager's private socket and inherits the caller's bus address.
+user_ctl() { # <args...>; retry transport failures while the manager starts
+  local i rc out
+  for ((i = 0; i < 30; i++)); do
+    out=$(bounded "$(cap_of "$ctl_timeout")" "$systemctl_bin" --user \
+      --machine="$apps_user@.host" "$@" 2>&1) && {
+      [[ -n $out ]] && printf '%s\n' "$out" >&2
+      return 0
+    }
+    rc=$?
+    case $out in
+      *"Transport endpoint is not connected"* | *"Failed to connect to user scope bus"* | *"Connection refused"*)
+        sleep 1
+        ;;
+      *)
+        [[ -n $out ]] && printf '%s\n' "$out" >&2
+        return "$rc"
+        ;;
+    esac
+  done
+  [[ -n $out ]] && printf '%s\n' "$out" >&2
+  return "$rc"
 }
 
 system_ctl() { # <verb> <unit>
   bounded "$ctl_timeout" "$systemctl_bin" "$1" "$2"
+}
+
+# A unit that was never installed exits 5 from systemd; any other failure,
+# including an unreadable manager, is a real failure. Probing is-active here
+# turned a dead manager into "already stopped" and let the revert remove a
+# secret a running container still mounted.
+user_stop() { # <unit>
+  local rc
+  user_ctl stop "$1"
+  rc=$?
+  ((rc == 0 || rc == 5)) && return 0
+  return 1
+}
+
+system_stop() { # <unit>
+  local rc
+  system_ctl stop "$1"
+  rc=$?
+  ((rc == 0 || rc == 5)) && return 0
+  return 1
 }
 
 secret_value() { # <podman name>  -> the value bytes on stdout
@@ -374,10 +414,16 @@ available_bytes() { # <path>
 # nothing about the apply. Measured on smortress: `df /` on composefs is 8.3M with
 # 0 available, which refused every apply while /var had 63G.
 immutable_mount() { # <path>
-  local fstype
+  local fstype opts
   fstype=$(timeout --signal=TERM --kill-after=5 10 "$findmnt_bin" -no FSTYPE --target "$1" 2>/dev/null) || return 1
   case $fstype in
     composefs | erofs | squashfs | iso9660) return 0 ;;
+    overlay | overlayfs)
+      # A writable overlay is a real disk; only the read-only composefs root is
+      # the case the guard must skip.
+      opts=$(timeout --signal=TERM --kill-after=5 10 "$findmnt_bin" -no OPTIONS --target "$1" 2>/dev/null) || return 1
+      [[ ,$opts, == *,ro,* ]] && return 0
+      ;;
   esac
   return 1
 }
@@ -755,7 +801,7 @@ stop_departed_apps() {
   local name
   for name in "${departed_apps[@]}"; do
     require_app_name "$name" stop-app || return 1
-    user_ctl stop "$(app_service "$name")" || return 1
+    user_stop "$(app_service "$name")" || return 1
   done
   return 0
 }
@@ -777,7 +823,7 @@ apply_ingress() {
   done
   for name in "${departed_apps[@]}"; do
     require_app_name "$name" ingress-stop || return 1
-    system_ctl stop "$ingress_template$name" || return 1
+    system_stop "$ingress_template$name" || return 1
   done
   return 0
 }
@@ -934,8 +980,8 @@ revert_apply() {
       rc=1
       continue
     }
-    user_ctl stop "$(app_service "$name")" || rc=1
-    system_ctl stop "$ingress_template$name" || rc=1
+    user_stop "$(app_service "$name")" || rc=1
+    system_stop "$ingress_template$name" || rc=1
   done
   # Only after their containers are gone: a secret a running container mounts
   # cannot be removed.

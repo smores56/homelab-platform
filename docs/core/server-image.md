@@ -241,9 +241,9 @@ signed `main` build, so a host can follow that instead and then upgrade with one
 command:
 
 ```sh
+# Break-glass only: switch to the digest the receiver verified.
 sudo bootc switch --enforce-container-sigpolicy \
-  ghcr.io/smores56/homelab-platform/server:latest
-sudo bootc upgrade   # every later update
+  ghcr.io/smores56/homelab-platform/server@sha256:<verified-digest>
 ```
 
 Signature policy applies to the tag unchanged: `signedIdentity: matchRepository`
@@ -258,10 +258,10 @@ nothing on the host makes that comparison for a hand-run upgrade. Moving
 runs may move the tag and why the receiver stays the authoritative path. A
 tag-following host is the operator's convenience, not the deployment policy.
 
-`bootc rollback` is not sticky on a tag-following host: it boots the previous
-deployment but leaves the reference alone, so the next `bootc upgrade` re-stages
-the build that was just escaped. After a rollback, switch back to the digest you
-trust instead of leaving the host on the tag.
+`bootc rollback` boots the previous deployment. Because the reference is a
+digest, the next deploy cannot silently re-stage the escaped build. The deploy
+record can still name the staged digest after a rollback; the next successful
+stage and boot gate overwrite it.
 
 The install path keeps a digest (`ignition/operator/derived-image`): a fresh host
 must come up on the build that was verified, not on whatever `:latest` names.
@@ -358,19 +358,17 @@ repository can take the snapshot, or the budget runs out, the deploy **holds**:
 `smortress-deploy release --force`, run by hand as root, releases it.
 
 `deploy-platform stage` follows a green gate: `bootc switch
---enforce-container-sigpolicy ghcr.io/smores56/homelab-platform/server:latest`
+--enforce-container-sigpolicy ghcr.io/smores56/homelab-platform/server@<manifest-digest>`
 (stage only, never `--apply`), then `.status.staged.image.imageDigest` must
-equal one of the two digest forms the verifier resolved for the commit — a tag
-that moved between the resolution and the switch therefore stages an image
-nobody verified, and that means nothing is recorded and nothing reboots — then
-`pending.json` and `systemctl reboot`.
+equal one of the two digest forms the verifier resolved for the commit. The
+switch names the verified digest, never the tag, so a tag that moved between
+resolution and switch cannot stage an image nobody verified. It waits for
+`ostree-finalize-staged` to publish the entry before writing `pending.json` and
+requesting the reboot.
 
-The reference is the tag on purpose: the host then follows `:latest`, so a
-hand-run `bootc switch :latest` and a later `bootc upgrade` both work. What the
-tag does not weaken is the deploy decision: the commit, its digest forms and the
-signature are still verified before the switch, and the staged digest is still
-read back. A hand-run switch or upgrade bypasses only the descendancy check,
-which is why the receiver remains the authoritative path.
+The host is digest-pinned. `bootc upgrade` has no tag to follow and is not a
+deploy path. A hand switch by tag bypasses the receiver's descendancy check and
+can stage a build nobody verified, so use the digest from the deploy journal.
 
 The sandbox has to re-open `/sysroot` itself, not just `/sysroot/ostree`. bootc's
 first act is not a write to a file: `sysroot_is_read_only()` finds `/sysroot`
@@ -467,8 +465,11 @@ before and after the reboot:
 
 ### Operating it
 
-`/usr/libexec/smortress-deploy` (`scripts/deploy-cli.sh`; root's `PATH` does not
-carry `/usr/libexec`) is the whole operator surface. `status` prints the deployed
+`/usr/bin/smortress-deploy` (a symlink to `/usr/libexec/smortress-deploy`,
+which is `scripts/deploy-cli.sh`) is the whole operator surface. On smortress
+the operator checkout is `/var/home/smores/homelab-platform`; `/srv/git/...` is
+the agent workspace and must not be used to run deploy scripts, because the two
+can be at different commits. `status` prints the deployed
 commits, the tenant's apps table, the held and staged records and both denylist
 tables; `release --force`
 waives the snapshot gate for the held digest; `unblock` drops one denylist entry;
@@ -480,6 +481,11 @@ Environments, the three `deploy-*` ciphertexts, the Healthchecks check, the
 `bootupctl update`, and how to read a hold — is `docs/manual-steps.md`
 section 49.
 ## Disks and encryption
+After a rollback, `status` can name a staged digest the host never booted. The
+commit is the descendancy anchor; the digest is only the restore target. Do not
+hand-edit `state.json`: the next successful stage and boot gate overwrite the
+record. If the recorded commit is not an ancestor of `main`, the deploy refuses
+and the host needs the console/restore path, not a state edit.
 
 FCOS owns a fixed raw disk image: `p1` BIOS-BOOT, `p2` EFI-SYSTEM, `p3` boot,
 `p4` root. The approved design's "p2 LUKS root, p3 LUKS data" numbering cannot

@@ -282,6 +282,9 @@ health_plan() {
       health_reason="plan-unreadable:$name"
       return 1
     fi
+    # Quadlet generates `<name>.service` from `<name>.container`; the plan names
+    # the file, not the unit systemd runs.
+    [[ $unit == *.container ]] && unit=${unit%.container}.service
     # A user unit is reached through the tenant's own manager: the deploy runs as
     # root and cannot `--user` against a session it does not have.
     if [[ $(timeout --signal=TERM "$(clamp_timeout "$ctl_timeout")" "$systemctl_bin" --user \

@@ -16,11 +16,12 @@
 # `deploy-held`), so a staged deploy and a green gate stay separate records.
 #
 # `stage` is the second half and only ever follows a `prepare` that exited 0:
-# `bootc switch --enforce-container-sigpolicy` to the tracked tag (stage only,
-# never `--apply`, so nothing reboots behind the gate's back), the `bootc status`
-# read-back that proves the staged digest is one of the forms the verifier
-# resolved -- a tag that moved between resolution and switch is refused, not
-# rebooted into -- `pending.json`, and the reboot. A host that already runs the
+# `bootc switch --enforce-container-sigpolicy` to the verified manifest digest
+# (stage only, never `--apply`, so nothing reboots behind the gate's back), the
+# `bootc status` read-back that proves the staged digest is one of the forms the
+# verifier resolved -- a tag that moved between resolution and switch cannot be
+# deployed, because the tag is never what is switched to -- `pending.json`, and
+# the reboot. A host that already runs the
 # verified image records the deployment and exits 6 with no reboot. It deliberately does not live inside
 # `prepare`, so a gate that ran twice cannot stage twice, and it takes no deploy
 # lock: the drain that calls it already holds one.
@@ -129,12 +130,17 @@ check_commit_digests() { # <commit> <digests-json>
 switch_timeout=$(clamp_timeout "${DEPLOY_SWITCH_TIMEOUT:-3600}")
 stage_status_timeout=$(clamp_timeout "${DEPLOY_STAGE_STATUS_TIMEOUT:-60}")
 stage_reboot_timeout=$(clamp_timeout "${DEPLOY_STAGE_REBOOT_TIMEOUT:-60}")
+# `ostree-finalize-staged` finishes after `switch` returns, so one immediate
+# status read can see no staged entry on a host that is about to have one.
+stage_poll_attempts=${DEPLOY_STAGE_POLL_ATTEMPTS:-30}
+stage_poll_interval=${DEPLOY_STAGE_POLL_INTERVAL:-1}
+stage_poll_budget=${DEPLOY_STAGE_POLL_BUDGET:-60}
+[[ $stage_poll_attempts =~ ^[0-9]+$ ]] || stage_poll_attempts=30
+[[ $stage_poll_interval =~ ^[0-9]+([.][0-9]+)?$ ]] || stage_poll_interval=1
+[[ $stage_poll_budget =~ ^[0-9]+$ ]] || stage_poll_budget=60
 bootc_bin=${BOOTC_BIN:-bootc}
 stage_systemctl=${SYSTEMCTL_BIN:-systemctl}
 image_repo=${DEPLOY_IMAGE_REPO:-ghcr.io/smores56/homelab-platform/server}
-# The reference the host tracks. A tag keeps `bootc upgrade` usable; the stage
-# still refuses a tag that does not resolve to the verified digest.
-image_tag=${DEPLOY_IMAGE_TAG:-latest}
 
 budget_left() {
   local left=$((gate_deadline - $(date -u +%s)))
@@ -370,6 +376,38 @@ cmd_prepare() {
   return 0
 }
 
+staged_once() {
+  timeout --signal=TERM --kill-after=10 "$stage_status_timeout" \
+    "$bootc_bin" status --json 2>/dev/null |
+    jq -er '.status.staged.image.imageDigest // empty' 2>/dev/null
+}
+
+# staged_digest: poll until one of the expected digests is staged. A stale
+# staged entry from the previous deployment is not this switch's result, so any
+# other digest keeps the poll going; the last one is returned for the refusal.
+staged_digest() { # <expected digest>...
+  local i staged want last='' deadline=$(( $(date -u +%s) + stage_poll_budget ))
+  for ((i = 0; i < stage_poll_attempts; i++)); do
+    staged=$(staged_once) || staged=''
+    if [[ -n $staged ]]; then
+      last=$staged
+      for want in "$@"; do
+        [[ $staged == "$want" ]] && {
+          printf '%s\n' "$staged"
+          return 0
+        }
+      done
+    fi
+    (( $(date -u +%s) >= deadline )) && break
+    sleep "$stage_poll_interval"
+  done
+  [[ -n $last ]] && {
+    printf '%s\n' "$last"
+    return 0
+  }
+  return 1
+}
+
 # restore_staged_deployment: put the boot entry back on the digest the state says
 # is running, and prove bootc staged it.
 #
@@ -377,8 +415,8 @@ cmd_prepare() {
 # leave the next boot rolling into an image nobody verified. The other deployment
 # is the one the state recorded, and the read-back is what makes "restored" a fact
 # rather than an exit code.
-restore_staged_deployment() {
-  local doc index manifest target staged rc=0
+restore_staged_deployment() { # <staged-before>
+  local baseline=${1-} doc index manifest target staged rc=0
   doc=$(state_read 2>/dev/null) || return 1
   index=$(jq -r '.repos["homelab-platform"].indexDigest // ""' <<<"$doc" 2>/dev/null) || index=""
   manifest=$(jq -r '.repos["homelab-platform"].manifestDigest // ""' <<<"$doc" 2>/dev/null) ||
@@ -396,10 +434,12 @@ restore_staged_deployment() {
     warn "switching back to $target failed (exit $rc)"
     return 1
   fi
-  staged=$(timeout --signal=TERM --kill-after=10 "$stage_status_timeout" \
-    "$bootc_bin" status --json 2>/dev/null |
-    jq -er '.status.staged.image.imageDigest // empty' 2>/dev/null) || staged=''
+  staged=$(staged_digest "$index" "$manifest") || staged=''
   if [[ -z $staged || ($staged != "$index" && $staged != "$manifest") ]]; then
+    return 1
+  fi
+  if [[ -n $baseline && $staged == "$baseline" ]]; then
+    warn "the staged entry is still $baseline; a late finalize may still land"
     return 1
   fi
   say "restored the staged entry to $staged"
@@ -433,7 +473,7 @@ booted_matches() {
 }
 
 cmd_stage() {
-  local commit='' digests='' index='' manifest='' staged='' rc=0 booted_spec='' 
+  local commit='' digests='' index='' manifest='' staged='' staged_before='' rc=0
   while (($#)); do
     case $1 in
       --commit)
@@ -487,27 +527,17 @@ cmd_stage() {
     return 6
   fi
 
-  # Moving within the tracked reference is `upgrade`: `switch` is a reference
-  # change, and bootc answers "image specification is unchanged" -- staging
-  # nothing -- when the target spec equals the booted one, even though the tag
-  # now names a newer digest. `upgrade` has no sigpolicy flag, but the shipped
-  # policy has `default: reject` plus a `sigstoreSigned` entry for this
-  # repository, so the pull is verified either way.
-  booted_spec=$(timeout --signal=TERM --kill-after=10 "$(clamp_timeout "$stage_status_timeout")" \
-    "$bootc_bin" status --booted --json 2>/dev/null |
-    jq -er '.status.booted.image.image // empty' 2>/dev/null) || booted_spec=''
-  if [[ $booted_spec == "$image_repo:$image_tag" ]]; then
-    timeout --signal=TERM --kill-after=60 "$switch_timeout" "$bootc_bin" upgrade || rc=$?
-  else
-    # A different reference: the switch both sets it and stages the image.
-    timeout --signal=TERM --kill-after=60 "$switch_timeout" "$bootc_bin" switch \
-      --enforce-container-sigpolicy "$image_repo:$image_tag" || rc=$?
-  fi
+  # The switch names the verified manifest digest, never the tag: the tag can
+  # move between resolution and stage, and a digest-pinned host does not drift
+  # on upgrade. `switch` both sets the reference and stages the image.
+  staged_before=$(staged_once) || staged_before=''
+  timeout --signal=TERM --kill-after=60 "$switch_timeout" "$bootc_bin" switch \
+    --enforce-container-sigpolicy "$image_repo@$manifest" || rc=$?
   if ((rc != 0)); then
     journal_append stage-failed "$(jq -nc --arg commit "$commit" --arg manifest "$manifest" \
       --argjson exit "$rc" '{commit:$commit,manifest:$manifest,exit:$exit}')" ||
       warn "cannot journal the failed switch"
-    warn "bootc could not stage $image_repo:$image_tag (exit $rc); nothing was staged"
+    warn "bootc could not stage $image_repo@$manifest (exit $rc); nothing was staged"
     deploy_notify fail stage-failed || warn "could not report the failed stage"
     return 4
   fi
@@ -515,9 +545,7 @@ cmd_stage() {
   # What bootc staged is the only thing the boot gate can compare a boot to, so
   # a staged entry that is not one of the digests the verifier resolved means the
   # deploy would reboot into an image nobody checked. Nothing is recorded.
-  staged=$(timeout --signal=TERM --kill-after=10 "$stage_status_timeout" \
-    "$bootc_bin" status --json 2>/dev/null |
-    jq -er '.status.staged.image.imageDigest // empty' 2>/dev/null) || staged=''
+  staged=$(staged_digest "$index" "$manifest") || staged=''
   if [[ -z $staged || ($staged != "$index" && $staged != "$manifest") ]]; then
     journal_append stage-digest-mismatch "$(jq -nc --arg commit "$commit" --arg staged "$staged" \
       --arg digest "$index" --arg manifest "$manifest" \
@@ -525,7 +553,7 @@ cmd_stage() {
       warn "cannot journal the staged digest mismatch"
     warn "bootc staged '${staged:-nothing}', not $index or $manifest; not rebooting"
     deploy_notify fail stage-digest-mismatch || warn "could not report the staged digest mismatch"
-    if restore_staged_deployment; then
+    if restore_staged_deployment "$staged_before"; then
       journal_append stage-restored "$(jq -nc --arg commit "$commit" --arg digest "$index" \
         --arg from "${staged:-}" \
         '{commit:$commit,digest:$digest,from:$from}')" ||

@@ -149,6 +149,13 @@ case ${1-} in
     elif [[ -n ${STUB_BOOTC_NO_STAGED:-} ]]; then
       jq -nc --arg d "$booted" '{status:{booted:{image:{imageDigest:$d}}}}'
     else
+      if [[ -n ${STUB_BOOTC_STAGE_AFTER:-} ]]; then
+        n=$(cat "$STUB_LOG/stage-count" 2>/dev/null || printf 0)
+        if ((n < STUB_BOOTC_STAGE_AFTER)); then
+          printf '%s\n' $((n + 1)) >"$STUB_LOG/stage-count"
+          staged=$STUB_BOOTC_STAGE_OLD
+        fi
+      fi
       jq -nc --arg s "$staged" --arg b "$booted" '
         def img($v): {image:{imageDigest:(if $v == "" then null else $v end)}};
         {status:{staged:img($s),booted:img($b)}}'
@@ -292,6 +299,8 @@ export STUB_SYSTEMCTL_USER_ACTIVE=$work/active-user-units
 export STUB_SYSTEMCTL_FAILED=$work/failed-units
 export STUB_SERVE_JSON=$work/serve.json
 export DEPLOY_APPS_BIN=$bin/deploy-apps
+# Keep the finalize poll short in tests; production uses the one-second default.
+export DEPLOY_STAGE_POLL_INTERVAL=0.1 DEPLOY_STAGE_POLL_ATTEMPTS=3
 
 # The listener is a real socket: the gate's ingress check must fail on a closed
 # port and pass on a bound one, and a stub could only ever say what it was told.
@@ -328,7 +337,7 @@ fi
 # --- the healthy host --------------------------------------------------------
 printf 'core-one.service\ncore-two.service\n' >"$DEPLOY_UNITS_FILE"
 printf 'core-one.service\ncore-two.service\n' >"$STUB_SYSTEMCTL_ACTIVE"
-printf 'demo.container\n' >"$STUB_SYSTEMCTL_USER_ACTIVE"
+printf 'demo.service\n' >"$STUB_SYSTEMCTL_USER_ACTIVE"
 : >"$STUB_SYSTEMCTL_FAILED"
 jq -nc --argjson port "$app_port" \
   '{version:1,apps:{demo:{basePath:"/apps/demo",containerPort:8080,loopbackPort:$port}}}' \
@@ -360,7 +369,7 @@ seed_pending() { # <index> <manifest> <commit> [<booted>]
 reset_case() { # keep the fakes' healthy answers, drop every record
   rm -f "$state_dir/state.json" "$state_dir/pending.json" "$state_dir/apply.json" \
     "$state_dir/held.json" "$state_dir/denylist.json" "$state_dir/journal.jsonl"
-  rm -f "$DEPLOY_PING_SECRET" "$GRUB_ENV" "$STUB_BOOTC_STATE"
+  rm -f "$DEPLOY_PING_SECRET" "$GRUB_ENV" "$STUB_BOOTC_STATE" "$STUB_LOG/stage-count"
   : >"$log/bootc-calls"
   : >"$log/systemctl-calls"
   : >"$log/grub-calls"
@@ -371,13 +380,14 @@ reset_case() { # keep the fakes' healthy answers, drop every record
   : >"$log/apps-calls"
   : >"$log/gate-order"
   unset STUB_BOOTC_SWITCH_EXIT STUB_BOOTC_ROLLBACK_EXIT STUB_BOOTC_NO_STAGED \
-    STUB_BOOTC_STAGE_ON_SWITCH STUB_ZPOOL_OK STUB_MOUNTPOINT_OK GRUB_EDITEV STUB_APPS_EXIT \
+    STUB_BOOTC_STAGE_ON_SWITCH STUB_BOOTC_STAGE_AFTER STUB_BOOTC_STAGE_OLD \
+    STUB_ZPOOL_OK STUB_MOUNTPOINT_OK GRUB_EDITEV STUB_APPS_EXIT \
     STUB_APPS_KEEP_APPLY
   # A two-second budget keeps the failed-health cases short while still proving
   # that the gate retries instead of deciding on the first look.
   export DEPLOY_BOOT_GATE_BUDGET=2 DEPLOY_BOOT_GATE_PAUSE=1
   printf 'core-one.service\ncore-two.service\n' >"$STUB_SYSTEMCTL_ACTIVE"
-  printf 'demo.container\n' >"$STUB_SYSTEMCTL_USER_ACTIVE"
+  printf 'demo.service\n' >"$STUB_SYSTEMCTL_USER_ACTIVE"
   : >"$STUB_SYSTEMCTL_FAILED"
   printf '%s\n' "$ping_url" >"$DEPLOY_PING_SECRET"
   printf 'boot_success=0\nboot_counter=2\ndefault=0\n' >"$GRUB_ENV"
@@ -407,8 +417,8 @@ printf 'staged=%s\nbooted=%s\n' "$digest_manifest" "$digest_prev_manifest" >"$ST
 run_stage --commit "$commit" --digests "$digests"
 check_eq "$rc" 0 "a stage whose digest bootc reports passes"
 check_eq "$(grep '^switch ' "$log/bootc-calls" | head -n 1)" \
-  "switch --enforce-container-sigpolicy $image_ref:latest" \
-  "stage switches to the tracked tag and enforces the signature policy"
+  "switch --enforce-container-sigpolicy $image_ref@$digest_manifest" \
+  "stage switches to the verified manifest digest and enforces the signature policy"
 check_no_grep "$log/bootc-calls" '--apply' "stage never applies the deployment"
 check_grep "$log/bootc-calls" 'status --json' "stage reads the staged entry back"
 pending=$(cat "$state_dir/pending.json" 2>/dev/null) || pending='{}'
@@ -434,6 +444,33 @@ if grep -qF "$ping_url" "$log/curl-urls" 2>/dev/null; then
 else
   ok "a clean stage notifies nothing"
 fi
+
+# A switch returns before ostree-finalize-staged writes the entry. The poll must
+# wait for the verified digest instead of accepting the stale staged entry.
+reset_case
+printf 'staged=%s\nbooted=%s\n' "$digest_other" "$digest_prev_manifest" >"$STUB_BOOTC_STATE"
+export STUB_BOOTC_STAGE_ON_SWITCH=$digest_manifest
+export STUB_BOOTC_STAGE_AFTER=2
+export STUB_BOOTC_STAGE_OLD=$digest_other
+run_stage --commit "$commit" --digests "$digests"
+unset STUB_BOOTC_STAGE_ON_SWITCH STUB_BOOTC_STAGE_AFTER STUB_BOOTC_STAGE_OLD
+check_eq "$rc" 0 "a stage waits for the finalize to publish the verified digest"
+check_json "$(cat "$state_dir/pending.json" 2>/dev/null)" .phase staged \
+  "the waited-for stage writes its pending record"
+check_grep "$log/systemctl-calls" 'reboot' "the waited-for stage reaches the reboot"
+
+# A restore that leaves the pre-switch entry unchanged must not claim success:
+# the switch may not have overridden a pending finalize.
+reset_case
+state_record_verified homelab-platform "$prev_commit" "$digest_prev_index" "$digest_prev_manifest"
+printf 'staged=%s\nbooted=%s\n' "$digest_prev_manifest" "$digest_other" >"$STUB_BOOTC_STATE"
+export STUB_BOOTC_STAGE_ON_SWITCH=$digest_prev_manifest
+run_stage --commit "$commit" --digests "$digests"
+unset STUB_BOOTC_STAGE_ON_SWITCH
+check_eq "$rc" 5 "a restore that did not change the staged entry refuses"
+check_eq "$(journal_field stage-restore-failed '.staged')" "$digest_prev_manifest" \
+  "the unchanged restore is journaled as a failure"
+check_no_file "$state_dir/pending.json" "the unchanged restore writes no pending record"
 
 # bootc may report the index form for the same staged image, and a host that
 # reports the form the reference did not use must still pass.
@@ -469,30 +506,9 @@ check_eq "$(journal_field stage-already-booted '.commit')" "$commit" \
 check_json "$(cat "$state_dir/state.json")" '.repos["homelab-platform"].commit' "$commit" \
   "the already-booted image is recorded in state"
 
-# The host tracks :latest. `switch` is a reference change and stages nothing
-# when the spec already matches, so moving within the tag is `upgrade`, and the
-# verified digest still has to be what upgrade staged.
-reset_case
-printf 'staged=\nbooted=%s\nbooted_spec=%s:latest\n' "$digest_prev_manifest" "$image_ref" \
-  >"$STUB_BOOTC_STATE"
-export STUB_BOOTC_UPGRADE_STAGE=$digest_manifest
-run_stage --commit "$commit" --digests "$digests"
-unset STUB_BOOTC_UPGRADE_STAGE
-check_eq "$rc" 0 "a tracked reference moves with upgrade"
-check_eq "$(grep -c '^upgrade' "$log/bootc-calls")" 1 \
-  "the move within the tracked reference is upgrade"
-check_eq "$(grep -c '^switch' "$log/bootc-calls" || true)" 0 \
-  "a tracked reference is not switched again"
-check_grep "$log/systemctl-calls" 'reboot' "a staged upgrade reaches the reboot"
-
-reset_case
-printf 'staged=\nbooted=%s\nbooted_spec=%s:latest\n' "$digest_prev_manifest" "$image_ref" \
-  >"$STUB_BOOTC_STATE"
-export STUB_BOOTC_UPGRADE_STAGE=$digest_other
-run_stage --commit "$commit" --digests "$digests"
-unset STUB_BOOTC_UPGRADE_STAGE
-check_eq "$rc" 5 "an upgrade that staged an unverified image is refused"
-check_no_grep "$log/systemctl-calls" 'reboot' "an unverified upgrade never reboots"
+# A stage always names the verified digest, so the tag cannot move underneath
+# it. The already-booted case above covers a manual `bootc upgrade` that landed
+# the same digest without the deploy.
 
 reset_case
 export STUB_BOOTC_NO_STAGED=1
@@ -556,8 +572,8 @@ check_no_file "$state_dir/pending.json" "success clears the pending record"
 check_eq "$(cat "$log/curl-urls")" "$ping_url" "success pings the deploy check"
 check_no_grep "$log/bootc-calls" 'rollback' "a healthy boot rolls nothing back"
 # The health gate actually looked at the plan's app, its port and its Serve path.
-check_grep "$log/systemctl-calls" 'is-active demo.container' \
-  "the gate checks the plan's tenant unit"
+check_grep "$log/systemctl-calls" 'is-active demo.service' \
+  "the gate checks the plan's Quadlet service, not its .container name"
 check_grep "$log/tailscale-calls" 'serve status --json' "the gate reads the Serve routes"
 check_json "$(cat "$state_dir/denylist.json" 2>/dev/null || printf '{}')" '.digests | length' 0 \
   "a healthy boot denylists nothing"

@@ -170,6 +170,7 @@ COPY apps/brave_ingest/__init__.py apps/brave_ingest/seed.py \
 RUN set -eux; \
     for f in /usr/libexec/smortress-src/*.sh; do install -m 0755 "$f" "/usr/libexec/$(basename "${f%.sh}")"; done; \
     rm -rf /usr/libexec/smortress-src; \
+    ln -sf /usr/libexec/smortress-deploy /usr/bin/smortress-deploy; \
     chmod 0755 /usr/libexec/apps-schema /usr/libexec/agent-proxy; \
     chmod 0644 /etc/pki/containers/smortress.pub /etc/smortress/secrets.manifest; \
     chmod 0600 /etc/smortress/secrets/*.yaml; \

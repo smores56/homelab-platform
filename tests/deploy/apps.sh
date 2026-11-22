@@ -234,7 +234,7 @@ scope=system
 rest=()
 for a in "$@"; do
   case $a in
-    --user) scope=user ;;
+    --user | --machine=*) scope=user ;;
     *) rest+=("$a") ;;
   esac
 done
@@ -282,6 +282,10 @@ fstype=ext4
 if [[ -f $FAKE_FSTYPE_MAP ]]; then
   got=$(awk -v p="$path" '$1 == p { print $2 }' "$FAKE_FSTYPE_MAP")
   [[ -n $got ]] && fstype=$got
+fi
+if [[ " $* " == *" OPTIONS "* ]]; then
+  printf '%s\n' "${FAKE_MOUNT_OPTS:-ro}"
+  exit 0
 fi
 printf '%s\n' "$fstype"
 EOF
@@ -704,7 +708,7 @@ check_grep "$log/actions" 'user restart alpha.service' "the restored app is rest
 check_grep "$log/actions" 'system restart smortress-tailscale-serve.service' \
   "Serve is regenerated for the restored plan"
 check_eq "$(tail -n 1 "$log/notify-urls")" "$ping_url/fail" "a reverted apply pages the deploy check"
-check_grep "$log/runuser-calls" 'restart alpha.service' "the restore ran as the tenant"
+check_grep "$log/actions" 'user restart alpha.service' "the restore ran as the tenant"
 
 # --- 9b. a revert removes the app the failed apply added ---------------------
 reset_case
@@ -1051,6 +1055,31 @@ if grep -q 'below the' <<<"$out"; then
   bad "an immutable root is not a space floor" "$out"
 else
   ok "an immutable root is not a space floor"
+fi
+
+# On this host `findmnt` reports `overlay` for the composefs root; it is not a
+# writable disk and must not refuse an apply.
+reset_case
+printf '/ 0\n' >"$FAKE_DF_MAP"
+printf '/ overlay\n' >"$FAKE_FSTYPE_MAP"
+APPS_FREE_ROOT_PATH=/ APPS_FREE_VAR_PATH=/ run_apply "$c_v1"
+if grep -q 'below the' <<<"$out"; then
+  bad "an overlay root is not a space floor" "$out"
+else
+  ok "an overlay root is not a space floor"
+fi
+
+# A writable overlay is an ordinary disk; the zero-free floor still applies.
+reset_case
+printf '/ 0\n' >"$FAKE_DF_MAP"
+printf '/ overlay\n' >"$FAKE_FSTYPE_MAP"
+export FAKE_MOUNT_OPTS=rw
+APPS_FREE_ROOT_PATH=/ APPS_FREE_VAR_PATH=/ run_apply "$c_v1"
+unset FAKE_MOUNT_OPTS
+if grep -q 'below the' <<<"$out"; then
+  ok "a writable overlay root still refuses the apply"
+else
+  bad "a writable overlay root still refuses the apply" "$out"
 fi
 
 # The same zero free on an ordinary root is still refused.
