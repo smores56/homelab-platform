@@ -20,16 +20,22 @@ shopt -s nullglob
 files=("$baked"/*.yaml)
 ((${#files[@]})) || exit 0
 
-# The host copy is authoritative: any ciphertext there means this host has
-# already moved on.
-if compgen -G "$dst/*.yaml" >/dev/null; then
-  exit 0
-fi
-
+# The host copy is authoritative per file: an existing file is a rotation or a
+# previous boot and is never overwritten, while a *missing* one is a secret the
+# image added since the last boot. Seeding only an empty directory left exactly
+# that case broken -- the manifest listed the new file, the host did not have it,
+# and the decrypt's set check failed every consumer for a file sitting in the
+# image.
+#
 # Runs as root (the unit is root's), so the copies are root-owned by
 # construction; `install -m` keeps the source's 0600 and the destination's 0700.
 install -d -m 0700 "$dst"
+seeded=0
 for file in "${files[@]}"; do
-  install -m 0600 -- "$file" "$dst/$(basename -- "$file")"
+  name=$(basename -- "$file")
+  [[ -e $dst/$name ]] && continue
+  install -m 0600 -- "$file" "$dst/$name"
+  seeded=$((seeded + 1))
 done
-printf 'sops-decrypt: seeded %d ciphertext file(s) into %s\n' "${#files[@]}" "$dst" >&2
+((seeded)) || exit 0
+printf 'sops-decrypt: seeded %d ciphertext file(s) into %s\n' "$seeded" "$dst" >&2

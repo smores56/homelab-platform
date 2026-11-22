@@ -31,9 +31,10 @@ the owner, mode and `format` named in
 `image/rootfs/etc/smortress/secrets.manifest`.
 
 The image also carries the same set under `/etc/smortress/secrets`, and that copy
-is *only* a seed: `sops-decrypt.service`'s `ExecStartPre` copies it into `/var`
-when the host has no ciphertext yet, and never over a file that is already there.
-So a rotation is an operator write plus a restart of the unit — no image, no
+is *only* a seed. `sops-decrypt.service`'s `ExecStartPre` copies each ciphertext
+the host does not have yet and never overwrites one that is there, so a *new*
+secret reaches `/var` on the next boot by itself, while a rotation stays a host
+write. A rotation is an operator write plus a restart of the unit — no image, no
 reboot:
 
 ```sh

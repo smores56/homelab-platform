@@ -724,6 +724,17 @@ run env SMORTRESS_SECRETS_BAKED="$seed/baked" SMORTRESS_SECRETS_SRC="$seed/host"
   scripts/smortress-secrets-seed.sh
 eq "$(cat "$seed/host/canary.yaml")" "canary: rotated" "a host copy is never overwritten"
 
+# A secret the image added after the host's copy existed: the manifest names it,
+# so leaving it out fails the decrypt's set check for every consumer.
+rm -f "$seed/host/restic-password.yaml"
+run env SMORTRESS_SECRETS_BAKED="$seed/baked" SMORTRESS_SECRETS_SRC="$seed/host" \
+  scripts/smortress-secrets-seed.sh
+eq "$rc" 0 "a missing ciphertext is seeded"
+eq "$(cat "$seed/host/restic-password.yaml" 2>/dev/null)" "password: baked" \
+  "the newly added secret lands"
+eq "$(cat "$seed/host/canary.yaml")" "canary: rotated" \
+  "the existing rotation is still untouched"
+
 rm -f "$seed/baked"/*.yaml
 rm -f "$seed/host"/*.yaml
 run env SMORTRESS_SECRETS_BAKED="$seed/baked" SMORTRESS_SECRETS_SRC="$seed/host" \
