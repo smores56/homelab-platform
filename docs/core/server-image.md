@@ -52,7 +52,7 @@ rollback path. Operator-only actions are in `docs/manual-steps.md` section 37.
 | `/usr/lib/systemd/system/smortress-deploy.path`, `/usr/lib/systemd/system/smortress-deploy.service` | The queue trigger (`DirectoryNotEmpty=/var/lib/homelab/deploy/queue`) and the one drain of it, `TimeoutStartSec=12600`. |
 | `/usr/lib/systemd/system/smortress-deploy-poll.timer`, `/usr/lib/systemd/system/smortress-deploy-poll.service`, `/usr/lib/systemd/system/smortress-deploy-heartbeat.timer`, `/usr/lib/systemd/system/smortress-deploy-heartbeat.service`, `/usr/lib/systemd/system/smortress-deploy-retry.timer`, `/usr/lib/systemd/system/smortress-boot-gate.service` | The hourly backstop, the dead-man beat for the `deploy` Healthchecks check, the five-minute retry of a deferred queue entry, and the gate that runs `Before=boot-complete.target`. |
 | `/usr/lib/systemd/system/smortress-apps-health.timer`, `/usr/lib/systemd/system/smortress-apps-health.service` | The five-minute probe of the tenant's apps, `OnBootSec=5min` then `OnUnitActiveSec=5min` with `Persistent=false`: a host that was off owes no probe for the window nothing was running. Ordered after `smortress-tailscale-serve.service`, because a base path is checked against the routes that unit declares. |
-| `/usr/share/smortress/deploy-units.txt` | The units the boot gate requires: what "serving" means for this host. The receiver's own units are deliberately absent — a missing deploy secret must page, not roll the host back. |
+| `/usr/share/smortress/deploy-units.txt` | The units the boot gate requires: what "serving" means for this host. The receiver's own units are deliberately absent — a missing deploy secret must page, not roll the host back — and so is every unit that reads the tenant's plan (`smortress-tailscale-serve`, `smortress-apps-quota`), because one that exits 1 on an app definition would denylist the platform digest for an app's fault. |
 | `/usr/lib/bootupd/grub2-static/configs.d/10-smortress-count.cfg` | The three-attempt boot counter. It is **not active on this host**: `bootupd` reports every component current and has no way to force a regeneration, so the snippet never reaches `grub.cfg` (`docs/manual-steps.md` §49.5). The gate journals `boot-counting-absent` each boot. |
 | `/etc/systemd/system.conf.d/10-watchdog.conf` | `RuntimeWatchdogSec=1min`, so a hung PID 1 becomes a reboot. No `kernel.panic`: without a bootloader counter, a panic reboot would loop the same image. |
 | `/etc/tmpfiles.d/smortress.conf` | Creates `/var/lib/homelab/deploy`, `queue` and `work` at `0700 root`: the receiver's state tree, outside every recovery group because the journal and `bootc status` rebuild it. |
@@ -388,11 +388,9 @@ health check, because the tenant may be half of two revisions), then — only wh
 `pending.json` exists — compares `.status.booted.image.imageDigest` to the
 recorded digests:
 
-- **match.** The health gate, retried inside 300 s: every unit in
+- **match.** The host health gate, retried inside 300 s: every unit in
   `/usr/share/smortress/deploy-units.txt` active and none of them `failed`, the
-  pool imported, `/srv/apps` a mountpoint, every app in `plan.json` up with its
-  ingress loopback port accepting a connect, and every expected Serve path
-  present in `tailscale serve status --json`. Success records the deployment,
+  pool imported, and `/srv/apps` a mountpoint. Success records the deployment,
   sets `boot_success=1`, resets the counter, clears `pending.json` and pings the
   `deploy` check green.
 - **no match.** The counter already fell back or an operator rolled back:
@@ -405,6 +403,17 @@ recorded digests:
 A failed health gate denylists the digest, pages, and runs `bootc rollback
 --apply`, resetting `boot_success`, `boot_counter` and `default` so a spent
 counter cannot re-select the deployment that just failed.
+
+The split is the whole point of that list being host-only: **the gate judges the
+host, the timer judges the tenant's apps.** The gate used to fail its health check
+for an app whose unit was inactive, whose loopback port was closed, or whose Serve
+path was missing, and roll the host image back for it. That is the wrong coupling
+in both directions: a crash-looping app is an apps revision — and one that starts
+ten minutes into the boot was never visible to a check that ran once — while a host
+image rolled back for a tenant defect teaches the operator nothing about the
+platform. The apply refuses to commit a revision whose own apps do not stay up
+(`deploy-apps` `check_started_apps`), and what the apply cannot see is the tenant
+prober's to report.
 
 ### The tenant prober
 

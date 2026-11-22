@@ -989,6 +989,12 @@ if grep -vE '^[[:space:]]*#' "$units_file" | grep -qiE 'deploy'; then
 else
   ok "the gate requires no deploy unit (its secret is seeded after the first deploy)"
 fi
+# A unit that reads the tenant's plan must not be judged here: both of them exit 1
+# on an app definition, and `is-failed` on one would denylist the platform digest
+# and roll a healthy host back for an app's fault.
+for unit in smortress-tailscale-serve.service smortress-apps-quota.service; do
+  check "the gate judges no unit that reads the tenant's plan: $unit" lacks "$unit" "$units_file"
+done
 while IFS= read -r unit; do
   [[ -n $unit ]] || continue
   pattern="(^|[[:space:]])${unit//./\\.}([[:space:]]|;)"

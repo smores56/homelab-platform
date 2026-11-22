@@ -6307,7 +6307,10 @@ liveness measure, with the same caveat: a PID 1 that hangs every boot would
 reboot into the same image until an operator intervenes.
 
 What does exist is the userspace gate: a deployment that boots but fails its
-health check is denylisted and `bootc rollback --apply` reverts it. The gate
+**host** health check is denylisted and `bootc rollback --apply` reverts it. The
+tenant's apps are not part of that check — a broken app is an apps revision, and
+`smortress-apps-health.timer` reports it every five minutes without rolling
+anything back — so a red gate here always means the platform itself. The gate
 journals `boot-counting-absent` on every boot where `grub.cfg` does not read the
 counter, so the gap is visible without reading this page.
 

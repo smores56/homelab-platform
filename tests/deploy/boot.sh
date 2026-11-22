@@ -4,14 +4,17 @@
 # A platform deploy ends in a reboot, so the half that decides whether the host
 # should keep what it booted lives here: the exact `bootc switch` argv, the
 # staged-digest check against what the verifier recorded, `pending.json` before
-# the reboot, the booted-versus-pending comparison, the health gate and its
+# the reboot, the booted-versus-pending comparison, the host health gate and its
 # budget, the denylist and the rollback argv, and the GRUB flags that let an
 # unbootable deployment fall back without userspace. `bootc`, `systemctl`,
 # `grub2-editenv`, `tailscale`, `zpool` and `mountpoint` are fakes on PATH and
 # the state is a throwaway directory; the records, the journal and the command
-# lines are real. The ingress check is a real TCP connect to a throwaway
-# listener, because a fake would prove nothing about it. No root, no reboot, no
-# image, no network.
+# lines are real. No root, no reboot, no image, no network.
+#
+# The gate judges the host only. The tenant's apps -- unit active, loopback port
+# answering, Serve path declared -- belong to tests/deploy/apps-health.sh, and the
+# fixtures here keep an app the gate would have found broken, so a gate that
+# starts judging the tenant again fails this suite.
 #
 #   tests/deploy/boot.sh
 # shellcheck disable=SC2154  # deploy-state.sh assigns these at source time
@@ -29,7 +32,7 @@ for file in "$platform" "$gate" "$lib"; do
     exit 1
   }
 done
-for tool in jq timeout python3; do
+for tool in jq timeout; do
   command -v "$tool" >/dev/null || {
     printf 'FAIL %s is required\n' "$tool" >&2
     exit 1
@@ -70,12 +73,7 @@ check_no_grep() { # file pattern label
 }
 
 work=$(mktemp -d)
-listener=
-cleanup() {
-  [[ -n $listener ]] && kill "$listener" 2>/dev/null
-  rm -rf "$work"
-}
-trap cleanup EXIT
+trap 'rm -rf "$work"' EXIT
 
 bin=$work/bin
 log=$work/log
@@ -108,6 +106,11 @@ prev_commit=abcdef0123456789abcdef0123456789abcdef01
 image_ref=ghcr.io/smores56/homelab-platform/server
 digests=$(jq -nc --arg i "$digest_index" --arg m "$digest_manifest" '{index:$i,manifest:$m}')
 
+# Nothing ever listens on this port. The plan, the tenant's active-unit list and
+# the Serve stub keep a healthy-looking app whose port is closed and whose path
+# can be removed: the fixtures are exactly the three failures the gate used to
+# judge, so a gate that starts judging the tenant again fails this suite instead
+# of rolling a host back silently.
 app_port=34611
 
 # --- the fakes ---------------------------------------------------------------
@@ -301,38 +304,6 @@ export STUB_SERVE_JSON=$work/serve.json
 export DEPLOY_APPS_BIN=$bin/deploy-apps
 # Keep the finalize poll short in tests; production uses the one-second default.
 export DEPLOY_STAGE_POLL_INTERVAL=0.1 DEPLOY_STAGE_POLL_ATTEMPTS=3
-
-# The listener is a real socket: the gate's ingress check must fail on a closed
-# port and pass on a bound one, and a stub could only ever say what it was told.
-python3 - "$app_port" <<'PY' &
-import socket, sys
-listener = socket.socket()
-listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-listener.bind(("127.0.0.1", int(sys.argv[1])))
-listener.listen(16)
-while True:
-    try:
-        conn, _ = listener.accept()
-    except OSError:
-        break
-    conn.close()
-PY
-listener=$!
-port_up=false
-for _ in $(seq 1 50); do
-  # The single quotes are the point: the child bash expands the port.
-  # shellcheck disable=SC2016
-  if timeout 1 bash -c 'exec 3<>"/dev/tcp/127.0.0.1/$1"' _ "$app_port" 2>/dev/null; then
-    port_up=true
-    break
-  fi
-  sleep 0.1
-done
-if $port_up; then
-  ok "the ingress stand-in accepts connections on 127.0.0.1:$app_port"
-else
-  bad "the ingress stand-in accepts connections on 127.0.0.1:$app_port"
-fi
 
 # --- the healthy host --------------------------------------------------------
 printf 'core-one.service\ncore-two.service\n' >"$DEPLOY_UNITS_FILE"
@@ -571,10 +542,16 @@ check_eq "$(grub_flags '.boot_counter')" 3 "success resets the boot counter"
 check_no_file "$state_dir/pending.json" "success clears the pending record"
 check_eq "$(cat "$log/curl-urls")" "$ping_url" "success pings the deploy check"
 check_no_grep "$log/bootc-calls" 'rollback' "a healthy boot rolls nothing back"
-# The health gate actually looked at the plan's app, its port and its Serve path.
-check_grep "$log/systemctl-calls" 'is-active demo.service' \
-  "the gate checks the plan's Quadlet service, not its .container name"
-check_grep "$log/tailscale-calls" 'serve status --json' "the gate reads the Serve routes"
+# The gate judges the host, and the plan's app is not part of that: the port
+# below nothing listens on and a Serve query it never makes are the prober's
+# business (tests/deploy/apps-health.sh).
+check_no_grep "$log/systemctl-calls" 'demo.service' "the gate probes no tenant unit"
+check_no_grep "$log/systemctl-calls" '--user' "the gate asks no user manager anything"
+if [[ -s $log/tailscale-calls ]]; then
+  bad "the gate reads no Serve status" "$(cat "$log/tailscale-calls")"
+else
+  ok "the gate reads no Serve status"
+fi
 check_json "$(cat "$state_dir/denylist.json" 2>/dev/null || printf '{}')" '.digests | length' 0 \
   "a healthy boot denylists nothing"
 
@@ -590,8 +567,8 @@ check_eq "$rc" 0 "a booted index digest matches the pending record and passes"
 check_no_file "$state_dir/held.json" "a landed released hold is cleared by the gate"
 
 # --- 4. the gate fails closed on an unhealthy host -------------------------
-# Each case names one health check, so a check that stops working is visible as
-# the one assertion that fails rather than as "the gate is stricter now".
+# Each case names one host check, so a check that stops working is visible as the
+# one assertion that fails rather than as "the gate is stricter now".
 unhealthy() { # <label>
   local label=$1 denylist
   seed_pending "$digest_index" "$digest_manifest" "$commit" "$digest_manifest"
@@ -626,9 +603,6 @@ reset_case
 printf 'core-two.service\n' >"$STUB_SYSTEMCTL_FAILED"
 unhealthy unit-failed
 
-reset_case
-: >"$STUB_SYSTEMCTL_USER_ACTIVE"
-unhealthy tenant-unit-inactive
 
 reset_case
 export STUB_ZPOOL_OK=0
@@ -640,16 +614,41 @@ export STUB_MOUNTPOINT_OK=0
 unhealthy apps-not-mounted
 unset STUB_MOUNTPOINT_OK
 
+# The three tenant failures that used to fail this gate are a pass now: an
+# inactive unit, a Serve list without the path, and a port nothing answers (the
+# default fixture, since the suite binds no listener at all). A check that comes
+# back shows up here as a rollback rather than as a stricter gate nobody noticed.
+tenant_unhealthy_passes() { # <label>
+  local label=$1
+  seed_pending "$digest_index" "$digest_manifest" "$commit" "$digest_manifest"
+  run_gate
+  if ((rc == 0)); then ok "$label does not fail the gate"; else bad "$label does not fail the gate" "$out"; fi
+  check_no_grep "$log/bootc-calls" 'rollback' "$label rolls nothing back"
+  check_eq "$(journal_field boot-gate-green '.commit')" "$commit" "$label records the deployment"
+  check_file "$state_dir/state.json" "$label records a landed deployment"
+  check_no_file "$state_dir/denylist.json" "$label denylists nothing"
+  check_eq "$(cat "$log/curl-urls")" "$ping_url" "$label pages the deploy check green"
+}
+
+reset_case
+: >"$STUB_SYSTEMCTL_USER_ACTIVE"
+tenant_unhealthy_passes tenant-unit-inactive
+
 reset_case
 printf '{"Web":{":443":{"Handlers":{"/other":{}}}}}' >"$STUB_SERVE_JSON"
-unhealthy serve-path-missing
+tenant_unhealthy_passes serve-path-missing
 
-# The ingress check is a real connect: nothing listens on this port, so the app
-# is in the plan, its unit is active and the host still must not keep the boot.
 reset_case
-jq -nc '{version:1,apps:{demo:{basePath:"/apps/demo",containerPort:8080,loopbackPort:34612}}}' \
+jq -nc --argjson port "$app_port" \
+  '{version:1,apps:{demo:{basePath:"/apps/demo",containerPort:8080,loopbackPort:$port}}}' \
   >"$APPS_PLAN"
-unhealthy ingress-unreachable
+tenant_unhealthy_passes ingress-unreachable
+
+# A plan nobody can read is the tenant's failure too, and it was the one that
+# failed every boot gate while the tenant was mid-apply.
+reset_case
+printf 'not a plan\n' >"$APPS_PLAN"
+tenant_unhealthy_passes plan-unreadable
 
 # --- 5. the health gate retries inside its budget, then fails closed -------
 reset_case

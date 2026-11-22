@@ -11,10 +11,11 @@
 # a stage was written and a reboot requested.
 #
 # The reconcile is a bounded `deploy-apps revert`: the tenant may be half of two
-# revisions, with the plan already the new one, so no health check may judge it
-# before the recorded revision is back. A revert that cannot finish is a failed
-# gate, not a pass: the record stays for the next boot and no platform decision
-# is made on a tenant nobody restored.
+# revisions, with the plan already the new one, so nothing may judge it there --
+# not this gate, which no longer probes the tenant, and not the tenant's own
+# prober, which stands down while `apply.json` says an apply is in flight. A
+# revert that cannot finish is a failed gate, not a pass: the record stays for the
+# next boot and no platform decision is made on a tenant nobody restored.
 #
 # With a pending record it compares the booted deployment's digest to the one the
 # verifier recorded, in both forms bootc may report (index or platform manifest):
@@ -49,10 +50,16 @@
 #
 # The health gate is retried inside its budget and fails closed: the units the
 # image declares must be active and none failed, the pool imported, /srv/apps a
-# mountpoint, every app in the tenant plan up with its ingress port answering,
-# and every expected Serve path declared. The tenant is checked because a
-# platform deploy is the only thing that can break it -- but `plan.json` is
-# optional: a host with no rendered plan has no tenant to wait for.
+# mountpoint. Each of those is the host's own health.
+#
+# The tenant's apps are deliberately not among them. A crash-looping app is an
+# apps-revision problem, the apply already refuses to commit a revision whose own
+# apps do not stay up (deploy-apps `check_started_apps`), and an app that breaks an
+# hour after the boot was never something a once-per-boot check could see. Rolling
+# the host image back for one made the gate's rollback say nothing about the
+# platform, so the tenant has its own prober on a timer
+# (smortress-apps-health.timer): the gate judges the host, the timer judges the
+# tenant's apps.
 #
 # Exit codes: 0 nothing to do, or a deployment was recorded or rolled back;
 # 1 the gate could not finish (an unreadable bootc status, an unwritable record,
@@ -112,15 +119,12 @@ apps_mount=$(mountpoint_for raw/apps)
 
 bootc_bin=${BOOTC_BIN:-bootc}
 systemctl_bin=${SYSTEMCTL_BIN:-systemctl}
-tailscale_bin=${TAILSCALE_BIN:-tailscale}
 zpool_bin=${ZPOOL_BIN:-zpool}
 mountpoint_bin=${MOUNTPOINT_BIN:-mountpoint}
 grub_editev=${GRUB_EDITEV:-grub2-editenv}
 grub_env=${GRUB_ENV:-/boot/grub2/grubenv}
 grub_cfg=${GRUB_CFG:-/boot/grub2/grub.cfg}
 deploy_units_file=${DEPLOY_UNITS_FILE:-/usr/share/smortress/deploy-units.txt}
-apps_plan=${APPS_PLAN:-/var/lib/homelab/apps/plan.json}
-apps_user=${APPS_USER:-apps}
 # Three attempts, matching the GRUB snippet: the number a fresh counter is reset
 # to on every boot the gate accepts.
 boot_budget=${DEPLOY_BOOT_BUDGET:-3}
@@ -129,7 +133,6 @@ gate_pause=${DEPLOY_BOOT_GATE_PAUSE:-4}
 lock_wait=${DEPLOY_BOOT_GATE_LOCK_WAIT:-300}
 ctl_timeout=${DEPLOY_BOOT_GATE_CTL_TIMEOUT:-10}
 probe_timeout=${DEPLOY_BOOT_GATE_PROBE_TIMEOUT:-10}
-connect_timeout=${DEPLOY_BOOT_GATE_CONNECT_TIMEOUT:-5}
 status_timeout=${DEPLOY_BOOT_GATE_STATUS_TIMEOUT:-60}
 grub_timeout=${DEPLOY_BOOT_GATE_GRUB_TIMEOUT:-30}
 rollback_timeout=${DEPLOY_ROLLBACK_TIMEOUT:-900}
@@ -238,72 +241,6 @@ digest_matches() { # <booted> <index> <manifest>
 # --- the health gate --------------------------------------------------------
 health_reason=
 
-# The single quotes are the point: the port is expanded by the child bash that
-# opens the connection, not by this shell, so no path here can be a hostname.
-# shellcheck disable=SC2016
-tcp_open() { # <port>
-  timeout --signal=TERM "$(clamp_timeout "$connect_timeout")" bash -c 'exec 3<>"/dev/tcp/127.0.0.1/$1"' _ "$1" \
-    2>/dev/null
-}
-
-serve_status_paths() {
-  local doc
-  doc=$(timeout --signal=TERM --kill-after=10 "$(clamp_timeout "$probe_timeout")" \
-    "$tailscale_bin" serve status --json 2>/dev/null) ||
-    return 1
-  jq -r '.Web // {} | to_entries[]
-    | select(.key | endswith(":443"))
-    | (.value.Handlers // {}) | keys[]' <<<"$doc" 2>/dev/null
-}
-
-health_plan() {
-  local rows serve_paths loopback unit path name
-  # No plan is a host with no tenant: nothing to wait for, and a gate that
-  # failed closed here would roll back every deploy before the first apps apply.
-  [[ -e $apps_plan ]] || return 0
-  jq -e '(.apps | type) == "object"' "$apps_plan" >/dev/null 2>&1 || {
-    health_reason="plan-unreadable"
-    return 1
-  }
-  rows=$(jq -r '(.apps // {}) | to_entries[]
-    | [.key, (.value.unitName // (.key + ".container")), (.value.basePath // ""),
-       ((.value.loopbackPort // "") | tostring)] | @tsv' "$apps_plan" 2>/dev/null) || {
-    health_reason="plan-unreadable"
-    return 1
-  }
-  [[ -n $rows ]] || return 0
-  serve_paths=$(serve_status_paths) || {
-    health_reason="serve-status-unreadable"
-    return 1
-  }
-  while IFS=$'\t' read -r name unit path loopback; do
-    [[ -n $name ]] || continue
-    if [[ -z $path || -z $unit ]]; then
-      health_reason="plan-unreadable:$name"
-      return 1
-    fi
-    # Quadlet generates `<name>.service` from `<name>.container`; the plan names
-    # the file, not the unit systemd runs.
-    [[ $unit == *.container ]] && unit=${unit%.container}.service
-    # A user unit is reached through the tenant's own manager: the deploy runs as
-    # root and cannot `--user` against a session it does not have.
-    if [[ $(timeout --signal=TERM "$(clamp_timeout "$ctl_timeout")" "$systemctl_bin" --user \
-      --machine="$apps_user@.host" is-active "$unit" 2>/dev/null) != active ]]; then
-      health_reason="tenant-unit-inactive:$name"
-      return 1
-    fi
-    if [[ ! $loopback =~ ^[0-9]+$ ]] || ! tcp_open "$loopback"; then
-      health_reason="ingress-unreachable:$name:$loopback"
-      return 1
-    fi
-    if ! grep -qxF -- "$path" <<<"$serve_paths" 2>/dev/null; then
-      health_reason="serve-path-missing:$path"
-      return 1
-    fi
-  done <<<"$rows"
-  return 0
-}
-
 health_check() {
   local unit
   local -a gate_units=()
@@ -343,7 +280,7 @@ health_check() {
     health_reason="apps-not-mounted"
     return 1
   }
-  health_plan
+  return 0
 }
 
 health_gate() {
@@ -460,8 +397,10 @@ rolled_back() { # <booted> <commit> <index> <manifest>
 
 # --- main -------------------------------------------------------------------
 # The tenant a previous boot or a watchdog left half-applied. This runs before
-# the health checks because they check the revision the plan names; on a
-# half-applied tenant that revision is not what is running.
+# anything is decided, because a half-applied tenant is not a revision anybody
+# wrote: the prober would page on it and the platform would be recorded on top of
+# it. Restoring the recorded revision is the only thing that makes either answer
+# mean something.
 reconcile_apply() {
   local phase rc=0
   record_exists apply || return 0
@@ -569,9 +508,9 @@ main() {
 
   if digest_matches "$booted" "$index" "$manifest"; then
     # The staged deployment is running, so the tenant has to be the revision the
-    # plan names before the health gate judges it. A revert that could not run
-    # leaves half of two revisions under a plan nobody restored: that is a failed
-    # gate, and it takes the same denylist and rollback as any other.
+    # plan names before the platform is recorded as landed. A revert that could
+    # not run leaves half of two revisions under a plan nobody restored: that is
+    # a failed gate, and it takes the same denylist and rollback as any other.
     if ((revert_rc != 0)); then
       fail_gate apply-revert-failed "$commit" "$index" "$manifest" || exit 1
       exit 1

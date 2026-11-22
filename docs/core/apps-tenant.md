@@ -279,14 +279,21 @@ same way, without waiting for a rejection: `smortress-deploy block commit <sha>`
    revision that cannot stay up keeps being attempted (the queue's `attempts` is
    the signal) until it is fixed forward or until an operator runs
    `smortress-deploy block commit <sha>`, which makes the next attempt the
-   verifier's refusal. This
-   covers the unit-active third of the next boot's gate: an app that is `active`
-   but never binds its loopback port can still make that gate roll the platform
-   image back. The other two — the port and the Serve path — plus the unit itself
-   are what `smortress-apps-health.timer` re-checks every five minutes between
-   boots, and its `apps-health-failed` names the app and the reason, which is the
-   tenant's signal until it has a Healthchecks check of its own
-   (`docs/core/server-image.md`).
+   verifier's refusal. The apply-time check
+   covers the unit-active third of what the tenant prober asks: an app that is
+   `active` but never binds its loopback port is still a failure, and the
+   five-minute `smortress-apps-health.timer` is what finds it. That prober is the
+   whole tenant half — the unit, the loopback port and the Serve path — because
+   the boot gate judges the host and no longer the tenant. An app down an hour
+   after the boot is an apps revision, and rolling the platform image back for one
+   was the wrong coupling: the gate's rollback has to mean the platform failed.
+   That is why neither `smortress-tailscale-serve` nor `smortress-apps-quota`
+   is on the gate's unit list — both read this plan and both exit 1 on a plan they
+   cannot act on — and why the apply, not the gate, is what refuses a revision.
+   The prober reboots nothing, stages nothing and rolls back nothing, and it
+   stands down while `apply.json` says an apply is in flight. It journals
+   `apps-health-failed` with the app and the reason — the tenant's signal until it
+   has a Healthchecks check of its own (`docs/core/server-image.md`).
 7. **Commit, then Serve.** `state.json` records the commit and the unit and
    secret content hashes, `apply.json`, `render.prev` and `work/prev-secrets/`
    are removed, and `smortress-tailscale-serve.service` is restarted. It is a
@@ -299,8 +306,9 @@ same way, without waiting for a rejection: `smortress-deploy block commit <sha>`
 `render.prev`, the previous plan and secret values, restarts the changed apps,
 starts the removed ones again, regenerates Serve and clears the record.
 `apply.json` is also the crash state: an apply interrupted by a reboot is
-reverted by the boot gate at the next boot — before any of its health checks,
-because the tenant may be half of two revisions — or by the drain before it
-acts on the queue. An apps deploy reboots nothing, so it has no boot gate and no
-boot counting; the platform half of the receiver, and the pre-userspace counter
-that covers it, are in `docs/core/server-image.md`.
+reverted by the boot gate at the next boot — before it decides anything, because
+the tenant may be half of two revisions, and the tenant prober stands down while
+the record exists — or by the drain before it acts on the queue. An apps deploy
+reboots nothing, so it has no boot gate and no boot counting; the platform half of
+the receiver, and the pre-userspace counter that covers it, are in
+`docs/core/server-image.md`.

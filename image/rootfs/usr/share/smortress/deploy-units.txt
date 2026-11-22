@@ -10,7 +10,15 @@
 # ConditionPathExists=!/var/lib/homelab/tailscale-enrolled, so systemd skips it
 # and it reads `inactive` on every host that has finished enrolling -- listing it
 # would roll back every deploy on a healthy host. The tailnet is asserted through
-# tailscaled and the Serve unit instead.
+# tailscaled instead.
+#
+# No unit that reads the tenant's plan is listed either: `smortress-tailscale-serve`
+# exits 1 on a plan it cannot parse and `smortress-apps-quota` on an invalid plan
+# or a quota it cannot apply, so either one in this list would let an app
+# definition denylist the platform digest and roll back a healthy host -- the
+# coupling the tenant prober exists to remove. Serve routes are checked by
+# `smortress-apps-health` (base path per app), and a quota failure is journaled by
+# the apply, which then refuses the revision.
 #
 # The deploy's own units are deliberately absent (the listener, the path, the
 # drain, the poll and heartbeat timers): their secrets are seeded by hand after
@@ -19,13 +27,11 @@
 firewalld.service
 sops-decrypt.service
 tailscaled.service
-smortress-tailscale-serve.service
 smortress-crypttab-fix.service
 smortress-data-init.service
 smortress-zpool.service
 zfs-ready@raw-apps.service
 smortress-apps-user.service
-smortress-apps-quota.service
 smortress-apps-deny.service
 smortress-apps-egress.service
 smortress-app-secrets.service
