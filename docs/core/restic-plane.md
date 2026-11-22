@@ -162,6 +162,13 @@ A run is **failed** when any of these happens:
 | `persist-failed` | the tag succeeded but the result could not be written durably |
 | `not-configured` | the R2 key pair is absent or empty in SOPS; no job touches that repository |
 
+A `snapshot-reconcile` or `snapshot-create` failure also prints zfs's own
+message on the attempt's stderr, and a busy `destroy` is retried once: the
+snapshot's `.zfs/snapshot` automount may still be releasing. Recording the
+message is not decoration — without it the record says only that a destroy
+failed, which is why the 2026-11-22 `hdd/photos` failure could not be diagnosed
+after it self-cleared.
+
 The attempt is retried `RESTIC_ATTEMPTS` times (default 2) with a bounded sleep
 between attempts. Every command — `zfs list/destroy/snapshot`, `restic
 backup/tag/snapshots/forget/prune/check`, `curl` — goes through `timeout`, so a

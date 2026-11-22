@@ -80,10 +80,44 @@ attempt_start=""
 deadline=""
 sleep_time=""
 
+# zfs is the only witness for a staging failure: its message is what turns
+# "attempt failed: snapshot-reconcile" into an explanation. Keep stderr instead
+# of sending it to /dev/null - the 2026-11-22 hdd/photos failure recorded the
+# reason and nothing else, and could not be diagnosed afterwards.
+zfs_last_err=""
+zfs_run() { # <seconds> <zfs args...>
+  local secs=$1 rc=0 err
+  shift
+  if ! err=$(mktemp); then
+    zfs_last_err=""
+    return 1
+  fi
+  # stdout carries no decision here (the caller only asks whether it worked);
+  # stderr is the whole point, so it is kept, never discarded.
+  with_deadline "$secs" "$zfs_bin" "$@" >/dev/null 2>"$err" || rc=$?
+  zfs_last_err=""
+  if ((rc != 0)); then
+    zfs_last_err=$(tr '\n' ' ' <"$err" | sed -e 's/[[:space:]]*$//')
+  fi
+  rm -f "$err"
+  return "$rc"
+}
+
+# A snapshot whose .zfs/snapshot automount is still being released returns EBUSY
+# for a moment; one short retry separates that from a real refusal.
+zfs_destroy() { # <snapshot>
+  zfs_run 120 destroy "$1" || {
+    sleep 2
+    zfs_run 120 destroy "$1"
+  }
+}
+
 cleanup_staging() {
   local snapshot
   for snapshot in "${staging_created[@]}"; do
-    with_deadline 120 "$zfs_bin" destroy "$snapshot" >/dev/null 2>&1 || true
+    if ! zfs_destroy "$snapshot"; then
+      warn "${backend:-?}/${unit:-?}: could not destroy $snapshot${zfs_last_err:+: $zfs_last_err}; the next run reconciles it"
+    fi
   done
   staging_created=()
 }
@@ -213,8 +247,9 @@ attempt_locked() {
   reap_pending || true
 
   for snapshot in "${staging_snapshots[@]}"; do
-    if with_deadline 120 "$zfs_bin" list -H -o name -t snapshot "$snapshot" >/dev/null 2>&1; then
-      if ! with_deadline 120 "$zfs_bin" destroy "$snapshot" >/dev/null 2>&1; then
+    if zfs_run 120 list -H -o name -t snapshot "$snapshot"; then
+      if ! zfs_destroy "$snapshot"; then
+        warn "$backend/$unit: cannot destroy the stale staging snapshot $snapshot${zfs_last_err:+: $zfs_last_err}"
         fail_attempt snapshot-reconcile
         return 1
       fi
@@ -223,7 +258,8 @@ attempt_locked() {
   done
 
   for snapshot in "${staging_snapshots[@]}"; do
-    if ! with_deadline "$deadline" "$zfs_bin" snapshot "$snapshot" >/dev/null 2>&1; then
+    if ! zfs_run "$deadline" snapshot "$snapshot"; then
+      warn "$backend/$unit: cannot snapshot $snapshot${zfs_last_err:+: $zfs_last_err}"
       fail_attempt snapshot-create
       return 1
     fi

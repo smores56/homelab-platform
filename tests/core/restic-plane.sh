@@ -140,7 +140,20 @@ cat >"$bin/zfs" <<'EOF'
 printf '%s\n' "$*" >>"$STUB_LOG/zfs"
 case $1 in
   list) exit "${STUB_ZFS_LIST_EXIT:-1}" ;;
-  destroy) exit "${STUB_ZFS_DESTROY_EXIT:-0}" ;;
+  destroy)
+    # A real zfs says why on stderr; the driver has to keep that sentence.
+    if (( ${STUB_ZFS_DESTROY_EXIT:-0} != 0 )); then
+      printf '%s\n' "${STUB_ZFS_STDERR:-cannot destroy snapshot}" >&2
+      exit "$STUB_ZFS_DESTROY_EXIT"
+    fi
+    # Fail only snapshots this run created, i.e. the end-of-run cleanup: the
+    # reconciliation of a stale one happens before any create.
+    if [[ -n ${STUB_ZFS_DESTROY_FAIL_LATE:-} ]] && grep -qx "${2##*@}" "$STUB_LOG/snapshots" 2>/dev/null; then
+      printf '%s\n' "${STUB_ZFS_STDERR:-cannot destroy snapshot}" >&2
+      exit 1
+    fi
+    exit 0
+    ;;
   snapshot)
     name=${2##*@}
     ds=${2%@*}
@@ -188,7 +201,9 @@ reset_state() {
   rm -rf "$state"
   install -d -m 0700 "$state"
   : >"$log/restic"; : >"$log/zfs"; : >"$log/curl-urls"; : >"$log/ready"
+  : >"$log/snapshots"
   unset STUB_BACKUP_EXIT STUB_BACKUP_ID STUB_BACKUP_SLEEP STUB_TAG_EXIT STUB_ZFS_LIST_EXIT \
+    STUB_ZFS_DESTROY_FAIL_LATE STUB_ZFS_STDERR \
     STUB_SNAPSHOTS_JSON STUB_SNAPSHOTS_EXIT STUB_READY_EXIT STUB_CAT_EXIT \
     STUB_MAINT_EXIT STUB_INIT_EXIT STUB_CURL_EXIT RESTIC_HEALTHCHECK_URL
   for key in "${dataset_order[@]}"; do
@@ -302,6 +317,36 @@ if grep -q 'destroy smortress/raw/photos@hdd\|destroy smortress/raw/books@ssd' "
 else
   ok "a job destroys only its own staging snapshot"
 fi
+
+# --- 2b. a staging failure says why -------------------------------------
+# The 2026-11-22 hdd/photos failure recorded "snapshot-reconcile" and nothing
+# else, because zfs's stderr went to /dev/null at every destroy site.
+reset_state
+export STUB_BACKUP_EXIT=0 STUB_BACKUP_ID="complete3" STUB_ZFS_LIST_EXIT=0 STUB_ZFS_DESTROY_EXIT=1
+busy="cannot destroy 'smortress/raw/photos@ssd': dataset is busy"
+export STUB_ZFS_STDERR=$busy
+run scripts/smortress-restic-backup.sh ssd --unit photos --no-maintenance
+if ((rc != 0)); then ok "a stale snapshot that will not destroy fails the job"; else bad "a stale snapshot that will not destroy fails the job"; fi
+eq "$(state_json ssd-photos '.last_attempt.reason')" snapshot-reconcile "the failure reason stays symbolic"
+if [[ $out == *"$busy"* ]]; then
+  ok "a failed reconciliation records zfs's own message"
+else
+  bad "a failed reconciliation records zfs's own message" "$out"
+fi
+eq "$(grep -c '^destroy smortress/raw/photos@ssd' "$log/zfs")" 2 \
+  "a busy destroy is retried once before the attempt fails"
+
+reset_state
+export STUB_BACKUP_EXIT=0 STUB_BACKUP_ID="complete4" STUB_ZFS_LIST_EXIT=1 STUB_ZFS_DESTROY_FAIL_LATE=1
+export STUB_ZFS_STDERR=$busy
+run scripts/smortress-restic-backup.sh ssd --unit photos --no-maintenance
+eq "$rc" 0 "a staging snapshot that will not destroy does not fail a good backup"
+if [[ $out == *"$busy"* ]]; then
+  ok "a failed end-of-run cleanup names the zfs error"
+else
+  bad "a failed end-of-run cleanup names the zfs error" "$out"
+fi
+unset STUB_ZFS_DESTROY_FAIL_LATE STUB_ZFS_STDERR
 
 # --- 3. readiness and mount gates ---------------------------------------
 reset_state
