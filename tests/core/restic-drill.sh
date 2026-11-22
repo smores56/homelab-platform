@@ -55,6 +55,16 @@ case $1 in
         printf '{"total_size":%s,"total_file_count":1}\n' "${FAKE_RESTORE_SIZE:-1000}" ;;
     dump)
         cat "$FAKE_PAYLOAD" ;;
+    restore)
+        target=""
+        while [ $# -gt 1 ]; do
+            case $1 in
+                --target) target=$2; shift 2 ;;
+                *) shift ;;
+            esac
+        done
+        [ -n "$target" ] || { echo "fake restic: restore without --target" >&2; exit 2; }
+        printf 'known\n' >"$target/known.txt" ;;
     *) printf 'fake restic: unexpected command: %s\n' "$*" >&2; exit 2 ;;
 esac
 EOF
@@ -102,6 +112,27 @@ else
     bad 'the restored content lands in the target' "$(ls -A "$target" 2>&1)"
 fi
 
+# --- the default method is restore; dump stays behind an override -------------
+
+if grep -qE ' restore .*--target' "$work/log"; then
+    ok 'a drill restores through restic restore'
+else
+    bad 'a drill restores through restic restore' "$(cat "$work/log")"
+fi
+
+: >"$work/log"
+rm -rf "$work/drill_root"/* 2>/dev/null || true
+if RESTIC_DRILL_METHOD=dump run ssd books; then
+    ok 'RESTIC_DRILL_METHOD=dump still drills through dump and tar'
+else
+    bad 'RESTIC_DRILL_METHOD=dump still drills through dump and tar' "$(cat "$work/stderr")"
+fi
+if grep -q ' dump ' "$work/log"; then
+    ok 'the override reaches restic'
+else
+    bad 'the override reaches restic' "$(cat "$work/log")"
+fi
+
 # --- a target without room is refused before writing ------------------------
 
 : >"$work/log"
@@ -117,7 +148,7 @@ if grep -q 'choose --target' "$work/stderr"; then
 else
     bad 'the refusal names the way out' "$(cat "$work/stderr")"
 fi
-if grep -q dump "$work/log"; then
+if grep -qE ' (dump|restore) ' "$work/log"; then
     bad 'nothing is restored when the size does not fit' "$(cat "$work/log")"
 else
     ok 'nothing is restored when the size does not fit'
