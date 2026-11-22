@@ -133,15 +133,34 @@ class Handler(BaseHTTPRequestHandler):
             )
         if self.path == "/v1.Backrest/GetOperations":
             try:
-                requested = (json.loads(body or b"{}").get("selector") or {}).get("ids") or []
+                selector = json.loads(body or b"{}").get("selector") or {}
             except ValueError:
-                requested = []
+                selector = {}
+            requested = selector.get("ids") or []
+            if not requested:
+                # No index operations until a reindex runs, which is the state a
+                # freshly started reader is in.
+                return self.send(200, json.dumps({"operations": []}).encode(), "application/json")
             snapshot = "bbb" if "2" in requested else "aaa"
             return self.send(
                 200,
-                json.dumps({"operations": [{"id": str(requested[0]), "snapshotId": snapshot}]}).encode(),
+                json.dumps(
+                    {
+                        "operations": [
+                            {
+                                "id": str(requested[0]),
+                                "snapshotId": snapshot,
+                                "operationIndexSnapshot": {},
+                            }
+                        ]
+                    }
+                ).encode(),
                 "application/json",
             )
+        if self.path == "/v1.Backrest/DoRepoTask":
+            with open(sys.argv[2], "a") as log:
+                log.write("DoRepoTask %s\n" % body.decode())
+            return self.send(200, b"{}", "application/json")
         if self.path == "/v1.Authentication/Login":
             return self.send(200, b'{"token":"t"}', "application/json")
         return self.send(200, b'{"ok":true}', "application/json")
@@ -150,7 +169,7 @@ class Handler(BaseHTTPRequestHandler):
 HTTPServer(("127.0.0.1", int(sys.argv[1])), Handler).serve_forever()
 PY
 
-python3 "$work/stub.py" "$stub_port" &
+python3 "$work/stub.py" "$stub_port" "$work/calls" &
 stub_pid=$!
 
 BACKREST_BIN='' BACKREST_REPO_ID=r2 \
@@ -208,6 +227,15 @@ hasnt 'the untagged snapshot is dropped' '"bbb"'
 
 eq "$(req POST /v1.Backrest/GetDownloadURL '{"opId":"1"}')" 200 'download of a verified snapshot is allowed'
 eq "$(req POST /v1.Backrest/GetDownloadURL '{"opId":"2"}')" 409 'download of an unverified snapshot is refused'
+
+# A fresh reader has no index operations, so the guard must ask for one after a
+# listing or GetDownloadURL can never mint a URL.
+sleep 2
+if grep -qa 'TASK_INDEX_SNAPSHOTS' "$work/calls"; then
+  ok 'listing triggers a snapshot reindex'
+else
+  bad 'listing triggers a snapshot reindex' "$(cat "$work/calls" 2>/dev/null)"
+fi
 
 eq "$(req POST /v1.Backrest/GetConfig '{}' application/proto)" 200 'protobuf GetConfig is served'
 hasnt 'protobuf redaction removes the password' 'SECRET-PW'

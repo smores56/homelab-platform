@@ -197,6 +197,74 @@ def only_verified_json(body):
     return json.dumps(parsed).encode()
 
 
+def api_call(method, payload, headers):
+    """One internal RPC, with the caller's own session."""
+    body = json.dumps(payload).encode()
+    request = {"Content-Type": "application/json", "Content-Length": str(len(body))}
+    request.update(headers)
+    conn = http.client.HTTPConnection(UPSTREAM_HOST, UPSTREAM_PORT, timeout=120)
+    try:
+        conn.request("POST", "/v1.Backrest/" + method, body=body, headers=request)
+        return as_json(conn.getresponse().read())
+    finally:
+        conn.close()
+
+
+def indexed_ids(headers):
+    operations = api_call("GetOperations", {"lastN": 1000}, headers).get("operations") or []
+    return {
+        operation.get("snapshotId")
+        for operation in operations
+        if operation.get("operationIndexSnapshot") is not None and operation.get("snapshotId")
+    }
+
+
+# Every restart starts from an empty index, and GetDownloadURL cannot mint a URL
+# without an index operation for the snapshot. Backrest schedules none on its
+# own with no plans configured, so listing snapshots has to ask for one, exactly
+# as the Worker does.
+def reindex(headers):
+    live = [
+        snapshot.get("id")
+        for snapshot in (api_call("ListSnapshots", {"repoId": REPO_ID}, headers).get("snapshots") or [])
+        if snapshot.get("id")
+    ]
+    if not live:
+        return
+    if all(snapshot in indexed_ids(headers) for snapshot in live):
+        return
+    api_call("DoRepoTask", {"repoId": REPO_ID, "task": "TASK_INDEX_SNAPSHOTS"}, headers)
+    deadline = time.monotonic() + 600
+    while time.monotonic() < deadline:
+        if all(snapshot in indexed_ids(headers) for snapshot in live):
+            return
+        time.sleep(1)
+
+
+_reindex_lock = threading.Lock()
+_reindex_running = False
+
+
+def schedule_reindex(headers):
+    global _reindex_running
+    with _reindex_lock:
+        if _reindex_running:
+            return
+        _reindex_running = True
+
+    def run():
+        global _reindex_running
+        try:
+            reindex(headers)
+        except Exception as error:  # noqa: BLE001 - a refresh must never kill a request
+            sys.stderr.write("backrest-guard: reindex failed: %s\n" % error)
+        finally:
+            with _reindex_lock:
+                _reindex_running = False
+
+    threading.Thread(target=run, daemon=True).start()
+
+
 def as_json(body):
     try:
         return json.loads(body)
@@ -350,7 +418,8 @@ class Handler(BaseHTTPRequestHandler):
         except OSError:
             self.refuse(502, "unavailable", "backrest is not reachable")
             return
-
+        if path == "/v1.Backrest/ListSnapshots" and response.status == 200:
+            schedule_reindex(self.auth_headers())
         try:
             content_type = response.getheader("Content-Type") or ""
             rewritten = None
