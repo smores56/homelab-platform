@@ -93,6 +93,18 @@ before the other and Cloudflare refuses two records at a name, so the cutover is
 two commits, each applied by CI (`tofu-apply` on `main`) with no local
 credentials:
 
+Before any of it, prove the host copy is the authoritative library:
+
+```sh
+CLUSTER_URL=https://photos.sammohr.dev CLUSTER_API_KEY=… \
+HOST_URL=https://smortress.<tailnet>.ts.net HOST_API_KEY=… \
+  scripts/compare-photos-origin.sh
+```
+
+It compares `/api/server/statistics` on both copies; a difference means the
+cutover would serve a different library. `EDGE_USAGE_DELTA` allows a byte
+tolerance, nothing else.
+
 1. `tofu/terraform.tfvars`: pin `cluster_hosts` to the remaining names, without
    `photos` and `opds`. The apply deletes their proxied CNAMEs.
 2. `tofu/terraform.tfvars`: add `edge_ipv4 = "<vps-ipv4>"`. The apply creates

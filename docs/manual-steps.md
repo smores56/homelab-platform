@@ -6904,7 +6904,17 @@ upstream certificate verifying, and this box being unable to reach smortress on
 
 ### 50.8 The cutover (after #709's gate)
 
-First record 30 days of `photos` + `opds` transfer from Cloudflare's analytics;
+Prove the host copy is the authoritative library first; a difference here means
+the cutover would serve a different Immich:
+
+```sh
+CLUSTER_URL=https://photos.sammohr.dev CLUSTER_API_KEY=... \
+HOST_URL=https://smortress.stonecat-jazz.ts.net HOST_API_KEY=... \
+  scripts/compare-photos-origin.sh
+```
+
+Both counts must match, and the usage within `EDGE_USAGE_DELTA` if you allow
+one. Then record 30 days of `photos` + `opds` transfer from Cloudflare's analytics;
 if it is a meaningful fraction of 10 TB, stop and size the plan instead. Also
 enable the panel firewall now, with `tcp/443`, `udp/41641` and ICMP echo
 (`§50.3`), or certificate issuance fails with the rest of the world.
