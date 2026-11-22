@@ -69,9 +69,27 @@ key names are visible and no identity is needed.
 the check or the recipient list cannot merge without one. **Signed commits are
 not required**, by operator decision: the agent runs unattended, so a signature
 would prove possession of a key that has to live on the machine, not that a
-human approved anything. The broker does not yet hold `pull_requests: write`
-on the tenant repository, so the agent cannot open the PR it is meant to
-auto-merge.
+human approved anything.
+
+A `main` ruleset requires a pull request and the `apps-schema` check; the only
+bypass actor is the repository admin role. The shell path was measured on
+2026-11-22: `smores56-agent` (classic `repo` PAT, Write collaborator) pushed
+`smores/agent-pr-proof`, opened PR #4, enabled squash auto-merge, and GitHub
+merged it at 18:38:17Z with `apps-schema` green and no human approval because
+the diff touched only `apps/smoke/app.toml`. A direct push of the same commit to
+`main` was refused with `push declined due to repository rule violations`.
+`scripts/agent-tenant-pr-probe.sh` repeats this: its read-only mode checks the
+token identity, the Write role, the ruleset and the direct-push refusal, and
+`--merge` opens and auto-merges the app-only PR.
+
+The broker is a different credential. Its `github-apps` enrollment requests
+`contents: write` only (`docs/broker.md`), so a broker-minted installation token
+cannot open the PR that path would merge. The installation's live permission
+set is not readable with a PAT (`403 Resource not accessible by personal access
+token`), so that statement rests on the reviewed enrollment. Closing it is an
+App owner action in the browser — App settings → Permissions & events →
+Repository permissions → Pull requests: Read and write, then re-approve the
+installation — not a `gh` call. The shell path above does not need it.
 
 ## Bounds
 

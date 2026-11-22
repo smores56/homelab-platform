@@ -175,15 +175,13 @@ was `smores56/homelab-platform#93`, closed unmerged, and its branch deleted.
 
 These are failures of the control, not of the probe:
 
-- **`homelab-apps` has no ruleset and no branch protection.** The machine user
-  can push `main`; not executed. No live ruleset enforces the app-only merge or
-  the `apps-schema` check the design relies on, so that path is unguarded.
 - **`sdlc` cannot have a ruleset or branch protection on the free plan.**
   `GET /repos/smores56/sdlc/rulesets` and the branch-protection endpoint return
   `Upgrade to GitHub Pro or make this repository public` (HTTP 403). The machine
   user has Write there, so it can push `main`; not executed.
 - **Only `~DEFAULT_BRANCH` is covered.** The live rulesets on
-  `homelab-platform`, `nix-config`, and `kanbei` target the default branch only.
+  `homelab-platform`, `homelab-apps`, `nix-config`, and `kanbei` target the
+  default branch only.
   The app-gating ruleset from `docs/manual-steps.md` section 1 item 3 is absent,
   so a non-main branch has no force-push or deletion rule. The machine user's
   own `agent/*` branches are intentionally exempt, but the gate the design
@@ -204,6 +202,46 @@ These are failures of the control, not of the probe:
 The environment half is now correct: `cloudflare` and `server-image` allow
 `main` only, and `cloudflare-plan` allows `main` and `smores/*` (it had zero
 policies before 2026-11-21).
+
+## The tenant auto-merges an agent-authored app-only PR
+
+SDLC #710. Property under test: the machine user can push an app-only branch,
+open a pull request, and let auto-merge land it, while a direct push to `main`
+is refused and no human approval is involved. The credential is the classic
+`repo` PAT from `docs/manual-steps.md` section 48; the broker is a separate
+identity (`docs/broker.md`).
+
+### What runs automatically
+
+Nothing: CI must not carry this token. The repeatable probe is
+`scripts/agent-tenant-pr-probe.sh`, run by hand with the token at
+`~/.config/smores56-agent/token` (mode 0600):
+
+```sh
+scripts/agent-tenant-pr-probe.sh           # read-only control checks
+scripts/agent-tenant-pr-probe.sh --merge   # opens and auto-merges a probe PR
+```
+
+`--merge` changes `apps/smoke/app.toml` only, pushes
+`smores/agent-pr-probe-<stamp>`, enables squash auto-merge as `smores56-agent`,
+waits for `apps-schema`, and deletes the branch. It never touches `.github/**`.
+
+### Results
+
+| Probe | Expected | Observed 2026-11-22 |
+| --- | --- | --- |
+| direct push `main` as agent | refused | `GH013 ... Changes must be made through a pull request.` / `Required status check "apps-schema" is expected.` / `push declined due to repository rule violations` |
+| branch push as agent | allowed | `* [new branch] smores/agent-pr-proof` |
+| open PR as agent | allowed | PR [#4](https://github.com/smores56/homelab-apps/pull/4) |
+| CODEOWNERS | no owner review for `apps/**` | PR #4 touched only `apps/smoke/app.toml`; no approval requested or given |
+| `apps-schema` | required, success | `COMPLETED / SUCCESS` |
+| auto-merge | enabled and merged by agent | `enabledBy=smores56-agent`, squash, merged `2026-11-22T18:38:17Z` |
+| repeatable probe | exits 0 | read-only mode 5/5 checks; `--merge` opened and merged PR [#5](https://github.com/smores56/homelab-apps/pull/5) at `18:40:13Z` |
+| broker installation | separate credential | enrollment requests `contents: write` only; live permissions unreadable with a PAT (`403`) |
+
+The broker-side `pull_requests: write` gap is real for `github-apps` but does
+not affect the shell path. Closing it needs the App owner in the browser, not a
+credential held by the agent.
 
 ## The platform policy stack fails closed
 
