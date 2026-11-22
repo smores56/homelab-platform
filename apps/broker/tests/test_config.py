@@ -23,15 +23,6 @@ class ShippedConfigTest(unittest.TestCase):
             sorted(self.config.hosts),
             [
                 "cluster",
-                "github-agent",
-                "github-agent-apps",
-                "github-agent-push",
-                "github-apps",
-                "github-hooks",
-                "github-platform",
-                "github-platform-push",
-                "github-sdlc",
-                "github-sdlc-git",
                 "loki",
                 "memory",
                 "neuralwatt",
@@ -45,15 +36,6 @@ class ShippedConfigTest(unittest.TestCase):
     def test_public_hosts_never_allow_private_addresses(self) -> None:
         for name in (
             "neuralwatt",
-            "github-apps",
-            "github-hooks",
-            "github-platform-push",
-            "github-platform",
-            "github-agent-push",
-            "github-agent",
-            "github-agent-apps",
-            "github-sdlc-git",
-            "github-sdlc",
             "tinyfish",
         ):
             self.assertFalse(self.config.hosts[name].allow_private, name)
@@ -76,75 +58,17 @@ class ShippedConfigTest(unittest.TestCase):
                 self.assertTrue(enrollment.scheme == "https" or enrollment.allow_private, name)
                 self.assertTrue(enrollment.secret_name or enrollment.app, name)
 
-    def test_github_app_enrollments_carry_their_scope(self) -> None:
-        self.assertIsNotNone(self.config.github_app)
-        apps = self.config.hosts["github-apps"].app
-        self.assertEqual(apps.repositories, ("homelab-apps",))
-        self.assertEqual(dict(apps.permissions), {"contents": "write"})
-        platform = self.config.hosts["github-platform"].app
-        self.assertEqual(dict(platform.permissions), {"contents": "write", "pull_requests": "write"})
-        push = self.config.hosts["github-platform-push"].app
-        self.assertEqual(dict(push.permissions), {"contents": "write"})
-        self.assertEqual(push.repositories, ("homelab-platform",))
-        self.assertEqual(self.config.hosts["github-platform-push"].injection.kind, "basic")
-
-    def test_agent_enrollments_cover_the_pr_repositories(self) -> None:
-        # The agent's own repos: it may push agent/* branches and open pull
-        # requests, and nothing else. The per-repo rulesets are the real gate.
-        expected = ("nix-config", "kanbei")
-        push = self.config.hosts["github-agent-push"]
-        self.assertEqual(push.host, "github.com")
-        self.assertEqual(push.injection.kind, "basic")
-        self.assertEqual(push.injection.username, "x-access-token")
-        self.assertEqual(push.app.repositories, expected)
-        self.assertEqual(dict(push.app.permissions), {"contents": "write", "workflows": "write"})
-        api = self.config.hosts["github-agent"]
-        self.assertEqual(api.host, "api.github.com")
-        self.assertEqual(api.injection.kind, "bearer")
-        self.assertEqual(api.app.repositories, expected)
-        self.assertEqual(dict(api.app.permissions), {"contents": "read", "pull_requests": "write"})
-
-    def test_sdlc_hosts_scope_the_registry_repository(self) -> None:
-        # SDLC #629: the work registry (smores56/sdlc) is a repository of its
-        # own. Git transport and REST API are separate hosts, a token cannot
-        # mint `metadata` without `read`, and issues are the only thing written.
-        git = self.config.hosts["github-sdlc-git"]
-        self.assertEqual(git.host, "github.com")
-        self.assertEqual(git.scheme, "https")
-        self.assertEqual(git.injection.kind, "basic")
-        self.assertEqual(git.injection.username, "x-access-token")
-        self.assertEqual(git.app.repositories, ("sdlc",))
-        self.assertEqual(dict(git.app.permissions), {"contents": "write"})
-        api = self.config.hosts["github-sdlc"]
-        self.assertEqual(api.host, "api.github.com")
-        self.assertEqual(api.scheme, "https")
-        self.assertEqual(api.injection.kind, "bearer")
-        self.assertEqual(api.app.repositories, ("sdlc",))
-        self.assertEqual(dict(api.app.permissions), {"issues": "write", "metadata": "read"})
-
-    def test_github_hooks_is_post_only_hook_creation_behind_a_url_guard(self) -> None:
-        # SDLC #628: outbound repository webhooks. The agent may create a hook
-        # and nothing else: PATCH/DELETE are refused by method, every other path
-        # by the allowlist, and a hook whose config.url leaves the receiver is
-        # refused by the body guard.
-        hooks = self.config.hosts["github-hooks"]
-        self.assertEqual(hooks.host, "api.github.com")
-        self.assertEqual(hooks.port, 443)
-        self.assertEqual(hooks.scheme, "https")
-        self.assertFalse(hooks.allow_private)
-        self.assertEqual(hooks.injection.kind, "bearer")
-        self.assertEqual(hooks.app.installation, "github-installation-id")
-        self.assertEqual(hooks.app.repositories, ("sdlc", "homelab-apps"))
-        self.assertEqual(dict(hooks.app.permissions), {"repository_hooks": "write", "metadata": "read"})
-        self.assertEqual(hooks.allow_methods, ("POST",))
-        self.assertEqual(len(hooks.allow_paths), 1)
-        self.assertTrue(hooks.allow_paths[0].fullmatch("/repos/smores56/sdlc/hooks"))
-        self.assertEqual(len(hooks.body_guards), 1)
-        guard = hooks.body_guards[0]
-        self.assertEqual(guard.methods, ("POST",))
-        self.assertEqual(guard.field, "config.url")
-        self.assertTrue(guard.allow.match("https://agent-hooks.sammohr.dev/hook/abc"))
-        self.assertIsNone(guard.allow.match("https://evil.example/hook"))
+    def test_no_github_identity_survives(self) -> None:
+        # One credential serves GitHub: the machine user's classic PAT, held by
+        # the shell and the agent, not an App installation token. The App
+        # registration, its key and every enrollment that used it were retired
+        # on 2026-11-22 (docs/agent-identity.md). Re-adding one is a decision,
+        # not a config edit, so it has to fail here first.
+        self.assertIsNone(self.config.github_app)
+        github = [name for name in self.config.hosts if name.startswith("github")]
+        self.assertEqual(github, [])
+        for name in ("github-apps", "github-agent-apps"):
+            self.assertNotIn(name, self.config.hosts)
 
     def test_memory_is_a_private_http_host_with_an_optional_token(self) -> None:
         # SDLC #631: the graphiti wrapper. In-cluster HTTP with a bearer token
@@ -210,13 +134,6 @@ class ShippedConfigTest(unittest.TestCase):
         # predicates forwards every method and path it always did.
         for name in (
             "neuralwatt",
-            "github-apps",
-            "github-platform-push",
-            "github-platform",
-            "github-agent-push",
-            "github-agent",
-            "github-sdlc-git",
-            "github-sdlc",
             "tinyfish",
             "loki",
             "memory",
@@ -516,37 +433,3 @@ class SecretsTest(unittest.TestCase):
         self.assertNotIn("notify-token", load_secrets(config.hosts, directory))
         pathlib.Path(directory, "notify-token").write_text("token\n")
         self.assertEqual(load_secrets(config.hosts, directory)["notify-token"], "token")
-
-    def test_the_app_key_is_required_when_an_app_is_enrolled(self) -> None:
-        config = load_config(SHIPPED, env={})
-        directory = tempfile.mkdtemp()
-        for name in {enrollment.secret_name for enrollment in config.hosts.values() if enrollment.secret_name}:
-            pathlib.Path(directory, name).write_text("value\n")
-        with self.assertRaises(ConfigError):
-            load_app_signing(config, directory)
-        pathlib.Path(directory, "github-app-id").write_text("not-a-number")
-        with self.assertRaises(ConfigError):
-            load_app_signing(config, directory)
-        pathlib.Path(directory, "github-app-id").write_text("4242\n")
-        with self.assertRaises(ConfigError):
-            load_app_signing(config, directory)
-        pathlib.Path(directory, "github-app-private-key").write_text(KEY_PEM)
-        with self.assertRaises(ConfigError):
-            # every enrollment's installation id is still missing
-            load_app_signing(config, directory)
-        scopes = {
-            enrollment.app.installation
-            for enrollment in config.hosts.values()
-            if enrollment.app is not None
-        }
-        for name in scopes:
-            pathlib.Path(directory, name).write_text("99\n")
-        signing = load_app_signing(config, directory)
-        self.assertEqual(signing.app_id, 4242)
-        self.assertEqual(signing.private_key, KEY_PEM.encode())
-        self.assertEqual(set(signing.installations), scopes)
-        self.assertTrue(all(value == 99 for value in signing.installations.values()))
-
-
-if __name__ == "__main__":
-    unittest.main()

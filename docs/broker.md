@@ -79,15 +79,6 @@ each request's logical host (see "GitHub App identity" below).
 | Logical host | Real endpoint | Injection | Credential | Private allowed |
 | --- | --- | --- | --- | --- |
 | `neuralwatt` | `https://api.neuralwatt.com:443` | `Authorization: Bearer` | `neuralwatt-api-key` | no |
-| `github-apps` | `https://github.com:443` | `Authorization: Basic x-access-token:<token>` | app: `homelab-apps`, `contents: write` | no |
-| `github-platform-push` | `https://github.com:443` | `Authorization: Basic x-access-token:<token>` | app: `homelab-platform`, `contents: write` | no |
-| `github-platform` | `https://api.github.com:443` | `Authorization: Bearer` | app: `homelab-platform`, `contents: write`, `pull_requests: write` | no |
-| `github-agent-push` | `https://github.com:443` | `Authorization: Basic x-access-token:<token>` | app: `nix-config`, `kanbei`, `contents: write`, `workflows: write` | no |
-| `github-agent` | `https://api.github.com:443` | `Authorization: Bearer` | app: `nix-config`, `kanbei`, `contents: read`, `pull_requests: write` | no |
-| `github-agent-apps` | `https://api.github.com:443` | `Authorization: Bearer` | app: `homelab-apps`, `contents: read`, `pull_requests: write` | no |
-| `github-sdlc-git` | `https://github.com:443` | `Authorization: Basic x-access-token:<token>` | app: `sdlc`, `contents: write` | no |
-| `github-sdlc` | `https://api.github.com:443` | `Authorization: Bearer` | app: `sdlc`, `issues: write`, `metadata: read` | no |
-| `github-hooks` | `https://api.github.com:443` | `Authorization: Bearer` | app: `sdlc`, `homelab-apps`, `repository_hooks: write`, `metadata: read` | no |
 | `tinyfish` | `https://api.search.tinyfish.ai:443` | `X-Api-Key: <token>` | `tinyfish-api-key` | no |
 | `loki` | `http://loki-gateway.observability.svc.cluster.local:3100` | `Authorization: Bearer`, fixed `X-Scope-OrgID: data` | `loki-gateway-token` | yes |
 | `memory` | `http://memory-mcp.graphiti.svc.cluster.local:8182` | `Authorization: Bearer` | `memory-mcp-token` (optional) | yes |
@@ -101,76 +92,11 @@ strips the logical host: the caller addresses `BROKER_URL/self/status`, and
 the service sees `/self/status`; `BROKER_URL/cluster/pods` becomes
 `/cluster/pods`. Without it the upstream would only see the trailing path.
 
-`github-platform-push` is the git transport half of the `github-platform`
-capability: GitHub serves git smart HTTP only on `github.com`, while PR calls
-are REST on `api.github.com`. The agent pushes `agent/*` branches to
-`homelab-platform` and opens same-repo pull requests; there is no fork (a
-GitHub App cannot fork, and GitHub refuses a fork of your own private
-repository), so branch rulesets, not the fork boundary, keep the identity off
-every other branch (docs/manual-steps.md step 1).
-
-`github-platform` asks for `contents: write` because merging a pull request is a
-contents write in the REST API; `pull_requests: write` alone is not enough and
-the merge call fails with `403 Resource not accessible by integration`. The
-scope is still bounded by the rulesets, not by this file: `main` requires a pull
-request with an approving review, so the token can merge what a human approved
-and nothing else. There is no `agent/**` containment ruleset; that requirement
-was dropped on 2026-11-21 (docs/manual-steps.md step 3), so the identity may push
-any non-default branch.
-
-`github-agent-apps` is the tenant half of that pair, on one repository:
-`homelab-apps`. Its paths are the open-PR call, the REST merge call and GraphQL,
-and its GraphQL guard admits only `enablePullRequestAutoMerge` -- so the route
-that is actually exercised is "open the PR, turn auto-merge on, let the required
-check merge it". The REST merge route needs `contents: write` (the same API rule
-as `github-platform` above), which this enrollment does not have; a caller that
-takes that route gets `403 Resource not accessible by integration`. Widening it
-is a decision about what the agent's API token may do to contents, not a typo.
-The measured app-only merge on 2026-11-22 went through the shell identity's PAT,
-not this enrollment (`docs/core/apps-tenant.md`).
-
-`github-agent-push` and `github-agent` are the same pair for the agent's own
-repositories: `nix-config` and `kanbei`. Both repositories are archived, so these
-hosts are historical; they go when this file next changes. They exist so the agent can propose
-changes there the way it does for `homelab-platform` — push an `agent/*`
-branch, open a pull request — without a second credential. The repositories are
-listed on both hosts and the installation token is minted per request, so the
-scope is exactly those two repos. Write access is still governed per repository
-by the `agent-gating` and `main` rulesets, not by this file: the token can only
-reach `agent/*`, and `main` requires a reviewed pull request. Adding a
-repository here is therefore not enough on its own — the rulesets must already
-be in place.
-
-`github-agent-push` also asks for `workflows: write`. GitHub refuses a push that
-touches `.github/workflows/` without it, and it refuses the whole push, not just
-the workflow file, so without the permission the agent cannot land a CI change it
-proposed. It is not a wider reach into the repositories: the same rulesets bound
-it, and a workflow change still needs a reviewed pull request on `main`.
-
-`github-sdlc-git` and `github-sdlc` (SDLC #629) are that pair for the personal
-work registry `smores56/sdlc`: git transport on `github.com`, REST on
-`api.github.com`, both scoped to that one repository so the agent can clone,
-push an `agent/*` branch and open the registry PR. The git half holds
-`contents: write`; the API half holds `issues: write` and `metadata: read`,
-because the registry edits issues and nothing else, and GitHub requires
-`metadata: read` on every installation token. `sdlc` must be in the app
-installation before these hosts work (docs/manual-steps.md step 1, item 2): a
-repository named here but absent from the installation fails the whole host with
-a 422.
-
-`github-hooks` (SDLC #628) is the outbound half of the webhook receiver: the
-agent registers repository hooks that GitHub delivers to
-`https://agent-hooks.sammohr.dev/`, so this host only ever creates one. The
-enrollment holds `repository_hooks: write` plus `metadata: read` on `sdlc` and
-`homelab-apps`, admits only `POST /repos/<owner>/<repo>/hooks`, and a body
-guard requires `config.url` to start with `https://agent-hooks.sammohr.dev/`.
-The narrow shape is the point: `PATCH`/`DELETE` (`method_denied`) would retarget
-or delete a hook the human installed, and without the body guard the agent could
-point a fresh hook at an attacker URL, whose deliveries carry the repository's
-event payloads. The App needs the **Repository webhooks: read and write**
-permission and a re-consented installation first (docs/manual-steps.md step 34):
-an installation token cannot grow a permission the installation never approved,
-so hook creation fails with `403`/`422` until then.
+GitHub is **not** a broker logical host. The broker mints installation tokens
+for an App that was retired on 2026-11-22, together with every enrollment that
+used it: one identity serves GitHub now, a classic `repo` PAT held by the
+machine user `smores56-agent`, and it never passes through this gateway. The
+replacement model, including why the App lost, is `docs/agent-identity.md`.
 
 `memory` (SDLC #631) is the graphiti memory wrapper
 (`memory-mcp.graphiti.svc.cluster.local:8182`), the same MCP endpoint
@@ -252,8 +178,9 @@ means any), one or more `paths` regexes, a `field` (dot-separated JSON keys) and
 an `allow` regex. When a request matches the method and path, the body must be
 valid UTF-8 JSON with no repeated key, and the named field must be a string
 matching `allow` at its start. A repeated key is `body_json_invalid` because two
-JSON parsers can read two different values from it. The canonical use is webhook
-creation on the `github-hooks` host (SDLC #628):
+JSON parsers can read two different values from it. The canonical shape is an
+outbound call whose URL must stay inside one origin (the retired `github-hooks`
+enrollment used exactly this):
 
 ```json
 "body_guards": [
@@ -447,29 +374,18 @@ curl -sS -o /dev/null -D - https://agent.sammohr.dev/ | head -3
 
 ### Repository mirror cross-reference
 
-The platform's `github-backup` CronJob (`clusters/homelab/platform/backup/`,
-`docs/runbook.md` "Repository mirror") uses a separate operator-owned
-fine-grained read-only PAT, not a broker logical host. The broker mints its own
-installation tokens from the app; the mirror's PAT is scoped to `Contents:
-read` on the two repositories and is not the agent's identity.
+The repository mirror uses a separate operator-owned fine-grained read-only PAT,
+not the agent's identity and not a broker logical host: it is scoped to
+`Contents: read` on the repositories it mirrors.
 
-### GitHub App identity
+### GitHub identity (retired from the broker)
 
-The broker holds `smores56-homelab-agent`'s private key and mints installation
-tokens on demand (`apps/broker/broker/github_app.py`): an RS256 JWT
-(`iat` −60 s, `exp` +540 s, `iss` = app id) is exchanged at
-`POST /app/installations/{id}/access_tokens` with the enrollment's
-`repositories` and `permissions` subset. Tokens live one hour; the broker
-reuses one until 5 minutes before expiry, keyed by installation, repositories
-and permissions, and includes the live tokens in its redaction set. One
-installation covers both repositories; the split between the three GitHub
-logical hosts is the requested scope, not a separate install. A minting
-failure is a `503` for that request — never a forward without a credential.
-
-The app's permissions are app-wide, so the per-host split above is enforced by
-these minted scopes plus the reviewed `broker.json`. The trust boundary is
-unchanged: the broker was already the only credential holder; now the credential
-is short-lived and revocable from the app's settings page.
+`smores56-homelab-agent` and its per-request installation tokens are gone as a
+deployed capability: `apps/broker/config/broker.json` carries no `github_app`
+block and no `github-*` enrollment, and a test asserts that
+(`apps/broker/tests/test_config.py`). The minting code is still present and
+tested so the retirement is reversible by config alone, but nothing reaches it.
+The live identity is the machine user's PAT; see `docs/agent-identity.md`.
 
 ## Inbound webhooks: `agent-hooks.sammohr.dev`
 

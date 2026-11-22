@@ -5701,6 +5701,16 @@ The only approval contract is the write broker's `libs/data_plane/approval.py`.
 
 ## 48. Create the machine-user account and its scoped token
 
+> **Current model (2026-11-22):** one dev credential and one registry
+> credential, no GitHub App. Read `docs/agent-identity.md` first. The dev token is
+> the classic `repo` PAT under `smores56-agent` (steps below, which still apply);
+> the `sdlc` registry uses a fine-grained PAT **owned by `smores56`**, scoped to
+> `smores56/sdlc` with Issues read/write and Metadata read and no Contents. The
+> `smores56-homelab-agent` App and its per-host enrollments are retired: the
+> registration, its key and the broker's `github-*` enrollments are gone, so step
+> 1 item 1 and step 34 are history, not instructions. "Cannot merge" is enforced
+> by the `main` ruleset's required approving review, not by the token.
+
 SDLC #710, part of #702. The general shell agents act on GitHub as a dedicated
 machine account, never as `smores56` and never through the `dotfiles` work PAT.
 The ceiling is a Write collaborator role: it can push branches, open pull
@@ -6403,9 +6413,10 @@ sudo /usr/libexec/smortress-deploy release --force
 ```
 
 It records the operator, the digest and the missing units, changes no image and
-reboots nothing: the next request for that commit — the hourly poll re-enqueues
-it while it is still the tip — reaches the gate, sees the release, stages and
-reboots. A release covers one digest only.
+reboots nothing: the next request for that commit — the daily 03:00 window
+re-enqueues it while it is still the tip, or a manual dispatch does it sooner —
+reaches the gate, sees the release, stages and reboots. A release covers one
+digest only.
 
 ### 49.8 A denylisted commit or digest: `unblock`
 
