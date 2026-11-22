@@ -2252,6 +2252,11 @@ prunes. A missing repository is reported by name, not created.
     the controller. Re-run it immediately before a destructive command; `sshd`
     is independent of k3s, ZFS and every data-plane unit.
 
+    **Waived for T6 (#709):** smortress is physically reachable on demand and
+    physical access to a powered-on host is an accepted risk, so the two paths
+    stay unconfigured. See `docs/migration-gates.md`, "Access-path decision";
+    the retirement steps stop data-plane writers only, never `sshd`.
+
 11. Order the gates. Inventory → `protect_old` (needs `gate_ready` from step 6)
     → pilot → scratch stack → shadow backfill → `cutover` (recorded human
     confirmation) → `retire_old` (irreversible, confirmation). The 970 is never

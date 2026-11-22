@@ -13,6 +13,16 @@ Two operator constraints outrank every other migration concern:
    and the 970 is not converted until a verified copy and a verified restore
    exist.
 
+**Access-path decision (2026-11-22).** Constraint 1 is met by substitution for
+#709, not by the rescue play: smortress is physically reachable on demand, and
+the owner accepts the risk of physical access to a powered-on host. The
+`rescue` role's two verified SSH paths therefore stay unconfigured and the
+play's proof is waived. The fallback for the failure class the play never
+covered — a boot that does not reach userspace — is the keyboard. The play's
+actual subject, a unit or firewall change removing the running OS's SSH, is out
+of scope for the retirement steps: they stop data-plane writers only, and SSH
+is not among them.
+
 `preflight` is read-only but online: it opens each restic repository to prove
 the backup chain and never writes, copies, prunes, or initializes anything.
 `verify` and `rollback-plan` stay offline and read one JSON document. No
