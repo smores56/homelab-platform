@@ -121,6 +121,10 @@ pull_timeout=${APPS_PULL_TIMEOUT:-1800}
 tenant_timeout=${APPS_TENANT_TIMEOUT:-120}
 ctl_timeout=${APPS_CTL_TIMEOUT:-120}
 serve_timeout=${APPS_SERVE_TIMEOUT:-180}
+# How long a started app may take to come up, and how long it must then stay up:
+# a container that exits is restarted, so one active sample is not health.
+health_wait_timeout=${APPS_HEALTH_WAIT_TIMEOUT:-180}
+health_settle=${APPS_HEALTH_SETTLE:-15}
 
 # Free space, in bytes: the tenant home takes the pulled layers, `/` and `/var`
 # take the container store and the ostree staging a platform deploy needs at the
@@ -146,6 +150,10 @@ previous_secrets_json='{}'
 previous_plan=false
 previous_state=false
 previous_commit=
+# The health check's verdict, set by app_health; the failure reason journals it.
+health_unit=
+health_state=
+failure_reason=
 intended_units=()
 intended_secrets=()
 intended_apps=()
@@ -270,6 +278,90 @@ user_ctl() { # <args...>; retry transport failures while the manager starts
 
 system_ctl() { # <verb> <unit>
   bounded "$ctl_timeout" "$systemctl_bin" "$1" "$2"
+}
+
+# One `systemctl show` answers both halves of the question: the state, and how
+# many times systemd has restarted the unit. A container that exits under
+# Restart= is usually `active` again by the next sample, so a state-only sample
+# misses the crash loop; the counter does not. Only the two properties are read
+# out of the answer, so a warning the bus prints alongside them cannot turn into
+# a verdict.
+user_state() { # <unit> -> "<ActiveState> <NRestarts>", or "unknown 0"
+  local i out state restarts
+  for ((i = 0; i < 10; i++)); do
+    out=$(bounded "$(cap_of "$ctl_timeout")" "$systemctl_bin" --user \
+      --machine="$apps_user@.host" show -p ActiveState -p NRestarts "$1" 2>&1)
+    state=$(sed -n 's/^ActiveState=//p' <<<"$out")
+    restarts=$(sed -n 's/^NRestarts=//p' <<<"$out")
+    if [[ -n $state && $restarts =~ ^[0-9]+$ ]]; then
+      printf '%s %s\n' "$state" "$restarts"
+      return 0
+    fi
+    # The manager is busiest right after the restarts above, so a transport
+    # failure here is expected occasionally and is not an answer.
+    case $out in
+      *"Transport endpoint is not connected"* | *"Failed to connect to user scope bus"* | \
+        *"Connection refused"* | *"Connection reset"* | *"Broken pipe"*)
+        sleep 1
+        ;;
+      *) break ;;
+    esac
+  done
+  printf 'unknown 0\n'
+  return 0
+}
+
+# Waits for the app to be active, then holds it through the settle window. Any
+# non-active sample, and any restart after the baseline, is the crash loop this
+# exists to catch. "Cannot ask" is not "unhealthy": an unanswered probe is
+# retried until the wait budget is gone. Sets health_unit and health_state.
+app_health() { # <name>
+  local unit probe state restarts baseline='' end
+  unit=$(app_service "$1")
+  # A probe bounded by an exhausted apply budget is a one-second answer to a
+  # question that needs seconds, and its failure would name the app instead of
+  # the budget.
+  if (($(budget_left) < health_wait_timeout + health_settle)); then
+    health_unit=$unit health_state=budget-exhausted
+    return 1
+  fi
+  end=$(($(date -u +%s) + health_wait_timeout))
+  while :; do
+    probe=$(user_state "$unit")
+    state=${probe%% *} restarts=${probe##* }
+    case $state in
+      active)
+        baseline=$restarts
+        break
+        ;;
+      # Anything else may still resolve, but a failed unit that has run out of
+      # restarts will not: waiting for it only delays the revert.
+      failed)
+        health_unit=$unit health_state=$state
+        return 1
+        ;;
+    esac
+    if (($(date -u +%s) >= end)); then
+      health_unit=$unit health_state=$state
+      return 1
+    fi
+    sleep 2
+  done
+  end=$(($(date -u +%s) + health_settle))
+  while :; do
+    probe=$(user_state "$unit")
+    state=${probe%% *} restarts=${probe##* }
+    if [[ $state != active ]]; then
+      health_unit=$unit health_state=$state
+      return 1
+    fi
+    if ((restarts > baseline)); then
+      health_unit=$unit health_state=restarted
+      return 1
+    fi
+    (($(date -u +%s) < end)) || return 0
+    sleep 1
+  done
 }
 
 # A unit that was never installed exits 5 from systemd; any other failure,
@@ -828,6 +920,26 @@ apply_ingress() {
   return 0
 }
 
+# New and restarted apps only: an unchanged app was committed by an earlier
+# apply, and an apply that does not write it cannot repair it. Checking it here
+# would let one broken app refuse every later commit, including its own fix.
+check_started_apps() {
+  local name
+  for name in "${new_apps[@]}" "${changed_apps[@]}"; do
+    require_app_name "$name" health-check || return 1
+    if ! app_health "$name"; then
+      failure_reason='app-unhealthy'
+      warn "$name: $health_unit is $health_state"
+      journal_append apps-unhealthy "$(jq -nc --arg commit "$commit" --arg app "$name" \
+        --arg unit "$health_unit" --arg state "$health_state" \
+        '{commit:$commit,app:$app,unit:$unit,state:$state}')" ||
+        warn "cannot journal the unhealthy app"
+      return 1
+    fi
+  done
+  return 0
+}
+
 apply_mutations() {
   # The plan first: the quota applier and Serve both re-read it, and neither may
   # act on the previous revision once a container of the new one exists.
@@ -853,6 +965,10 @@ apply_mutations() {
   stop_departed_apps || return 1
   remove_departed_secrets || return 1
   apply_ingress || return 1
+  # The apps this apply started are what the next boot's gate judges, and a gate
+  # that finds one down rolls back a healthy platform image. So a revision whose
+  # apps do not stay up is reverted here, before it is committed.
+  check_started_apps || return 1
   return 0
 }
 
@@ -1309,7 +1425,8 @@ cmd_apply() {
   if ! apply_mutations; then
     warn "the apply failed after it started changing the host; reverting"
     journal_append apps-failed "$(jq -nc --arg commit "$commit" --arg phase restoring \
-      '{commit:$commit,phase:$phase,reason:"mutation-failed"}')" || warn "cannot journal the failure"
+      --arg reason "${failure_reason:-mutation-failed}" \
+      '{commit:$commit,phase:$phase,reason:$reason}')" || warn "cannot journal the failure"
     revert_apply || warn "the revert did not finish; the record is kept for the next gate"
     deploy_notify fail apps-apply-reverted || warn "could not report the failed apply"
     say "$commit was rolled back to the previous revision"

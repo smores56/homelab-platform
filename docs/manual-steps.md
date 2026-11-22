@@ -6347,6 +6347,7 @@ sudo tail -n 20 /var/lib/homelab/deploy/journal.jsonl | jq -c .
 #   stage-digest-mismatch, boot-gate-green, boot-gate-failed, rolled-back-by-bootloader
 #   apps-start, apps-pulled, apps-rejected, apps-applied, apps-quota-applied,
 #   apps-reverted, apps-failed, apps-serve-failed,
+#   apps-unhealthy (a started app was not active, or was restarted),
 #   apps-name-refused (a name the schema forbids reached a unit sink),
 #   apps-work-kept (a work tree the sweep would not remove)
 #   denylist-cleared, bootstrap-recorded, poll-denylisted, notify-sent, notify-failed

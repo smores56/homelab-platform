@@ -118,6 +118,10 @@ export SOPS_AGE_KEY_FILE=$work/age.txt
 export APPS_FREE_HOME_PATH=$APPS_HOME
 export APPS_FREE_ROOT_PATH=$work
 export APPS_FREE_VAR_PATH=$work
+# The health wait must expire, not hang. The settle window is off unless a case
+# is testing it: with it at 0 the window is a single sample.
+export APPS_HEALTH_WAIT_TIMEOUT=2
+export APPS_HEALTH_SETTLE=0
 export DEPLOY_APPS_BIN=$root/$apps
 export DEPLOY_DRAIN_RESCAN_PAUSE=0
 
@@ -248,6 +252,34 @@ if [[ $unit == smortress-apps-quota.service && -f $APPS_PLAN ]]; then
 fi
 if [[ $unit == smortress-tailscale-serve.service && -f $APPS_PLAN ]]; then
   cp -- "$APPS_PLAN" "$FAKE_LOG/serve-plan"
+fi
+# `show -p ActiveState -p NRestarts <unit>` is the health question. The suite
+# decides the answer per unit: down, failed, slow to start, or restarted after a
+# few samples -- the shape a container that starts and then exits has.
+if [[ $verb == show ]]; then
+  unit=${rest[${#rest[@]}-1]}
+  state=active restarts=0 samples=0
+  if [[ " ${FAKE_UNIT_INACTIVE:-} " == *" $unit "* ]]; then
+    state=inactive
+  fi
+  if [[ " ${FAKE_UNIT_FAILED:-} " == *" $unit "* ]]; then
+    state=failed
+  fi
+  if [[ -n ${FAKE_SHOW_DOWN:-} || (-n ${FAKE_SHOW_TRANSPORT_ONCE:-} && ! -e $FAKE_LOG/transport-once) ]]; then
+    : >"$FAKE_LOG/transport-once"
+    printf 'Failed to connect to user scope bus\n' >&2
+    exit 1
+  fi
+  printf '%s\n' "$unit" >>"$FAKE_LOG/shows"
+  samples=$(grep -cxF -- "$unit" "$FAKE_LOG/shows")
+  if [[ " ${FAKE_UNIT_SLOW:-} " == *" $unit "* ]] && ((samples <= 2)); then
+    state=activating
+  fi
+  if [[ " ${FAKE_UNIT_RESTART:-} " == *" $unit "* ]] && ((samples > 3)); then
+    restarts=1
+  fi
+  printf 'ActiveState=%s\nNRestarts=%s\n' "$state" "$restarts"
+  exit 0
 fi
 if [[ -n ${FAKE_SYSTEMCTL_FAIL_ONCE:-} && " $* " == *"$FAKE_SYSTEMCTL_FAIL_ONCE"* &&
   ! -e $FAKE_LOG/failed-once ]]; then
@@ -429,7 +461,9 @@ reset_case() {
   printf 'rules = []\n' >"$APPS_POLICY"
   set_secrets "$secrets_v1"
   unset FAKE_SYSTEMCTL_FAIL FAKE_SYSTEMCTL_FAIL_ONCE FAKE_PULL_FAIL FAKE_CURL_EXIT \
-    FAKE_SOPS_EXIT
+    FAKE_SOPS_EXIT FAKE_UNIT_INACTIVE FAKE_UNIT_FAILED FAKE_UNIT_SLOW FAKE_UNIT_RESTART \
+    FAKE_SHOW_DOWN FAKE_SHOW_TRANSPORT_ONCE
+  export APPS_HEALTH_SETTLE=0
 }
 
 run_apply() { # <commit>
@@ -728,6 +762,105 @@ check_grep "$log/actions" 'system stop smortress-app-ingress@beta' \
 check_eq "$(jq -r '.repos["homelab-apps"].commit' "$state_dir/state.json")" "$c_depart" \
   "the revert keeps the previous commit recorded"
 check_file "$APPS_UNIT_DIR/alpha.container" "the previous app's unit stays"
+
+# --- 9c. an app that does not come up is not committed -----------------------
+# The next boot's gate would find the unit inactive and roll back the platform
+# image, so an apply may not commit a revision whose apps are not running.
+reset_case
+run_apply "$c_v1"
+check_eq "$rc" 0 "the two-app revision applies" "$out"
+plan_before=$(sha "$APPS_PLAN")
+unit_before=$(sha "$APPS_UNIT_DIR/alpha.container")
+state_before=$(sha "$state_dir/state.json")
+: >"$log/actions"
+set_secrets "$secrets_v1b"
+export FAKE_UNIT_INACTIVE=alpha.service
+run_apply "$c_v2"
+unset FAKE_UNIT_INACTIVE
+check_eq "$rc" 5 "an app that stays down exits 5 after the revert" "$out"
+check_eq "$(journal_field apps-unhealthy '.app')" alpha "the unhealthy app is named"
+check_eq "$(journal_field apps-unhealthy '.unit')" alpha.service \
+  "the unhealthy unit is journaled"
+check_eq "$(journal_field apps-unhealthy '.state')" inactive \
+  "the state systemd reported is journaled"
+check_eq "$(journal_field apps-failed '.reason' | tail -n 1)" app-unhealthy \
+  "the failure names health, not a mutation"
+check_eq "$(jq -r '.repos["homelab-apps"].commit' "$state_dir/state.json")" "$c_v1" \
+  "the down app does not commit its revision"
+check_eq "$(sha "$APPS_PLAN")" "$plan_before" "the revert restores the previous plan"
+check_eq "$(sha "$APPS_UNIT_DIR/alpha.container")" "$unit_before" \
+  "the revert restores the previous unit"
+check_eq "$(cat "$secret_store/app-alpha-api-key")" one "the revert restores the previous secret"
+check_eq "$(sha "$state_dir/state.json")" "$state_before" "the revert restores the previous state"
+check_no_file "$state_dir/apply.json" "the revert clears the crash record"
+check_eq "$(tail -n 1 "$log/notify-urls")" "$ping_url/fail" "the unhealthy apply pages the deploy check"
+
+# --- 9d. an app the commit did not touch cannot block it ---------------------
+# An apply cannot repair a revision it did not write: a stale inactive app is the
+# boot gate's business, not a reason to refuse every later commit.
+reset_case
+run_apply "$c_v1"
+set_secrets "$secrets_v1b"
+export FAKE_UNIT_INACTIVE=beta.service
+run_apply "$c_secret"
+unset FAKE_UNIT_INACTIVE
+check_eq "$rc" 0 "an inactive app the commit did not change applies" "$out"
+check_grep "$log/systemctl-calls" 'show -p ActiveState -p NRestarts alpha.service' \
+  "the changed app is still checked"
+check_eq "$(journal_field apps-unhealthy '.app')" "" "the untouched app is not judged"
+
+# --- 9e. an app that crashes after it starts is not committed ----------------
+# Restart= brings a crashed container back fast enough that every sample can
+# still read `active`; NRestarts moving past its baseline is the evidence.
+reset_case
+run_apply "$c_v1"
+check_eq "$rc" 0 "the two-app revision applies" "$out"
+set_secrets "$secrets_v1b"
+export FAKE_UNIT_RESTART=alpha.service APPS_HEALTH_SETTLE=2
+run_apply "$c_v2"
+unset FAKE_UNIT_RESTART
+check_eq "$rc" 5 "an app restarted inside the settle window exits 5" "$out"
+check_eq "$(journal_field apps-unhealthy '.unit')" alpha.service \
+  "the restarted unit is journaled"
+check_eq "$(journal_field apps-unhealthy '.state')" restarted \
+  "the restart is journaled as the verdict"
+
+# --- 9f. a slow start is not a crash ----------------------------------------
+reset_case
+run_apply "$c_v1"
+set_secrets "$secrets_v1b"
+export FAKE_UNIT_SLOW=alpha.service
+run_apply "$c_v2"
+unset FAKE_UNIT_SLOW
+check_eq "$rc" 0 "an app that comes up late still applies" "$out"
+
+# --- 9g. a transport blip is asked again, not judged -------------------------
+reset_case
+run_apply "$c_v1"
+set_secrets "$secrets_v1b"
+export FAKE_SHOW_TRANSPORT_ONCE=1
+run_apply "$c_v2"
+unset FAKE_SHOW_TRANSPORT_ONCE
+check_eq "$rc" 0 "one unreachable probe does not fail the apply" "$out"
+
+# --- 9h. a manager that cannot be asked never reads as healthy ---------------
+reset_case
+run_apply "$c_v1"
+set_secrets "$secrets_v1b"
+export FAKE_SHOW_DOWN=1
+run_apply "$c_v2"
+unset FAKE_SHOW_DOWN
+check_eq "$rc" 5 "an app whose state cannot be read is not committed" "$out"
+check_eq "$(journal_field apps-unhealthy '.state')" unknown "the unknown state is journaled"
+
+# --- 9i. a healthy app survives a real settle window ------------------------
+reset_case
+run_apply "$c_v1"
+set_secrets "$secrets_v1b"
+export APPS_HEALTH_SETTLE=2
+run_apply "$c_v2"
+check_eq "$rc" 0 "a healthy app applies through the settle window" "$out"
+check_eq "$(journal_field apps-unhealthy '.app')" "" "no health verdict is journaled"
 
 # --- 10. a Serve failure after the commit does not revert --------------------
 reset_case

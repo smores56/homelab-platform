@@ -242,6 +242,26 @@ runs `smortress-deploy unblock commit <sha>`.
    ones, stop the removed ones, and start/stop
    `smortress-app-ingress@<name>` to match. Root never writes inside the
    tenant's home: every write there runs as the tenant through `runuser`.
+   Every app this step started or restarted must then answer health: one
+   `systemctl show -p ActiveState -p NRestarts` must read `active`, first
+   within `APPS_HEALTH_WAIT_TIMEOUT` (180 s) and then through an
+   `APPS_HEALTH_SETTLE` (15 s) window with the restart counter unchanged. The
+   counter is what catches a container that starts and exits: `Restart=` brings
+   it back fast enough that every sample can still read `active`, while
+   `NRestarts` moves. A probe that cannot reach the tenant manager is retried,
+   never read as unhealthy; a window that ends without an answer, a `failed`
+   state, or a probe cut short because the apply budget is spent
+   (`budget-exhausted`) are failures. Apps the commit did not touch are not
+   checked, because an apply cannot repair a revision it did not write, and
+   refusing every later commit over one stale down app would also refuse the
+   commit that fixes it. A failure reverts the apply, journals `apps-unhealthy`
+   with the unit and what was seen, and journals `apps-failed` with
+   `reason: app-unhealthy`. The drain retries an exit 5 every 300 s, so a
+   revision that cannot stay up keeps being attempted (the queue's `attempts` is
+   the signal) until it is fixed forward; there is no `block` verb yet. This
+   covers the unit-active third of the next boot's gate: an app that is `active`
+   but never binds its loopback port can still make that gate roll the platform
+   image back.
 7. **Commit, then Serve.** `state.json` records the commit and the unit and
    secret content hashes, `apply.json`, `render.prev` and `work/prev-secrets/`
    are removed, and `smortress-tailscale-serve.service` is restarted. It is a
