@@ -6,10 +6,34 @@ that replaced `smores56-homelab-agent` and its per-request installation tokens o
 
 ## The two credentials
 
-| Purpose | Owner | Kind | Scope | Held by |
-| --- | --- | --- | --- | --- |
-| Normal development | `smores56-agent` (machine user) | classic PAT, non-expiring | `repo` | the agent shell, `~/.config/smores56-agent/token` (0600) |
-| The `sdlc` issue registry | `smores56` | fine-grained PAT | only `smores56/sdlc`: **Issues: read/write**, **Metadata: read**, no Contents | the agent shell, staged for `sdlc`/`s` |
+| Who | Identity | Kind |
+| --- | --- | --- | --- |
+| A Maki session you launch | **yours** (`smores56`) | your own `gh auth` login, nothing injected |
+| The Hermes general agent | `smores56-agent` (machine user) | classic PAT, non-expiring, `repo` |
+| The Hermes general agent, SDLC registry | `smores56` | fine-grained PAT: only `smores56/sdlc`, **Issues: read/write**, **Metadata: read**, no Contents |
+
+Both machine credentials are **agent-only**. They are never placed in a home
+directory, never exported in an interactive shell, and never reach the Hermes
+gateway container, which has no shell and no Podman socket. They live as
+ciphertext (`secrets/server/`) and are delivered per job by the trusted shell
+dispatcher through systemd credentials, so the plaintext exists only inside one
+general job's namespace:
+
+```ini
+# the dispatcher unit (T5), root
+LoadCredential=github-token:/var/lib/homelab/agent/github-token
+LoadCredential=sdlc-token:/var/lib/homelab/agent/sdlc-token
+```
+
+```sh
+# general job class only; personal jobs receive neither
+export GH_TOKEN="$(cat /run/secrets/github-token)"
+export SDLC_GH_TOKEN_FILE=/run/secrets/sdlc-token
+```
+
+Until that dispatcher exists (#702 T5), the general agent has **no** GitHub
+identity: its native shell is disabled, so it has nothing to push with. Staging
+either token on the host beforehand would only create a second, weaker path.
 
 The dev token can push branches, open and update pull requests, comment, and
 enable auto-merge. It **cannot** merge except where a ruleset says so, and it
@@ -60,6 +84,10 @@ the scope.
 
 ## What the agent may not do to itself
 
+An interactive session acts as you, with your full authority — including the
+ruleset bypass — because it is you. The machine user acts only inside a general
+job, where the dispatcher, not the model, chose the mount.
+
 It may restart its runtime; it may not re-pin it. Bumping `agent-runtime`, the
 server image, or any other pin is a pull request to `homelab-platform`, and the
 required approving review makes that a human merge. The bytes the agent runs
@@ -69,7 +97,8 @@ cannot be changed by the agent alone.
 
 - No broker logical host is named `github-*`; a test asserts that, so a
   reintroduced App enrollment fails first.
-- Rotating the dev token is one revocation and one file on the host; there is no
-  installation to uninstall and no key to redistribute.
+- Rotating the dev token is one revocation, one ciphertext edit and a restart of
+  the decrypt unit; there is no file on the host to forget and no installation to
+  uninstall.
 - Leaking the dev token is bounded by the rulesets and by the missing `workflow`
   scope, not by token lifetime. The owner accepted that trade on 2026-11-22.

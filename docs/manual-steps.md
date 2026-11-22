@@ -5701,11 +5701,14 @@ The only approval contract is the write broker's `libs/data_plane/approval.py`.
 
 ## 48. Create the machine-user account and its scoped token
 
-> **Current model (2026-11-22):** one dev credential and one registry
-> credential, no GitHub App. Read `docs/agent-identity.md` first. The dev token is
-> the classic `repo` PAT under `smores56-agent` (steps below, which still apply);
-> the `sdlc` registry uses a fine-grained PAT **owned by `smores56`**, scoped to
-> `smores56/sdlc` with Issues read/write and Metadata read and no Contents. The
+> **Current model (2026-11-22):** both machine credentials are for the Hermes
+> general agent only; an interactive session you launch uses your own login and
+> nothing is injected. Read `docs/agent-identity.md` first. The dev token is the
+> classic `repo` PAT under `smores56-agent` (steps below, which still apply); the
+> `sdlc` registry uses a fine-grained PAT **owned by `smores56`**, scoped to
+> `smores56/sdlc` with Issues read/write and Metadata read and no Contents. Both
+> are delivered per job by the shell dispatcher (T5) from ciphertext, never from a
+> home directory. The
 > `smores56-homelab-agent` App and its per-host enrollments are retired: the
 > registration, its key and the broker's `github-*` enrollments are gone, so step
 > 1 item 1 and step 34 are history, not instructions. "Cannot merge" is enforced
