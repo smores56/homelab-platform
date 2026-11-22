@@ -5,6 +5,7 @@
 # It proves the shape the design depends on and nothing it cannot see: the
 # certificate, the two public names and the origin parity are checked from
 # outside by scripts/verify-public-edge.sh, not here.
+# shellcheck disable=SC2329  # helpers are invoked through check()
 set -uo pipefail
 
 pass=0
@@ -58,7 +59,7 @@ check "the installed Caddyfile validates" \
 check "Caddy serves photos.sammohr.dev" grep -qxF 'photos.sammohr.dev {' /etc/caddy/Caddyfile
 check "Caddy serves opds.sammohr.dev" grep -qxF 'opds.sammohr.dev {' /etc/caddy/Caddyfile
 check "Caddy never answers HTTP-01" grep -qF 'disable_http_challenge' /etc/caddy/Caddyfile
-check "Caddy has no admin API" grep -qxF 'admin off' /etc/caddy/Caddyfile
+check "Caddy has no admin API" grep -qF 'admin off' /etc/caddy/Caddyfile
 # Exactly two site blocks, never a third: a site added by hand is a name
 # published by accident, and every positive grep above would still pass.
 eq "$(grep -E '^[a-z0-9.-]+[[:space:]]*\{' /etc/caddy/Caddyfile \
@@ -82,11 +83,15 @@ check_not "22 is never accepted from the public interface" \
   grep -qF 'tcp dport 22 accept' <<<"$rules"
 
 # The login the design keeps tailnet-only: keys, no password, no root shell
-# without a key, whatever cloud-init left in sshd_config.d.
+# without a key, whatever cloud-init left in sshd_config.d. sshd -T normalizes
+# `prohibit-password` to its older synonym `without-password`, so both count.
 eq "$(sshd -T | awk '$1 == "passwordauthentication" { print $2 }')" no \
   "sshd refuses passwords"
-eq "$(sshd -T | awk '$1 == "permitrootlogin" { print $2 }')" prohibit-password \
-  "sshd refuses a root password login"
+root_login_is_key_only() {
+  sshd -T | awk '$1 == "permitrootlogin" { print $2 }' \
+    | grep -qxE 'prohibit-password|without-password'
+}
+check "sshd refuses a root password login" root_login_is_key_only
 
 eq "$(ss -ltnH 'sport = :80' | wc -l | tr -d ' ')" 0 "nothing listens on port 80"
 check "Caddy listens on 443" ss -ltnH 'sport = :443'
@@ -98,10 +103,18 @@ eq "$(jq -r '.BackendState // empty' <<<"$status")" Running "the tailnet link is
 check "the node carries tag:vps" jq -e '.Self.Tags // [] | index("tag:vps")' <<<"$status"
 check "the tailnet name is smoresnet" jq -e '.Self.DNSName // "" | startswith("smoresnet.")' <<<"$status"
 
-# The whole point of the panel's udp/41641 rule: a direct path, not DERP. This
-# exits non-zero when every reply came back relayed.
-check "the path to smortress is direct" \
-  timeout 30 tailscale ping --c 3 --until-direct=true smortress
+# The whole point of the panel's udp/41641 rule: a direct path, not DERP.
+# `--until-direct` exits non-zero when every reply came back relayed, but the
+# seconds right after a join are still relayed while the path negotiates, so
+# retry before calling it a finding.
+direct_path() {
+  for _ in 1 2 3 4 5 6; do
+    timeout 10 tailscale ping --c 3 --until-direct=true smortress >/dev/null 2>&1 && return 0
+    sleep 5
+  done
+  return 1
+}
+check "the path to smortress is direct" direct_path
 
 # The upstream half is a property of the pair, not of this box, and until the
 # image that declares Serve 8446/8447 is on smortress it cannot pass. It is

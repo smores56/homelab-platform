@@ -6896,42 +6896,50 @@ upstream checks because it predates this step.
 EDGE_IP=<vps-ipv4> scripts/verify-public-edge.sh
 ```
 
-All ten probes must pass: both names over valid TLS, certificates more than
-14 days from expiry, and 404 for `/apps/agent-local/v1`,
+The two certificate probes must still be red here: certificates are issued only
+once the names resolve to the box (`§50.8`), because Let's Encrypt validates
+them by resolution. Everything else must pass — both names answering through
+`EDGE_IP`, and 404 for `/apps/agent-local/v1`,
 `/apps/agent-general/v1` and `/wallpapers/` on both names.
 
 ### 50.8 The cutover (after #709's gate)
 
 First record 30 days of `photos` + `opds` transfer from Cloudflare's analytics;
-if it is a meaningful fraction of 10 TB, stop and size the plan instead. Then:
+if it is a meaningful fraction of 10 TB, stop and size the plan instead. Also
+enable the panel firewall now, with `tcp/443`, `udp/41641` and ICMP echo
+(`§50.3`), or certificate issuance fails with the rest of the world.
+
+Cloudflare refuses two records at one name and OpenTofu cannot order a destroy
+before a create, so the cutover is two commits, each applied by CI
+(`tofu-apply`), with no local credentials:
 
 ```sh
 cd /srv/git/github.com/smores56/homelab-platform/main
-$EDITOR tofu/terraform.tfvars   # edge_ipv4 = "<vps-ipv4>"
-tofu -chdir=tofu plan -no-color
+git fetch origin && git checkout origin/main
+$EDITOR tofu/terraform.tfvars   # cluster_hosts = [<every host but photos and opds>]
+git commit -qm 'chore(tofu): take photos and opds off the cluster tunnel'
+git push
 ```
 
-Expected: the two proxied CNAMEs removed and two grey-cloud `A` records with
-`ttl = 300` created. Nothing else.
-
-Cloudflare refuses two records at one name and OpenTofu cannot order a destroy
-before a create, so take the CNAMEs out first, alone:
+Wait for `tofu-apply` to finish, then:
 
 ```sh
-tofu -chdir=tofu apply -no-color \
-  -target='cloudflare_dns_record.cluster["photos"]' \
-  -target='cloudflare_dns_record.cluster["opds"]'
-tofu -chdir=tofu apply -no-color
-scripts/verify-public-edge.sh
+$EDITOR tofu/terraform.tfvars   # edge_ipv4 = "<vps-ipv4>"
+git commit -qm 'feat(tofu): point the edge names at the VPS'
+git push
 ```
 
-Between those two applies the names fall through to the wildcard (the host
-tunnel behind the Access deny), which is the only window either order has.
+Expected in that second plan: two grey-cloud `A` records with `ttl = 300`, and
+nothing else. Between the two applies the names fall through to the wildcard
+(the host tunnel behind the Access deny), which is the only window either order
+has. Then, once Caddy has ordered:
 
-Rollback is the same two steps in reverse: destroy the `A` records with
-`-target='cloudflare_dns_record.edge["photos"]'` and
-`-target='cloudflare_dns_record.edge["opds"]'`, then set `edge_ipv4 = ""` and
-apply to get the CNAMEs back.
+```sh
+scripts/verify-public-edge.sh   # all ten green, certificates included
+```
+
+Rollback is the same two commits in reverse: drop `edge_ipv4` (the `A` records
+go, names fall to the deny), then restore `cluster_hosts` (the CNAMEs return).
 
 ### 50.9 The rebuild drill, timed
 

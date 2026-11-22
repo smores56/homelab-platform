@@ -59,6 +59,14 @@ No CAA record is written for the edge account — the zone's CAA story stays
 pinned to Kanbei's account, and a second pin would make a rebuild's new ACME
 account the outage (`docs/cloudflare.md`, "CAA").
 
+**Issuance needs the public name, so it happens after the cutover.** ACME
+validates `photos.sammohr.dev` and `opds.sammohr.dev` by resolving them: while
+they are proxied CNAMEs to the cluster tunnel, Let's Encrypt reaches Cloudflare
+and the challenge fails (`Cannot negotiate ALPN protocol "acme-tls/1"`). Caddy
+keeps retrying, and the first successful order is seconds after the `A` records
+appear. The pre-cutover probe therefore proves reachability and the path leaks
+through `EDGE_IP`, not the certificate.
+
 The ACME account key and the certificates live in Caddy's data directory
 (`/var/lib/caddy/.local/share/caddy`). Losing them costs only a re-issue; keep
 them in the kit because a re-issue during a rebuild is the step most likely to
@@ -70,35 +78,36 @@ fail unattended.
 gated on `var.edge_ipv4`. While it is empty the names stay proxied CNAMEs to the
 cluster tunnel and nothing about the edge is public.
 
-The plan for a non-empty `edge_ipv4` holds a destroy (the proxied CNAME) and a
-create (the grey-cloud `A`) at the same name. OpenTofu cannot order one before
-the other, and Cloudflare refuses two records at a name, so the cutover is
-applied in two steps, cluster records first:
+One plan that both set `edge_ipv4` and dropped the names from the cluster set
+would hold a destroy and a create at the same name. OpenTofu cannot order one
+before the other and Cloudflare refuses two records at a name, so the cutover is
+two commits, each applied by CI (`tofu-apply` on `main`) with no local
+credentials:
 
-```sh
-tofu -chdir=tofu apply -target='cloudflare_dns_record.cluster["photos"]' \
-  -target='cloudflare_dns_record.cluster["opds"]'
-tofu -chdir=tofu apply
-```
+1. `tofu/terraform.tfvars`: pin `cluster_hosts` to the remaining names, without
+   `photos` and `opds`. The apply deletes their proxied CNAMEs.
+2. `tofu/terraform.tfvars`: add `edge_ipv4 = "<vps-ipv4>"`. The apply creates
+   both grey-cloud `A` records, and Caddy's next order succeeds.
 
-Between the two steps the names fall through to the wildcard, which is the host
-tunnel behind the Access deny: refused, not served. That window is seconds, and
-it is the only one; a single apply would instead fail on the second record and
-leave exactly the same window with a red apply.
+Between the two applies the names fall through to the wildcard, which is the
+host tunnel behind the Access deny: refused, not served. That window is one CI
+run, and it is the only one either order has.
 
 The cluster tunnel keeps its ingress rules for both names. With no DNS record
 they serve nothing; #709 decides when the rules go, not this cutover.
 
 The cutover waits on #709's retirement gate: it changes which Immich is
-authoritative, which is a data decision, not a DNS one. Rollback is the same
-two steps in reverse — destroy the `A` records with `-target`, then set
-`edge_ipv4 = ""` and apply to get the CNAMEs back.
+authoritative, which is a data decision, not a DNS one. Rollback is the same two
+commits in reverse — drop `edge_ipv4` (the `A` records go, names fall to the
+deny), then restore `cluster_hosts` (the CNAMEs return).
 
-Before the cutover, the whole probe runs against the box without touching the
-zone:
+Before the cutover the reachability and path-leak probes run against the box
+without touching the zone; the two certificate probes cannot pass until the
+names resolve here, and they are the first post-cutover check:
 
 ```sh
-EDGE_IP=<vps-ipv4> scripts/verify-public-edge.sh
+EDGE_IP=<vps-ipv4> scripts/verify-public-edge.sh   # pre-cutover: cert probes red
+scripts/verify-public-edge.sh                      # post-cutover: all ten green
 ```
 
 ## Metering
