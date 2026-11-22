@@ -39,3 +39,17 @@ opds.sammohr.dev {
 	encode zstd gzip
 	reverse_proxy https://{$SMORTRESS_FQDN}:8447
 }
+
+# The recovery reader (#725 T2). Unlike the two above it proxies to a process on
+# this box, not to smortress: Backrest reads R2 directly, and the guard in front
+# of it is what keeps the admin RPCs and the repository password off the public
+# surface. No Serve port is involved.
+recovery.sammohr.dev {
+	tls {
+		issuer acme {
+			disable_http_challenge
+		}
+	}
+	encode zstd gzip
+	reverse_proxy http://127.0.0.1:9898
+}

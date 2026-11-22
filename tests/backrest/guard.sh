@@ -248,5 +248,17 @@ eq "$(req POST /v1.Backrest/GetConfig '{}' application/proto)" 200 'protobuf Get
 hasnt 'protobuf redaction removes the password' 'SECRET-PW'
 hasnt 'protobuf redaction removes the environment' 'AKIA'
 
+# The public reader's only gate is a shared password, so the login endpoint is
+# bounded: 10 requests per 10 s per client, the Cloudflare rule this replaces.
+codes=''
+for _ in $(seq 12); do
+  codes+="$(req POST /v1.Authentication/Login '{"username":"x"}') "
+done
+if [[ $codes == *429* && $codes == *200* ]]; then
+  ok 'a login burst is rate limited'
+else
+  bad 'a login burst is rate limited' "codes: $codes"
+fi
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]

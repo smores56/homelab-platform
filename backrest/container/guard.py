@@ -51,6 +51,30 @@ ALLOWED_RPCS = {
 }
 
 RPC_PATH = re.compile(r"^/v1\.([A-Za-z]+)/([A-Za-z]+)$")
+
+# The Cloudflare rule this replaces: 10 requests per 10 s per client on the login
+# endpoint. Backrest's password is the only gate on a public reader, and the
+# password is shared with family, so a distributed guess is bounded here or not
+# at all.
+LOGIN_WINDOW_SECONDS = 10.0
+LOGIN_LIMIT = 10
+_login_hits = {}
+_login_lock = threading.Lock()
+
+
+def login_allowed(client):
+    now = time.monotonic()
+    with _login_lock:
+        if len(_login_hits) > 4096:
+            for key in [key for key, hits in _login_hits.items() if not hits or now - hits[-1] > LOGIN_WINDOW_SECONDS]:
+                _login_hits.pop(key, None)
+        hits = [at for at in _login_hits.get(client, []) if now - at < LOGIN_WINDOW_SECONDS]
+        if len(hits) >= LOGIN_LIMIT:
+            _login_hits[client] = hits
+            return False
+        hits.append(now)
+        _login_hits[client] = hits
+        return True
 HOP_BY_HOP = {
     "connection",
     "keep-alive",
@@ -353,6 +377,10 @@ class Handler(BaseHTTPRequestHandler):
         # 415 from Backrest, and the guard then reads an empty operation list.
         return api_call(method, payload, auth_headers)
 
+    def client_key(self):
+        forwarded = (self.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
+        return forwarded or self.client_address[0]
+
     def auth_headers(self):
         headers = {}
         for name in ("Authorization", "Cookie"):
@@ -392,6 +420,9 @@ class Handler(BaseHTTPRequestHandler):
         refused = self.guard(path, method)
         if refused:
             self.refuse(*refused)
+            return
+        if path == "/v1.Authentication/Login" and not login_allowed(self.client_key()):
+            self.refuse(429, "resource_exhausted", "too many login attempts")
             return
         if path == "/v1.Backrest/GetDownloadURL" and not self.download_is_verified(
             body, self.headers.get("Content-Type") or ""

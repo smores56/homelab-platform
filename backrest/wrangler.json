@@ -7,12 +7,6 @@
   "observability": {
     "enabled": true
   },
-  "routes": [
-    {
-      "pattern": "recovery.sammohr.dev",
-      "custom_domain": true
-    }
-  ],
   "containers": [
     {
       "class_name": "Backrest",

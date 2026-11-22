@@ -56,8 +56,11 @@ if jq -e . "$dir/wrangler.json" >/dev/null 2>&1; then
     jq -e '.containers[0].scheduling_policy == "durable_object"' "$dir/wrangler.json"
   assert "Durable Object export declared" \
     jq -e '.exports.Backrest.type == "durable-object"' "$dir/wrangler.json"
-  assert "serves recovery.sammohr.dev" \
-    jq -e '[.routes[].pattern] == ["recovery.sammohr.dev"]' "$dir/wrangler.json"
+  # The reader moved to the edge (T2): the Worker must not claim the name, or
+  # Cloudflare keeps a proxied custom domain in front of the VPS record.
+  assert "no Worker custom domain claims recovery.sammohr.dev" \
+    jq -e '([.routes // [] | .[].pattern] | index("recovery.sammohr.dev")) == null' "$dir/wrangler.json"
+  has "the edge serves recovery.sammohr.dev" provision/edge/Caddyfile "recovery.sammohr.dev {"
   assert "repository location is not a checked-in default" \
     jq -e '(.vars | has("BACKREST_REPO_URI") | not) and (.vars | has("BACKREST_REPO_GUID") | not)' "$dir/wrangler.json"
   hasnt "no credential in wrangler.json" "$dir/wrangler.json" "api_token"
