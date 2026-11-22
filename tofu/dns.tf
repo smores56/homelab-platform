@@ -47,8 +47,8 @@ resource "cloudflare_dns_record" "edge" {
 
   lifecycle {
     precondition {
-      condition     = contains(keys(local.cluster_ingress), each.value)
-      error_message = "local.edge_hosts names a hostname the cluster ingress map does not know: the cutover would create a record with no origin to fall back to."
+      condition     = contains(keys(local.cluster_ingress), each.value) || contains(local.edge_only_hosts, each.value)
+      error_message = "local.edge_hosts names a hostname neither the cluster ingress map nor local.edge_only_hosts knows: the cutover would create a record with no origin at all."
     }
   }
 }

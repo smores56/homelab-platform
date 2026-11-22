@@ -35,6 +35,11 @@ locals {
   edge_hosts     = ["photos", "opds", "recovery"]
   edge_dns_hosts = var.edge_ipv4 == "" ? [] : local.edge_hosts
 
+  # Names whose origin is the VPS itself, not a tunnel route. The recovery
+  # reader reads R2 directly and never had one, so there is no cluster record
+  # for it to fall back to and the DNS precondition has to admit that.
+  edge_only_hosts = ["recovery"]
+
   # The DNS set follows the ingress map unless explicitly pinned, so a cutover
   # is one edit here and the two cannot disagree. The edge names leave it only
   # when their own record exists, which keeps the tunnel as the fallback while
