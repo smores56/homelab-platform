@@ -36,23 +36,14 @@ resource "cloudflare_ruleset" "dav_rate_limit" {
   kind    = "zone"
   phase   = "http_ratelimit"
 
-  rules = [
-    {
-      action      = "block"
-      description = "Rate limit the Backrest login endpoint per IP"
-      # The one path the Worker admits before authentication:
-      # `backrest/src/index.ts` guards every RPC and lets only
-      # `Authentication/Login` through, so this covers the password and nothing
-      # a signed-in reader does.
-      expression = "(http.host eq \"recovery.${var.domain}\" and http.request.uri.path eq \"/v1.Authentication/Login\")"
-      ratelimit = {
-        characteristics     = ["ip.src", "cf.colo.id"]
-        period              = 10
-        requests_per_period = 10
-        mitigation_timeout  = 10
-      }
-    },
-  ]
+  # Empty by design: the one rule this slot held rate limited the Backrest
+  # login endpoint on `recovery`, and the reader moved off Cloudflare (T2,
+  # `recovery` is a grey A record at the edge now). The guard enforces the same
+  # 10-per-10-s budget itself, because a host with no Cloudflare in front of it
+  # gets nothing from this phase. The slot stays empty rather than going to
+  # `music`/`ntfy`: giving them a budget is a change to their behaviour, not the
+  # retirement of a dead control, and it belongs in its own reviewed change.
+  rules = []
 
   lifecycle {
     prevent_destroy = true

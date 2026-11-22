@@ -177,5 +177,34 @@ systemctl restart caddy
 systemctl enable --now unattended-upgrades
 timedatectl set-ntp true
 
+# The reader's watchdog: one restart when the guard stops answering, then a
+# dead-man ping if that did not help. `Restart=always` covers a container that
+# exits, not one that stays up and answers nothing. The script exits early on a
+# box that does not host the reader, so this is safe everywhere.
+install -m 0755 "$here/backrest-watchdog.sh" /usr/local/bin/backrest-watchdog
+cat >/etc/systemd/system/backrest-watchdog.service <<'UNIT'
+[Unit]
+Description=Probe the recovery reader and restart it when it stops answering
+After=backrest.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/backrest-watchdog
+UNIT
+cat >/etc/systemd/system/backrest-watchdog.timer <<'UNIT'
+[Unit]
+Description=Run the recovery reader watchdog every five minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
+UNIT
+systemctl daemon-reload
+systemctl enable --now backrest-watchdog.timer
+
 say "provisioned; proving it"
 exec "$here/verify.sh"

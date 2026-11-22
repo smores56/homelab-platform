@@ -1,19 +1,28 @@
-# Hosted Backrest recovery reader (T4)
+# Backrest recovery reader (T4, moved to the edge in T2)
 
 Backrest is the browser recovery path for the R2 repository. It is a *reader*:
 one repository, a read-only credential, no plans, and no scheduling. It replaced
 the static recovery letter on `recovery.sammohr.dev`; the old Pages project is
 kept but serves nothing.
 
-## Deployment
+**The reader runs on the edge VPS now (#725 T2), not on Cloudflare.** The Worker
+and its container were deleted; `recovery.sammohr.dev` is a grey A record and
+Caddy on `smoresnet` terminates TLS in front of the guard. The guard
+(`backrest/container/guard.py`) reproduces the Worker's policy inside the image —
+read-only RPC allowlist, JSON and protobuf redaction of the repository password
+and the restic environment, verified-only listing and downloads, and the
+10-per-10-s login budget the Cloudflare rule used to provide. It owns the port
+and starts Backrest on loopback, so a host cannot expose an unguarded reader.
 
 ```
-browser -- Backrest password -- Worker -- Durable Object -- container (Backrest, restic 0.19.1)
-                                                                  |
-                                                                  +-- R2 (read-only token)
+browser -- Backrest password -- Caddy (LE cert) -- guard -- Backrest (loopback) -- R2 (read-only token)
 ```
 
-- `backrest/` builds the image, the Worker, and the Durable Object.
+`provision/edge/backrest-watchdog.timer` restarts the reader when it stops
+answering and pings Healthchecks if a ping URL is written to
+`/etc/backrest/healthcheck-url`.
+
+- `backrest/` builds the image, the guard, and the Worker (now retired).
 - `backrest/scripts/deploy.sh` is the only deploy path: it refuses to run
   without the repository id, URI and GUID, which deliberately do not live in
   `wrangler.json`.

@@ -176,22 +176,19 @@ locals {
   #                 carried alongside the ntfy bearer the broker injects. The
   #                 app's own auth is the gate: deny-all default, no signup, and
   #                 ntfy's per-visitor request limiter.
-  #   recovery    - the hosted Backrest reader (#707). Design #701 opens it so
-  #                 family can reach it with nothing set up in advance; the
-  #                 re-affirmation on 2026-11-20 kept it password-only. Then the
-  #                 reader's password is the only login, its login endpoint is
-  #                 rate limited (rate-limit.tf), and what makes the exposure
-  #                 acceptable is that write RPCs are denied at the Backrest and
-  #                 R2 layers, so the surface is a read-only browser
-  #                 (docs/core/backrest.md). Re-adding Access here is the
-  #                 fallback if that denial ever weakens.
+  #   recovery    - absent since T2: the reader moved to the edge as a grey A
+  #                 record, so Cloudflare neither proxies it nor runs Access in
+  #                 front of it. Its password-only exposure is unchanged, but the
+  #                 controls are the guard on the VPS (read-only RPC allowlist,
+  #                 config redaction, 10-per-10-s login budget) and the read-only
+  #                 R2 token behind it (docs/core/backrest.md). A proxied record
+  #                 plus this entry would be the fallback if the guard weakens.
   public_apps = toset([
     "photos",
     "music",
     "opds",
     "agent-hooks",
     "ntfy",
-    "recovery",
   ])
 }
 
@@ -218,8 +215,8 @@ resource "cloudflare_zero_trust_access_application" "public" {
   # reviewed widening of the public surface.
 }
 
-# The hosted Backrest reader (#707) owns `recovery.sammohr.dev`, and it has no
-# Access application (#701, re-affirmed 2026-11-20): the name is in
-# `local.public_apps` above so the wildcard does not gate it. The application
-# that used to sit here carried `prevent_destroy`, so its state entry is removed
-# first and the object deleted at the edge (docs/manual-steps.md §39.4).
+# The hosted Backrest reader (#707) left this file when it moved to the edge
+# (T2, #725): `recovery` is a grey A record now, so no Access application can
+# apply to it and the entry in `local.public_apps` is gone. The application that
+# once sat here carried `prevent_destroy`, so its state entry was removed first
+# and the object deleted at the edge (docs/manual-steps.md §39.4).
