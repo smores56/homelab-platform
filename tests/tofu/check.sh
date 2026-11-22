@@ -672,11 +672,6 @@ if grep -rniE --exclude='*.md' 'cloudflare[_-]?(api[_-])?token' "${shipped[@]}" 
 else
   ok "no shipped tree carries a Cloudflare token"
 fi
-if grep -rniE 'cloudflare[_-]?(api[_-])?token' images/nanobot/ | grep -qi nanobot; then
-  bad "nanobot holds no Cloudflare token"
-else
-  ok "nanobot holds no Cloudflare token"
-fi
 
 # The tailnet policy (design #767, T1). sshd on smortress answers the tailnet
 # only, so the rules that decide who may open port 22 are code, gated on the

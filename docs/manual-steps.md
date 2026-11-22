@@ -282,9 +282,9 @@ so a half-finished sweep still fails CI rather than shipping `latest`.
 place a tag alone would ship: `docker.io/alpine/git:2.54.0` resolves to the
 manifest list `sha256:6a1fdb962814ca11508ca8d1bab94375b5b7ac4e4a9a40981c29fc32c02f095d`
 (recorded 2026-11-11; verify with `crane digest docker.io/alpine/git:2.54.0`
-before trusting it). The nanobot image is no longer pinned by hand: it is built
-here and rolled by Flux image automation (step 31); `homelab-apps` only carries
-the setter marker.
+before trusting it). No agent runtime image is published from this repository:
+the tenant image and its Flux roll-out are retired (step 31), and the agent units
+now ship inside the bootc image, whose pins the server-image workflow checks.
 
 ## 10. Create the broker credential Secret
 
@@ -841,9 +841,13 @@ jsonpath='{.items[0].spec.containers[0].image}'` prints the digest.
 
 ## 20. Route `agent.sammohr.dev` and retire `nanobot.sammohr.dev`
 
-The hostname moves from the host tunnel to the cluster tunnel, behind the
-existing Access application `agent` (owner email plus service auth for maki).
-No Cloudflare credential goes into the agent pod.
+The two Access applications here are edge objects and survive the agent
+runtime's retirement: `agent` stays, `nanobot` goes. What the retirement
+changed is the origin. The cluster and the nanobot runtime that used to answer
+`agent.sammohr.dev` are gone, and the agent plane on smortress is reached
+through Tailscale Serve (40.4); the tunnel entry this section configures is the
+historical route, kept because `tofu` state still carries it. No Cloudflare
+credential goes into the agent.
 
 **Order matters.** This change removes the `nanobot` Access application from
 `tofu/access.tf`. It carried `prevent_destroy`, so the state entry is removed
@@ -874,50 +878,44 @@ before the first apply; applying first fails on the destroy.
 3. Mint the maki service token in Zero Trust → Access controls → Service credentials → Service tokens. The
    `service auth` policy already accepts any valid service token; store the
    `CF-Access-Client-Id`/`CF-Access-Client-Secret` pair in maki's client config,
-   never in the cluster. The owner uses the browser identity.
+   never in the image or this repository. The owner uses the browser identity.
 
 4. Delete the `nanobot` application at the edge: Zero Trust → Access →
    Applications → `nanobot` → Delete. Its state entry is already gone, so a
-   later apply neither recreates nor destroys it.
+   later apply neither recreates nor destroys it. This is the one part of the
+   retirement no commit can do: until it is checked off, the application still
+   exists at the edge even though nothing in this repository names it.
 
-5. Verify the edge and the pod:
+5. Verify the edge and the current agent plane. This section changes the Access
+   application; the origin is the host's Serve route (40.10), not a pod:
 
    ```sh
    curl -sS -o /dev/null -D - https://agent.sammohr.dev/ | head -3     # 302 to *.cloudflareaccess.com
    curl -sS -o /dev/null -D - https://nanobot.sammohr.dev/ | head -3   # 302 to Access, never an origin
-   cluster-kubectl -n tenant-apps get deploy nanobot
-   cluster-kubectl -n tenant-apps get pods -l app.kubernetes.io/name=nanobot -o wide
-   cluster-kubectl -n tenant-apps exec deploy/nanobot -- env | grep -E 'BROKER_URL|CLOUDFLARE' || true
+   curl -fsS -o /dev/null -w '%{http_code}\n' \
+     https://smortress.<tailnet>.ts.net/apps/agent-general/v1/models
    ```
 
-   Expected: `BROKER_URL` is set, no `CLOUDFLARE_*` variable exists, and the
-   pod has no mounted service-account token.
+   Expect `401` on the last line: the facade answers, and a request with no key
+   is refused by the facade rather than by a missing origin.
 
-### Rotating the agent's WebUI token
+### Rotating the agent's WebUI password
 
-The WebUI password is `channels.websocket.tokenIssueSecret` in
-`$HOME/.nanobot/config.json` on the scratch PVC
-(`/data/home/.nanobot/config.json`). nanobot generates it on first start, so it
-appears in that bootstrap's pod log; rotate it if the log was shared. Rotation
-invalidates every issued websocket token, so open browsers must sign in again.
+The nanobot runtime held its own `config.json` and generated
+`channels.websocket.tokenIssueSecret` on first start; that file, its renderer
+and the pod that carried them are retired. The WebUI password is now one
+ciphertext per deployment, decrypted at boot into the unit's environment file:
+`secrets/server/agent-ui-personal-password.yaml` and
+`agent-ui-general-password.yaml` (`docs/core/applications.md`). Rotate it the
+way 40.7 rotates every agent secret:
 
 ```sh
-cluster-kubectl -n tenant-apps exec -i deploy/nanobot -- python - <<'PY'
-import json, secrets, pathlib
-p = pathlib.Path("/data/home/.nanobot/config.json")
-c = json.loads(p.read_text())
-ws = c.setdefault("channels", {}).setdefault("websocket", {})
-ws["tokenIssueSecret"] = secrets.token_hex(16)
-p.write_text(json.dumps(c, indent=2) + "\n")
-print("new WebUI token:", ws["tokenIssueSecret"])
-PY
-cluster-kubectl -n tenant-apps rollout restart deploy/nanobot
+sops secrets/server/agent-ui-personal-password.yaml   # set value: to `openssl rand -hex 32`
 ```
 
-`render.py` rewrites only the listener hosts, providers, presets, the memory MCP
-server (when `BROKER_URL` is set), prompt, skills and cron, so the rotated secret
-survives restarts; the rollout also discards the old container log. Store the
-printed token in the password manager.
+`smortress-agent-config.service` rewrites `webui.env` on the next boot, so the
+rotation lands with a deploy (40.2) and invalidates every issued browser
+session.
 
 ## 21. Kanbei public hostname behind Access
 
@@ -1698,116 +1696,19 @@ after this passes.
    wrapper and its data are untouched by that.
 ## 31. Publish the nanobot image and enable its automation
 
-The agent image is built in this repository (`images/nanobot/`). A merge to
-`main` that touches it, or a `workflow_dispatch` from agent-control's
-`POST /self/build`, runs the `publish-nanobot` workflow, which pushes
-`ghcr.io/smores56/homelab-platform/nanobot:build-<run_number>` and prints the
-digest in the run summary. The tenant can trigger that workflow and nothing
-else: it never sees the dispatch token, the job's `GITHUB_TOKEN` is scoped to
-the run, and the source changes only by human merge here.
+Retired. Nothing in this repository builds, publishes or rolls the agent
+runtime, and the workflow this section drove (`publish-nanobot.yml`) no longer
+exists: `images/nanobot/` and its render tests were deleted with the runtime.
+The Flux image automation it configured (`ImageRepository`, `ImagePolicy`,
+`imageupdateautomation nanobot`) went with the k3s/Flux tree, and the
+`nanobot-policy` ConfigMap, its admission pins and the scratch PVC went with the
+cluster.
 
-1. Install the image controllers on an existing cluster. `flux bootstrap` wrote
-   the old `--components-extra` set, so applying the regenerated install
-   manifest is what adds them (a re-bootstrap does the same and also commits):
-
-   ```sh
-   kubectl apply -f clusters/homelab/flux-system/gotk-components.yaml
-   kubectl -n flux-system rollout status deploy/image-reflector-controller --timeout=120s
-   kubectl -n flux-system rollout status deploy/image-automation-controller --timeout=120s
-   ```
-
-2. Make the package public. The cluster holds no image pull secret, and
-   `ImageRepository nanobot` has no `secretRef`:
-
-   GitHub → your profile → Packages → `nanobot` → Package settings → Danger zone
-   → Change visibility → Public. Verify anonymously:
-
-   ```sh
-   crane digest ghcr.io/smores56/homelab-platform/nanobot:build-1
-   ```
-
-3. Run the workflow once and record the digest the summary prints:
-
-   ```sh
-   gh workflow run publish-nanobot.yml --ref main
-   gh run watch
-   kubectl -n flux-system get imagepolicy nanobot -o jsonpath='{.status.latestRef.image}{"\n"}'
-   ```
-
-4. Create the write deploy key for image automation. It is a second key: the
-   tenant reconciler keeps its read-only key (`homelab-apps-auth`).
-
-   ```sh
-   ssh-keygen -t ed25519 -N '' -C 'flux-image-automation' -f homelab-apps-write
-   gh repo deploy-key add homelab-apps-write.pub \
-     --repo smores56/homelab-apps --title 'flux image automation' --allow-write
-   ```
-
-5. Encrypt that key with the `flux-system` age recipient (step 6) and apply the
-   Secret. Nothing plaintext is committed; the ciphertext is stored with the age
-   key in the password manager:
-
-   ```sh
-   AGE_KEY=~/secrets/sops-age.agekey            # from the password manager
-   RECIPIENT=$(age-keygen -y "$AGE_KEY")
-   umask 077
-   tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
-   kubectl -n flux-system create secret generic homelab-apps-write \
-     --from-file=identity=homelab-apps-write \
-     --dry-run=client -o yaml >"$tmp/secret.yaml"
-   sops --encrypt --age "$RECIPIENT" --input-type yaml --output-type yaml \
-     "$tmp/secret.yaml" >~/secrets/homelab-apps-write.sops.yaml
-   sops --decrypt ~/secrets/homelab-apps-write.sops.yaml | kubectl apply -f -
-   rm -f homelab-apps-write homelab-apps-write.pub
-   ```
-
-   Verify the automation source is Ready (it stays NotReady until this Secret
-   exists, by design):
-
-   ```sh
-   kubectl -n flux-system get gitrepository homelab-apps
-   kubectl -n flux-system get imageupdateautomation nanobot
-   ```
-
-6. Add the setter marker to the tenant Deployment — `homelab-apps` owns the
-   file, this repository only pins the contract
-   (`clusters/homelab/flux-system/image-automation/write-contract.yaml`):
-
-   ```yaml
-   image: ghcr.io/smores56/homelab-platform/nanobot@sha256:<digest>
-     # {"$imagepolicy": "flux-system:nanobot"}
-   ```
-
-   Without the marker nothing is updated; with it, Flux commits
-   `feat(nanobot): roll the image to ...` to `main` on the next build.
-
-7. Confirm the rollout and that the old registry path is now rejected:
-
-   ```sh
-   cluster-kubectl -n tenant-apps get deploy nanobot \
-     -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'
-   cluster-kubectl -n tenant-apps get pods -l app.kubernetes.io/name=nanobot
-   # SDLC bootstrap on the tools PVC (docs/flux.md, "SDLC tooling on the tools PVC")
-   cluster-kubectl -n tenant-apps logs deploy/nanobot | grep nanobot-bootstrap
-   ```
-
-   The bootstrap line reads `nanobot-bootstrap: sdlc=<rev|none> tools=<n> skills=<n>`;
-   `sdlc=none` means the first clone never landed on the PVC and `tools=0` means
-   the install failed; either way the agent is running without a refreshed SDLC
-   (`docs/flux.md`), not unhealthy.
-
-   The admission prefix moved with the image: a pod still pointing at
-   `ghcr.io/smores56/nix-config/nanobot@sha256:...` is denied by
-   `tenant-images`, so the old digest cannot silently stay.
-
-8. Update the platform-owned prompt or model catalogue by editing
-   `clusters/homelab/platform/policy/nanobot/`. The `nanobot-policy` ConfigMap
-   has an exact name (admission pins it), so the running pod keeps the old files
-   until someone restarts it; that restart is the rollout record.
-
-   ```sh
-   kubectl -n tenant-apps rollout restart deploy/nanobot
-   ```
+The agent plane that replaced it is the smortress Quadlet plane: the units ship
+inside the bootc image (`units/quadlet/`), so an agent change is an image change
+plus a maintenance-window reboot, not a published tenant image. Section 40 is
+where that work happens: 40.2 deploys the image that ships the Quadlets, 40.7
+creates the agent secrets, and 40.11 rotates a facade token.
 
 ## 32. Project the memory token into `broker-credentials` and probe the `memory` host
 
@@ -1877,83 +1778,15 @@ new value.
 
 ## 33. Create the build dispatch token for `POST /self/build`
 
-`agent-control` starts `publish-nanobot.yml` through the Actions API
-(`docs/flux.md`, "Dispatch contract"). The credential is a file, not an env
-value: the Deployment mounts the `agent-control-build` Secret at `/run/build`
-and reads `BUILD_TOKEN_FILE=/run/build/token` on every dispatch. The volume is
-`optional: true`, so the pod runs without the Secret and `POST /self/build`
-answers `503 {"error": "build_unavailable"}` until this step lands; no other
-route is affected.
+Retired. The endpoint existed to start `publish-nanobot.yml` through the Actions
+API (`docs/flux.md`, "Dispatch contract"), and that workflow no longer exists.
+`agent-control` was a cluster Deployment and went with the k3s/Flux tree, so
+there is no `self` route to call and no token to mint: the build Secret, its
+`/run/build/token` mount and the `503 build_unavailable` path have nothing left
+to authenticate.
 
-1. Mint the credential. Either a fine-grained personal access token on
-   `smores56/homelab-platform` only with **Repository permissions → Actions:
-   Read and write** (nothing else), or a GitHub App installation token for an
-   app installed on that one repository with Actions write. It must not reach
-   any other repository: the endpoint only dispatches `publish-nanobot.yml` on
-   `main` here, and `Actions: write` there is all it can do.
-
-2. Create the Secret with the single key `token`. The value is typed into a
-   `read` so it never reaches the shell history, the process list or a
-   transcript:
-
-   ```sh
-   umask 077
-   tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
-   read -rs BUILD_TOKEN            # paste the token; nothing is echoed
-   printf '%s' "$BUILD_TOKEN" >"$tmp/token"
-   unset BUILD_TOKEN
-   kubectl -n tenant-apps create secret generic agent-control-build \
-     --from-file=token="$tmp/token" --dry-run=client -o yaml | kubectl apply -f -
-   ```
-
-   Verify the file is non-empty without printing it:
-
-   ```sh
-   kubectl -n tenant-apps get secret agent-control-build \
-     -o jsonpath='{.data.token}' | base64 -d | wc -c    # non-zero
-   ```
-
-3. Restart the Deployment so both replicas mount the file:
-
-   ```sh
-   kubectl -n tenant-apps rollout restart deployment/agent-control
-   kubectl -n tenant-apps rollout status deployment/agent-control --timeout=120s
-   ```
-
-4. Exercise the route. A port-forward travels the kubelet and shows up as
-   `caller=127.0.0.1`; the broker's `self` host is the normal caller:
-
-   ```sh
-   kubectl -n tenant-apps port-forward svc/agent-control 18081:8081 &
-   curl -s -o /dev/null -w '%{http_code}\n' -X POST localhost:18081/self/build  # 202
-   curl -s -o /dev/null -w '%{http_code}\n' localhost:18081/self/build          # 405
-   gh run list --workflow publish-nanobot.yml --limit 1
-   ```
-
-   `202` means GitHub accepted the dispatch; a run appears within seconds and
-   its summary carries `build-<run_number>` and the digest. The audit line
-   for the request is `level=audit method=POST path=/self/build status=202 …`;
-   no token, header or body is ever logged.
-
-Diagnosis:
-
-- `503 {"error": "build_unavailable"}` — the file is absent or empty: the
-  Secret does not exist, its key is not `token`, or the rollout happened before
-  the Secret was created. Re-run steps 2–3.
-- `502 {"error": "upstream", "upstreamStatus": 401}` (or `403`) — the token is
-  expired/revoked or lacks `Actions: write` on this repository.
-- `502` with `upstreamStatus: 404` — the token cannot see the repository, or
-  the workflow file is no longer named `publish-nanobot.yml` on `main`.
-- `502` with no `upstreamStatus` — the pod could not reach `api.github.com`;
-  check `kubectl -n tenant-apps logs deploy/agent-control` for the audit line
-  and the tenant's public egress (`docs/tenancy.md`).
-
-Rotation: mint a replacement token, replace the Secret with the same
-`--from-file=token=…` command from step 2 (an idempotent `apply` of the
-client-side manifest), then `kubectl -n tenant-apps rollout restart
-deployment/agent-control`. The service re-reads the file on every dispatch, but
-the restart is what proves both replicas hold the new value. Revoke the old
-token in GitHub after the rollout completes.
+Reviving the route means naming a workflow that still exists and owning it in
+this repository first; do not recreate the credential in anticipation of one.
 
 ## 34. Grant the app `Repository webhooks` and re-consent the installation
 

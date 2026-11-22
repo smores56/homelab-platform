@@ -533,6 +533,20 @@ writer here). Static half passes: `tests/digest/check.sh` → `digest: 63 passed
 
 ## nanobot has no credentials and no internal reach
 
+**Retired with the runtime.** Everything below describes the cluster plane:
+`tenant-apps/nanobot`, its ServiceAccount, the `agent-identity` and
+`nanobot-policy` admission pins, `ImageRepository`/`ImagePolicy nanobot` and the
+`publish-nanobot.yml` checks. The nanobot runtime, its image and its workflow are
+gone, and the manifests went with the k3s/Flux tree, so those assertions have no
+subject left and none of them is run any more.
+
+What still holds the property is code, not manifests: the broker's own unit
+suite (CI job `broker unit tests`, the section below) proves the enrollment,
+predicate and injection contract against `apps/broker/config/broker.json`, and
+`tests/core/apps-egress.sh` proves the host tenant's egress drops LAN,
+link-local, tailnet and metadata destinations. Keep this section as the record of
+what the cluster promised; do not run the `cluster-kubectl` commands in it.
+
 SDLC #582. Property under test: the agent can call only its enrolled logical
 hosts through the broker, and only with the credential the broker injects. It
 cannot reach a private, loopback, link-local, CGNAT, pod-CIDR, service-CIDR or

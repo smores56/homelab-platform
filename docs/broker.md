@@ -11,6 +11,15 @@ Source: `apps/broker/` (Python stdlib, 123 unit tests). The reviewed
 enrollment ships beside it at `apps/broker/config/broker.json`; the k3s/Flux
 manifests were retired with the cluster tree.
 
+**Status.** The cluster plane described below is historical: the `broker`
+namespace, its Deployment, ServiceAccount, NetworkPolicies, the `tenant-apps`
+caller identity, the `agent-debug` ceiling and the tunnel route to
+`tenant-apps/nanobot` all went with the k3s/Flux tree, and the nanobot runtime
+that made the calls is retired. The request contract, the enrollment, the
+predicates and the code remain the source of truth for the broker itself, which
+is what `apps/broker/tests` asserts. Do not read the `kubectl` and manifest
+commands here as runnable.
+
 ## Trust boundary and non-goals
 
 The broker is inside the boundary: it holds the provider and GitHub tokens and

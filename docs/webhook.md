@@ -17,6 +17,16 @@ provider --HTTPS--> agent-hooks.sammohr.dev (Access bypass)
 Source: `apps/webhook/` (Python stdlib, 78 unit tests). Manifests:
 `clusters/homelab/webhook/`. Applied by the Flux stage `platform-webhook`.
 
+**Status.** The manifests, the tunnel and the Flux stage above went with the
+k3s/Flux tree, and the gateway this receiver enqueued into is retired with the
+nanobot runtime. Nothing in this repository deploys `apps/webhook`, nothing
+serves `ws://nanobot.tenant-apps.svc:8765`, and no gateway config exists from
+which to read `enqueue-token`. What remains true is the receiver's own contract
+below (capability URL, HMAC, size limit, dedupe, the exact frames of the
+researched WebUI protocol) and the unit tests that pin it; a future enqueue
+target needs its own address, its own token source and its own reviewed change.
+Do not read the deployment commands here as runnable.
+
 ## Trust boundary and non-goals
 
 The receiver is **unauthenticated by construction**. It has no session, no
@@ -88,7 +98,7 @@ The tokens are separate, operator-created Secret keys (`webhook-tokens`):
 | Key | Used for | Source |
 | --- | --- | --- |
 | `admin-token` | `POST`/`DELETE /endpoints` | `openssl rand -hex 32` |
-| `enqueue-token` | `/webui/bootstrap` bearer | nanobot's `channels.websocket.tokenIssueSecret` |
+| `enqueue-token` | `/webui/bootstrap` bearer | the enqueue target's own token; the retired gateway minted it as `channels.websocket.tokenIssueSecret` |
 
 The Deployment mounts the Secret with `optional: false`, so a missing Secret
 leaves the pod pending instead of serving a public hostname with no tokens.
@@ -122,14 +132,12 @@ continuity into a previous one.
 
 ### Integration risks
 
-- **The token is generated, not injected.** The image's `docker_bootstrap`
-  writes `channels.websocket.tokenIssueSecret` from `NANOBOT_WEB_TOKEN`, or a
-  random value when that variable is absent. `homelab-apps` does not set it, so
-  today the operator reads the value from the pod's rendered config
-  (`$HOME/.nanobot/config.json`). If the scratch PVC is ever reset, the gateway
-  mints a new secret and every enqueue 502s until `enqueue-token` is updated.
-  The durable fix is a tenant-side `NANOBOT_WEB_TOKEN` from a SOPS/ESO secret;
-  that is a `homelab-apps` change, not this repository's.
+- **The token was generated, not injected** (retired). The nanobot image's
+  `docker_bootstrap` wrote `channels.websocket.tokenIssueSecret` from
+  `NANOBOT_WEB_TOKEN`, or a random value when that variable was absent. Both the
+  image and the pod are gone, so the risk as written has no subject: a receiver
+  brought back needs a token source this repository controls, not a value read
+  out of a running container's config.
 - **The envelope is a WebUI protocol, not a public API.** nanobot's
   `webui/client_contract.py` versions it (`WEBUI_PROTOCOL = 1`), but a future
   release can change the frame. The unit tests pin the exact frames against a
@@ -159,10 +167,11 @@ per-IP budget would drop a legitimate burst of deliveries, and the receiver has
 no rate limit of its own — the capability URL, HMAC, size limit and dedupe are
 the controls.
 
-NetworkPolicy is default-deny in both directions. The receiver admits only
-`ingress/cloudflared` on 8080 and reaches only `tenant-apps/nanobot` on 8765
-(plus DNS). It has no public egress, so a delivery cannot be spilled anywhere
-else. The remote halves live in `clusters/homelab/platform/network/webhook-flows.yaml`.
+NetworkPolicy is default-deny in both directions. The receiver admitted only
+`ingress/cloudflared` on 8080 and reached only `tenant-apps/nanobot` on 8765
+(plus DNS), so a delivery could not be spilled anywhere else. Both the policy and
+its remote half (`clusters/homelab/platform/network/webhook-flows.yaml`) are
+retired with the cluster tree.
 
 ## Operations
 

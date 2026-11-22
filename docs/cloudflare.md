@@ -224,7 +224,7 @@ zone with no application of its own is reachable only by the owner's identity.
   `kanbei` keeps the email policy alone and
   adds `allow_authenticate_via_warp`, so a device that already runs the
   Cloudflare One client skips the login; a device without it gets the ordinary
-  Access redirect. `nanobot` is retired (SDLC #583): the cluster serves the same app on
+  Access redirect. `nanobot` is retired (SDLC #583): the agent app is served on
   `agent`, and the old application is gone rather than left email-only.
   The API rejects `allow_authenticate_via_warp` until the account has a
   Cloudflare One Client authentication session duration (Zero Trust → Access →
@@ -283,11 +283,12 @@ whole policy.
 
 ## Retired hostnames
 
-`llm.sammohr.dev` is retired (the cluster serves models) and `chat.sammohr.dev`
+`llm.sammohr.dev` is retired (the cluster served models) and `chat.sammohr.dev`
 was replaced by `agent.sammohr.dev`. `nanobot.sammohr.dev` is retired with the
-agent cutover (SDLC #583): the wildcard CNAME moves it back to the host tunnel
-until the host's ingress entry is removed, and the wildcard Access application
-denies it once its own application is gone.
+agent cutover (SDLC #583): it falls under the wildcard CNAME, and the wildcard
+Access application denies it once its own application is gone. The runtime that
+used to answer it is gone as well, so that application is the only edge object
+left to delete; its existence is an operator step, not a repository change.
 
 All three applications carried `prevent_destroy`, so they cannot be deleted by
 dropping the block: the state entry goes first, then the object is deleted in

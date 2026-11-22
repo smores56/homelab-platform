@@ -5,7 +5,7 @@ Podman Quadlets and systemd units baked into it, ZFS recovery groups backed by t
 host Restic plane, Tailscale Serve for reachability, Cloudflare OpenTofu for the
 public edge, and the offline checks that guard all of it.
 
-Agents (nanobot) never push here. They work in
+Agents never push here. They work in
 [`homelab-apps`](https://github.com/smores56/homelab-apps) and propose platform
 changes by pull request from a fork, so no PR workflow can read a secret.
 
@@ -28,7 +28,7 @@ changes by pull request from a fork, so no PR workflow can read a secret.
 | `apps/data_plane/` | CLI entry points for the data-plane library |
 | `apps/recovery-page/` | The static recovery page, built against the rendered manifest (`docs/core/recovery-kit.md`) |
 | `backrest/` | The Backrest reader Worker: source, TypeScript typecheck and static tests (`docs/core/backrest.md`) |
-| `images/` | Container image sources: nanobot, the agents, data-plane, brave, tuta-calendar |
+| `images/` | Container image sources: agent egress, agent mail, agent WebUI, data-plane, brave, tuta-calendar |
 | `tofu/` | Cloudflare OpenTofu (provider v5), Access default-deny, CAA (`docs/cloudflare.md`), tailnet policy |
 | `provision/edge/` | The public edge VPS bootstrap, Caddyfile, firewall and on-box verify (`docs/core/public-edge.md`) |
 | `provision/smortress/` | Autoinstall user-data for the bootc host |

@@ -54,7 +54,6 @@ broker|python3 -m unittest discover -s apps/broker/tests -t apps/broker|apps/bro
 webhook|python3 -m unittest discover -s apps/webhook/tests -t apps/webhook|apps/webhook/*
 agent-proxy|python3 -m unittest discover -s apps/agent_proxy/tests -t apps/agent_proxy|apps/agent_proxy/*
 agent-facade|python3 -m unittest discover -s apps/agent_facade/tests -t apps|apps/agent_facade/*
-nanobot|python3 -m py_compile images/nanobot/render.py && python3 -m unittest discover -s tests/nanobot-image -t tests/nanobot-image && bash -n images/nanobot/entrypoint.sh|images/nanobot/*,tests/nanobot-image/*
 backrest|npm ci --prefix backrest && npm --prefix backrest run typecheck && npm --prefix backrest test && tests/backrest/check.sh|backrest/*
 tofu-check|tests/tofu/check.sh|tests/tofu/*,tofu/*
 tofu-fmt|tofu fmt -check -recursive tofu|tofu/*
