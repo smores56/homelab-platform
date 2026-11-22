@@ -32,7 +32,7 @@ locals {
   # (docs/core/public-edge.md, "DNS and the cutover"): the cluster records first
   # with -target, the A records after. The comments here describe the desired
   # state, not a race-free apply.
-  edge_hosts     = ["photos", "opds"]
+  edge_hosts     = ["photos", "opds", "recovery"]
   edge_dns_hosts = var.edge_ipv4 == "" ? [] : local.edge_hosts
 
   # The DNS set follows the ingress map unless explicitly pinned, so a cutover
