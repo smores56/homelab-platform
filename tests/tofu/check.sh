@@ -149,10 +149,13 @@ fi
 # which the exposed surface is: `docs/core/backrest.md`.
 absent cloudflare_zero_trust_access_application.backrest 'no Access application gates recovery.<zone>'
 hasnt 'recovery has no application destination of its own' 'uri[[:space:]]*=[[:space:]]*"recovery\.\$\{var\.domain\}"'
+# The reader left Cloudflare (T2, #725): recovery is a grey A record at the
+# edge, so an Access bypass entry would gate nothing and only suggest the name
+# still resolves to a proxied origin.
 if grep -qE '^[[:space:]]*"recovery",$' "$work/code.tf"; then
-  ok "recovery is a public bypass hostname"
+  bad "recovery is no longer a public bypass hostname" "local.public_apps still names recovery"
 else
-  bad "recovery is a public bypass hostname" "local.public_apps must name recovery"
+  ok "recovery is no longer a public bypass hostname"
 fi
 if grep -qE '^resource "cloudflare_(pages_domain|dns_record)" "recovery"' tofu/pages.tf; then
   bad "the Pages domain and DNS record are retired"
@@ -256,7 +259,7 @@ hasnt "no tunnel UUID is authored in the config" '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-
 echo "== public edge DNS"
 has 'edge_ipv4 is a variable' 'variable "edge_ipv4"'
 has 'an empty edge_ipv4 is valid' 'var\.edge_ipv4 == "" \|\| can\(regex'
-has 'the edge names are the two applications' 'edge_hosts[[:space:]]*=[[:space:]]*\["photos", "opds"\]'
+has 'the edge names are the served names' 'edge_hosts[[:space:]]*=[[:space:]]*\["photos", "opds", "recovery"\]'
 has 'the edge DNS set is empty until the cutover' 'var\.edge_ipv4 == "" \? \[\] : local\.edge_hosts'
 has 'the edge names leave the cluster set in the same plan' 'setsubtract\('
 if grep -qF 'local.edge_dns_hosts,' "$work/code.tf"; then
@@ -381,47 +384,33 @@ else
   ok "the rate-limit rule does not cover the webhook receiver"
 fi
 
-# The reader is public, so its login endpoint carries the brute-force control
-# the absent gate does not: the design's "Cloudflare login rate limit". It holds
-# the zone's only rate-limit slot, because a rule carries exactly one threshold
-# and the media budget is orders of magnitude too loose for a password.
-echo "== backrest login rate limit"
+# The reader is public, but it is no longer on Cloudflare: its login budget is
+# enforced by the guard on the VPS, where no rate-limit phase can apply. The
+# zone's single slot is therefore empty on purpose, and the assertions pin that
+# rather than a rule that would silently stop matching.
+echo "== the rate-limit slot is empty"
 rl=$(extract cloudflare_ruleset.dav_rate_limit)
-login_rule=$(awk '
-  /^    \{$/ { buf = ""; inrule = 1 }
-  inrule { buf = buf $0 "\n" }
-  inrule && /^    \},$/ {
-    if (buf ~ /v1\.Authentication\/Login/) { printf "%s", buf; exit }
-    inrule = 0
-  }
-' <<<"$rl")
-if [[ -n $login_rule ]]; then
-  ok "a rate-limit rule names the Backrest login endpoint"
+if [[ -n $rl ]]; then
+  ok "the rate-limit ruleset still exists"
 else
-  bad "a rate-limit rule names the Backrest login endpoint" "no rule in cloudflare_ruleset.dav_rate_limit matches /v1.Authentication/Login"
+  bad "the rate-limit ruleset still exists"
 fi
-if grep -qF 'http.host eq \"recovery.${var.domain}\"' <<<"$login_rule"; then
-  ok "the login rule applies to recovery.<zone>"
+eq "$(grep -c 'ratelimit = {' <<<"$rl")" "0" "no rule holds the zone's one rate-limit slot"
+if grep -q 'v1\\.Authentication/Login' <<<"$rl"; then
+  bad "no rule targets a name Cloudflare does not proxy"
 else
-  bad "the login rule applies to recovery.<zone>"
+  ok "no rule targets a name Cloudflare does not proxy"
 fi
-if grep -qE '^[[:space:]]*action[[:space:]]*=[[:space:]]*"block"' <<<"$login_rule"; then
-  ok "the login rule blocks the request"
+if grep -qF 'rules = []' tofu/rate-limit.tf; then
+  ok "the empty slot is explicit"
 else
-  bad "the login rule blocks the request"
+  bad "the empty slot is explicit"
 fi
-login_budget=$(sed -nE 's/.*requests_per_period[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' <<<"$login_rule")
-if [[ -n $login_budget ]] && ((login_budget <= 60)); then
-  ok "the login rule allows at most 60 requests per period"
+if grep -q 'guard' tofu/rate-limit.tf; then
+  ok "the empty slot names where the budget went"
 else
-  bad "the login rule allows at most 60 requests per period" "got '${login_budget:-none}'; a password budget must stay far below the media one"
+  bad "the empty slot names where the budget went"
 fi
-if grep -qE '^[[:space:]]*period[[:space:]]*=[[:space:]]*10$' <<<"$login_rule"; then
-  ok "the login rule counts in the plan's 10-second window"
-else
-  bad "the login rule counts in the plan's 10-second window"
-fi
-eq "$(grep -c 'ratelimit = {' <<<"$rl")" "1" "the zone's one rate-limit slot goes to the login rule"
 
 # Dropping the media rule is a real loss of an edge control, so the decision and
 # its trigger for revisiting have to be written down where the rationale lives.

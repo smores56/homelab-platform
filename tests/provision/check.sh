@@ -25,12 +25,16 @@ has() { grep -qF -- "$1" "$2"; }
 one_login_key() {
   [[ $(grep -c '^ssh-ed25519 ' "$edge/authorized_keys") == 1 ]]
 }
-sites_are_two() {
+sites_are_three() {
   local got
   got=$(grep -E '^[a-z0-9.-]+[[:space:]]*\{' "$edge/Caddyfile" \
     | sed 's/[[:space:]]*{$//' | sort | tr '\n' ' ')
-  [[ $got == 'opds.sammohr.dev photos.sammohr.dev ' ]]
+  [[ $got == 'opds.sammohr.dev photos.sammohr.dev recovery.sammohr.dev ' ]]
 }
+# A site address that starts with http:// is a listener without TLS. An http://
+# upstream inside a TLS site is the opposite and is expected here: the guard
+# listens on loopback.
+no_plain_http_site() { ! grep -qE '^http://' "$edge/Caddyfile"; }
 lacks() { ! grep -qF -- "$1" "$2"; }
 
 [ -d "$art" ] || { echo "missing $art" >&2; exit 1; }
@@ -69,9 +73,9 @@ check "the edge refuses HTTP-01" has 'disable_http_challenge' "$edge/Caddyfile"
 check "the edge has no admin API" has 'admin off' "$edge/Caddyfile"
 check "the edge proxies Immich on its own Serve port" has 'https://{$SMORTRESS_FQDN}:8446' "$edge/Caddyfile"
 check "the edge proxies OPDShelf on its own Serve port" has 'https://{$SMORTRESS_FQDN}:8447' "$edge/Caddyfile"
-check "the edge declares no plain HTTP site" lacks 'http://' "$edge/Caddyfile"
+check "the edge declares no plain HTTP site" no_plain_http_site
 check "the edge never proxies 443" lacks ':443' "$edge/Caddyfile"
-check "the edge serves exactly the two names" sites_are_two
+check "the edge serves exactly the three names" sites_are_three
 check "the edge firewall drops by default" has 'policy drop' "$edge/nftables.conf"
 check "the edge firewall admits 443" has 'tcp dport 443 accept' "$edge/nftables.conf"
 check "the edge firewall admits WireGuard" has 'udp dport 41641 accept' "$edge/nftables.conf"
