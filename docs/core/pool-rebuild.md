@@ -249,20 +249,23 @@ Then, in order:
 ### What the 2026-11-22 window proved for `agent-local`
 
 The full `agent-runtime-drill.sh restore agent-local --backend ssd` was stopped,
-not passed: it wrote 39 GiB of 520 GB in 24 minutes, which cannot finish inside
-the helper's four-hour deadline. What stands in its place:
+not passed: under the old `dump` method it wrote 39 GiB of 520 expanded GB in 24
+minutes, which could not finish inside the helper's four-hour deadline. What
+stands in its place:
 
 - `scripts/retirement-gate.sh` cold-restores every unit from each destination
   and matches one sample file per dataset against the live tree. That matrix is
   the retirement evidence.
 - 400 files spread across the first 383,794 restored files of `agent-local`
   matched byte for byte, with owner and mode, against `/var/lib/agent/local`.
-- the restore expands hardlinks (`restic dump` emits none). The source is
+- the old method expanded hardlinks (`restic dump` emits none). The source is
   36.8 GB unique with 4,365,676 of its 4,592,084 files sharing an inode, but
-  those 519.8 GB of paths arrive as distinct files: the 8 % restored held
+  those 519.8 GB of paths arrived as distinct files: the 8 % restored held
   43.8 GB unique and zero multi-link files, 118 % of the whole source's unique
-  bytes. A full restore of this unit therefore needs 520 GB and hours, not the
-  four-hour default (`docs/core/restic-plane.md`, "Restore by hand").
+  bytes. The drill's default is `restic restore` now, which preserves links and
+  needs far less than 520 GB, but no completed `agent-local` restore has been
+  timed (`docs/core/restic-plane.md`, "Restore by hand"): the unit is unproven,
+  not done.
 
 Record a deferred drill as deferred. `smortress-restic-verify` going green says
 the snapshots are fresh; it does not say this unit was restored in full.

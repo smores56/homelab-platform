@@ -334,8 +334,10 @@ sudo /usr/libexec/smortress-restic-restore-drill r2 books --snapshot <id> \
 
 The helper restores every path in the unit under
 `<target>/<mountpoint>/.zfs/snapshot/<backend>/` because those are the absolute
-paths the backup recorded. It refuses a non-empty target and only accepts
-`verified` snapshots. Check the contents, not the exit status.
+paths the backup recorded. It refuses a non-empty target, only accepts
+`verified` snapshots, and fails when the snapshot does not carry one of the
+unit's paths. The exit status is a gate, not evidence: open a known file and
+compare ownership and mode.
 
 The default target is `<drill root>/<backend>-<unit>-<time>`, where the drill
 root is the first mounted of `/var/lib/restic/hdd` and `/var/lib/restic/ssd`
@@ -349,8 +351,8 @@ anything the helper asks restic for the snapshot's restore size and refuses a
 target whose filesystem cannot hold it plus a 2 GiB margin, naming `--target`
 and `RESTIC_DRILL_ROOT` in the message.
 
-`agent-local` will not fit that default deadline, and the reason is the method
-rather than the bytes. The helper used to pipe `restic dump` into `tar`, and
+`agent-local` did not fit the old method's deadline, and the method rather than
+the bytes was the reason. The helper used to pipe `restic dump` into `tar`, and
 `dump` emits no hardlink entries, so a tree that is 519.8 GB summed per path but
 36.8 GB unique arrived as 519.8 GB of distinct files: on 2026-11-22 the drill
 wrote 39 GiB and 383,794 of 4,592,084 files in 24 minutes before it was stopped,
@@ -365,10 +367,16 @@ Over S3 the difference is larger than the parallelism: `dump` walks the tree one
 node at a time, and a single stalled read hangs the whole drill until
 `RESTIC_DEADLINE_DRILL` (14400 s) kills it — on 2026-11-22 an `r2/music` drill
 spent 25 minutes and wrote nothing, and an `ssd/agent-local` drill did the same.
-SELinux labels are excluded (`--exclude-xattr security.selinux`) because root
-cannot remove them from userspace; the real dataset gets its label back when the
-data is copied home. `agent-local` still takes tens of minutes for its 4.4M
-files; budget the target, not the deadline.
+SELinux labels are excluded (`--exclude-xattr security.selinux`): applying or
+removing the label needs privileges the drill does not have, and the real dataset
+gets its label back when the data is copied home.
+
+Two things the new default has not proved. It is **unmeasured** on `agent-local`:
+no completed `ssd/agent-local` restore has been timed, so there is no figure
+here to quote. And the deadline is now one window for the whole unit — `photos`
+has three datasets, which used to be three separate 14400 s budgets and is now
+one — so raise `RESTIC_DEADLINE_DRILL` for the media units and budget the
+target, not the deadline.
 
 The raw equivalent, for any machine:
 

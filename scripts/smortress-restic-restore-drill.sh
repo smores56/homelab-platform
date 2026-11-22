@@ -157,9 +157,9 @@ if ((restore_size + margin > avail_bytes)); then
 fi
 
 say "$backend/$unit: restoring $snapshot into $target"
-# restic restore clears xattrs on every file it writes, and SELinux denies
-# removing security.selinux even for root (lremovexattr, not setxattr). The
-# label is reapplied by the system on the real target, so it is excluded here.
+# Applying or removing security.selinux needs privileges the drill does not have
+# (CAP_MAC_ADMIN and a relabelto policy), and the label is reapplied by the
+# system on the real target, so it is excluded here.
 #
 # `dump` piped through tar was the original path and is kept behind
 # RESTIC_DRILL_METHOD=dump, but it is the wrong default: dump walks the tree one
@@ -175,6 +175,16 @@ case $method in
       warn "restore failed; $target holds an incomplete tree"
       exit 1
     fi
+    # restore succeeds for whatever the snapshot holds, so it succeeds for a
+    # snapshot that predates one of the unit's paths. dump failed on a missing
+    # path, and a drill that prints "Restored into" for a tree it never wrote is
+    # evidence that does not exist.
+    for path in "${staging_paths[@]}"; do
+      if [[ ! -d $target$path ]]; then
+        warn "$snapshot has no $path; the drill restored an incomplete unit"
+        exit 1
+      fi
+    done
     ;;
   dump)
     for path in "${staging_paths[@]}"; do
@@ -200,8 +210,8 @@ esac
 } >&2
 cat <<EOF
 
-Check the contents, not the exit status: compare a known file and ownership,
-then remove the tree:
+The exit status is a gate, not evidence: open a known file, compare ownership and
+mode, then remove the tree:
   find "$target" -maxdepth 6 | head
   sudo rm -rf "$target"
 

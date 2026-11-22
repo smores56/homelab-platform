@@ -13,6 +13,11 @@ root=$(git rev-parse --show-toplevel)
 cd "$root" || exit 1
 
 script=scripts/smortress-restic-restore-drill.sh
+# The unit's own paths come from the layout the drill reads, not a copy here: a
+# restore that omits one has to be caught against the same table the backup used.
+# shellcheck source=/dev/null
+source scripts/restic-plane-common.sh
+mapfile -t book_paths < <(unit_staging_paths books ssd)
 [[ -r $script ]] || {
   printf 'FAIL %s is missing\n' "$script" >&2
   exit 1
@@ -64,6 +69,12 @@ case $1 in
             esac
         done
         [ -n "$target" ] || { echo "fake restic: restore without --target" >&2; exit 2; }
+        # Real restore writes the snapshot's absolute paths under --target; the
+        # suite passes the ones this unit should carry.
+        while IFS= read -r p; do
+            [ -z "$p" ] && continue
+            mkdir -p "$target$p"
+        done <<<"${FAKE_STAGING_PATHS:-}"
         printf 'known\n' >"$target/known.txt" ;;
     *) printf 'fake restic: unexpected command: %s\n' "$*" >&2; exit 2 ;;
 esac
@@ -91,6 +102,7 @@ run() {
         FAKE_LOG=$work/log FAKE_PAYLOAD=$work/payload.tar \
         FAKE_DF_BLOCKS=${FAKE_DF_BLOCKS:-100000000} \
         FAKE_RESTORE_SIZE=${FAKE_RESTORE_SIZE:-1000} \
+        FAKE_STAGING_PATHS="${FAKE_STAGING_PATHS:-$(printf '%s\n' "${book_paths[@]}")}" \
         bash "$script" "$@" >"$work/stdout" 2>"$work/stderr"
 }
 
@@ -131,6 +143,44 @@ if grep -q ' dump ' "$work/log"; then
     ok 'the override reaches restic'
 else
     bad 'the override reaches restic' "$(cat "$work/log")"
+fi
+
+# --- the default restore's flags are part of the contract --------------------
+
+: >"$work/log"
+rm -rf "$work/drill_root"/* 2>/dev/null || true
+run ssd books >/dev/null 2>&1
+if grep -qF -- '--sparse --exclude-xattr security.selinux' "$work/log"; then
+    ok 'the default restore keeps holes and drops the SELinux label'
+else
+    bad 'the default restore keeps holes and drops the SELinux label' "$(cat "$work/log")"
+fi
+
+# --- a snapshot that lacks one of the unit's paths is not a drill -----------
+
+: >"$work/log"
+rm -rf "$work/drill_root"/* 2>/dev/null || true
+if FAKE_STAGING_PATHS=${book_paths[0]} run ssd books; then
+    bad 'a snapshot missing one of the unit paths is refused'
+else
+    ok 'a snapshot missing one of the unit paths is refused'
+fi
+if grep -q 'restored an incomplete unit' "$work/stderr"; then
+    ok 'the missing path is named'
+else
+    bad 'the missing path is named' "$(cat "$work/stderr")"
+fi
+
+# --- an unknown method is a usage error, not a silent default ---------------
+
+: >"$work/log"
+rm -rf "$work/drill_root"/* 2>/dev/null || true
+RESTIC_DRILL_METHOD=bogus run ssd books
+rc=$?
+if ((rc == 2)); then
+    ok 'an unknown method is a usage error'
+else
+    bad 'an unknown method is a usage error' "exit $rc: $(cat "$work/stderr")"
 fi
 
 # --- a target without room is refused before writing ------------------------
