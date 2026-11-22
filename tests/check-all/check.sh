@@ -29,6 +29,10 @@ expect "a data-plane change selects its check and lint" $'data-plane\nlint' \
   "$(selected tests/data-plane/check.sh)"
 expect "a recovery-inventory change selects the data-plane tests and lint" \
   $'data-plane\nlint' "$(selected recovery/inventory.yml)"
+expect "a rendered recovery-group manifest change selects the data-plane tests" \
+  "data-plane" "$(selected deploy/data-plane/config/recovery-groups.json)"
+expect "a deployed source schema change selects the data-plane tests" \
+  "data-plane" "$(selected deploy/data-plane/config/sources/brave.json)"
 expect "a workflow change selects lint" "lint" \
   "$(selected .github/workflows/ci.yml)"
 expect "a docs change selects nothing" "" \
