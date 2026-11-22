@@ -122,6 +122,8 @@ export APPS_FREE_VAR_PATH=$work
 # is testing it: with it at 0 the window is a single sample.
 export APPS_HEALTH_WAIT_TIMEOUT=2
 export APPS_HEALTH_SETTLE=0
+# Short enough that "the manager never answers" is a case, not a minute.
+export APPS_CTL_RETRIES=3
 export DEPLOY_APPS_BIN=$root/$apps
 export DEPLOY_DRAIN_RESCAN_PAUSE=0
 
@@ -265,8 +267,8 @@ if [[ $verb == show ]]; then
   if [[ " ${FAKE_UNIT_FAILED:-} " == *" $unit "* ]]; then
     state=failed
   fi
-  if [[ -n ${FAKE_SHOW_DOWN:-} || (-n ${FAKE_SHOW_TRANSPORT_ONCE:-} && ! -e $FAKE_LOG/transport-once) ]]; then
-    : >"$FAKE_LOG/transport-once"
+  if [[ -n ${FAKE_SHOW_DOWN:-} || (-n ${FAKE_SHOW_TRANSPORT_ONCE:-} && ! -e $FAKE_LOG/show-transport-once) ]]; then
+    : >"$FAKE_LOG/show-transport-once"
     printf 'Failed to connect to user scope bus\n' >&2
     exit 1
   fi
@@ -280,6 +282,23 @@ if [[ $verb == show ]]; then
   fi
   printf 'ActiveState=%s\nNRestarts=%s\n' "$state" "$restarts"
   exit 0
+fi
+# The two answers the apply's retry and its stop mapping exist for: a manager
+# that is not reachable yet (transport), and a unit that was never installed
+# (systemd exits 5).
+if [[ -n ${FAKE_SYSTEMCTL_TRANSPORT:-} && " $* " == *"$FAKE_SYSTEMCTL_TRANSPORT"* ]]; then
+  printf 'Failed to connect to user scope bus\n' >&2
+  exit 1
+fi
+if [[ -n ${FAKE_SYSTEMCTL_TRANSPORT_ONCE:-} && " $* " == *"$FAKE_SYSTEMCTL_TRANSPORT_ONCE"* &&
+  ! -e $FAKE_LOG/transport-once ]]; then
+  : >"$FAKE_LOG/transport-once"
+  printf 'Failed to connect to user scope bus\n' >&2
+  exit 1
+fi
+if [[ -n ${FAKE_SYSTEMCTL_NOTLOADED:-} && " $* " == *"$FAKE_SYSTEMCTL_NOTLOADED"* ]]; then
+  printf 'Unit %s not loaded.\n' "$unit" >&2
+  exit 5
 fi
 if [[ -n ${FAKE_SYSTEMCTL_FAIL_ONCE:-} && " $* " == *"$FAKE_SYSTEMCTL_FAIL_ONCE"* &&
   ! -e $FAKE_LOG/failed-once ]]; then
@@ -462,8 +481,9 @@ reset_case() {
   set_secrets "$secrets_v1"
   unset FAKE_SYSTEMCTL_FAIL FAKE_SYSTEMCTL_FAIL_ONCE FAKE_PULL_FAIL FAKE_CURL_EXIT \
     FAKE_SOPS_EXIT FAKE_UNIT_INACTIVE FAKE_UNIT_FAILED FAKE_UNIT_SLOW FAKE_UNIT_RESTART \
-    FAKE_SHOW_DOWN FAKE_SHOW_TRANSPORT_ONCE
-  export APPS_HEALTH_SETTLE=0
+    FAKE_SHOW_DOWN FAKE_SHOW_TRANSPORT_ONCE FAKE_SYSTEMCTL_TRANSPORT \
+    FAKE_SYSTEMCTL_TRANSPORT_ONCE FAKE_SYSTEMCTL_NOTLOADED
+  export APPS_HEALTH_SETTLE=0 APPS_CTL_RETRIES=3
 }
 
 run_apply() { # <commit>
@@ -861,6 +881,54 @@ export APPS_HEALTH_SETTLE=2
 run_apply "$c_v2"
 check_eq "$rc" 0 "a healthy app applies through the settle window" "$out"
 check_eq "$(journal_field apps-unhealthy '.app')" "" "no health verdict is journaled"
+
+# --- 9j. a unit that is not loaded is already stopped -----------------------
+# The revert stops the apps the failed apply added. systemd exits 5 for a unit it
+# never had, and reading that as a failure left the record behind forever.
+reset_case
+run_apply "$c_depart"
+check_eq "$rc" 0 "the single-app revision applies" "$out"
+: >"$log/actions"
+set_secrets "$secrets_v1"
+export FAKE_SYSTEMCTL_FAIL_ONCE='start beta.service' FAKE_SYSTEMCTL_NOTLOADED=stop
+run_apply "$c_v1"
+unset FAKE_SYSTEMCTL_FAIL_ONCE FAKE_SYSTEMCTL_NOTLOADED
+check_eq "$rc" 5 "a failed apply still exits 5" "$out"
+check_grep "$log/actions" 'user stop beta.service' "the revert stops the added app"
+check_grep "$log/actions" 'system stop smortress-app-ingress@beta' \
+  "the revert stops the added app's ingress"
+check_no_file "$state_dir/apply.json" "a not-loaded stop completes the revert"
+check_eq "$(jq -r '.repos["homelab-apps"].commit' "$state_dir/state.json")" "$c_depart" \
+  "the revert keeps the previous commit recorded"
+
+# --- 9k. a manager that is gone is not "already stopped" --------------------
+# The other side of the same mapping: an unreachable manager must fail the
+# revert and keep the record, or the next boot believes the host is consistent.
+reset_case
+run_apply "$c_depart"
+set_secrets "$secrets_v1"
+export FAKE_SYSTEMCTL_FAIL_ONCE='start beta.service'
+export FAKE_SYSTEMCTL_TRANSPORT='stop beta.service'
+run_apply "$c_v1"
+unset FAKE_SYSTEMCTL_FAIL_ONCE FAKE_SYSTEMCTL_TRANSPORT
+check_eq "$rc" 5 "an unreachable manager still exits 5" "$out"
+check_file "$state_dir/apply.json" "a failed revert keeps the record"
+check_eq "$(journal_field apps-revert-failed '.reason' | tail -n 1)" restore-incomplete \
+  "the failed revert says why"
+check_eq "$(tail -n 1 "$log/notify-urls")" "$ping_url/fail" \
+  "the failed revert pages the deploy check"
+
+# --- 9l. a transport blip on a control call is asked again ------------------
+reset_case
+run_apply "$c_v1"
+check_eq "$rc" 0 "the two-app revision applies" "$out"
+set_secrets "$secrets_v1b"
+export FAKE_SYSTEMCTL_TRANSPORT_ONCE='restart alpha.service'
+run_apply "$c_v2"
+unset FAKE_SYSTEMCTL_TRANSPORT_ONCE
+check_eq "$rc" 0 "a transport blip on restart does not fail the apply" "$out"
+check_eq "$(grep -c 'user restart alpha.service' "$log/actions")" 2 \
+  "the restart is retried once"
 
 # --- 10. a Serve failure after the commit does not revert --------------------
 reset_case

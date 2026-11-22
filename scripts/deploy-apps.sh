@@ -120,6 +120,10 @@ df_timeout=${APPS_DF_TIMEOUT:-30}
 pull_timeout=${APPS_PULL_TIMEOUT:-1800}
 tenant_timeout=${APPS_TENANT_TIMEOUT:-120}
 ctl_timeout=${APPS_CTL_TIMEOUT:-120}
+# Transport failures are retried while the tenant manager starts; the count is a
+# knob because a suite that has to prove the exhausted case cannot wait 30 s for
+# every call.
+ctl_retries=${APPS_CTL_RETRIES:-30}
 serve_timeout=${APPS_SERVE_TIMEOUT:-180}
 # How long a started app may take to come up, and how long it must then stay up:
 # a container that exits is restarted, so one active sample is not health.
@@ -255,7 +259,7 @@ tenant_remove() { # <path>
 # races the manager's private socket and inherits the caller's bus address.
 user_ctl() { # <args...>; retry transport failures while the manager starts
   local i rc out
-  for ((i = 0; i < 30; i++)); do
+  for ((i = 0; i < ctl_retries; i++)); do
     out=$(bounded "$(cap_of "$ctl_timeout")" "$systemctl_bin" --user \
       --machine="$apps_user@.host" "$@" 2>&1) && {
       [[ -n $out ]] && printf '%s\n' "$out" >&2
