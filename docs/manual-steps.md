@@ -6368,10 +6368,13 @@ sudo tail -n 20 /var/lib/homelab/deploy/journal.jsonl | jq -c .
 #   apps-unhealthy (a started app was not active, or was restarted),
 #   apps-name-refused (a name the schema forbids reached a unit sink),
 #   apps-work-kept (a work tree the sweep would not remove)
+#   apps-health-failed (a plan app is not serving: the reason, the app, the unit;
+#   from the five-minute smortress-apps-health.timer, which rolls nothing back and
+#   pings nothing -- this journal line is the tenant's only signal)
 #   denylist-added, denylist-cleared, bootstrap-recorded, state-reconciled,
 #   booted-unrecorded, poll-denylisted, notify-sent, notify-failed
 sudo journalctl -u smortress-deploy-listener.service -u smortress-deploy.service \
-  -u smortress-boot-gate.service --no-pager -n 50
+  -u smortress-boot-gate.service -u smortress-apps-health.service --no-pager -n 50
 ```
 
 ### 49.7 A held deploy: what it looks like, and `release --force`

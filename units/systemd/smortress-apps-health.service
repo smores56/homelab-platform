@@ -1,0 +1,44 @@
+[Unit]
+# The tenant is judged from here, not from the boot gate: an app that crash-loops
+# an hour after the host booted is an apps-revision problem, and a host image
+# rolled back for it would be a rollback that says nothing about the platform.
+# This prober reports and repairs nothing -- the apply already refuses to commit a
+# revision whose own apps do not stay up.
+Description=Probe the tenant's apps and journal the ones that are not serving
+Requires=sops-decrypt.service
+After=sops-decrypt.service local-fs.target
+# The Serve routes are what the base path is checked against, and Serve is
+# re-declared at boot after the plan is read: probing before it ran would report
+# every app's path missing on a healthy host.
+After=smortress-tailscale-serve.service
+Wants=smortress-tailscale-serve.service
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/smortress-apps-health
+# Each probe is bounded (5-10 s per app, plus a bounded Serve read), so this is
+# the net under a run that hangs anyway rather than a per-app budget: it covers
+# the ~10 apps this host's plan can carry against a wedged `systemctl`, and it
+# stays inside the timer's five-minute period so two runs never overlap.
+TimeoutStartSec=240
+UMask=0077
+User=root
+# Read-only apart from the journal line it appends: the prober must not be able to
+# touch the tenant it is judging, nor the state the drain writes.
+ProtectSystem=strict
+ReadWritePaths=/var/lib/homelab/deploy
+# `systemctl --user --machine=apps@.host` reaches the tenant's manager through its
+# runtime state.
+ReadWritePaths=/run/user
+ProtectHome=read-only
+# The transport behind `--machine=` wants a scratch directory of its own; a private
+# /tmp and /var/tmp are that, so listing them as writable paths on top would be a
+# no-op on a private mount.
+PrivateTmp=yes
+NoNewPrivileges=yes
+LockPersonality=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes

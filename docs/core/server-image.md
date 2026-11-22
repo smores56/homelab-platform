@@ -47,9 +47,11 @@ rollback path. Operator-only actions are in `docs/manual-steps.md` section 37.
 | `/usr/libexec/{deploy-state,deploy-drain,deploy-platform,deploy-apps,deploy-poll,deploy-heartbeat}` | `scripts/deploy-*.sh`: the state library, the queue drain (single writer of `state.json`), the platform snapshot gate and stage, the apps apply and revert, the hourly backstop and the five-minute dead-man. |
 | `/usr/libexec/smortress-boot-gate` | `scripts/smortress-boot-gate.sh`: reconciles an interrupted apps apply, then keeps or rolls back the deployment this host just booted. |
 | `/usr/libexec/smortress-deploy` | `scripts/deploy-cli.sh`, staged under the name the runbook uses: `status`, `release --force`, `unblock`, `bootstrap`. |
+| `/usr/libexec/smortress-apps-health` | `scripts/smortress-apps-health.sh`: the tenant's prober. For every app in `plan.json`, the Quadlet's unit active in the tenant's manager, the plan's loopback port accepting a connect, and the app's base path declared by Serve. Journals `apps-health-failed` with the reason, the app and the unit; reboots, stages, rolls back and reverts nothing, and pings no check. |
 | `/usr/lib/systemd/system/smortress-deploy-listener.service` | The listener, `Restart=always`, `Requires=` and `After=` on `sops-decrypt.service`, sandboxed with the state tree as its only writable path. |
 | `/usr/lib/systemd/system/smortress-deploy.path`, `/usr/lib/systemd/system/smortress-deploy.service` | The queue trigger (`DirectoryNotEmpty=/var/lib/homelab/deploy/queue`) and the one drain of it, `TimeoutStartSec=12600`. |
 | `/usr/lib/systemd/system/smortress-deploy-poll.timer`, `/usr/lib/systemd/system/smortress-deploy-poll.service`, `/usr/lib/systemd/system/smortress-deploy-heartbeat.timer`, `/usr/lib/systemd/system/smortress-deploy-heartbeat.service`, `/usr/lib/systemd/system/smortress-deploy-retry.timer`, `/usr/lib/systemd/system/smortress-boot-gate.service` | The hourly backstop, the dead-man beat for the `deploy` Healthchecks check, the five-minute retry of a deferred queue entry, and the gate that runs `Before=boot-complete.target`. |
+| `/usr/lib/systemd/system/smortress-apps-health.timer`, `/usr/lib/systemd/system/smortress-apps-health.service` | The five-minute probe of the tenant's apps, `OnBootSec=5min` then `OnUnitActiveSec=5min` with `Persistent=false`: a host that was off owes no probe for the window nothing was running. Ordered after `smortress-tailscale-serve.service`, because a base path is checked against the routes that unit declares. |
 | `/usr/share/smortress/deploy-units.txt` | The units the boot gate requires: what "serving" means for this host. The receiver's own units are deliberately absent — a missing deploy secret must page, not roll the host back. |
 | `/usr/lib/bootupd/grub2-static/configs.d/10-smortress-count.cfg` | The three-attempt boot counter. It is **not active on this host**: `bootupd` reports every component current and has no way to force a regeneration, so the snippet never reaches `grub.cfg` (`docs/manual-steps.md` §49.5). The gate journals `boot-counting-absent` each boot. |
 | `/etc/systemd/system.conf.d/10-watchdog.conf` | `RuntimeWatchdogSec=1min`, so a hung PID 1 becomes a reboot. No `kernel.panic`: without a bootloader counter, a panic reboot would loop the same image. |
@@ -403,6 +405,41 @@ recorded digests:
 A failed health gate denylists the digest, pages, and runs `bootc rollback
 --apply`, resetting `boot_success`, `boot_counter` and `default` so a spent
 counter cannot re-select the deployment that just failed.
+
+### The tenant prober
+
+`smortress-apps-health.timer` runs `smortress-apps-health` every five minutes —
+`OnBootSec=5min`, then `OnUnitActiveSec=5min` off the end of the previous probe,
+`Persistent=false` — and asks the same three questions about every app in
+`/var/lib/homelab/apps/plan.json`: the Quadlet's unit active in the tenant's own
+manager (`systemctl --user --machine=apps@.host`), the plan's loopback port
+accepting a connect, and the app's `basePath` present in
+`tailscale serve status --json`. No plan is a host with no tenant and passes; a
+plan that cannot be read is a `plan-unreadable` failure.
+
+A failure journals `apps-health-failed` with the reason, the app and the unit,
+and writes the same reason to the unit's stderr; it stops at the first broken app,
+so one outage is one line. **The tenant's signal is that journal**, read with
+`sudo tail -n 20 /var/lib/homelab/deploy/journal.jsonl | jq -c .` or
+`journalctl -u smortress-apps-health.service` — not a phone page. The one
+Healthchecks check this host owns is the deploy check, and two things make it the
+wrong bell here: the heartbeat pings it green every five minutes, so a prober on
+the same cadence would turn one crash-looping app into a down/recover pair per
+tick, and `deploy_notify fail` appends a bare `/fail` that carries no reason.
+**Paging is the follow-up step**: it needs a Healthchecks check of its own, which
+means an operator-created URL in the decrypt manifest. Until then this program
+journals and names the app instead.
+
+An apply in flight passes silently rather than reporting: `deploy-apps` installs
+the new plan before it writes the units and restarts Serve, and both the drain
+and the gate's revert hold `apply.json` for the whole of that window, so the
+record is what keeps a tick from reading a deploy that is still happening as a
+revision that broke.
+
+It reports and nothing else. It writes no deploy record, reboots nothing, stages
+nothing, and rolls back or reverts nothing: a crash-looping app is an apps
+revision, and `deploy-apps` already refuses to commit one whose own apps do not
+stay up (`check_started_apps`).
 
 ### Below userspace
 

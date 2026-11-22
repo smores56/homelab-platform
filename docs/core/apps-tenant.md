@@ -282,7 +282,11 @@ same way, without waiting for a rejection: `smortress-deploy block commit <sha>`
    verifier's refusal. This
    covers the unit-active third of the next boot's gate: an app that is `active`
    but never binds its loopback port can still make that gate roll the platform
-   image back.
+   image back. The other two — the port and the Serve path — plus the unit itself
+   are what `smortress-apps-health.timer` re-checks every five minutes between
+   boots, and its `apps-health-failed` names the app and the reason, which is the
+   tenant's signal until it has a Healthchecks check of its own
+   (`docs/core/server-image.md`).
 7. **Commit, then Serve.** `state.json` records the commit and the unit and
    secret content hashes, `apply.json`, `render.prev` and `work/prev-secrets/`
    are removed, and `smortress-tailscale-serve.service` is restarted. It is a

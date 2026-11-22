@@ -103,6 +103,7 @@ COPY scripts/storage-layout.sh scripts/zfs-ready.sh scripts/sops-decrypt.sh \
      scripts/smortress-restic-restore-drill.sh \
      scripts/app-secrets.sh scripts/immich-dump.sh scripts/tailscale-serve.sh \
      scripts/apps-quota.sh scripts/apps-user.sh scripts/apps-ingress.sh \
+     scripts/smortress-apps-health.sh \
      scripts/deploy-state.sh scripts/deploy-drain.sh \
      scripts/deploy-platform.sh scripts/smortress-boot-gate.sh \
      scripts/deploy-apps.sh scripts/deploy-poll.sh scripts/deploy-heartbeat.sh \
@@ -252,6 +253,7 @@ RUN set -eux; \
       smortress-boot-gate.service \
       smortress-deploy-poll.timer \
       smortress-deploy-heartbeat.timer \
+      smortress-apps-health.timer \
       smortress-deploy-retry.timer \
       smortress-immich-dump.timer \
       smortress-agent-collect-finance.timer \

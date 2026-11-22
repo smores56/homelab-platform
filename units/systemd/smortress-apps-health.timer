@@ -1,0 +1,21 @@
+[Unit]
+Description=Five-minute probe of the tenant's apps
+
+[Timer]
+# Monotonic, not calendar: the probe is worthless while a host is still starting
+# its containers, so the first run waits one period, and `OnUnitActiveSec`
+# measures from the end of the previous probe rather than from the clock -- a
+# probe that spent its whole budget can never have the next one start on top of
+# it. An apply in flight is not this timer's business: it can start at any time,
+# and the prober itself stands down while `apply.json` exists.
+OnBootSec=5min
+OnUnitActiveSec=5min
+AccuracySec=30s
+# A host that was off owes nothing: a missed probe is not a backlog to catch up on
+# at boot, and `Persistent=true` would fire one immediately for a window in which
+# nothing was running to be unhealthy.
+Persistent=false
+Unit=smortress-apps-health.service
+
+[Install]
+WantedBy=timers.target

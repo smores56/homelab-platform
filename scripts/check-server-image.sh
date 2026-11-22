@@ -947,6 +947,16 @@ check "the poll timer starts the poll service" \
   grep -qxF 'Unit=smortress-deploy-poll.service' units/systemd/smortress-deploy-poll.timer
 check "the heartbeat timer starts the heartbeat service" \
   grep -qxF 'Unit=smortress-deploy-heartbeat.service' units/systemd/smortress-deploy-heartbeat.timer
+# The tenant prober is a timer and a timer-triggered oneshot: enabling the timer
+# is the whole delivery, because a timer the image does not enable never fires.
+# Enabling the service instead would run it once at boot and never again, which is
+# the coupling this split removes.
+check "the image enables the tenant prober's timer" \
+  grep -qE '^[[:space:]]*smortress-apps-health\.timer([[:space:]]|;)' image/Containerfile
+check "the image leaves the tenant prober to its timer" \
+  lacks 'smortress-apps-health.service' image/Containerfile
+check "the prober timer starts the prober" \
+  grep -qxF 'Unit=smortress-apps-health.service' units/systemd/smortress-apps-health.timer
 # A deferred entry is retried by this timer, not by the path unit re-firing the
 # drain: without it a rate-limited deploy would wait for the next event.
 check "the retry timer starts the drain service" \
