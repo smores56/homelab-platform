@@ -31,6 +31,9 @@ ExecStart=/usr/libexec/smortress-boot-gate
 TimeoutStartSec=2700
 UMask=0077
 User=root
+# `/` is a composefs root with zero free by design; the apps space floor must
+# measure the writable data root.
+Environment=APPS_FREE_ROOT_PATH=/var
 # The deploy lock's own directory, never /run/smortress: the gate takes the same
 # lock the drain does, and the secrets must stay read-only. Preserve=yes so a
 # hand-run command's lock inode survives this oneshot's own cleanup.
@@ -74,7 +77,11 @@ ReadWritePaths=/var/home/apps
 ReadWritePaths=/run/user
 ProtectHome=read-only
 PrivateTmp=yes
-NoNewPrivileges=yes
+# No NoNewPrivileges: the tenant helper drops to uid 972 with runuser/PAM, and
+# the directive makes that setuid fail with "Operation not permitted". The unit
+# already runs as root and executes arbitrary tooling, so the directive bought
+# little beyond a false sense of containment (same rationale as RestrictSUIDSGID).
+NoNewPrivileges=no
 # No RestrictSUIDSGID: it makes tar's mode-restoring chmod on directories fail
 # with ENOSYS ("Cannot mkdir/open: Function not implemented"), which broke every
 # tenant apply. The unit runs as root and executes arbitrary tooling, so the

@@ -48,6 +48,9 @@ RuntimeDirectoryPreserve=yes
 # the unit's namespace, which ProtectSystem=strict would otherwise not give it.
 CacheDirectory=smortress-restic
 Environment=RESTIC_CACHE_DIR=/var/cache/smortress-restic
+# `/` is a composefs root with zero free by design; the apps space floor must
+# measure the writable data root.
+Environment=APPS_FREE_ROOT_PATH=/var
 
 # state.json, the queue and the journal are the drain's own writes.
 # The snapshot gate (T3) adds the plane's state tree and the two local
@@ -90,7 +93,11 @@ ReadWritePaths=/var/home/apps
 ReadWritePaths=/run/user
 ProtectHome=read-only
 PrivateTmp=yes
-NoNewPrivileges=yes
+# No NoNewPrivileges: the tenant helper drops to uid 972 with runuser/PAM, and
+# the directive makes that setuid fail with "Operation not permitted". The unit
+# already runs as root and executes arbitrary tooling, so the directive bought
+# little beyond a false sense of containment (same rationale as RestrictSUIDSGID).
+NoNewPrivileges=no
 # No RestrictSUIDSGID: it makes tar's mode-restoring chmod on directories fail
 # with ENOSYS ("Cannot mkdir/open: Function not implemented"), which broke every
 # tenant apply. The unit runs as root and executes arbitrary tooling, so the

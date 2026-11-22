@@ -840,6 +840,22 @@ else
   ok "a unit that sets RestrictSUIDSGID is refused"
 fi
 rm -f "$suidgid_fixture"
+# The host needed both of these under #824: the apply's floor must measure the
+# writable data root, and the tenant helper must be able to drop to uid 972.
+for unit in units/systemd/smortress-deploy.service units/systemd/smortress-boot-gate.service; do
+  check "$unit measures the writable data root" \
+    grep -qxF 'Environment=APPS_FREE_ROOT_PATH=/var' "$unit"
+  check "$unit lets the tenant helper drop privileges" \
+    lacks 'NoNewPrivileges=yes' "$unit"
+done
+nnp_fixture=$(mktemp)
+printf 'NoNewPrivileges=yes\n' >"$nnp_fixture"
+if lacks 'NoNewPrivileges=yes' "$nnp_fixture"; then
+  bad "a unit that sets NoNewPrivileges is refused"
+else
+  ok "a unit that sets NoNewPrivileges is refused"
+fi
+rm -f "$nnp_fixture"
 
 # Every program a unit or a script names under /usr/libexec has to be installed by
 # the image, and the set is derived rather than listed: the `smortress-src` loop
