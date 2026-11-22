@@ -84,6 +84,7 @@ each request's logical host (see "GitHub App identity" below).
 | `github-platform` | `https://api.github.com:443` | `Authorization: Bearer` | app: `homelab-platform`, `contents: write`, `pull_requests: write` | no |
 | `github-agent-push` | `https://github.com:443` | `Authorization: Basic x-access-token:<token>` | app: `nix-config`, `kanbei`, `contents: write`, `workflows: write` | no |
 | `github-agent` | `https://api.github.com:443` | `Authorization: Bearer` | app: `nix-config`, `kanbei`, `contents: read`, `pull_requests: write` | no |
+| `github-agent-apps` | `https://api.github.com:443` | `Authorization: Bearer` | app: `homelab-apps`, `contents: read`, `pull_requests: write` | no |
 | `github-sdlc-git` | `https://github.com:443` | `Authorization: Basic x-access-token:<token>` | app: `sdlc`, `contents: write` | no |
 | `github-sdlc` | `https://api.github.com:443` | `Authorization: Bearer` | app: `sdlc`, `issues: write`, `metadata: read` | no |
 | `github-hooks` | `https://api.github.com:443` | `Authorization: Bearer` | app: `sdlc`, `homelab-apps`, `repository_hooks: write`, `metadata: read` | no |
@@ -116,6 +117,17 @@ request with an approving review, so the token can merge what a human approved
 and nothing else. There is no `agent/**` containment ruleset; that requirement
 was dropped on 2026-11-21 (docs/manual-steps.md step 3), so the identity may push
 any non-default branch.
+
+`github-agent-apps` is the tenant half of that pair, on one repository:
+`homelab-apps`. Its paths are the open-PR call, the REST merge call and GraphQL,
+and its GraphQL guard admits only `enablePullRequestAutoMerge` -- so the route
+that is actually exercised is "open the PR, turn auto-merge on, let the required
+check merge it". The REST merge route needs `contents: write` (the same API rule
+as `github-platform` above), which this enrollment does not have; a caller that
+takes that route gets `403 Resource not accessible by integration`. Widening it
+is a decision about what the agent's API token may do to contents, not a typo.
+The measured app-only merge on 2026-11-22 went through the shell identity's PAT,
+not this enrollment (`docs/core/apps-tenant.md`).
 
 `github-agent-push` and `github-agent` are the same pair for the agent's own
 repositories: `nix-config` and `kanbei`. Both repositories are archived, so these

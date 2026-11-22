@@ -6076,11 +6076,14 @@ Accepted on 2026-11-21:
 
 - The PAT is non-expiring by owner decision; manual revocation is the only kill
   switch.
-- `homelab-apps` has no ruleset and no branch protection, and `sdlc` is a
-  private repository on the free plan where GitHub refuses rulesets and branch
-  protection (`Upgrade to GitHub Pro or make this repository public`, HTTP 403).
-  The machine user can push `main` in both; this was not executed. Those two
-  repositories need protections before the Write ceiling is real.
+- `sdlc` is a private repository on the free plan where GitHub refuses rulesets
+  and branch protection (`Upgrade to GitHub Pro or make this repository public`,
+  HTTP 403). The machine user has Write there, so it can push `main`; this was
+  not executed. `sdlc` needs protections before the Write ceiling is real.
+  `homelab-apps` is no longer in this list: its `main` ruleset stopped being a
+  gap on 2026-11-21, and both the direct-push refusal and an app-only
+  auto-merge were measured on 2026-11-22 (`docs/core/apps-tenant.md`,
+  `scripts/agent-tenant-pr-probe.sh`).
 - The `main` rulesets cover only `~DEFAULT_BRANCH`. Non-main branches have no
   force-push or deletion rule, and the app-gating ruleset described in section
   1 item 3 is absent on `homelab-platform`, `nix-config`, and `kanbei`.
