@@ -270,6 +270,12 @@ stands in its place:
 Record a deferred drill as deferred. `smortress-restic-verify` going green says
 the snapshots are fresh; it does not say this unit was restored in full.
 
+### Measurement decision (2026-11-22)
+
+The owner canceled the `agent-local` timing drill. The restore path is covered by
+the offline tests and the runbook; this document claims no wall-clock or
+restored-bytes figure for that unit.
+
 ## Rollback
 
 There is no rollback past phase C: `p5` is gone. The two copies that exist by

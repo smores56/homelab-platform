@@ -378,6 +378,10 @@ has three datasets, which used to be three separate 14400 s budgets and is now
 one — so raise `RESTIC_DEADLINE_DRILL` for the media units and budget the
 target, not the deadline.
 
+The owner canceled the `agent-local` measurement on 2026-11-22: no timing or
+restored-bytes figure is claimed, and the offline tests plus the runbook are the
+evidence.
+
 The raw equivalent, for any machine:
 
 ```sh
