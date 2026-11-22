@@ -825,6 +825,21 @@ check "the drain waits for the boot gate" \
   grep -qE '^After=.*smortress-boot-gate\.service' units/systemd/smortress-deploy.service
 check "the drain can write the boot it stages" \
   grep -qE '^ReadWritePaths=(-)?/boot$' units/systemd/smortress-deploy.service
+# RestrictSUIDSGID made tar's mode-restoring chmod on directories fail with
+# ENOSYS ("Cannot mkdir/open: Function not implemented"), which broke every
+# tenant extraction (#824). Both units run as root and execute arbitrary tooling,
+# so the filter bought little beyond a false sense of containment.
+for unit in units/systemd/smortress-deploy.service units/systemd/smortress-boot-gate.service; do
+  check "$unit does not set RestrictSUIDSGID" lacks 'RestrictSUIDSGID=yes' "$unit"
+done
+suidgid_fixture=$(mktemp)
+printf 'RestrictSUIDSGID=yes\n' >"$suidgid_fixture"
+if lacks 'RestrictSUIDSGID=yes' "$suidgid_fixture"; then
+  bad "a unit that sets RestrictSUIDSGID is refused"
+else
+  ok "a unit that sets RestrictSUIDSGID is refused"
+fi
+rm -f "$suidgid_fixture"
 
 # Every program a unit or a script names under /usr/libexec has to be installed by
 # the image, and the set is derived rather than listed: the `smortress-src` loop

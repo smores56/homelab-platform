@@ -381,7 +381,13 @@ d_c=sha256:aaaabbbbccccddddeeeeffff0000111122223333444455556666777788889999
 new_tree() { # <commit> -> the extracted-tree path
   local dir=$work/trees/$1/homelab-apps-$1
   rm -rf "$work/trees/$1"
-  mkdir -p "$dir/apps"
+  mkdir -p "$dir/apps" "$dir/.github/workflows"
+  # The real tenant tarball carries repository metadata too. tar creates these
+  # directories before writing the files inside them, which is the shape that
+  # failed on the host under RestrictSUIDSGID (#824).
+  printf 'apps @smores56\n' >"$dir/.github/CODEOWNERS"
+  printf 'name: ci\n' >"$dir/.github/workflows/ci.yml"
+  printf 'name: deploy\n' >"$dir/.github/workflows/deploy.yml"
   # Only the key names matter here: the real decryption is the fake sops, which
   # answers with the values this suite sets per commit.
   printf '{"apps":{"alpha":{"api-key":"ENC[x]"},"beta":{"beta-key":"ENC[x]"}},"sops":{}}\n' \
@@ -464,6 +470,21 @@ publish "$c_v2" "$tree"
 
 secrets_v1='{"apps":{"alpha":{"api-key":"one"},"beta":{"beta-key":"beta-one"}},"sops":{}}'
 secrets_v1b='{"apps":{"alpha":{"api-key":"two"},"beta":{"beta-key":"beta-one"}},"sops":{}}'
+
+# The commit tarball carries repository metadata as well as app definitions.
+# Extract it once with the exact flags the apply uses, so a future archive or
+# flag change fails here rather than on a drain. On the host this is the step
+# that returned ENOSYS while RestrictSUIDSGID was set (#824).
+extract_check=$work/extract-check
+rm -rf "$extract_check"
+mkdir -p "$extract_check"
+tar -xzf "$fetch_dir/$c_v1.tar.gz" -C "$extract_check" \
+  --strip-components=1 --no-same-owner --no-same-permissions --no-overwrite-dir
+for path in .github/CODEOWNERS .github/workflows/ci.yml .github/workflows/deploy.yml \
+  apps/alpha/app.toml apps/beta/app.toml; do
+  check_file "$extract_check/$path" "the commit tarball extracts $path"
+done
+rm -rf "$extract_check"
 
 # --- drivers -----------------------------------------------------------------
 set_secrets() { printf '%s\n' "$1" >"$FAKE_SECRETS_JSON"; }
