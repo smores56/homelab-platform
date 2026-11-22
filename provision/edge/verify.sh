@@ -91,9 +91,12 @@ eq "$(sshd -T | awk '$1 == "permitrootlogin" { print $2 }')" prohibit-password \
 eq "$(ss -ltnH 'sport = :80' | wc -l | tr -d ' ')" 0 "nothing listens on port 80"
 check "Caddy listens on 443" ss -ltnH 'sport = :443'
 
+eq "$(hostnamectl --static)" smoresnet "the OS hostname is smoresnet"
+
 status=$(tailscale status --json 2>/dev/null || true)
 eq "$(jq -r '.BackendState // empty' <<<"$status")" Running "the tailnet link is up"
 check "the node carries tag:vps" jq -e '.Self.Tags // [] | index("tag:vps")' <<<"$status"
+check "the tailnet name is smoresnet" jq -e '.Self.DNSName // "" | startswith("smoresnet.")' <<<"$status"
 
 # The whole point of the panel's udp/41641 rule: a direct path, not DERP. This
 # exits non-zero when every reply came back relayed.

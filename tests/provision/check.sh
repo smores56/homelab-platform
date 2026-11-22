@@ -22,6 +22,9 @@ check() {
 }
 
 has() { grep -qF -- "$1" "$2"; }
+one_login_key() {
+  [[ $(grep -c '^ssh-ed25519 ' "$edge/authorized_keys") == 1 ]]
+}
 sites_are_two() {
   local got
   got=$(grep -E '^[a-z0-9.-]+[[:space:]]*\{' "$edge/Caddyfile" \
@@ -75,7 +78,9 @@ check "the edge firewall admits WireGuard" has 'udp dport 41641 accept' "$edge/n
 check "the edge firewall trusts the tailnet interface" has 'iifname "tailscale0" accept' "$edge/nftables.conf"
 check "the edge firewall never admits 22 publicly" lacks 'tcp dport 22 accept' "$edge/nftables.conf"
 check "the bootstrap joins with the edge tag" has '--advertise-tags=tag:vps' "$edge/bootstrap.sh"
-check "the bootstrap fixes the node hostname" has '--hostname=edge' "$edge/bootstrap.sh"
+check "the bootstrap fixes the node hostname" has '--hostname=smoresnet' "$edge/bootstrap.sh"
+check "the bootstrap sets the OS hostname" has 'hostnamectl set-hostname smoresnet' "$edge/bootstrap.sh"
+check "the bootstrap installs the repository login key" has 'authorized_keys' "$edge/bootstrap.sh"
 check "the bootstrap validates the ruleset before applying it" has 'nft -c -f /etc/nftables.conf' "$edge/bootstrap.sh"
 check "the bootstrap validates the Caddyfile before enabling Caddy" has 'caddy validate --config /etc/caddy/Caddyfile' "$edge/bootstrap.sh"
 check "sshd hardening sorts before cloud-init" has '05-edge-hardening.conf' "$edge/bootstrap.sh"
@@ -83,6 +88,8 @@ check "the bootstrap refuses a Caddy older than 2.6" has 'is too old; the Caddyf
 check "the bootstrap unmasks the packaged Caddy unit" has 'systemctl unmask caddy' "$edge/bootstrap.sh"
 check "the bootstrap restores the kit's host key" has 'EDGE_HOST_KEY' "$edge/bootstrap.sh"
 check "the verify proves the node carries the edge tag" has 'tag:vps' "$edge/verify.sh"
+check "the verify proves the tailnet name" has 'startswith("smoresnet.")' "$edge/verify.sh"
+check "the repository login key is one ed25519 line" one_login_key
 check "the verify proves nothing listens on 80" has 'sport = :80' "$edge/verify.sh"
 
 if command -v shellcheck >/dev/null 2>&1; then

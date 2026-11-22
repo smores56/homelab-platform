@@ -13,6 +13,7 @@ ctrl panel offers no cloud-init and no API to declare one.
 | `nftables.conf` | second firewall layer: 443 and 41641 public, 22 on the tailnet only |
 | `05-edge-hardening.conf` | sshd drop-in; sshd keeps the first value, so `05-` beats cloud-init's `50-` |
 | `verify.sh` | on-box proof of the design's shape; run it after any hand change |
+| `authorized_keys` | the login key the bootstrap appends, so a replacement box trusts it without a console step |
 
 ## Order
 
@@ -24,10 +25,11 @@ ctrl panel offers no cloud-init and no API to declare one.
    `udp/41641` and ICMP echo. Console/VNC bypasses it, so this cannot lock you
    out.
 3. From the HTML5 console, run `bootstrap.sh` with a `tag:vps` preauthorized
-   key, the host's MagicDNS name and an ACME contact address. A root SSH key
+   key, the host's MagicDNS name and an ACME contact address. It names the box
+   `smoresnet` on the OS and the tailnet, and appends `authorized_keys`. A root SSH key
    must already be in `/root/.ssh/authorized_keys`; the template takes it from
    the order form, and the bootstrap leaves key auth as the only way in.
-4. Reconnect over the tailnet and run `verify.sh`. Its upstream half (the two
+4. Reconnect over the tailnet (`ssh root@smoresnet`) and run `verify.sh`. Its upstream half (the two
    Serve ports and the 443 refusal) is gated on `EXPECT_UPSTREAM=1`: run that
    once the image that declares 8446/8447 is on smortress, and before cutover.
 

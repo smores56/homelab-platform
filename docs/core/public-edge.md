@@ -31,8 +31,8 @@ recovery-kit item or must not exist.
 | --- | --- | --- |
 | Caddy | `provision/edge/Caddyfile` | TLS for the two names, proxies to Serve ports 8446 and 8447 |
 | nftables | `provision/edge/nftables.conf` | 443 and udp/41641 public, 22 on `tailscale0` only |
-| sshd | `provision/edge/05-edge-hardening.conf` | keys only, no password, no root password login; `05-` so it beats cloud-init's `50-cloud-init.conf` |
-| tailscale | `provision/edge/bootstrap.sh` | joins once as `tag:vps`, hostname `edge`, tags set key expiry off |
+| sshd | `provision/edge/05-edge-hardening.conf` + `authorized_keys` | keys only, no password, no root password login; `05-` so it beats cloud-init's `50-cloud-init.conf` |
+| tailscale | `provision/edge/bootstrap.sh` | joins once as `tag:vps` with hostname `smoresnet` (the panel name, the OS name and the tailnet name are one word), tags set key expiry off; the bootstrap realigns an existing node's name |
 
 The ctrl panel's own firewall is the first layer and allows exactly `tcp/443`,
 `udp/41641` and ICMP echo. Console/VNC bypasses it, so a wrong panel rule is
@@ -135,7 +135,8 @@ the rebuild, run once and timed before the cutover:
 2. In the ctrl panel, reinstall the Ubuntu 24.04 template. Note whether the IPv4
    changed.
 3. From the HTML5 console, re-run `provision/edge/bootstrap.sh` with a fresh
-   `tag:vps` key (`docs/manual-steps.md` §50.2).
+   `tag:vps` key (`docs/manual-steps.md` §50.2). It sets the hostname, appends
+   the repository login key, and realigns the tailnet name.
 4. Reconnect over the tailnet, run `provision/edge/verify.sh`, then
    `scripts/verify-public-edge.sh` with `EDGE_IP`.
 5. If the IPv4 changed, update `edge_ipv4` and apply; otherwise nothing to do.
@@ -145,6 +146,26 @@ the rebuild, run once and timed before the cutover:
 Restoring the Caddy data directory before step 3 shortens the wait for
 certificates; it is optional, and the ACME account it carries is the same one,
 so the re-issued certificates do not depend on a new account registration.
+
+## What a rebuild cannot derive
+
+Everything the box runs is in this repository and `provision/edge/bootstrap.sh`
+converges a bare Ubuntu 24.04 template to it. The list below is the whole of
+what the repository *cannot* reproduce, with what is done about each item.
+
+| Gap | Closure |
+| --- | --- |
+| Deploying the VPS itself (template, datacenter, IPv4) | Panel only: ctrl has no API and no cloud-init. Accepted; the bootstrap starts from a stock template. |
+| First login on a replacement box | The template installs the order form's key, or the console. `authorized_keys` in the repo is appended by the bootstrap, so *this* login is reproducible after that first contact. |
+| ctrl account and its second factor | Recovery-kit row. Without it there is no console and no reinstall. |
+| Tailnet identity (the join key) | A preauthorized `tag:vps` key is single-use and minted in the Tailscale console per rebuild; the admin login and 2FA codes are a kit row. Not automated on purpose: the alternative is a long-lived, reusable credential on a public box's rebuild path. |
+| SSH host key | Kit row plus `EDGE_HOST_KEY`; omitted, the box generates a new one and every `known_hosts` entry goes stale. |
+| Caddy's data directory (ACME account, certificates) | Not restored. A rebuild re-issues, which costs seconds and needs nothing from the kit; the account it replaces is not pinned by CAA, so a new one is valid immediately. |
+| Panel network firewall | Manual per rebuild: `tcp/443`, `udp/41641`, ICMP echo. Console/VNC bypasses it, so it cannot lock the box out. |
+| The public IPv4 | May change on a replacement (not on a reinstall). Cutover and probes take `EDGE_IP`, and DNS is `var.edge_ipv4` in tofu. |
+| Hostname | Closed: the bootstrap sets `smoresnet` on the OS and on the tailnet. |
+| Package versions | Distro packages plus unattended upgrades; deliberately unpinned, so a rebuild may pick up newer Caddy. The bootstrap's 2.6 gate is the only floor. |
+| Time, sshd policy, firewall, Serve routes on smortress | Closed: bootstrap for the box, the image for smortress, tofu for the tailnet. |
 
 ## Validation
 

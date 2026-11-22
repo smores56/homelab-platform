@@ -46,6 +46,16 @@ if [[ ! -s /usr/share/keyrings/tailscale-archive-keyring.gpg ]]; then
 fi
 apt-get install -y -qq caddy tailscale nftables jq openssl unattended-upgrades >/dev/null
 
+# One name for one box: the panel, the OS and the tailnet all call it smoresnet,
+# so a rebuild does not leave three names for the same host and a person
+# guessing which one a command wants.
+hostnamectl set-hostname smoresnet
+if grep -qE '^127\.0\.1\.1[[:space:]]' /etc/hosts; then
+  sed -i 's/^127\.0\.1\.1[[:space:]].*/127.0.1.1 smoresnet/' /etc/hosts
+else
+  printf '127.0.1.1 smoresnet\n' >>/etc/hosts
+fi
+
 # The Caddyfile needs Caddy 2.6, whose `tls` block accepts `issuer`. Ubuntu
 # 24.04 ships 2.6.2 and was validated against it; jammy's 2.4 does not parse
 # the block. Fail here rather than at the first certificate order, which is a
@@ -64,9 +74,17 @@ fi
 # is the same prefix docs/core/server-image.md uses for the host.
 install -d -m 0755 /etc/ssh/sshd_config.d
 install -m 0644 "$here/05-edge-hardening.conf" /etc/ssh/sshd_config.d/05-edge-hardening.conf
-if [[ ! -s /root/.ssh/authorized_keys ]]; then
-  say "warning: /root/.ssh/authorized_keys is empty; key auth becomes the only login and the console the only way to add one"
-fi
+# The login key is in the repository, not only in the order form: a replacement
+# box then trusts the same key with no console step. It is appended, not
+# written, because the template may already carry the key from the order and
+# replacing that would lock the operator out of the session they are in.
+install -d -m 0700 /root/.ssh
+touch /root/.ssh/authorized_keys
+chmod 0600 /root/.ssh/authorized_keys
+while IFS= read -r key; do
+  [[ -n $key ]] || continue
+  grep -qxF -- "$key" /root/.ssh/authorized_keys || printf '%s\n' "$key" >>/root/.ssh/authorized_keys
+done <"$here/authorized_keys"
 # The host key is a kit item: it pins the box identity across a reinstall, so a
 # client's known_hosts entry survives and the operator never has to accept a
 # new fingerprint over a console session they cannot verify. Without it a fresh
@@ -97,10 +115,14 @@ systemctl restart nftables
 # One join: tagged, key expiry off (a tagged node's keys do not expire), and a
 # stable hostname. The tag is what the ACL names, so a rebuild with a new
 # address reaches exactly the same two ports.
-if ! tailscale status --json 2>/dev/null | grep -Eq '"BackendState":[[:space:]]*"Running"'; then
+if tailscale status --json 2>/dev/null | grep -Eq '"BackendState":[[:space:]]*"Running"'; then
+  # An already-joined node keeps the hostname it joined with; realign it so a
+  # rename of the OS hostname does not leave the tailnet on the old name.
+  tailscale set --hostname=smoresnet
+else
   : "${TS_AUTHKEY:?set TS_AUTHKEY to a preauthorized key carrying tag:vps on the first run}"
   tailscale up --auth-key "$TS_AUTHKEY" --advertise-tags=tag:vps \
-    --hostname=edge --accept-routes=false
+    --hostname=smoresnet --accept-routes=false
 fi
 
 # Caddy: the two names, no admin API, no port 80. The environment file carries

@@ -6821,9 +6821,10 @@ Console/VNC bypasses this firewall, so a wrong rule cannot lock the box out.
 ### 50.4 Deploy and join from the console
 
 Deploy the **Ubuntu 24.04** template in New York (jammy's Caddy 2.4 cannot
-parse the TLS options in `provision/edge/Caddyfile`), note the IPv4 in
-`docs/core/public-edge.md`, and from the HTML5 console install Tailscale from
-its signed repository, as `bootstrap.sh` does — not `curl | sh`:
+parse the TLS options in `provision/edge/Caddyfile`), name the VPS `smoresnet` in
+the panel, note the IPv4 in `docs/core/public-edge.md`, and from the HTML5
+console install Tailscale from its signed repository, as `bootstrap.sh` does —
+not `curl | sh`:
 
 ```sh
 . /etc/os-release
@@ -6834,7 +6835,7 @@ curl -fsSL "https://pkgs.tailscale.com/stable/ubuntu/$VERSION_CODENAME.tailscale
   -o /etc/apt/sources.list.d/tailscale.list
 apt-get update -qq && apt-get install -y tailscale
 tailscale up --auth-key 'tskey-auth-…' --advertise-tags=tag:vps \
-  --hostname=edge --accept-routes=false
+  --hostname=smoresnet --accept-routes=false
 tailscale status
 ```
 
@@ -6851,8 +6852,8 @@ From a laptop on the tailnet:
 ```sh
 cd /srv/git/github.com/smores56/homelab-platform/main
 git fetch origin && git checkout origin/main
-tar -C provision -cf - edge | ssh root@edge 'tar -C /root -xf -'
-ssh root@edge
+tar -C provision -cf - edge | ssh root@smoresnet 'tar -C /root -xf -'
+ssh root@smoresnet
 ```
 
 Then on the box:
@@ -6883,7 +6884,7 @@ Expected: the previous routes unchanged, plus 8446 → `http://127.0.0.1:2283`
 and 8447 → `http://127.0.0.1:8083`. Confirm the pair from the edge:
 
 ```sh
-ssh root@edge EXPECT_UPSTREAM=1 /root/edge/verify.sh
+ssh root@smoresnet EXPECT_UPSTREAM=1 /root/edge/verify.sh
 ```
 
 That run must be green before `§50.8`; the plain bootstrap run skips the
