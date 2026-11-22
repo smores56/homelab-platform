@@ -6350,7 +6350,8 @@ sudo tail -n 20 /var/lib/homelab/deploy/journal.jsonl | jq -c .
 #   apps-unhealthy (a started app was not active, or was restarted),
 #   apps-name-refused (a name the schema forbids reached a unit sink),
 #   apps-work-kept (a work tree the sweep would not remove)
-#   denylist-cleared, bootstrap-recorded, poll-denylisted, notify-sent, notify-failed
+#   denylist-added, denylist-cleared, bootstrap-recorded, poll-denylisted,
+#   notify-sent, notify-failed
 sudo journalctl -u smortress-deploy-listener.service -u smortress-deploy.service \
   -u smortress-boot-gate.service --no-pager -n 50
 ```
@@ -6398,6 +6399,20 @@ sudo /usr/libexec/smortress-deploy unblock digest sha256:…
 # smortress-deploy: cleared the denylisted digest sha256:… for smores
 sudo /usr/libexec/smortress-deploy unblock commit <40-hex>
 ```
+
+The way on is the same act in reverse. The drain retries a failed apps apply
+every 300 s, and an app that starts and then exits fails every attempt, so a
+revision that cannot stay up would be attempted forever:
+
+```sh
+sudo /usr/libexec/smortress-deploy block commit <40-hex>
+# smortress-deploy: denylisted the commit <40-hex> for smores
+```
+
+The next attempt is refused by the verifier, the drain pops the entry, and the
+poll stops offering the tip until `unblock` removes exactly that entry. It takes
+the same two tables and value shapes as `unblock`, refuses a non-root caller and
+a value that is already listed, and journals `denylist-added` with the operator.
 
 Set the value only after the cause is gone — a fixed definition is a *new* commit
 and needs no unblock; a denied digest is usually a failed health gate, so read

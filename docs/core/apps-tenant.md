@@ -197,7 +197,8 @@ commit-signature check: signed commits are not required in this repository
 (operator decision above), and tip + descendancy + the validator are what
 actually bound a commit. A rejection is final — the drain pops the entry and
 the same commit is refused at the listener and by the poll until an operator
-runs `smortress-deploy unblock commit <sha>`.
+runs `smortress-deploy unblock commit <sha>`. An operator can refuse a commit the
+same way, without waiting for a rejection: `smortress-deploy block commit <sha>`.
 
 **Then the apply, in this order**, with a revert path behind every step:
 
@@ -258,7 +259,9 @@ runs `smortress-deploy unblock commit <sha>`.
    with the unit and what was seen, and journals `apps-failed` with
    `reason: app-unhealthy`. The drain retries an exit 5 every 300 s, so a
    revision that cannot stay up keeps being attempted (the queue's `attempts` is
-   the signal) until it is fixed forward; there is no `block` verb yet. This
+   the signal) until it is fixed forward or until an operator runs
+   `smortress-deploy block commit <sha>`, which makes the next attempt the
+   verifier's refusal. This
    covers the unit-active third of the next boot's gate: an app that is `active`
    but never binds its loopback port can still make that gate roll the platform
    image back.

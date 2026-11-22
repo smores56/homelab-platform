@@ -475,6 +475,53 @@ out=$(PATH="$work/uid0:$PATH" SUDO_USER=alice bash "$cli" unblock digest "$other
 rc=$?
 check_eq "$rc" 1 "clearing an entry that is not listed is refused"
 
+# --- 10b. a crashing commit is denylisted by hand ---------------------------
+# The drain retries a failed apps apply every 300 s, and an app that starts and
+# then crash-loops fails every time: the verifier's refusal is what makes the
+# block final, so the operator needs a way to place it -- one value, one table,
+# journaled with who did it, exactly like the clear.
+crashed=2222222222222222222222222222222222222222
+reset_gate
+jq -nc --arg c "$crashed" '
+  {schema:1,
+   commits:{($c):{reason:"app-unhealthy",at:"2026-11-21T00:00:00Z"}},
+   digests:{}}' | atomic_write "$state_dir/denylist.json"
+
+out=$(SUDO_USER=smores PATH="$work/nonroot:$PATH" bash "$cli" block commit "$commit" 2>&1)
+rc=$?
+check_eq "$rc" 1 "a non-root block is refused"
+if denylist_has commit "$commit"; then bad "a refused block denylists nothing"; else
+  ok "a refused block denylists nothing"
+fi
+
+run_cli block
+check_eq "$rc" 2 "block without arguments is a usage error"
+run_cli block tag "$commit"
+check_eq "$rc" 2 "block rejects an unknown table"
+run_cli block commit "$digest_index"
+check_eq "$rc" 2 "block rejects a digest where a commit belongs"
+run_cli block digest "$commit"
+check_eq "$rc" 2 "block rejects a commit where a digest belongs"
+
+out=$(PATH="$work/uid0:$PATH" SUDO_USER=alice bash "$cli" block commit "$commit" 2>&1)
+rc=$?
+check_eq "$rc" 0 "root denylists a commit"
+if denylist_has commit "$commit"; then ok "the blocked commit is listed"; else
+  bad "the blocked commit is listed"
+fi
+check_eq "$(journal_field denylist-added '.operator')" alice \
+  "the block is journaled with the operator"
+check_eq "$(journal_field denylist-added '.kind')" commit "the block is journaled with the table"
+check_eq "$(journal_field denylist-added '.value')" "$commit" \
+  "the block is journaled with the value"
+if denylist_has commit "$crashed"; then ok "blocking one commit keeps the others"; else
+  bad "blocking one commit keeps the others"
+fi
+
+out=$(PATH="$work/uid0:$PATH" SUDO_USER=alice bash "$cli" block commit "$commit" 2>&1)
+rc=$?
+check_eq "$rc" 1 "blocking a commit that is already listed is refused"
+
 # --- 11. a restored host is bootstrapped by hand ----------------------------
 # Without a recorded ancestor there is no descendancy to check and the verifier
 # refuses every deploy with `bootstrap-required`. The operator names the running

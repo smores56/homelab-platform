@@ -3,6 +3,7 @@
 #
 #   smortress-deploy status
 #   smortress-deploy release --force
+#   smortress-deploy block <commit|digest> <value>
 #   smortress-deploy unblock <commit|digest> <value>
 #   smortress-deploy bootstrap <repo> <commit>
 #
@@ -20,6 +21,12 @@
 # `unblock` is the way off the denylist: a denied tip is refused at the listener
 # and stops the hourly poll, so nothing deploys that commit again until the
 # operator removes exactly the entry a gate or a rollback added.
+#
+# `block` is the way on: the drain retries a failed apps apply every 300 s, and a
+# revision whose app starts and then exits fails on every attempt. Denying the
+# commit turns the next attempt into the verifier's refusal, which pops the entry
+# and keeps the poll from offering the tip again. It is one value in one table,
+# journaled with who did it, and `unblock` is how it comes back.
 #
 # `bootstrap` records the commit a restored or rebuilt host is running, once:
 # a deployment is only ever verified against a recorded ancestor, and nothing on
@@ -61,11 +68,13 @@ usage() {
   cat >&2 <<'EOF'
 usage: smortress-deploy status
        smortress-deploy release --force
+       smortress-deploy block <commit|digest> <value>
        smortress-deploy unblock <commit|digest> <value>
        smortress-deploy bootstrap <repo> <commit>
 
   status           deployed commits, the held and pending records, the denylist
   release --force  waive the snapshot gate for the held platform digest (root)
+  block            add one denylist entry, refusing that commit or digest (root)
   unblock          drop one denylist entry (root)
   bootstrap        record the running commit of a restored host, once (root)
 EOF
@@ -156,6 +165,50 @@ valid_denylist_value() { # <commit|digest> <value>
     digest) [[ $2 =~ ^sha256:[0-9a-f]{64}$ ]] ;;
     *) return 1 ;;
   esac
+}
+
+cmd_block() {
+  local kind=${1-} value=${2-} operator uid
+  (($# == 2)) || {
+    usage
+    exit 2
+  }
+  if ! valid_denylist_value "$kind" "$value"; then
+    warn "block takes {commit <40-hex sha>|digest sha256:<64-hex>}, not $kind $value"
+    exit 2
+  fi
+  uid=$(id -u)
+  if [[ $uid != 0 ]]; then
+    warn "block must be run as root (uid $uid)"
+    exit 1
+  fi
+  operator=${SUDO_USER:-$uid}
+
+  if ! deploy_lock_acquire; then
+    warn "another drain holds $deploy_lock_file; nothing was denied"
+    exit 1
+  fi
+  trap deploy_lock_release EXIT
+
+  if denylist_has "$kind" "$value"; then
+    # Not an error in the state: saying so is what stops the operator believing
+    # the entry was just placed by this run.
+    warn "$value is already on the denylist"
+    exit 1
+  fi
+  journal_append denylist-added "$(jq -nc --arg kind "$kind" --arg value "$value" \
+    --arg by "$operator" '{kind:$kind,value:$value,operator:$by}')" || {
+    warn "cannot journal the denial; nothing was written"
+    exit 4
+  }
+  # The reason is the table's own wording: a reader of denylist.json must be able
+  # to tell a gate's refusal from an operator's, and the journal has who.
+  denylist_add "$kind" "$value" operator || {
+    warn "cannot rewrite $deploy_denylist_file"
+    exit 4
+  }
+  say "denylisted the $kind $value for $operator"
+  return 0
 }
 
 cmd_unblock() {
@@ -262,6 +315,10 @@ case $cmd in
   status)
     shift
     cmd_status
+    ;;
+  block)
+    shift
+    cmd_block "$@"
     ;;
   unblock)
     shift
