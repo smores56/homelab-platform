@@ -62,7 +62,7 @@ edge|tests/edge/check.sh|tests/edge/*,scripts/verify-public-edge.sh
 core|tests/core/check.sh && tests/core/storage-layout.sh && tests/core/restic-drill.sh && tests/core/tailscale-serve.sh && tests/core/apps-egress.sh && tests/core/apps-user.sh && tests/core/agent-drill.sh|tests/core/*,scripts/core/*,scripts/access-*
 apps|tests/apps/check.sh && tests/apps/render.sh && tests/apps/quota.sh && tests/apps/ingress.sh|tests/apps/*,scripts/apps-*
 deploy|tests/deploy/state.sh && tests/deploy/receiver.sh && tests/deploy/verify.sh && tests/deploy/platform.sh && tests/deploy/boot.sh && tests/deploy/apps.sh && tests/deploy/notify.sh && tests/deploy/poll.sh && tests/deploy/heartbeat.sh|tests/deploy/*,scripts/deploy-*
-data-plane|tests/data-plane/check.sh|tests/data-plane/*,apps/data_plane/*,recovery/*,deploy/data-plane/config/recovery-groups.json,deploy/data-plane/config/sources/*
+data-plane|scripts/render-source-schemas.py --check && tests/data-plane/check.sh|tests/data-plane/*,apps/data_plane/*,libs/data_plane/*,scripts/render-source-schemas.py,recovery/*,deploy/data-plane/config/recovery-groups.json,deploy/data-plane/config/sources/*
 tuta-calendar|venv="${XDG_CACHE_HOME:-$HOME/.cache}/check-all/tuta-calendar"; if [ ! -x "$venv/bin/python" ]; then python3 -m venv "$venv" && "$venv/bin/pip" install -q --disable-pip-version-check -r images/tuta-calendar/requirements.lock; fi; PATH="$venv/bin:$PATH" tests/tuta-calendar/check.sh|tests/tuta-calendar/*
 agent-egress|tests/agent-egress/check.sh|tests/agent-egress/*
 brave|tests/brave/check.sh|tests/brave/*
