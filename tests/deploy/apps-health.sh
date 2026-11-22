@@ -125,6 +125,12 @@ cat >"$bin/tailscale" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$STUB_LOG/tailscale-calls"
 [[ ${STUB_TAILSCALE_EXIT:-0} == 0 ]] || exit "$STUB_TAILSCALE_EXIT"
+# An apply that begins while a probe is running writes its record after the
+# prober's first look: a case points STUB_TAILSCALE_APPLY at a record to move it
+# in here, which is the earliest moment inside the probe that is deterministic.
+if [[ -n ${STUB_TAILSCALE_APPLY:-} ]]; then
+  mv -- "$STUB_TAILSCALE_APPLY" "$DEPLOY_STATE_DIR/apply.json"
+fi
 if [[ $* == "serve status --json" ]]; then
   cat "$STUB_SERVE_JSON"
 fi
@@ -199,7 +205,7 @@ reset_case() {
   : >"$log/probe-order"
   : >"$log/tailscale-calls"
   : >"$log/curl-urls"
-  unset STUB_TAILSCALE_EXIT
+  unset STUB_TAILSCALE_EXIT STUB_TAILSCALE_APPLY
   printf '%s\n' "$ping_url" >"$DEPLOY_PING_SECRET"
   printf 'demo.service\n' >"$STUB_SYSTEMCTL_USER_ACTIVE"
   printf 'demo.service\n' >"$STUB_SYSTEMCTL_ACTIVE"
@@ -221,7 +227,6 @@ check_rc() { # want label
   if [[ $rc == "$1" ]]; then ok "$2"; else bad "$2" "want exit $1, got $rc: $out"; fi
 }
 
-# The prober judges; it never acts on the platform or on the tenant.
 # The prober judges and journals; it never acts on the platform or on the tenant,
 # and it never touches the deploy check: one Healthchecks check answered by the
 # host heartbeat cannot carry a tenant verdict, and a `deploy_notify fail` from
@@ -334,6 +339,28 @@ else
   ok "an apply in flight probes no unit"
 fi
 no_side_effects "an apply in flight"
+
+# An apply that begins after the run's first look is the same window: the record
+# the prober read for was not there yet, and the revision it is now halfway
+# through is the one this tick would call broken. Reporting it would put a false
+# line on the tenant's only signal for every deploy that overlaps a tick.
+reset_case
+: >"$STUB_SYSTEMCTL_USER_ACTIVE"
+printf '{"schema":1,"phase":"installing","previousUnits":[],"intendedUnits":[]}\n' \
+  >"$work/apply-mid-probe.json"
+export STUB_TAILSCALE_APPLY=$work/apply-mid-probe.json
+run_prober
+unset STUB_TAILSCALE_APPLY
+check_rc 0 "an apply that starts mid-probe passes"
+check_grep "$log/systemctl-calls" 'is-active demo.service' \
+  "the mid-probe apply is seen after the probe started"
+if [[ -n $(journal_field apps-health-failed '.reason') ]]; then
+  bad "an apply that starts mid-probe journals no failure" \
+    "$(journal_field apps-health-failed '.reason')"
+else
+  ok "an apply that starts mid-probe journals no failure"
+fi
+no_side_effects "an apply that starts mid-probe"
 
 # --- 7. no plan is a host with no tenant -----------------------------------
 # The prober runs from the first boot, before the first apps apply installs a

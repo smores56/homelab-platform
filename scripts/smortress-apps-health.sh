@@ -190,5 +190,12 @@ if probe_plan; then
   fi
   exit 0
 fi
+# The record above was read before the probe began; an apply that started while
+# it ran is the same window, and a tick that reported a revision the drain is
+# halfway through would put a false line on the tenant's only signal.
+if [[ -e $deploy_state_dir/apply.json ]]; then
+  say "an apps apply started during the probe; nothing was reported"
+  exit 0
+fi
 report_failure
 exit 1

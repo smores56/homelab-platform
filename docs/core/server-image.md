@@ -443,7 +443,8 @@ An apply in flight passes silently rather than reporting: `deploy-apps` installs
 the new plan before it writes the units and restarts Serve, and both the drain
 and the gate's revert hold `apply.json` for the whole of that window, so the
 record is what keeps a tick from reading a deploy that is still happening as a
-revision that broke.
+revision that broke. The record is read again before a failure is reported, so an
+apply that starts mid-probe never becomes a false line on the journal.
 
 It reports and nothing else. It writes no deploy record, reboots nothing, stages
 nothing, and rolls back or reverts nothing: a crash-looping app is an apps
