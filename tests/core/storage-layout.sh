@@ -145,8 +145,8 @@ eq "$(readiness_key 'photos' || true)" '' 'a slashless instance is rejected'
 eq "$(readiness_key 'data-files' || true)" '' 'an unknown kind is rejected'
 
 # The old layout is gone from everything the image ships or the tests read.
-# `ansible/`, `provision/` and the retired `apps/data_plane` tests keep their
-# historical wording until those paths are deleted.
+# `provision/` and the retired `apps/data_plane` tests keep their historical
+# wording until those paths are deleted.
 leftover=$(grep -rl --exclude=storage-migration.md -- '/var/tank\|tank/' \
   scripts units image docs 2>/dev/null || true)
 leftover+=$(grep -rl --exclude=storage-layout.sh -- '/var/tank\|tank/' \

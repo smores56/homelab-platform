@@ -20,7 +20,7 @@ with one page over every per-group repository the platform renders.
 
 ## Group model
 
-The platform's backup inventory (`ansible/group_vars/all.yml`, `ansible/group_vars/backup.yml`,
+The platform's backup inventory (`recovery/inventory.yml`, `recovery/backup.yml`,
 `scripts/render-recovery-groups.py`) defines recovery groups such as `photos`, `notes`, `books`,
 `memory-external`, and `data-plane-state`. Each group has its own restic repository (an `s3:` URL on
 the shared R2 bucket, optionally with a per-group prefix) and its own data root inside a snapshot.
@@ -106,7 +106,7 @@ deno task blob --check-only \
 ```
 
 The operator prerequisites — the real R2 account id in
-`ansible/group_vars/backup.yml` and the rendered manifest, a passed host
+`recovery/backup.yml` and the rendered manifest, a passed host
 `preflight`, and a real restore drill before this page can retire the legacy
 one — are `docs/manual-steps.md` step 35.
 

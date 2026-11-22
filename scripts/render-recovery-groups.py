@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Render the backup plan from the Ansible group vars.
+"""Render the backup plan from the recovery inventory.
 
 One model: every recovery group owns one restic repository per tier
 (``<repository_root>/<group id>``) and one subtree of the single recursive ZFS
-snapshot. ``ansible/group_vars/all.yml`` remains the only source of dataset
-names and mount points; ``ansible/group_vars/backup.yml`` adds display paths,
-cadences, and tiers.
+snapshot. ``recovery/inventory.yml`` remains the only source of dataset names
+and mount points; ``recovery/backup.yml`` adds display paths, cadences, and
+tiers.
 
 The script writes the public page manifest
-``deploy/data-plane/config/recovery-groups.json``, can print the host plan that
-roles/backup renders to ``/etc/homelab/backup.json``, and fails on drift:
+``deploy/data-plane/config/recovery-groups.json``, can print the host plan the
+host installs as ``/etc/homelab/backup.json``, and fails on drift:
 
     scripts/render-recovery-groups.py            # write the public manifest
     scripts/render-recovery-groups.py --check    # fail when it drifted
@@ -30,8 +30,8 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent
-ALL_VARS = ROOT / "ansible" / "group_vars" / "all.yml"
-BACKUP_VARS = ROOT / "ansible" / "group_vars" / "backup.yml"
+ALL_VARS = ROOT / "recovery" / "inventory.yml"
+BACKUP_VARS = ROOT / "recovery" / "backup.yml"
 TARGET = ROOT / "deploy" / "data-plane" / "config" / "recovery-groups.json"
 
 TIER_NAMES = ["nvme", "hdd", "r2"]
@@ -287,7 +287,7 @@ def _parse_sequence(
 
 
 def load_yaml(path: str | Path) -> Any:
-    """Load the strict YAML subset used by the Ansible group vars."""
+    """Load the strict YAML subset used by the recovery inventory."""
 
     lines = _read_lines(Path(path).read_text(encoding="utf-8"))
     if not lines:
@@ -299,7 +299,7 @@ def load_yaml(path: str | Path) -> Any:
 
 
 def resolve_templates(value: Any, variables: dict[str, Any]) -> Any:
-    """Resolve simple ``{{ var }}`` references, as Ansible would at apply time."""
+    """Resolve simple ``{{ var }}`` references, as the inventory expects them."""
 
     if isinstance(value, dict):
         return {key: resolve_templates(item, variables) for key, item in value.items()}
@@ -387,7 +387,7 @@ def validate(all_vars: dict[str, Any], backup_vars: dict[str, Any]) -> list[str]
 
     retired = sorted(RETIRED_BACKUP_VARS & set(backup_vars))
     if retired:
-        raise SystemExit("backup.yml still declares retired vars: " + ", ".join(retired))
+        raise SystemExit("recovery/backup.yml still declares retired vars: " + ", ".join(retired))
     order = expected_group_ids(all_vars, backup_vars)
     if len(order) != len(set(order)):
         raise SystemExit("backup group ids are not unique")
@@ -460,7 +460,7 @@ def validate(all_vars: dict[str, Any], backup_vars: dict[str, Any]) -> list[str]
         if not rows:
             raise SystemExit(
                 f"recovery_inventory group {group_id!r} has no zfs_datasets rows; "
-                "declare the dataset in all.yml"
+                "declare the dataset in recovery/inventory.yml"
             )
         for row in rows:
             mountpoint = row["mountpoint"]
@@ -519,7 +519,7 @@ def build_recovery_groups(
 def build_host_plan(
     all_vars: dict[str, Any], backup_vars: dict[str, Any]
 ) -> dict[str, Any]:
-    """The plan roles/backup renders to /etc/homelab/backup.json."""
+    """The plan the host installs as /etc/homelab/backup.json."""
 
     order = validate(all_vars, backup_vars)
     specs = backup_vars["backup_group_specs"]

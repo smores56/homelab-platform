@@ -6,11 +6,12 @@
 #
 # One source for dataset layout: recovery-group membership and mount points come
 # from `recovery_inventory`, `zfs_datasets`, and `backup_host_paths` in
-# group_vars/all.yml. This file only adds policy (display path, cadence, tiers).
+# `recovery/inventory.yml`. This file only adds policy (display path, cadence,
+# tiers).
 #
 # The host plan `/etc/homelab/backup.json` and the public page manifest
 # `deploy/data-plane/config/recovery-groups.json` are both rendered from these
-# variables by roles/backup and scripts/render-recovery-groups.py;
+# variables by scripts/render-recovery-groups.py;
 # tests/data-plane/test_inventory_contract.py fails when either drifts.
 
 backup_schema_version: 1
@@ -97,8 +98,8 @@ backup_group_specs:
     tiers: [nvme, hdd, r2]
 
 # Ordered group ids: host inventory groups first, then declared host paths.
-# Derived so a dataset that is classified in all.yml can never be silently
-# skipped by the backup plan.
+# Derived so a dataset that is classified in recovery/inventory.yml can never be
+# silently skipped by the backup plan.
 backup_group_ids: >-
   {{ (recovery_inventory.keys() | list | map('regex_replace', '_', '-') | list)
      + (backup_host_paths | map(attribute='id') | list) }}

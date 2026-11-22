@@ -92,6 +92,4 @@ repository (`restic snapshots` and
 - The platform's SQLite journal is the single source for intent state; the
   broker reaches it through `broker_journal.BrokerJournal`.
 - The services that wrap these libraries still need OCI images and manifests;
-  see `deploy/data-plane/` and `ansible/` in this repository.
-- The `libs/` tree is not yet covered by `scripts/kustomize-build-all.sh`; the
-  new tree is validated by `deploy/data-plane/tests/check.sh`.
+  see `images/data-plane/` and `deploy/data-plane/` in this repository.

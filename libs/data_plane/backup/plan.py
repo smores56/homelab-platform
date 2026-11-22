@@ -1,9 +1,10 @@
 """The host backup plan: one restic repository per recovery group and tier.
 
-``/etc/homelab/backup.json`` is written by the Ansible backup role and read
-here. The plan is the only input the runner needs: it names the dataset the
-run snapshots, the staged mount that restic reads, the password file, the
-repository roots per tier, and the recovery groups with their cadence.
+``/etc/homelab/backup.json`` is rendered by
+``scripts/render-recovery-groups.py --host-plan`` and read here. The plan is the
+only input the runner needs: it names the dataset the run snapshots, the staged
+mount that restic reads, the password file, the repository roots per tier, and
+the recovery groups with their cadence.
 
 A group's first listed tier is its primary (the one restic backs up into);
 every other tier receives a ``restic copy`` from that primary.

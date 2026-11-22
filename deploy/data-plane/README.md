@@ -126,7 +126,7 @@ kustomize build deploy/data-plane/base > /tmp/data-plane.yaml
 #    repeat step 1:
 #      deploy/data-plane/base/kustomization.yaml   (images: newName/newTag)
 #      deploy/data-plane/images.yaml               (the repeated contract)
-#      ansible/group_vars/all.yml                  (data_plane_images, host units)
+#      recovery/inventory.yml                     (data_plane_images, host units)
 #    The check fails on a tag, a floating reference, the all-zero placeholder,
 #    or drift between the two deploy files.
 

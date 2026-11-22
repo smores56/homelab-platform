@@ -1,5 +1,5 @@
 // public/manifest.json is rendered by the platform from the recovery inventory
-// (scripts/render-recovery-groups.py + the ansible backup vars). It is public:
+// (scripts/render-recovery-groups.py + the recovery backup policy). It is public:
 // group ids, labels, repository URLs, and the data root to strip. It carries no
 // credential; the read-only R2 key and the restic password live in the encrypted
 // data-keys blob.

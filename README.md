@@ -19,6 +19,7 @@ changes by pull request from a fork, so no PR workflow can read a secret.
 | `ignition/` | First-boot Ignition for the bootc deployment |
 | `scripts/deploy-platform.sh` | The platform deploy path: image change plus a maintenance-window reboot |
 | `scripts/deploy-apps.sh` | The `homelab-apps` tenant deploy path: schemas in, rootless Quadlets out (`docs/core/apps-tenant.md`) |
+| `recovery/` | The recovery inventory and the backup policy the manifest and the host plan are rendered from (`scripts/render-recovery-groups.py`) |
 | `deploy/data-plane/` | Trees an operator applies rather than the image: relay source schemas and the rendered recovery-group manifest |
 | `libs/data_plane/` | The data-plane library: contracts, event log, write broker, backup runner, migration gates |
 | `apps/broker/` | Broker source and unit tests (Python stdlib, no dependencies) (`docs/broker.md`) |

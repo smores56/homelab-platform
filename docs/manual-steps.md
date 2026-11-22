@@ -2020,10 +2020,10 @@ secret file, no `broker-credentials` key and no restart are involved.
 ## 35. Prove the #660 data plane: repositories, drill, and the gate
 
 The backup path is host systemd units plus restic; the recovery page is static
-Cloudflare Pages; the cluster tree is applied by hand. Every test in this
-repository runs a fake restic runner, so this section is the only proof that
-restic actually copies and restores on the host. Steps 1-8 are the proof and
-none of them is destructive; step 9 is the first gated step.
+Cloudflare Pages. Every test in this repository runs a fake restic runner, so
+this section is the only proof that restic actually copies and restores on the
+host. Steps 1-8 are the proof and none of them is destructive; step 9 is the
+first gated step.
 
 Nothing auto-initializes a repository, and `preflight` never writes, copies or
 prunes. A missing repository is reported by name, not created.
@@ -2033,7 +2033,7 @@ prunes. A missing repository is reported by name, not created.
 
    ```sh
    # replace ACCOUNT with the Cloudflare account id
-   $EDITOR ansible/group_vars/backup.yml        # backup_r2_repository_root
+   $EDITOR recovery/backup.yml                  # backup_r2_repository_root
    scripts/render-recovery-groups.py
    scripts/render-recovery-groups.py --check    # must pass; CI asserts the file
    scripts/render-recovery-groups.py --host-plan > /tmp/backup.json
@@ -2096,34 +2096,24 @@ prunes. A missing repository is reported by name, not created.
    admin identity) for the page blob.
 
    The data-plane units read their own files from subdirectories of the same
-   root. Stage the decrypted bundle outside the repository and install it with
-   the secrets play; the play targets the storage and data-plane hosts and is a
-   no-op while `secrets_source_dir` is empty:
+   root, so the unpacking above is the install step. The Ansible secrets play
+   that used to copy them into place is retired with `ansible/`.
 
-   ```sh
-   ansible-playbook -i inventory/hosts.yml playbooks/site.yml --tags secrets \
-     -e secrets_source_dir=/run/operator-secrets
-   ```
-
-   The policy is `host_secret_files` in `group_vars/all.yml`: one entry per
+   The policy is `host_secret_files` in `recovery/inventory.yml`: one entry per
    file, relative to the secret root, with `unit` and `mount` for a file a unit
-   mounts. An entry with a unit installs on `data_plane_hosts` at `0640` with
-   the container gid; an entry without one installs on `storage_hosts` at `0600`
-   root. The role creates each parent directory at `0700` and copies with the
-   final owner and mode, so there is no second writer of that file and a drift
-   is corrected on the next run. A rotation replaces the file and
-   `try-restart`s only a running unit whose content changed; a stopped or
-   recovery-fenced unit stays stopped, so rotate, then run the play again. The
-   host runs no relay; relays and collectors live in the cluster tree.
+   mounts. The unpacker writes every file `0600` root inside `0700`
+   directories, so there is no second writer of that file and a drift is
+   corrected on the next unpack. Rotate the bundle, unpack again, and restart
+   only the unit whose file changed; a stopped or recovery-fenced unit stays
+   stopped.
 
    A host unit also cannot pull an image. Every `podman run` uses `--pull=never`
-   and its own `--root`, so put a digest-pinned OCI archive on the host and set
-   `data_plane_image_archive` in `group_vars/all.yml`; the role loads it into
-   each per-service store and fails closed while the image is absent. The broker
-   reads `deploy/data-plane/config/source-catalog.json`, which the role installs
-   at `DATA_PLANE_CATALOG`. Only the dedicated `events` and `intents` datasets
-   are handed to the container uid; `/srv/books` stays host-owned, so a
-   general-source write needs an owner match before cutover.
+   and its own `--root`, so put a digest-pinned OCI archive on the host and load
+   it into each per-service store; a unit fails closed while the image is
+   absent. The broker reads `deploy/data-plane/config/source-catalog.json`. Only
+   the dedicated `events` and `intents` datasets are handed to the container
+   uid; `/srv/books` stays host-owned, so a general-source write needs an owner
+   match before cutover.
 
 4. Create every repository, one group at a time. `backup-init` is idempotent and
    creates only the tiers the group lists:
@@ -2169,30 +2159,23 @@ prunes. A missing repository is reported by name, not created.
    before cutover. Every failure line names `<group>/<tier>`, so one run shows
    every gap. `restic check` and `--read-data` do not modify a repository.
 
-7. Restore a group to a dedicated scratch mount. `recover.yml` fences every
-   writer and backup timer first, restores nvme→hdd→r2, and prints the real
-   destination and entry count:
+7. Restore a unit to a dedicated scratch mount. The Ansible recovery play that
+   fenced every writer and restored nvme→hdd→r2 is retired with `ansible/`; the
+   current procedure is `docs/core/restic-plane.md`, "Restore by hand":
 
    ```sh
-   sudo install -d -m 0755 /mnt/scratch      # its own mount, not a subdirectory
-   ansible-playbook -i inventory/hosts.yml playbooks/recover.yml \
-     --tags destructive \
-     -e homelab_recovery_confirm=true \
-     -e homelab_recovery_apply=true \
-     -e homelab_recovery_scratch_target=/mnt/scratch \
-     -e homelab_recovery_groups=notes
+   export RESTIC_PASSWORD_FILE=/run/smortress/secrets/restic-password.yaml
+   sudo /usr/libexec/smortress-restic-restore-drill r2 books --list
+   sudo /usr/libexec/smortress-restic-restore-drill r2 books \
+     --target /var/lib/restic/hdd/drill/books
    ```
 
-   The drill passes when the printed tree matches the group's staged path and a
-   restored file opens. Restoring into `/` needs `--allow-live`, the
-   `writers-fenced` marker and a non-empty refusal, and is never the drill.
-   Resume writers only after that check:
-
-   ```sh
-   ansible-playbook -i inventory/hosts.yml playbooks/recover.yml \
-     --tags destructive -e homelab_recovery_confirm=true \
-     -e homelab_recovery_apply=true -e homelab_recovery_resume_writers=true
-   ```
+   The drill passes when the printed tree matches the unit's paths and a
+   restored file opens. It only accepts a `verified` snapshot and refuses a
+   non-empty target, so it is never the live restore: restoring over a dataset
+   means stopping that unit's writers first, restoring, and starting them only
+   after the tree has been opened. `scripts/retirement-gate.sh` runs the same
+   helper over every unit and destination and prints the evidence table.
 
 8. Drill the browser page against the rendered manifest, then deploy it. The
    blob must be built against the manifest the site ships:
@@ -2212,25 +2195,15 @@ prunes. A missing repository is reported by name, not created.
    group, restore a sample tree and open the files. The legacy page and the
    legacy repositories stay live until this passes.
 
-9. Apply the cluster tree only after the image exists. Publish the image, pin
-   the digest in `deploy/data-plane/base/kustomization.yaml`,
-   `deploy/data-plane/images.yaml` and `data_plane_images` in
-   `ansible/group_vars/all.yml`, then create the operator Secrets the base
-   mounts. The key names are the contract; the values are generated once and
-   never committed:
+9. The cluster apply this step used to end with is retired with `ansible/`: the
+   host runs Quadlets, not a cluster, and the values below reach the host units
+   as files through the bundle in item 3. The key names are the contract; the
+   values are generated once and never committed:
 
-   ```sh
-   kubectl -n data-plane create secret generic event-service-secrets \
-     --from-file=append-token --from-file=read-token --from-file=consumers.json
-   kubectl -n data-plane create secret generic write-broker-secrets \
-     --from-file=identity --from-file=operator-key
-   kubectl -n data-plane create secret generic confirmation-surface-secrets \
-     --from-file=token --from-file=key
-   for source in brave finance tuta immich; do
-     kubectl -n data-plane create secret generic "relay-$source" --from-file=token
-   done
-   nix-shell -p kustomize kubeconform --run "deploy/data-plane/tests/check.sh"
-   ```
+   - `event-service`: `append-token`, `read-token`, `consumers.json`
+   - `write-broker`: `identity`, `operator-key`
+   - `confirmation-surface`: `token`, `key`
+   - one `token` per relay source (brave, finance, tuta, immich)
 
    The append and read tokens must differ; the service refuses equal tokens,
    and a relay never receives either. `consumers.json` is a JSON object of
@@ -2239,23 +2212,17 @@ prunes. A missing repository is reported by name, not created.
    The host units use the same values under
    `/etc/homelab/secrets/<service>/` (item 3) and mount them read-only at the
    paths their environment names; `homelab-collector-relay` is retired, because
-   the host has no collector and the cluster owns one relay per source.
+   the host runs no collector.
 
-10. Before any destructive step, provision rescue access and re-prove it:
-
-    ```sh
-    cd ansible
-    ansible-playbook -i inventory/hosts.yml playbooks/rescue.yml
-    ```
-
-    The play refuses to pass unless two independent SSH paths authenticate from
-    the controller. Re-run it immediately before a destructive command; `sshd`
-    is independent of k3s, ZFS and every data-plane unit.
+10. Before any destructive step, re-prove access. The Ansible rescue play is
+    retired with `ansible/`: access is the console (physical) plus the host's
+    own `sshd`, which is independent of ZFS and every data-plane unit. Open both
+    immediately before a destructive command.
 
     **Waived for T6 (#709):** smortress is physically reachable on demand and
-    physical access to a powered-on host is an accepted risk, so the two paths
-    stay unconfigured. See `docs/migration-gates.md`, "Access-path decision";
-    the retirement steps stop data-plane writers only, never `sshd`.
+    physical access to a powered-on host is an accepted risk. See
+    `docs/migration-gates.md`, "Access-path decision"; the retirement steps stop
+    data-plane writers only, never `sshd`.
 
 11. Order the gates. Inventory → `protect_old` (needs `gate_ready` from step 6)
     → pilot → scratch stack → shadow backfill → `cutover` (recorded human

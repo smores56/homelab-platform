@@ -27,6 +27,8 @@ expect "a broker change selects the broker tests" "broker" \
   "$(selected apps/broker/server.py)"
 expect "a data-plane change selects its check and lint" $'data-plane\nlint' \
   "$(selected tests/data-plane/check.sh)"
+expect "a recovery-inventory change selects the data-plane tests and lint" \
+  $'data-plane\nlint' "$(selected recovery/inventory.yml)"
 expect "a workflow change selects lint" "lint" \
   "$(selected .github/workflows/ci.yml)"
 expect "a docs change selects nothing" "" \

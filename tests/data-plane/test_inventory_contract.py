@@ -1,11 +1,11 @@
-"""The deploy manifest and the Ansible backup vars cannot drift.
+"""The rendered manifest and the recovery inventory cannot drift.
 
 One backup model: every recovery group owns one restic repository per tier and
 one subtree of the single recursive ZFS snapshot. Host dataset names come from
-``recovery_inventory``/``zfs_datasets``/``backup_host_paths`` in ``all.yml`` and
-policy from ``backup.yml``. This test fails when the checked-in public manifest
-is stale, when the host plan has the wrong shape, or when a retired per-domain
-variable survives.
+``recovery_inventory``/``zfs_datasets``/``backup_host_paths`` in
+``recovery/inventory.yml`` and policy from ``recovery/backup.yml``. This test
+fails when the checked-in public manifest is stale, when the host plan has the
+wrong shape, or when a retired per-domain variable survives.
 """
 
 from __future__ import annotations

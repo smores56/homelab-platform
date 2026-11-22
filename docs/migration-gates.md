@@ -2,8 +2,10 @@
 
 Source of truth: SDLC #660, "Migration and retirement gates" and "Ordered
 migration". The gate implementation lives in
-`libs/data_plane/migration/`; the rescue-access implementation lives in
-`ansible/roles/rescue/` and `ansible/playbooks/rescue.yml`.
+`libs/data_plane/migration/`. The rescue access it was written against — the
+`rescue` role and `rescue.yml` — is retired with `ansible/`: access is the
+console plus the host's own `sshd`, and a restore is `docs/core/restic-plane.md`,
+"Restore by hand".
 
 Two operator constraints outrank every other migration concern:
 
@@ -14,14 +16,14 @@ Two operator constraints outrank every other migration concern:
    exist.
 
 **Access-path decision (2026-11-22).** Constraint 1 is met by substitution for
-#709, not by the rescue play: smortress is physically reachable on demand, and
-the owner accepts the risk of physical access to a powered-on host. The
-`rescue` role's two verified SSH paths therefore stay unconfigured and the
-play's proof is waived. The fallback for the failure class the play never
-covered — a boot that does not reach userspace — is the keyboard. The play's
-actual subject, a unit or firewall change removing the running OS's SSH, is out
-of scope for the retirement steps: they stop data-plane writers only, and SSH
-is not among them.
+#709: smortress is physically reachable on demand, and the owner accepts the
+risk of physical access to a powered-on host, so the two verified SSH paths the
+retired `rescue` play required were never configured and its proof is waived.
+The fallback for the failure class nothing else covers — a boot that does not
+reach userspace — is the keyboard, with `bootc rollback --apply` for the
+deployment and the Restic plane for the data. The play's subject, a unit or
+firewall change removing the running OS's SSH, is out of scope for the
+retirement steps: they stop data-plane writers only, and SSH is not among them.
 
 `preflight` is read-only but online: it opens each restic repository to prove
 the backup chain and never writes, copies, prunes, or initializes anything.
@@ -80,11 +82,10 @@ records an unreadable path or missing tool under `gaps` instead of failing. Run
 it once as the login user and once with `sudo` for the ZFS and private-tree
 sections; the two reports are meant to be compared.
 
-The Ansible gate runs the same command on the data-plane host, where the backup
-role installs the library at `/opt/data-plane/lib` and the plan at
-`backup_config_file`; it proves freshness, path coverage, and repository
-structure by default, and takes `-e homelab_migration_read_data=true` to add the
-primary read-data pass before a cutover.
+The same command runs on the data-plane host, where the library lives at
+`/opt/data-plane/lib` and the plan at `/etc/homelab/backup.json`; it proves
+freshness, path coverage, and repository structure by default, and `--read-data`
+adds the primary read-data pass before a cutover.
 
 The plan names every recovery group, its staged path, its cadence, and its
 ordered tiers; the first tier is the primary. For every group the gate proves:
@@ -192,27 +193,20 @@ old ones.
 
 ## SSH invariant
 
-- `sshd` is enabled independently of k3s, ZFS, and every `homelab-*` data-plane
-  unit. The rescue role starts and enables it before any optional path.
-- The optional `migration-breakglass` account is SSH-public-key only, has a
-  locked password, and receives no sudo unless
-  `rescue_breakglass_sudo: true`. Its authorized-keys file is operator-supplied;
-  a missing file fails the run.
-- The optional `cloudflared-rescue.service` uses its own token file, distinct
-  from the data-plane tunnel and outside the data-plane secret root. A missing
-  or non-root-only token file fails the run. The token is passed to the service
-  as a systemd credential, never in argv or the journal.
-- The optional Tailscale or WireGuard path is `rescue_vpn: none` by default.
-  Enabling it without its root-only auth-key/config file fails the run. The
-  Tailscale unit uses `--auth-key=file:<path>` so the key never enters argv.
+- `sshd` is enabled independently of ZFS and every `smortress-*` data-plane
+  unit, so a failed unit cannot take the access path with it.
+- The Ansible-era breakglass account, rescue tunnel and `rescue_vpn` path are
+  retired with `ansible/`; nothing in this repository opens a second SSH or VPN
+  entry.
 - `PasswordAuthentication yes` is never written; password authentication stays
   off from the base hardening drop-in.
 
-## Ansible enforcement
+## Destructive-step enforcement
 
-The gates above are not advisory: the operator runs the plan-driven backup
-gate before the corresponding host actions, and Ansible gates the destructive
-ones on its own flags:
+The gates above are not advisory: the operator runs the plan-driven backup gate
+before the corresponding host actions. The flags below are the contract a
+destructive step has to satisfy — they were enforced by the Ansible tree, which
+is retired, so today they are what the operator checks and what the gate reads:
 
 - A destructive run needs **all** of `--tags destructive` and a per-host
   `homelab_destructive_device_ids` allow-list of `/dev/disk/by-id/` paths. The
@@ -228,25 +222,23 @@ ones on its own flags:
   mapper's by-id device is allow-listed and the pool is absent. Both
   `zfs-import-cache.service` and `zfs-import-scan.service` require
   `systemd-cryptsetup@…`.
-- A plain `site.yml` never starts `homelab-write-broker.service` or the backup
-  timers (`homelab-backup-fast.timer`, `homelab-backup-media.timer`);
-  `--tags writers` and `--tags backup` are separate, gated steps.
-- `recover.yml` fences every writer and backup timer first, then restores each
+- A plain host apply never starts `homelab-write-broker.service` or the backup
+  timers; starting writers and starting backups are separate, gated steps.
+- A recovery stops every writer and backup timer first, then restores each
   group's newest covering snapshot from nvme→hdd→r2 onto a dedicated scratch
-  mount. Backups record the staged path `/run/data-plane/current/<path>`, so the
-  entrypoint restores that staged subtree into a temporary directory and moves
-  it to `<scratch>/<path>`, printing the real destination and its entry count. A
-  destination that already holds data is refused unless `--overwrite` is
-  passed. The scratch mount must be its own mount and must have room for the
-  newest covering snapshots (times 1.1, plus a `homelab_recovery_min_free_gb`
-  estimate for a snapshot restic recorded no size for). Restoring into `/`
-  requires `--allow-live` and the `/run/homelab/writers-fenced` fence file that
-  `recover.yml` creates; `--allow-live` never bypasses the non-empty refusal.
+  mount (`docs/core/restic-plane.md`, "Restore by hand"). Backups record the
+  staged path, so the restore writes that subtree into a temporary directory and
+  moves it to `<scratch>/<path>`, printing the real destination and its entry
+  count. A destination that already holds data is refused unless it is an
+  overwrite run. The scratch mount must be its own mount and must have room for
+  the newest covering snapshots (times 1.1, plus a margin for a snapshot restic
+  recorded no size for). Restoring into a live dataset requires the writers to be
+  stopped first, and stopping them never bypasses the non-empty refusal.
   `--verify-only` proves repository reachability and path coverage only; it does
-  not inspect a restored tree. Writers stay disabled until
-  `homelab_recovery_resume_writers=true` is set after a verified live restore.
-  `zfs receive` never uses `-F` on the default path. The recovery portal is not
-  a prerequisite; a missing backup mount or a stopped portal is only a warning.
+  not inspect a restored tree. Writers stay disabled until the restored tree has
+  been opened. `zfs receive` never uses `-F` on the default path. The recovery
+  portal is not a prerequisite; a missing backup mount or a stopped portal is
+  only a warning.
 
 ## Commands
 
@@ -263,24 +255,18 @@ python3 -m data_plane.migration rollback-plan rollback.json
 Exit codes: `0` all gates hold; `1` a check failed (the report names every
 failure); `2` an unreadable or invalid plan, malformed evidence, or usage.
 
-There is no bypass flag. The Ansible tree forbids `ignore_errors`, and the
-Python gate has no "force" or "skip" switch; `--no-read-data` only skips the
+There is no bypass flag. No gate accepts `ignore_errors`, and the Python gate
+has no "force" or "skip" switch; `--no-read-data` only skips the
 primary read-data pass and is visible in the report. Fixing the failed
 condition is the only way to change a result.
 
 ## Exact pre-migration sequence
 
 1. Complete the inventory and record it outside this repository.
-2. Provision rescue access before touching production:
-
-   ```sh
-   cd ansible
-   # Fill rescue_verify_paths in group_vars/all.yml or inventory/hosts.yml first.
-   ansible-playbook -i inventory/hosts.yml playbooks/rescue.yml
-   ```
-
-   This installs/enables `sshd`, configures any optional path, and refuses to
-   pass unless two independent paths authenticate from the controller.
+2. Prove access before touching production. The Ansible path that installed and
+   verified two independent SSH routes is retired with `ansible/`; what holds
+   now is the console (physical) plus the host's own `sshd`. Open both before the
+   first destructive step.
 3. Complete the old system's HDD/R2 backups, back up Cloudflare/OpenTofu state
    and GitHub artifacts, and populate the Bitwarden recovery kit.
 4. Restore the latest old-system generation onto scratch storage and record the
@@ -296,8 +282,8 @@ condition is the only way to change a result.
    python3 -m data_plane.migration preflight --plan /etc/homelab/backup.json --json
    ```
 
-   Fix every reported failure. Re-run `playbooks/rescue.yml` and verify both
-   SSH paths again immediately before any destructive step.
+   Fix every reported failure. Re-open the console and log in over `sshd` again
+   immediately before any destructive step.
 7. Only when `gate_ready` is true may the pilot, scratch stack, shadow
    backfill, and cutover begin. Cutover still needs the confirmation.
 8. `retire_old` (including the 970 conversion) is last and needs its own
