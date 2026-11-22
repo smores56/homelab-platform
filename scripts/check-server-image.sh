@@ -957,6 +957,17 @@ check "the image leaves the tenant prober to its timer" \
   lacks 'smortress-apps-health.service' image/Containerfile
 check "the prober timer starts the prober" \
   grep -qxF 'Unit=smortress-apps-health.service' units/systemd/smortress-apps-health.timer
+# Fail-safe: no prober unit may become a host-gate requirement (asserted where
+# the gate's list is read). The service is a oneshot that reads `inactive`
+# between runs, so listing it would fail the gate on every boot, and a listed
+# timer would let a tenant-side probe fault roll the host image back -- the
+# coupling this split removes. Both must cost a journal line.
+check "the prober is not ordered into the boot" \
+  lacks 'boot-complete.target' units/systemd/smortress-apps-health.service
+# The probe reads Serve's routes, and Serve is re-declared at boot after the plan
+# is read: probing first would report every base path missing on a healthy host.
+check "the prober waits for the Serve routes" \
+  grep -qE '^After=.*smortress-tailscale-serve\.service' units/systemd/smortress-apps-health.service
 # A deferred entry is retried by this timer, not by the path unit re-firing the
 # drain: without it a rate-limited deploy would wait for the next event.
 check "the retry timer starts the drain service" \
@@ -994,6 +1005,12 @@ fi
 # and roll a healthy host back for an app's fault.
 for unit in smortress-tailscale-serve.service smortress-apps-quota.service; do
   check "the gate judges no unit that reads the tenant's plan: $unit" lacks "$unit" "$units_file"
+done
+# The prober is the other half of the same split, and it must fail safe: the
+# oneshot reads `inactive` between runs and the timer may be failed for a
+# tenant's fault, so either one in this list would roll back a healthy host.
+for unit in smortress-apps-health.service smortress-apps-health.timer; do
+  check "the gate requires no prober unit: $unit" lacks "$unit" "$units_file"
 done
 while IFS= read -r unit; do
   [[ -n $unit ]] || continue

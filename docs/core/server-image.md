@@ -449,7 +449,10 @@ apply that starts mid-probe never becomes a false line on the journal.
 It reports and nothing else. It writes no deploy record, reboots nothing, stages
 nothing, and rolls back or reverts nothing: a crash-looping app is an apps
 revision, and `deploy-apps` already refuses to commit one whose own apps do not
-stay up (`check_started_apps`).
+stay up (`check_started_apps`). It is not a boot dependency either: neither
+prober unit is listed in `/usr/share/smortress/deploy-units.txt` and neither is
+ordered against `boot-complete.target`, so a prober that is missing, stale or
+failed costs a journal line and never a boot.
 
 ### Below userspace
 
