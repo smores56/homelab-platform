@@ -135,22 +135,36 @@ done
 
 ```sh
 sudo systemctl stop zfs-mount smortress-zpool
-sudo zpool export smortress                 # unmounts every dataset
+sudo zpool export smortress                 # unmounts every dataset; -f if busy
 sudo zpool labelclear -f /dev/mapper/data   # the second vdev label sits at the disk tail
-sudo cryptsetup close data
+sudo cryptsetup close data || sudo dmsetup remove -f data
 sudo wipefs -a /dev/disk/by-partlabel/luks-data
-sudo parted /dev/nvme0n1 rm 5
-sudo parted /dev/nvme0n1 resizepart 4 307200MiB
-sudo partx -u /dev/nvme0n1
-sudo cryptsetup resize root
-sudo xfs_growfs /var
-df -h /var                                 # expect ~299G: p4 starts after /boot
 ```
 
 Clear the labels before the partition goes, not just the LUKS header:
 `init-zpool` branches on `blkid` reporting `zfs_member`, and a stale trailing
 label under the new partition's tail is what makes it try to import a pool that
 is not there and exit 1.
+
+`parted` is not in the server image, so the repartition uses `sgdisk` and
+`growpart`. Create p5 first, at the offset p4 has to stop at, then let
+`growpart` fill the gap: it takes its limit from the next partition's start and
+aligns to 1 MiB, which lands p4 on exactly 300 GiB.
+
+```sh
+# p4 starts at sector 1050624 on this disk (cat /sys/block/nvme0n1/nvme0n1p4/start).
+# 300 GiB is 629145600 sectors, so p5 starts at 1050624 + 629145600.
+sudo sgdisk -d 5 /dev/nvme0n1
+sudo sgdisk -n 5:630196224:0 -c 5:luks-data -t 5:8300 /dev/nvme0n1
+sudo sgdisk -p /dev/nvme0n1                 # p4 ends 630196223, p5 starts 630196224
+sudo growpart /dev/nvme0n1 4
+sudo partx -u /dev/nvme0n1 && sudo cryptsetup resize root && sudo xfs_growfs /var
+df -h /var                                 # ~299G: p4 starts after /boot
+```
+
+Never reboot between the `rm` and the `mkpart` of p5: a boot with p5 absent
+leaves `smortress-data-init.service` with no device, and the pool unit fails
+with it.
 
 If `partx` refuses because a partition is in use, reboot instead. Nothing on
 the host grows the filesystem on the way up: dracut resizes the mapping when it
@@ -172,6 +186,12 @@ On boot `smortress-data-init.service` formats `p5` with `/etc/luks/data`, writes
 nothing (the crypttab entry is already there), opens the mapper, and
 `smortress-zpool.service` runs `/usr/libexec/init-zpool`, which creates the pool
 and all fifteen datasets at their mountpoints.
+
+If that oneshot fails with `Option --allow-discards is not allowed with
+luksFormat action`, the image predates the fix and p5 is still unformatted.
+Format it the way the current script does — `luksFormat` without the flag, then
+`cryptsetup open --allow-discards --persistent` — and start
+`smortress-zpool.service`; the oneshot then finds a valid header and succeeds.
 
 Check the installed table before trusting it: `docs/core/storage-migration.md`
 warns that an installed `init-zpool` can predate `scripts/storage-layout.sh`,
