@@ -35,6 +35,32 @@ Until that dispatcher exists (#702 T5), the general agent has **no** GitHub
 identity: its native shell is disabled, so it has nothing to push with. Staging
 either token on the host beforehand would only create a second, weaker path.
 
+### Staging the pair
+
+Two ciphertexts, one scalar each (`value` format, because the job reads the file's
+bytes directly), and their manifest lines land together — the decrypt fails
+closed when the set and the manifest disagree:
+
+```sh
+# one key holding one bare scalar
+( umask 077
+  printf 'token: %s\n' '<the token>' >/tmp/t.yaml
+  sops --encrypt --input-type yaml --output-type yaml \
+    --filename-override secrets/server/agent-github-token.yaml /tmp/t.yaml \
+    >secrets/server/agent-github-token.yaml
+  rm -f /tmp/t.yaml
+)
+```
+
+```text
+# image/rootfs/etc/smortress/secrets.manifest
+agent-github-token.yaml  root  root  0400  value
+sdlc-github-token.yaml   root  root  0400  value
+```
+
+`check-server-image.sh` asserts the owner, mode and `value` format whenever a
+ciphertext is present, and treats absence as the correct pre-T5 state.
+
 The dev token can push branches, open and update pull requests, comment, and
 enable auto-merge. It **cannot** merge except where a ruleset says so, and it
 cannot edit `.github/workflows/**` — that needs the `workflow` scope, which is

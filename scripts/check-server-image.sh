@@ -697,6 +697,21 @@ check "the boot decrypt reads the host ciphertext" \
 check "the boot decrypt seeds the host copy first" \
   has 'ExecStartPre=/usr/libexec/smortress-secrets-seed' units/systemd/sops-decrypt.service
 
+# The two machine credentials are agent-only (docs/agent-identity.md): a bare
+# value, root-only, because the dispatcher hands the file's bytes to one general
+# job as GH_TOKEN. Absent is a valid state -- until the T5 dispatcher exists the
+# general agent has no GitHub identity -- and the ciphertext/manifest set check
+# above keeps a staged file and its line together either way.
+for name in agent-github-token.yaml sdlc-github-token.yaml; do
+  if [[ -e secrets/server/$name ]]; then
+    check "$name is a root-only manifest value" \
+      grep -qE "^${name//./\\.}[[:space:]]+root[[:space:]]+root[[:space:]]+0400[[:space:]]+value$" \
+      image/rootfs/etc/smortress/secrets.manifest
+  else
+    ok "$name is not staged yet (no agent GitHub identity before T5)"
+  fi
+done
+
 # The smores account password (design #767, T3). It was an operator file Ignition
 # read at install time; bootc never reconciles /var, so the value ships as
 # ciphertext instead and is consumed twice -- by the renderer for the install and
