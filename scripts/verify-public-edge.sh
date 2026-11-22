@@ -67,11 +67,14 @@ fetch() {
 }
 
 certificate_ok() { # <name>
-  local name=$1 out
-  out=$("$openssl_bin" s_client -connect "$name:443" -servername "$name" \
-    -verify_hostname "$name" -CAfile "$cafile" \
-    -checkend "$((min_days * 86400))" </dev/null 2>/dev/null) || return 1
-  grep -q 'Verify return code: 0 (ok)' <<<"$out"
+  local name=$1 pem
+  # `-checkend` is an `openssl x509` option, not an `s_client` one: s_client
+  # rejects it as an unknown option and exits 1, so this probe failed against
+  # every host, healthy or not, until the check moved to a second invocation.
+  pem=$("$openssl_bin" s_client -connect "$name:443" -servername "$name" \
+    -verify_hostname "$name" -CAfile "$cafile" </dev/null 2>/dev/null) || return 1
+  grep -q 'Verify return code: 0 (ok)' <<<"$pem" || return 1
+  "$openssl_bin" x509 -noout -checkend "$((min_days * 86400))" <<<"$pem" >/dev/null 2>&1
 }
 
 for host in "$photos" "$opds"; do

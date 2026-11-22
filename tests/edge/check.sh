@@ -117,6 +117,13 @@ if grep -qF -- '-checkend 1209600' "$work/ossl.log"; then
 else
     bad 'the expiry check uses the default 14-day window' "$(cat "$work/ossl.log")"
 fi
+# s_client has no -checkend: passing it there made every run fail on a healthy
+# host. The option belongs on `openssl x509`, reading the PEM s_client printed.
+if grep -F -- 's_client' "$work/ossl.log" | grep -qF -- '-checkend'; then
+    bad 's_client is not passed -checkend' "$(cat "$work/ossl.log")"
+else
+    ok 's_client is not passed -checkend'
+fi
 # The stub keys on the URL, so a regression to plain HTTP or a hardcoded port
 # would still look healthy; the argv is the only witness.
 if grep -qF -- 'https://photos.sammohr.dev/' "$work/curl.log"; then
