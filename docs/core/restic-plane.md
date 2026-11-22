@@ -349,14 +349,23 @@ anything the helper asks restic for the snapshot's restore size and refuses a
 target whose filesystem cannot hold it plus a 2 GiB margin, naming `--target`
 and `RESTIC_DRILL_ROOT` in the message.
 
-`agent-local` will not fit that default deadline. The helper pipes `restic dump`
-into `tar`, and `dump` emits no hardlink entries, so a tree that is 444 GiB
-summed per path but 36 GiB unique arrives as 444 GiB of distinct files. On
-2026-11-22 the drill wrote 39 GiB and 383,794 of 4,438,112 files in 24 minutes
-before it was stopped: the restored 43 GiB of unique bytes already exceeded the
-36.7 GiB the source occupies in total, which is the arithmetic proof that the
-links were expanded. Budget hours and a full-size target for that unit, and do
-not read `RESTIC_DEADLINE_DRILL` (14400 s) as enough for it.
+`agent-local` will not fit that default deadline, and the reason is the method
+rather than the bytes. The helper used to pipe `restic dump` into `tar`, and
+`dump` emits no hardlink entries, so a tree that is 444 GiB summed per path but
+36 GiB unique arrived as 444 GiB of distinct files: on 2026-11-22 the drill wrote
+39 GiB and 383,794 of 4,438,112 files in 24 minutes before it was stopped, and
+the 43 GiB it had written already exceeded the 36.7 GiB the source occupies.
+
+The default is now `restic restore`, which preserves hardlinks and loads packs in
+parallel; `dump` stays behind `RESTIC_DRILL_METHOD=dump` for an older restic.
+Over S3 the difference is larger than the parallelism: `dump` walks the tree one
+node at a time, and a single stalled read hangs the whole drill until
+`RESTIC_DEADLINE_DRILL` (14400 s) kills it — on 2026-11-22 an `r2/music` drill
+spent 25 minutes and wrote nothing, and an `ssd/agent-local` drill did the same.
+SELinux labels are excluded (`--exclude-xattr security.selinux`) because root
+cannot remove them from userspace; the real dataset gets its label back when the
+data is copied home. `agent-local` still takes tens of minutes for its 4.4M
+files; budget the target, not the deadline.
 
 The raw equivalent, for any machine:
 

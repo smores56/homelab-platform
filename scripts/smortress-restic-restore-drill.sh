@@ -15,6 +15,9 @@
 # need (docs/core/pool-rebuild.md). The snapshot's restore size is compared with
 # the target filesystem before anything is written, and a target without room is
 # refused.
+#
+# Env: RESTIC_DRILL_METHOD (restore|dump, default restore), RESTIC_DRILL_ROOT,
+# RESTIC_DEADLINE_DRILL.
 # shellcheck disable=SC2154  # variables and helpers come from restic-plane-common
 # shellcheck disable=SC2016  # the bash -c script takes its values as positional parameters
 set -euo pipefail
@@ -155,17 +158,39 @@ fi
 
 say "$backend/$unit: restoring $snapshot into $target"
 # restic restore clears xattrs on every file it writes, and SELinux denies
-# removing security.selinux even for root (lremovexattr, not setxattr). A dump
-# piped through tar --no-xattrs restores content, modes and ownership without
-# needing CAP_MAC_ADMIN; the label is reapplied by the system on the real target.
-for path in "${staging_paths[@]}"; do
-  if ! with_deadline "$deadline" bash -o pipefail -c \
-    '"$1" -r "$2" dump "$3" "$4" | tar -xf - --no-xattrs -C "$5"' _ \
-    "$restic_bin" "$repo" "$snapshot" "$path" "$target"; then
-    warn "restore failed; $target holds an incomplete tree"
-    exit 1
-  fi
-done
+# removing security.selinux even for root (lremovexattr, not setxattr). The
+# label is reapplied by the system on the real target, so it is excluded here.
+#
+# `dump` piped through tar was the original path and is kept behind
+# RESTIC_DRILL_METHOD=dump, but it is the wrong default: dump walks the tree one
+# node at a time, emits hardlinked content as separate files (a 36 GiB agent
+# tree arrives as 444 GiB, docs/core/restic-plane.md), and over S3 a single
+# stalled read hangs the whole drill until the deadline. restore loads packs in
+# parallel and preserves hardlinks.
+method=${RESTIC_DRILL_METHOD:-restore}
+case $method in
+  restore)
+    if ! with_deadline "$deadline" "$restic_bin" -r "$repo" restore "$snapshot" \
+      --target "$target" --sparse --exclude-xattr 'security.selinux'; then
+      warn "restore failed; $target holds an incomplete tree"
+      exit 1
+    fi
+    ;;
+  dump)
+    for path in "${staging_paths[@]}"; do
+      if ! with_deadline "$deadline" bash -o pipefail -c \
+        '"$1" -r "$2" dump "$3" "$4" | tar -xf - --no-xattrs -C "$5"' _ \
+        "$restic_bin" "$repo" "$snapshot" "$path" "$target"; then
+        warn "restore failed; $target holds an incomplete tree"
+        exit 1
+      fi
+    done
+    ;;
+  *)
+    warn "unknown RESTIC_DRILL_METHOD: $method (restore or dump)"
+    exit 2
+    ;;
+esac
 
 {
   printf '\nRestored into:\n'
