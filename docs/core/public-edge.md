@@ -39,9 +39,11 @@ Tailscale are OS infrastructure on a box whose only application is a TLS proxy.
 | sshd | `provision/edge/05-edge-hardening.conf` + `authorized_keys` | keys only, no password, no root password login; `05-` so it beats cloud-init's `50-cloud-init.conf` |
 | tailscale | `provision/edge/bootstrap.sh` | joins once as `tag:vps` with hostname `smoresnet` (the panel name, the OS name and the tailnet name are one word), tags set key expiry off; the bootstrap realigns an existing node's name |
 
-The ctrl panel's own firewall is the first layer and allows exactly `tcp/443`,
-`udp/41641` and ICMP echo. Console/VNC bypasses it, so a wrong panel rule is
-recoverable without a support ticket.
+The ctrl panel's network firewall is **not enabled** (decision, 2026-11-22):
+the host nftables ruleset is the only layer. What that gives up is written down
+as a residual in `docs` and in #725 — a host firewall that fails to load at boot,
+or a compromised host, is not bounded by anything in front of it. It saves a
+browser-only rule list that no diff or CI can see.
 
 `udp/41641` is open so the tailnet keeps a direct WireGuard path to smortress;
 without it every proxied byte is relayed through DERP and Immich uploads crawl.
@@ -175,7 +177,7 @@ what the repository *cannot* reproduce, with what is done about each item.
 | Tailnet identity (the join key) | A preauthorized `tag:vps` key is single-use and minted in the Tailscale console per rebuild; the admin login and 2FA codes are a kit row. Not automated on purpose: the alternative is a long-lived, reusable credential on a public box's rebuild path. |
 | SSH host key (ed25519 only) | Kit row plus `EDGE_HOST_KEY`; omitted, the box generates a new one and every `known_hosts` entry goes stale. The template's rsa and ecdsa pairs are deleted, because they are in no kit and would be a second, never-verified identity. |
 | Caddy's data directory (ACME account, certificates) | Not restored. A rebuild re-issues, which costs seconds and needs nothing from the kit; the account it replaces is not pinned by CAA, so a new one is valid immediately. |
-| Panel network firewall | Manual per *service*: `tcp/443`, `udp/41641`, ICMP echo. It survives an OS reinstall and must be set again only for a replacement VPS. Console/VNC bypasses it, so it cannot lock the box out. |
+| Panel network firewall | Not enabled (owner decision). The host nftables ruleset is the only layer; the cost is that a boot-time firewall failure or a compromised host is unbounded, and 443 depends on the host rules being right. |
 | The public IPv4 | May change on a replacement (not on a reinstall). DNS takes it in `var.edge_ipv4`; the probes resolve the names, so only the cutover needs the value. |
 | Hostname | Closed: the bootstrap sets `smoresnet` on the OS and on the tailnet. |
 | Package versions | Distro packages plus unattended upgrades; deliberately unpinned, so a rebuild may pick up newer Caddy. The bootstrap's 2.6 gate is the only floor. |

@@ -6806,17 +6806,16 @@ it is used once, in `§50.4`, and the node's key expiry is off because it is
 tagged. A reinstall has to mint a new one, which is why the admin login and its
 2FA recovery codes are recovery-kit rows (`docs/core/recovery-kit.md`).
 
-### 50.3 Panel firewall
+### 50.3 Panel firewall (not planned)
 
-RackNerd ctrl → the VPS → Firewall → enable, with exactly these inbound rules:
+Decision 2026-11-22: the ctrl network firewall stays off. The host nftables
+ruleset (`provision/edge/nftables.conf`, applied by the bootstrap) is the only
+layer; the accepted residual is that a host firewall which fails at boot leaves
+the kernel default-allow, and a compromised host can expose any port it likes.
 
-| Protocol | Port | Why |
-| --- | --- | --- |
-| TCP | 443 | the two public names |
-| UDP | 41641 | direct WireGuard, so the tailnet does not relay to DERP |
-| ICMP | echo | path-MTU diagnosis of the proxied connections |
-
-Console/VNC bypasses this firewall, so a wrong rule cannot lock the box out.
+If that changes, the rule set is `tcp/443`, `udp/41641` and ICMP (all types, not
+just echo — PMTU needs destination-unreachable), added **before** enabling it,
+or certificate issuance fails. Console/VNC bypasses the panel.
 
 ### 50.4 Deploy and join from the console
 
