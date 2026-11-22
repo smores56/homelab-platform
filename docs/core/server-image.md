@@ -458,9 +458,13 @@ before and after the reboot:
   something other than the verified manifest;
 - the boot gate itself: a hand-run switch writes no `pending.json`, so there is
   no health gate, no denylist entry and no recorded deployment. The record in
-  `state.json` stays at the older commit until something else writes it —
-  `smortress-deploy bootstrap` exists for a restored host, not for making a hand
-  switch look deployed.
+  `state.json` stays at the older commit until something else writes it — next
+  boot the gate journals `booted-unrecorded` and pages, and leaves the record
+  alone. `smortress-deploy reconcile --commit <sha>` is the repair: it reads the
+  booted digest from `bootc status` and records it for the commit the operator
+  asserts, journaling the previous commit. Neither it nor `bootstrap` (which
+  refuses an existing record) is a way to make a hand-run switch look deployed;
+  they make the record say what the host is actually running.
 
 ### Operating it
 

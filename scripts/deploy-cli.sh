@@ -3,6 +3,7 @@
 #
 #   smortress-deploy status
 #   smortress-deploy release --force
+#   smortress-deploy reconcile --commit <sha>
 #   smortress-deploy block <commit|digest> <value>
 #   smortress-deploy unblock <commit|digest> <value>
 #   smortress-deploy bootstrap <repo> <commit>
@@ -27,6 +28,11 @@
 # commit turns the next attempt into the verifier's refusal, which pops the entry
 # and keeps the poll from offering the tip again. It is one value in one table,
 # journaled with who did it, and `unblock` is how it comes back.
+#
+# `reconcile` repairs the other half of `bootstrap`: a record that disagrees with
+# what the host actually booted (the boot gate journals `booted-unrecorded` and
+# leaves state alone). The digest is read from `bootc status`, the commit is the
+# one the operator asserts, and the previous commit stays in the journal.
 #
 # `bootstrap` records the commit a restored or rebuilt host is running, once:
 # a deployment is only ever verified against a recorded ancestor, and nothing on
@@ -61,6 +67,8 @@ fi
 # shellcheck source=/dev/null
 source "$state_lib"
 
+bootc_bin=${BOOTC_BIN:-bootc}
+
 say() { printf 'smortress-deploy: %s\n' "$*"; }
 warn() { printf 'smortress-deploy: %s\n' "$*" >&2; }
 
@@ -68,12 +76,14 @@ usage() {
   cat >&2 <<'EOF'
 usage: smortress-deploy status
        smortress-deploy release --force
+       smortress-deploy reconcile --commit <sha>
        smortress-deploy block <commit|digest> <value>
        smortress-deploy unblock <commit|digest> <value>
        smortress-deploy bootstrap <repo> <commit>
 
   status           deployed commits, the held and pending records, the denylist
   release --force  waive the snapshot gate for the held platform digest (root)
+  reconcile        record the booted digest for the commit the operator names (root)
   block            add one denylist entry, refusing that commit or digest (root)
   unblock          drop one denylist entry (root)
   bootstrap        record the running commit of a restored host, once (root)
@@ -165,6 +175,67 @@ valid_denylist_value() { # <commit|digest> <value>
     digest) [[ $2 =~ ^sha256:[0-9a-f]{64}$ ]] ;;
     *) return 1 ;;
   esac
+}
+
+# The digest comes from the host, the commit from the operator. A digest-pinned
+# boot has no commit anywhere in `bootc status`, and the revision label lives only
+# in the registry config, which may be unreachable exactly when this runs -- so
+# naming the commit is the same trust `bootstrap` already takes, with the booted
+# digest filled in for the operator instead of retyped.
+cmd_reconcile() {
+  local commit='' operator uid booted doc current_commit current_index current_manifest
+  while (($#)); do
+    case $1 in
+      --commit)
+        commit=${2-}
+        shift 2
+        ;;
+      *) usage; exit 2 ;;
+    esac
+  done
+  if [[ ! $commit =~ ^[0-9a-f]{40}$ ]]; then
+    warn "reconcile takes --commit <40-hex sha>, the commit this host booted"
+    exit 2
+  fi
+  uid=$(id -u)
+  if [[ $uid != 0 ]]; then
+    warn "reconcile must be run as root (uid $uid)"
+    exit 1
+  fi
+  operator=${SUDO_USER:-$uid}
+
+  booted=$(timeout --signal=TERM --kill-after=10 30 "$bootc_bin" status --booted --json 2>/dev/null |
+    jq -er '.status.booted.image.imageDigest // empty' 2>/dev/null) || booted=''
+  if [[ ! $booted =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    warn "cannot read the booted deployment digest from $bootc_bin status"
+    exit 4
+  fi
+
+  doc=$(state_read 2>/dev/null) || doc='{}'
+  current_commit=$(jq -r '.repos["homelab-platform"].commit // ""' <<<"$doc" 2>/dev/null) ||
+    current_commit=''
+  current_index=$(jq -r '.repos["homelab-platform"].indexDigest // ""' <<<"$doc" 2>/dev/null) ||
+    current_index=''
+  current_manifest=$(jq -r '.repos["homelab-platform"].manifestDigest // ""' <<<"$doc" 2>/dev/null) ||
+    current_manifest=''
+  if [[ $current_commit == "$commit" ]] &&
+    [[ $booted == "$current_index" || $booted == "$current_manifest" ]]; then
+    warn "the record already names $commit at $booted; nothing to reconcile"
+    exit 1
+  fi
+
+  if ! deploy_lock_acquire; then
+    warn "another drain holds $deploy_lock_file; nothing was recorded"
+    exit 1
+  fi
+  trap deploy_lock_release EXIT
+
+  state_record_reconciled "$commit" "$booted" "$operator" || {
+    warn "cannot rewrite $deploy_state_file"
+    exit 4
+  }
+  say "recorded $commit at $booted for $operator"
+  return 0
 }
 
 cmd_block() {
@@ -315,6 +386,10 @@ case $cmd in
   status)
     shift
     cmd_status
+    ;;
+  reconcile)
+    shift
+    cmd_reconcile "$@"
     ;;
   block)
     shift

@@ -6350,8 +6350,8 @@ sudo tail -n 20 /var/lib/homelab/deploy/journal.jsonl | jq -c .
 #   apps-unhealthy (a started app was not active, or was restarted),
 #   apps-name-refused (a name the schema forbids reached a unit sink),
 #   apps-work-kept (a work tree the sweep would not remove)
-#   denylist-added, denylist-cleared, bootstrap-recorded, poll-denylisted,
-#   notify-sent, notify-failed
+#   denylist-added, denylist-cleared, bootstrap-recorded, state-reconciled,
+#   booted-unrecorded, poll-denylisted, notify-sent, notify-failed
 sudo journalctl -u smortress-deploy-listener.service -u smortress-deploy.service \
   -u smortress-boot-gate.service --no-pager -n 50
 ```
@@ -6440,6 +6440,28 @@ overwrite an existing record, refuses a repository the receiver does not deploy,
 and journals `bootstrap-recorded`. It is not a way to make a hand-run
 `bootc switch` look deployed (see `docs/core/server-image.md`, "What a hand-run
 switch still gives up").
+
+### 49.10 A record that disagrees with the boot: `reconcile`
+
+The boot gate compares the image this host booted with the digest `state.json`
+records, and when they differ it journals `booted-unrecorded` and pages —
+deliberately leaving the record alone, because the host is healthy and a
+hand-run `bootc switch` is the operator's choice. Repairing it is an operator
+act, and the digest is read from the host rather than retyped:
+
+```sh
+sudo bootc status --booted --json | jq -r '.status.booted.image.imageDigest'
+sudo /usr/libexec/smortress-deploy reconcile --commit <40-hex>
+# smortress-deploy: recorded <40-hex> at sha256:… for smores
+```
+
+The commit is the one the operator asserts: a digest-pinned boot carries no
+commit in `bootc status`, and the revision label lives only in the registry
+config. `reconcile` reads the booted digest, refuses a non-root caller, refuses
+a record that already matches, drops the stale digest form rather than keeping
+two, leaves other repositories' records alone, and journals `state-reconciled`
+with the previous commit and the operator. It is not `bootstrap` (which refuses
+an existing record) and not a way to make a hand-run switch look deployed.
 
 ### 40.18 Run the agent runtime drill
 

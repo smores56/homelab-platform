@@ -178,6 +178,36 @@ state_record_verified() {
     ' <<<"$current" | atomic_write "$deploy_state_file"
 }
 
+# state_record_reconciled <commit> <manifest-digest> <operator>
+#
+# The operator's repair for a host whose record and `bootc status` disagree: the
+# digest is the booted one (read from the host, never entered) and the commit is
+# the one the operator asserts, because a digest-pinned boot carries no commit.
+# It is deliberately not `state_record_verified`: nothing verified a deployment
+# here, and the journal keeps the value the record held before -- the previous
+# commit is otherwise lost, and it is what an operator reads to decide whether
+# the repair was right.
+state_record_reconciled() {
+  local commit=$1 manifest=$2 operator=$3 current from
+  [[ $commit =~ ^[0-9a-f]{40}$ && $manifest =~ ^sha256:[0-9a-f]{64}$ ]] || return 2
+  [[ -n $operator ]] || operator=$(id -u)
+  current=$(state_read 2>/dev/null) || current='{}'
+  from=$(jq -r '.repos["homelab-platform"].commit // ""' <<<"$current" 2>/dev/null) || from=''
+  journal_append state-reconciled "$(jq -nc --arg commit "$commit" --arg digest "$manifest" \
+    --arg from "$from" --arg by "$operator" \
+    '{commit:$commit,digest:$digest,from:$from,operator:$by}')" || return 1
+  # The stale index digest is dropped, not kept beside the booted one: two
+  # different digests in one record is how the record got wrong in the first place.
+  jq -c --arg commit "$commit" --arg manifest "$manifest" --arg now "$(deploy_now)" '
+    . as $s
+    | $s
+    + {schema: ($s.schema // 1),
+       repos: (($s.repos // {})
+         | .["homelab-platform"] = {commit: $commit, manifestDigest: $manifest}),
+       updated: $now}
+  ' <<<"$current" | atomic_write "$deploy_state_file"
+}
+
 held_read() { record_read held; }
 held_write() { record_write held; }
 apply_read() { record_read apply; }

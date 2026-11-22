@@ -147,6 +147,18 @@ printf '%s\n' "$url" >>"$STUB_LOG/curl-urls"
 exit "${STUB_CURL_EXIT:-0}"
 EOF
 
+# `bootc status --booted --json` is the only thing a reconcile reads from the
+# host, and a stub is the only way to present a boot the record disagrees with.
+cat >"$bin/bootc" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$STUB_LOG/bootc-calls"
+if [[ ${1-} == status && -n ${STUB_BOOTC_DIGEST:-} ]]; then
+  jq -nc --arg d "$STUB_BOOTC_DIGEST" '{status:{booted:{image:{imageDigest:$d}}}}'
+  exit 0
+fi
+exit 1
+EOF
+
 # `release --force` is a root action; the uid is faked so the test does not need
 # to be root to prove the refusal.
 install -d -m 0755 "$work/nonroot" "$work/uid0"
@@ -521,6 +533,76 @@ fi
 out=$(PATH="$work/uid0:$PATH" SUDO_USER=alice bash "$cli" block commit "$commit" 2>&1)
 rc=$?
 check_eq "$rc" 1 "blocking a commit that is already listed is refused"
+
+# --- 10c. a record that disagrees with the boot is reconciled by hand --------
+# The gate journals `booted-unrecorded` and deliberately leaves state alone, so
+# the repair is the operator's: it records the digest the host actually booted,
+# for the commit the operator names (a digest-pinned boot carries no commit), and
+# keeps the previous value in the journal.
+reconciled_digest=sha256:4444444444444444444444444444444444444444444444444444444444444444
+stale_digest=sha256:5555555555555555555555555555555555555555555555555555555555555555
+stale_commit=1111111111111111111111111111111111111111
+apps_commit=2222222222222222222222222222222222222222
+reset_gate
+jq -nc --arg c "$stale_commit" --arg i "$stale_digest" --arg a "$apps_commit" '
+  {schema:1,
+   repos:{"homelab-platform":{commit:$c,indexDigest:$i,manifestDigest:$i},
+          "homelab-apps":{commit:$a}},
+   apps:{}, updated:"2026-11-21T00:00:00Z"}' | atomic_write "$state_dir/state.json"
+
+unset STUB_BOOTC_DIGEST
+out=$(PATH="$work/uid0:$PATH" SUDO_USER=alice bash "$cli" reconcile --commit "$commit" 2>&1)
+rc=$?
+check_eq "$rc" 4 "a reconcile that cannot read the booted image exits 4"
+check_json "$(state_read)" '.repos["homelab-platform"].manifestDigest' "$stale_digest" \
+  "a failed reconcile leaves the record alone"
+export STUB_BOOTC_DIGEST=$reconciled_digest
+
+out=$(SUDO_USER=smores PATH="$work/nonroot:$PATH" bash "$cli" reconcile --commit "$commit" 2>&1)
+rc=$?
+check_eq "$rc" 1 "a non-root reconcile is refused"
+check_json "$(state_read)" '.repos["homelab-platform"].commit' "$stale_commit" \
+  "a refused reconcile leaves the commit alone"
+if grep -q state-reconciled "$state_dir/journal.jsonl" 2>/dev/null; then
+  bad "a refused reconcile journals nothing"
+else
+  ok "a refused reconcile journals nothing"
+fi
+
+run_cli reconcile
+check_eq "$rc" 2 "reconcile without arguments is a usage error"
+run_cli reconcile "$commit"
+check_eq "$rc" 2 "reconcile takes --commit, not a bare value"
+run_cli reconcile --commit abc123
+check_eq "$rc" 2 "reconcile rejects a commit that is not 40 hex"
+
+out=$(PATH="$work/uid0:$PATH" SUDO_USER=alice bash "$cli" reconcile --commit "$commit" 2>&1)
+rc=$?
+check_eq "$rc" 0 "root reconciles the record to the booted image"
+check_json "$(state_read)" '.repos["homelab-platform"].commit' "$commit" \
+  "the reconciled commit is recorded"
+check_json "$(state_read)" '.repos["homelab-platform"].manifestDigest' "$reconciled_digest" \
+  "the booted digest is recorded"
+check_json "$(state_read)" '.repos["homelab-platform"] | has("indexDigest")' false \
+  "the stale index digest is dropped"
+check_json "$(state_read)" '.repos["homelab-apps"].commit' "$apps_commit" \
+  "the apps record is untouched"
+check_eq "$(journal_field state-reconciled '.operator')" alice \
+  "the reconcile is journaled with the operator"
+check_eq "$(journal_field state-reconciled '.from')" "$stale_commit" \
+  "the reconcile is journaled with the previous commit"
+check_eq "$(journal_field state-reconciled '.digest')" "$reconciled_digest" \
+  "the reconcile is journaled with the booted digest"
+if grep -q state-verified "$state_dir/journal.jsonl" 2>/dev/null; then
+  bad "a reconcile does not claim a verified deployment"
+else
+  ok "a reconcile does not claim a verified deployment"
+fi
+check_grep "$log/bootc-calls" 'status --booted --json' "the booted image is read, not guessed"
+
+out=$(PATH="$work/uid0:$PATH" SUDO_USER=alice bash "$cli" reconcile --commit "$commit" 2>&1)
+rc=$?
+check_eq "$rc" 1 "reconciling a record that already matches is refused"
 
 # --- 11. a restored host is bootstrapped by hand ----------------------------
 # Without a recorded ancestor there is no descendancy to check and the verifier
