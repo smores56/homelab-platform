@@ -33,6 +33,14 @@ ctrl panel offers no cloud-init and no API to declare one.
    Serve ports and the 443 refusal) is gated on `EXPECT_UPSTREAM=1`: run that
    once the image that declares 8446/8447 is on smortress, and before cutover.
 
+5. After the cutover, run `scripts/verify-public-edge.sh` from a host with
+   public resolution: it is the only check that sees the VPS. Then confirm the
+   issuer under `/var/lib/caddy/.local/share/caddy/certificates/` is
+   `acme-v02`, not `acme-staging-v02`. A staging certificate verifies against no
+   public store, and `admin off` means a replaced `Caddyfile` takes effect only
+   on `systemctl restart caddy`, so a staging run can outlive the file that
+   replaced it — that is exactly how the first cutover came up untrusted.
+
 The DNS cutover is not part of this: it waits for #709's retirement gate and is
 two commits applied by CI (pin `cluster_hosts`, then set `edge_ipv4`), cluster
 records first. See `docs/core/public-edge.md`.
