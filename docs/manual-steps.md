@@ -6896,10 +6896,10 @@ upstream checks because it predates this step.
 EDGE_IP=<vps-ipv4> scripts/verify-public-edge.sh
 ```
 
-The two certificate probes must still be red here: certificates are issued only
-once the names resolve to the box (`§50.8`), because Let's Encrypt validates
-them by resolution. Everything else must pass — both names answering through
-`EDGE_IP`, and 404 for `/apps/agent-local/v1`,
+The two certificate probes are skipped here: certificates are issued only once
+the names resolve to the box (`§50.8`), because Let's Encrypt validates them by
+resolution. This mode is a routing check (curl `-k`), so the rest must pass —
+both names answering through `EDGE_IP`, and 404 for `/apps/agent-local/v1`,
 `/apps/agent-general/v1` and `/wallpapers/` on both names.
 
 ### 50.8 The cutover (after #709's gate)

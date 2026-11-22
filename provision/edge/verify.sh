@@ -105,10 +105,10 @@ check "the tailnet name is smoresnet" jq -e '.Self.DNSName // "" | startswith("s
 
 # The whole point of the panel's udp/41641 rule: a direct path, not DERP.
 # `--until-direct` exits non-zero when every reply came back relayed, but the
-# seconds right after a join are still relayed while the path negotiates, so
-# retry before calling it a finding.
+# seconds right after a join or a peer reboot are still relayed while the path
+# negotiates, so retry for a minute before calling it a finding.
 direct_path() {
-  for _ in 1 2 3 4 5 6; do
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
     timeout 10 tailscale ping --c 3 --until-direct=true smortress >/dev/null 2>&1 && return 0
     sleep 5
   done

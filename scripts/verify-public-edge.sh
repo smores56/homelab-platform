@@ -16,6 +16,12 @@
 #
 #   EDGE_IP=203.0.113.7 scripts/verify-public-edge.sh
 #
+# EDGE_IP makes this a routing check, not a TLS one: Let's Encrypt can only
+# issue once the names resolve to the box, so before the DNS cutover there is no
+# certificate to verify. In that mode the probes run with -k, the two
+# certificate checks are skipped, and the run still proves that both names reach
+# the edge and that the agent paths and /wallpapers stay unpublished.
+#
 # Knobs: EDGE_IP, EDGE_TIMEOUT (10 s), EDGE_CERT_MIN_DAYS (14), EDGE_CAFILE,
 # CURL_BIN and OPENSSL_BIN (tests/edge/check.sh drives the same code).
 set -uo pipefail
@@ -41,6 +47,9 @@ bad() {
   [[ -n ${2:-} ]] && printf '     %s\n' "$2"
   return 0
 }
+note() {
+  printf 'skip %s\n' "$1"
+}
 
 for tool in "$curl_bin" "$openssl_bin"; do
   command -v "$tool" >/dev/null 2>&1 || {
@@ -58,7 +67,8 @@ http_code() { # <name> <url>
     --max-time "$timeout_s" --write-out '%{http_code}'
   )
   if [[ -n $edge_ip ]]; then
-    args+=(--resolve "$1:443:$edge_ip")
+    # Routing check only: nothing has issued for this name yet.
+    args+=(--resolve "$1:443:$edge_ip" --insecure)
   fi
   "$curl_bin" "${args[@]}" "$2" 2>/dev/null
 }
@@ -81,7 +91,9 @@ for host in "$photos" "$opds"; do
   else
     bad "$host answers over TLS" "got '$code'"
   fi
-  if certificate_ok "$host"; then
+  if [[ -n $edge_ip ]]; then
+    note "$host certificate: skipped, Let's Encrypt issues only after the name resolves here"
+  elif certificate_ok "$host"; then
     ok "$host presents a certificate valid for the name for $min_days more days"
   else
     bad "$host presents a certificate valid for the name for $min_days more days" \

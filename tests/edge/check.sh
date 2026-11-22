@@ -74,8 +74,14 @@ run() {
 
 run
 eq "$?" 0 'a healthy edge exits 0'
-eq "$(grep -c '^ok' "$work/out")" 10 'both names are probed for reachability, certificate and three paths each'
+eq "$(grep -c '^ok' "$work/out")" 8 'both names are probed for reachability and three paths each'
+eq "$(grep -c '^skip' "$work/out")" 2 'the certificate probes are skipped before issuance'
 eq "$(grep -c '^FAIL' "$work/out")" 0 'nothing fails on a healthy edge'
+if grep -qF -- '--insecure' "$work/curl.log"; then
+    ok 'EDGE_IP mode is a routing check and says so in argv'
+else
+    bad 'EDGE_IP mode is a routing check and says so in argv' "$(cat "$work/curl.log")"
+fi
 if grep -qF -- '--resolve photos.sammohr.dev:443:203.0.113.7' "$work/curl.log"; then
     ok 'EDGE_IP pins the photos name for the pre-cutover probe'
 else
@@ -86,6 +92,11 @@ if grep -qF -- '--resolve opds.sammohr.dev:443:203.0.113.7' "$work/curl.log"; th
 else
     bad 'EDGE_IP pins the opds name for the pre-cutover probe' "$(cat "$work/curl.log")"
 fi
+# Certificate checks only exist in public-DNS mode: EDGE_IP is a routing check
+# because nothing can have issued before the name resolves here.
+EDGE_IP=
+run
+eq "$?" 0 'public DNS mode exits 0'
 if grep -qF -- '-verify_hostname opds.sammohr.dev' "$work/ossl.log"; then
     ok 'the certificate is verified for the name, not just for any name'
 else
@@ -112,6 +123,7 @@ fi
 # --- the failure this script exists to catch ----------------------------------
 
 STUB_ROOT_CODE=502
+EDGE_IP=203.0.113.7
 run
 eq "$?" 1 'an origin returning 502 fails the run'
 if grep -qF 'FAIL photos.sammohr.dev answers over TLS' "$work/out"; then
@@ -122,6 +134,7 @@ fi
 
 STUB_ROOT_CODE=
 STUB_LEAK_CODE=200
+EDGE_IP=203.0.113.7
 run
 eq "$?" 1 'a published /wallpapers fails the run'
 if grep -qF 'FAIL /wallpapers/ is not published on opds.sammohr.dev' "$work/out"; then
@@ -132,6 +145,7 @@ fi
 
 STUB_LEAK_CODE=
 STUB_CERT_FAIL=1
+EDGE_IP=
 run
 eq "$?" 1 'a certificate that fails verification fails the run'
 if grep -qF 'FAIL photos.sammohr.dev presents a certificate' "$work/out"; then
@@ -142,6 +156,7 @@ fi
 
 STUB_CERT_FAIL=0
 EDGE_CERT_MIN_DAYS=3
+EDGE_IP=
 run
 if grep -qF -- '-checkend 259200' "$work/ossl.log"; then
     ok 'the expiry window is configurable'
@@ -155,6 +170,12 @@ EDGE_CERT_MIN_DAYS=
 EDGE_IP=
 run
 eq "$?" 0 'an unset EDGE_IP still probes through public DNS'
+eq "$(grep -c '^ok' "$work/out")" 10 'public DNS mode probes the certificates too'
+if grep -qF -- '--insecure' "$work/curl.log"; then
+    bad 'public DNS mode verifies TLS' "$(cat "$work/curl.log")"
+else
+    ok 'public DNS mode verifies TLS'
+fi
 if grep -qF -- '--resolve' "$work/curl.log"; then
     bad 'an unset EDGE_IP adds no resolve override' "$(cat "$work/curl.log")"
 else

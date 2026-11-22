@@ -64,8 +64,8 @@ validates `photos.sammohr.dev` and `opds.sammohr.dev` by resolving them: while
 they are proxied CNAMEs to the cluster tunnel, Let's Encrypt reaches Cloudflare
 and the challenge fails (`Cannot negotiate ALPN protocol "acme-tls/1"`). Caddy
 keeps retrying, and the first successful order is seconds after the `A` records
-appear. The pre-cutover probe therefore proves reachability and the path leaks
-through `EDGE_IP`, not the certificate.
+appear. The pre-cutover probe therefore proves reachability and the path leaks through
+`EDGE_IP` (curl `-k`, certificate probes skipped), not the certificate.
 
 The ACME account key and the certificates live in Caddy's data directory
 (`/var/lib/caddy/.local/share/caddy`). Losing them costs only a re-issue; keep
@@ -102,12 +102,13 @@ commits in reverse — drop `edge_ipv4` (the `A` records go, names fall to the
 deny), then restore `cluster_hosts` (the CNAMEs return).
 
 Before the cutover the reachability and path-leak probes run against the box
-without touching the zone; the two certificate probes cannot pass until the
-names resolve here, and they are the first post-cutover check:
+without touching the zone. That mode is a routing check: it runs curl with `-k`
+and **skips** the two certificate probes, because nothing can have issued before
+the names resolve here. The certificate probes are the first post-cutover check.
 
 ```sh
-EDGE_IP=<vps-ipv4> scripts/verify-public-edge.sh   # pre-cutover: cert probes red
-scripts/verify-public-edge.sh                      # post-cutover: all ten green
+EDGE_IP=<vps-ipv4> scripts/verify-public-edge.sh   # pre-cutover: 8 ok, 2 skipped
+scripts/verify-public-edge.sh                      # post-cutover: all ten ok
 ```
 
 ## Metering
