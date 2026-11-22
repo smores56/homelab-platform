@@ -30,7 +30,7 @@ expect "an agent-control change selects its check and lint" $'agent-control\nlin
 expect "a workflow change selects lint" "lint" \
   "$(selected .github/workflows/ci.yml)"
 expect "a docs change selects nothing" "" \
-  "$(selected README.md docs/tenancy.md)"
+  "$(selected README.md docs/broker.md)"
 expect "an unclaimed path selects every group" "$groups" \
   "$(selected brand/new-thing | wc -l | tr -d ' ')"
 expect "--list names each group once" "$groups" \
