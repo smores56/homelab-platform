@@ -25,6 +25,11 @@ by `provision/edge/bootstrap.sh` and rebuilt by reinstalling the OS and running
 it again. Anything stateful that the bootstrap does not recreate must be a
 recovery-kit item or must not exist.
 
+The template's `multipathd`, `ModemManager`, `udisks2`, `upower` and `rsyslog`
+are disabled by the bootstrap: this VM has none of that hardware and journald
+owns the journal. Everything else is a package, not a container — Caddy and
+Tailscale are OS infrastructure on a box whose only application is a TLS proxy.
+
 ## What runs
 
 | Piece | Declared in | Purpose |

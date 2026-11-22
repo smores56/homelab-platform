@@ -46,6 +46,15 @@ if [[ ! -s /usr/share/keyrings/tailscale-archive-keyring.gpg ]]; then
 fi
 apt-get install -y -qq caddy tailscale nftables jq openssl unattended-upgrades >/dev/null
 
+# The template ships daemons for hardware this VM does not have: no multipath
+# storage, no modem, no removable media, no battery, and journald already owns
+# the journal. They cost ~80 MB and four event loops that can only fail, so
+# they are disabled rather than purged (a reinstall starts from the template
+# again anyway).
+for unit in multipathd ModemManager udisks2 upower rsyslog; do
+  systemctl disable --now "$unit" >/dev/null 2>&1 || true
+done
+
 # One name for one box: the panel, the OS and the tailnet all call it smoresnet,
 # so a rebuild does not leave three names for the same host and a person
 # guessing which one a command wants.
