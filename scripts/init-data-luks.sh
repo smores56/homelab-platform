@@ -48,10 +48,12 @@ else
 fi
 
 if ! cryptsetup isLuks "$device"; then
-  # --allow-discards persists the discard flag in the LUKS2 header, the same
-  # setting Ignition wrote for the root volume.
+  # No --allow-discards here: current cryptsetup rejects it on luksFormat, and a
+  # first boot that fails here leaves p5 unformatted and the pool unit with no
+  # device. The flag is an open-time option, persisted into the LUKS2 header by
+  # the open below with --persistent.
   cryptsetup luksFormat --batch-mode --type luks2 --label luks-data \
-    --key-file "$keyfile" --allow-discards "$device"
+    --key-file "$keyfile" "$device"
   echo "init-data-luks: formatted $device with $keyfile"
 fi
 
@@ -67,7 +69,9 @@ if ! grep -qE "^${name}[[:space:]]" "$crypttab" 2>/dev/null; then
 fi
 
 if [[ ! -e $mapper ]]; then
-  cryptsetup open --key-file "$keyfile" "$device" "$name"
+  # --persistent records the discard flag in the LUKS2 header, the same setting
+  # Ignition wrote for the root volume, so every later boot keeps TRIM.
+  cryptsetup open --allow-discards --persistent --key-file "$keyfile" "$device" "$name"
   echo "init-data-luks: opened $mapper"
 else
   echo "init-data-luks: $mapper is already open"

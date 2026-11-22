@@ -105,6 +105,21 @@ if grep -qE '^[[:space:]]*cryptsetup luksFormat' scripts/init-data-luks.sh 2>/de
 else
   bad 'the first-boot oneshot formats the data partition'
 fi
+# cryptsetup refuses --allow-discards on luksFormat (it is an open-time option),
+# so a first boot that formats p5 must not pass it there; the flag is persisted
+# by the open instead, which is what keeps TRIM working through the mapper.
+if grep -A3 -E '^[[:space:]]*cryptsetup luksFormat' scripts/init-data-luks.sh |
+  grep -q -- '--allow-discards'; then
+  bad 'the data format passes no --allow-discards to luksFormat'
+else
+  ok 'the data format passes no --allow-discards to luksFormat'
+fi
+if grep -qE 'cryptsetup open .*--allow-discards --persistent' scripts/init-data-luks.sh; then
+  ok 'the first open persists the discard flag'
+else
+  bad 'the first open persists the discard flag'
+fi
+
 if grep -qE '^ExecStart=/usr/libexec/init-data-luks$' units/systemd/smortress-data-init.service 2>/dev/null; then
   ok 'the image enables the data formatting oneshot'
 else
