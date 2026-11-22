@@ -3,8 +3,12 @@
 # here is an identifier that docs/ prints anyway, and the tests assert this file
 # carries no credential.
 #
-# The cluster host set is not here on purpose: it follows `local.cluster_ingress`
-# in tofu/cluster.tf, so DNS moves with the tunnel route.
+# The cluster host set normally follows `local.cluster_ingress` in
+# tofu/cluster.tf, so DNS moves with the tunnel route. It is pinned here for the
+# edge cutover (#725): `photos` and `opds` have to leave the cluster tunnel in a
+# commit of their own, because Cloudflare refuses two records at one name and an
+# apply cannot order a CNAME destroy before an A create. Delete this line once
+# #709 retires their ingress rules.
 
 account_id = "385f7d47e2e8438fbda5d6f76d760434"
 domain     = "sammohr.dev"
@@ -20,6 +24,8 @@ cluster_tunnel_id = "16a461e2-b28e-4535-b79d-eca2f6e9b001"
 # Empty until the in-VM CSR client has registered; see docs/manual-steps.md
 # step 16. The CAA records are created only once this is set.
 acme_account_id = ""
+
+cluster_hosts = ["agent", "agent-hooks", "memory", "music", "ntfy"]
 
 # The tailnet's name: the label before `.ts.net` MagicDNS names everything on
 # it. Naming it is what creates the ACL in tofu/tailscale.tf; an empty value
