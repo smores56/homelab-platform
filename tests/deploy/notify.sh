@@ -89,7 +89,8 @@ job=$(cat "$work/notify.yml")
 # --- the job is a notification, not a gate ------------------------------------
 
 check_grep "$job" '^    needs: publish$' "notify runs after the build, not before it"
-check_grep "$job" "^    if: github\.ref == 'refs/heads/main'$" "notify runs from main only"
+check_grep "$job" "^    if: github\.event_name == 'workflow_dispatch' && github\.ref == 'refs/heads/main'$" \
+  "notify runs from a main dispatch only"
 check_grep "$job" '^    environment: deploy-notify$' "notify uses its own Environment"
 check_grep "$job" '^    permissions: \{\}$' "notify holds no permission on the repository"
 # The signing key lives in the `server-image` Environment and nowhere else: a job

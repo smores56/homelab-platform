@@ -179,7 +179,10 @@ jobs:
     needs: publish
     # A main push builds and signs the image; deploying it is a deliberate
     # release, so the receiver is told only by an explicit workflow_dispatch.
-    if: github.event_name == 'workflow_dispatch'
+    # The ref guard stays as well: a dispatch can name a branch, and only main
+    # is a release. The Environment's branch policy is the second lock, not
+    # the first.
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     environment: deploy-notify
