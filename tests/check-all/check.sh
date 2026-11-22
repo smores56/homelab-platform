@@ -25,8 +25,8 @@ selected() {
 
 expect "a broker change selects the broker tests" "broker" \
   "$(selected apps/broker/server.py)"
-expect "an agent-control change selects its check and lint" $'agent-control\nlint' \
-  "$(selected tests/agent-control/check.sh)"
+expect "a data-plane change selects its check and lint" $'data-plane\nlint' \
+  "$(selected tests/data-plane/check.sh)"
 expect "a workflow change selects lint" "lint" \
   "$(selected .github/workflows/ci.yml)"
 expect "a docs change selects nothing" "" \

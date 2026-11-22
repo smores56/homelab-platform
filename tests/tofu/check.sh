@@ -663,12 +663,16 @@ fi
 hasnt "no token variable" 'variable "[^"]*token'
 hasnt "no API token attribute" '(api_token|api-key|apikey)[[:space:]]*='
 hasnt "no bearer secret literal" 'Bearer [A-Za-z0-9]'
-if grep -rniE 'cloudflare[_-]?(api[_-])?token' clusters/ | grep -q .; then
-  bad "no cluster manifest carries a Cloudflare token"
+# The cluster tree that carried these manifests is retired, so the trees that
+# remain are what the assertion covers. A grep over a path that no longer
+# exists exits 2 and asserts nothing, which reads as a pass.
+shipped=(apps units image ignition provision deploy images)
+if grep -rniE --exclude='*.md' 'cloudflare[_-]?(api[_-])?token' "${shipped[@]}" | grep -q .; then
+  bad "no shipped tree carries a Cloudflare token"
 else
-  ok "no cluster manifest carries a Cloudflare token"
+  ok "no shipped tree carries a Cloudflare token"
 fi
-if grep -rniE 'cloudflare[_-]?(api[_-])?token' clusters/ | grep -qi nanobot; then
+if grep -rniE 'cloudflare[_-]?(api[_-])?token' images/nanobot/ | grep -qi nanobot; then
   bad "nanobot holds no Cloudflare token"
 else
   ok "nanobot holds no Cloudflare token"

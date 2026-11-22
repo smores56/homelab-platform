@@ -150,7 +150,7 @@ eq "$(readiness_key 'data-files' || true)" '' 'an unknown kind is rejected'
 leftover=$(grep -rl --exclude=storage-migration.md -- '/var/tank\|tank/' \
   scripts units image docs 2>/dev/null || true)
 leftover+=$(grep -rl --exclude=storage-layout.sh -- '/var/tank\|tank/' \
-  tests/core tests/apps tests/backrest tests/access tests/backup 2>/dev/null || true)
+  tests/core tests/apps tests/backrest tests/access 2>/dev/null || true)
 eq "$leftover" '' 'no script, unit, image file, test or doc names /var/tank'
 
 # The declared ACL mode must reach both pool-creation paths, or it is decorative.

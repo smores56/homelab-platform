@@ -1,8 +1,9 @@
 # homelab-platform
 
-Human-owned cluster platform for `smortress`: Flux bootstrap, namespaces, RBAC,
-admission policy, network policy, SOPS/ESO stores, data-bearing app manifests,
-Cloudflare OpenTofu, and the cluster-side CI that guards them.
+Human-owned platform for `smortress`: one immutable uCore bootc server image, the
+Podman Quadlets and systemd units baked into it, ZFS recovery groups backed by the
+host Restic plane, Tailscale Serve for reachability, Cloudflare OpenTofu for the
+public edge, and the offline checks that guard all of it.
 
 Agents (nanobot) never push here. They work in
 [`homelab-apps`](https://github.com/smores56/homelab-apps) and propose platform
@@ -12,60 +13,55 @@ changes by pull request from a fork, so no PR workflow can read a secret.
 
 | Path | Contents |
 | --- | --- |
-| `clusters/homelab/kustomization.yaml` | Flux root build; controller patches live here so bootstrap cannot overwrite them |
-| `clusters/homelab/flux-system/` | Install manifests, root sync objects, `gotk-patches/`, image automation (`image-automation/`), `bootstrap.sh` |
-| `clusters/homelab/platform/` | Ordered stages: namespaces, RBAC, admission policy, network, secrets, storage, backup, digest, data apps, ingress, observability, nanobot policy, tenant reconciler |
-| `clusters/homelab/data/` | Data-bearing apps, one namespace and one virtiofs share each: Immich, Navidrome, OPDShelf, Graphiti (`docs/data-migration.md`) |
-| `clusters/homelab/ingress/` | `cloudflared` for the cluster tunnel; the host tunnel stays human-owned |
-| `clusters/homelab/observability/` | Prometheus, Loki, Vector, status exporter, Loki gateway |
-| `clusters/homelab/broker/` | Credential-injecting broker for agent traffic (`docs/broker.md`) |
-| `clusters/homelab/webhook/` | Inbound webhook receiver behind `agent-hooks.sammohr.dev` (`docs/webhook.md`) |
-| `apps/broker/` | Broker source and unit tests (Python stdlib, no dependencies) |
-| `apps/webhook/` | Webhook receiver source and unit tests (Python stdlib, no dependencies) |
+| `image/` | The server image: Containerfile, rootfs, pins and the cosign public key (`docs/core/server-image.md`) |
+| `units/systemd/` | systemd units baked into the image: gates, backup timers, mounts (Quadlets are below) |
+| `units/quadlet/` | Podman Quadlet workloads: the agents, Immich, OPDShelf, Syncthing and their networks |
+| `ignition/` | First-boot Ignition for the bootc deployment |
+| `scripts/deploy-platform.sh` | The platform deploy path: image change plus a maintenance-window reboot |
+| `scripts/deploy-apps.sh` | The `homelab-apps` tenant deploy path: schemas in, rootless Quadlets out (`docs/core/apps-tenant.md`) |
+| `deploy/data-plane/` | Trees an operator applies rather than the image: relay source schemas and the rendered recovery-group manifest |
+| `libs/data_plane/` | The data-plane library: contracts, event log, write broker, backup runner, migration gates |
+| `apps/broker/` | Broker source and unit tests (Python stdlib, no dependencies) (`docs/broker.md`) |
+| `apps/webhook/` | Webhook receiver source and unit tests (Python stdlib, no dependencies) (`docs/webhook.md`) |
 | `apps/agent_facade/` | MCP source facades and portable memory for the two agent deployments (`docs/agent-facade.md`) |
-| `images/nanobot/` | Agent image source (Dockerfile, entrypoint, `render.py`); published by `publish-nanobot.yml` |
-| `units/` | systemd units and Quadlets baked into the derived server image (`docs/core/server-image.md`) |
-| `image/` | The server image's Containerfile, rootfs, pins and cosign public key |
-| `tests/policies/` | Static + runtime policy checks, fixtures, expectation tables |
-| `tests/core/` | Offline checks for the core gate, the Restic plane, the apps tenant and the Serve routes |
-| `tests/deploy/` | Offline checks for the deploy receiver: listener, verification, gates, apps apply, CI notify |
-| `tests/tofu/` | Static assertions on the Cloudflare config (`tests/tofu/check.sh`) |
-| `tests/backup/` | Offline argument/URL shape tests for the repository mirror (`tests/backup/check.sh`) |
-| `tests/digest/` | Digest builder fixtures and rendered contract (`tests/digest/check.sh`) |
-| `tests/access/` | Live Access default-deny probe (`tests/access/check.sh`, skips without a token) |
-| `tests/edge/` | Offline checks for the public-edge probe (`tests/edge/check.sh`) |
+| `apps/data_plane/` | CLI entry points for the data-plane library |
+| `apps/recovery-page/` | The static recovery page, built against the rendered manifest (`docs/core/recovery-kit.md`) |
+| `backrest/` | The Backrest reader Worker: source, TypeScript typecheck and static tests (`docs/core/backrest.md`) |
+| `images/` | Container image sources: nanobot, the agents, data-plane, brave, tuta-calendar |
 | `tofu/` | Cloudflare OpenTofu (provider v5), Access default-deny, CAA (`docs/cloudflare.md`), tailnet policy |
 | `provision/edge/` | The public edge VPS bootstrap, Caddyfile, firewall and on-box verify (`docs/core/public-edge.md`) |
+| `provision/smortress/` | Autoinstall user-data for the bootc host |
+| `secrets/` | SOPS+age ciphertext, decrypted at boot or by the operator; CI references none |
+| `tests/core/` | Offline checks for the core gate, the Restic plane, the apps tenant and the Serve routes |
+| `tests/data-plane/` | Data-plane unit tests: contracts, backup plan, migration gates, restore planning |
+| `tests/deploy/` | Offline checks for the deploy receiver: listener, verification, gates, apps apply, CI notify |
+| `tests/tofu/` | Static assertions on the Cloudflare config (`tests/tofu/check.sh`) |
+| `tests/access/` | Live Access default-deny probe (`tests/access/check.sh`, skips without a token) |
+| `tests/edge/` | Offline checks for the public-edge probe (`tests/edge/check.sh`) |
 | `scripts/` | CI helpers, shellchecked |
-| `docs/` | Flux, tenancy, observability, broker, webhook, agent facade, runbook, negative tests, manual steps |
+| `docs/` | Core image, apps tenant, Restic plane, backrest, public edge, recovery kit, broker, webhook, agent facade, runbook, manual steps |
 
 ## Local checks
 
 ```sh
-scripts/install-ci-tools.sh "$HOME/.local/bin"   # pinned kustomize, kubeconform, tofu, vector, yq
-kustomize build clusters/homelab/platform
-yamllint .
-shellcheck scripts/*.sh
-scripts/check-action-pins.sh
-scripts/check-pr-secret-boundary.sh
-scripts/check-codeowners.sh
-tests/policies/check.sh                  # static policy, RBAC, network, broker and webhook checks
-python3 -m unittest discover -s apps/broker/tests -t apps/broker   # broker unit tests
-python3 -m unittest discover -s apps/webhook/tests -t apps/webhook  # webhook unit tests
-python3 -m unittest discover -s apps/agent_facade/tests -t apps/agent_facade  # agent facade unit tests
+scripts/check-all.sh                     # every group, in parallel
+scripts/check-all.sh --changed           # only the groups this branch touches
+scripts/check-all.sh --list              # the groups and their commands
+
+scripts/install-ci-tools.sh ~/.local/bin # the pinned tool the tofu group needs
 tests/tofu/check.sh                      # Cloudflare config shape, no credentials
-tests/backup/check.sh                    # mirror script shape, no network
-tests/access/check.sh                    # live Access deny, skips without a token
-tests/observability/check.sh             # vector unit tests, config lint, exporter tests
-tests/digest/check.sh                    # digest builder fixtures and manifest contract
+tests/data-plane/check.sh                # data-plane unit tests, no host
 tests/core/check.sh                      # core gate, apps tenant, Restic plane and deploy docs
 tests/deploy/*.sh                        # deploy receiver, verification, gates, apps apply, notification
+tests/access/check.sh                    # live Access deny, skips without a token
+scripts/render-recovery-groups.py --check # the recovery manifest matches its source
 ```
 
-CI (`.github/workflows/ci.yml`) runs the same checks with pinned tool versions;
+`scripts/check-all.sh` is the source of truth for what runs; CI
+(`.github/workflows/ci.yml`) runs the same commands, sharded into jobs.
 `.github/workflows/tofu-plan.yml` and `tofu-apply.yml` own the `cloudflare`
-environment. `tofu-plan` is a read-only drift check on `main`; `tofu-apply` is
-`workflow_dispatch` only and applies a reviewed plan (SDLC #622).
+environment: `tofu-plan` is a read-only drift check on `main`, and `tofu-apply`
+is `workflow_dispatch` only and applies a reviewed plan (SDLC #622).
 
 ## Ownership
 
