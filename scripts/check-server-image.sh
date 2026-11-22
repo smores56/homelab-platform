@@ -1199,6 +1199,25 @@ for unit in units/systemd/smortress-agent-brave-seed.service \
   check "$unit mounts the installed tree" \
     has '--volume /usr/lib/agent-facade:/usr/lib/agent-facade:ro' "$unit"
 done
+# The same programs are being moved out of this image and into the runtime image
+# (images/agent-runtime/Containerfile, publish-agent-runtime.yml), so an agent
+# change rebuilds a container instead of the OS. The list has to match there for
+# the same reason it matches here: a module left out is an import error at the
+# first start.
+for module in apps/agent_facade/*.py apps/brave_ingest/*.py; do
+  check "the runtime image installs ${module#apps/}" \
+    has "$module" images/agent-runtime/Containerfile
+done
+check "the runtime image installs the facade libraries" \
+  has 'libs/data_plane/ /usr/lib/agent-facade/libs/data_plane/' images/agent-runtime/Containerfile
+check "the runtime image installs the proxy" \
+  has 'apps/agent_proxy/proxy.py /usr/libexec/agent-proxy' images/agent-runtime/Containerfile
+if grep -qE '^COPY.*apps/(agent_facade|agent_proxy)/tests' \
+  images/agent-runtime/Containerfile; then
+  bad "the runtime image ships no test suite"
+else
+  ok "the runtime image ships no test suite"
+fi
 check "the browser unit ships with the egress gate it depends on" \
   has 'units/quadlet/agent-brave.container' image/Containerfile
 check "Syncthing's sync port is permitted on the tailscale zone" \
