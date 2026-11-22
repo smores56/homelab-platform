@@ -101,6 +101,12 @@ if [[ -n ${EDGE_HOST_KEY:-} ]]; then
   chmod 0644 /etc/ssh/ssh_host_ed25519_key.pub
   rm -f -- "$EDGE_HOST_KEY"
 fi
+# ed25519 is the only host key, as on smortress. The template's rsa and ecdsa
+# pairs are in no kit, so after a rebuild they would regenerate silently and
+# present a second identity the operator has never verified. sshd re-reads host
+# keys on the reload below.
+rm -f /etc/ssh/ssh_host_rsa_key /etc/ssh/ssh_host_rsa_key.pub \
+  /etc/ssh/ssh_host_ecdsa_key /etc/ssh/ssh_host_ecdsa_key.pub
 sshd -t
 systemctl reload ssh 2>/dev/null || systemctl reload sshd
 

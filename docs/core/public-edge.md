@@ -168,9 +168,9 @@ what the repository *cannot* reproduce, with what is done about each item.
 | First login on a replacement box | The template installs the order form's key, or the console. `authorized_keys` in the repo is appended by the bootstrap, so *this* login is reproducible after that first contact. |
 | ctrl account and its second factor | Recovery-kit row. Without it there is no console and no reinstall. |
 | Tailnet identity (the join key) | A preauthorized `tag:vps` key is single-use and minted in the Tailscale console per rebuild; the admin login and 2FA codes are a kit row. Not automated on purpose: the alternative is a long-lived, reusable credential on a public box's rebuild path. |
-| SSH host key | Kit row plus `EDGE_HOST_KEY`; omitted, the box generates a new one and every `known_hosts` entry goes stale. |
+| SSH host key (ed25519 only) | Kit row plus `EDGE_HOST_KEY`; omitted, the box generates a new one and every `known_hosts` entry goes stale. The template's rsa and ecdsa pairs are deleted, because they are in no kit and would be a second, never-verified identity. |
 | Caddy's data directory (ACME account, certificates) | Not restored. A rebuild re-issues, which costs seconds and needs nothing from the kit; the account it replaces is not pinned by CAA, so a new one is valid immediately. |
-| Panel network firewall | Manual per rebuild: `tcp/443`, `udp/41641`, ICMP echo. Console/VNC bypasses it, so it cannot lock the box out. |
+| Panel network firewall | Manual per *service*: `tcp/443`, `udp/41641`, ICMP echo. It survives an OS reinstall and must be set again only for a replacement VPS. Console/VNC bypasses it, so it cannot lock the box out. |
 | The public IPv4 | May change on a replacement (not on a reinstall). Cutover and probes take `EDGE_IP`, and DNS is `var.edge_ipv4` in tofu. |
 | Hostname | Closed: the bootstrap sets `smoresnet` on the OS and on the tailnet. |
 | Package versions | Distro packages plus unattended upgrades; deliberately unpinned, so a rebuild may pick up newer Caddy. The bootstrap's 2.6 gate is the only floor. |

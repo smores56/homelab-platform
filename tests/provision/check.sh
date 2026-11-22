@@ -88,6 +88,7 @@ check "sshd hardening sorts before cloud-init" has '05-edge-hardening.conf' "$ed
 check "the bootstrap refuses a Caddy older than 2.6" has 'is too old; the Caddyfile needs 2.6' "$edge/bootstrap.sh"
 check "the bootstrap unmasks the packaged Caddy unit" has 'systemctl unmask caddy' "$edge/bootstrap.sh"
 check "the bootstrap restores the kit's host key" has 'EDGE_HOST_KEY' "$edge/bootstrap.sh"
+check "the bootstrap drops the template's other host keys" has 'rm -f /etc/ssh/ssh_host_rsa_key' "$edge/bootstrap.sh"
 check "the verify proves the node carries the edge tag" has 'tag:vps' "$edge/verify.sh"
 check "the verify proves the tailnet name" has 'startswith("smoresnet.")' "$edge/verify.sh"
 check "the repository login key is one ed25519 line" one_login_key
