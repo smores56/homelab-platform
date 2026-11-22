@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
 # Decrypt every listed SOPS ciphertext into /run with least-privilege ownership
-# and mode. The age identity is staged root-only from the offline recovery kit;
-# the image carries ciphertext only. No plaintext is written outside /run.
+# and mode. The age identity and the ciphertext are both root-only on /var, which
+# bootc never reconciles: a rotation is an operator write and a restart of this
+# unit, not an OS image and a reboot. (The image still carries a set to seed a
+# host that has none; see scripts/smortress-secrets-seed.sh.) No plaintext is
+# written outside /run.
 #
 # The manifest has five columns: name uid gid mode [format]. `format` is `yaml`
 # (the default; the decrypted file is written verbatim) or `value` (the sole
 # top-level scalar is written, which is what a restic password file must be).
 set -euo pipefail
 
-src=${SMORTRESS_SECRETS_SRC:-/etc/smortress/secrets}
+src=${SMORTRESS_SECRETS_SRC:-/var/lib/smortress/secrets}
 dst=${SMORTRESS_SECRETS_DST:-/run/smortress/secrets}
 manifest=${SMORTRESS_SECRETS_MANIFEST:-/etc/smortress/secrets.manifest}
 age_key=${SMORTRESS_AGE_KEY:-/var/lib/homelab/age/keys.txt}

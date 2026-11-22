@@ -704,6 +704,35 @@ run scripts/sops-decrypt.sh
 if ((rc != 0)); then ok "an unlisted ciphertext still fails closed"; else bad "an unlisted ciphertext still fails closed"; fi
 rm -f "$dec/src/extra.yaml"
 
+# --- 7b. the ciphertext seed that makes /var authoritative ----------------
+# The decrypt reads /var now, and the image's baked set is only the seed for a
+# host that has none. Nothing may overwrite a host copy: that is where a rotation
+# lands, and reinstating the baked value would silently undo it.
+seed=$work/seed
+install -d -m 0700 "$seed/baked"
+printf 'canary: baked\n' >"$seed/baked/canary.yaml"
+printf 'password: baked\n' >"$seed/baked/restic-password.yaml"
+run env SMORTRESS_SECRETS_BAKED="$seed/baked" SMORTRESS_SECRETS_SRC="$seed/host" \
+  scripts/smortress-secrets-seed.sh
+eq "$rc" 0 "the seed copies the baked ciphertext"
+eq "$(cat "$seed/host/canary.yaml" 2>/dev/null)" "canary: baked" "the ciphertext lands"
+eq "$(stat -c %a "$seed/host/canary.yaml" 2>/dev/null)" 600 "the ciphertext is root-only"
+eq "$(stat -c %a "$seed/host" 2>/dev/null)" 700 "the host directory is root-only"
+
+printf 'canary: rotated\n' >"$seed/host/canary.yaml"
+run env SMORTRESS_SECRETS_BAKED="$seed/baked" SMORTRESS_SECRETS_SRC="$seed/host" \
+  scripts/smortress-secrets-seed.sh
+eq "$(cat "$seed/host/canary.yaml")" "canary: rotated" "a host copy is never overwritten"
+
+rm -f "$seed/baked"/*.yaml
+rm -f "$seed/host"/*.yaml
+run env SMORTRESS_SECRETS_BAKED="$seed/baked" SMORTRESS_SECRETS_SRC="$seed/host" \
+  scripts/smortress-secrets-seed.sh
+eq "$rc" 0 "nothing baked is not an error"
+if [[ -e $seed/host/canary.yaml ]]; then bad "nothing baked copies nothing"; else
+  ok "nothing baked copies nothing"
+fi
+
 # --- 8. units cannot start before the dataset is ready ------------------
 svc=units/systemd/smortress-restic-backup@.service
 for key in "${dataset_order[@]}"; do

@@ -16,7 +16,7 @@ rollback path. Operator-only actions are in `docs/manual-steps.md` section 37.
 | `/etc/containers/registries.d/ghcr.io-smortress.yaml` | Enables cosign signature lookup for our GHCR repository. |
 | `/etc/pki/containers/smortress.pub` | Public half of the operator cosign key. The private half is an environment secret and a recovery-kit item. |
 | `/usr/bin/{sops,age,age-keygen,restic}` | Hash-pinned release binaries from `image/pins.env`; no distribution drift. |
-| `/etc/smortress/secrets/*.yaml` | SOPS ciphertext only. `image/rootfs/etc/smortress/secrets.manifest` fixes the decrypted owner, group and mode. |
+| `/var/lib/smortress/secrets/*.yaml` | SOPS ciphertext only, root-only (`0700` dir, `0600` files), on `/var` so an image never overwrites it. `image/rootfs/etc/smortress/secrets.manifest` fixes the decrypted owner, group and mode. The image also carries a copy under `/etc/smortress/secrets`, which only seeds a host that has none yet (`scripts/smortress-secrets-seed.sh`). |
 | `/usr/lib/systemd/system/zfs-ready@.service` | One readiness instance per recovery group; verifies the mount, not the directory. |
 | `/usr/lib/systemd/system/sops-decrypt.service` | Boot-ordered decrypt into `/run/smortress/secrets`. |
 | `/usr/lib/systemd/system/smortress-password.service` | Re-applies the `smores` account password hash through `chpasswd -e` at every boot from `/run/smortress/secrets/smores-password-hash.yaml`; bootc never reconciles `/var`, so `/etc/shadow` would otherwise be whatever the install left there. |

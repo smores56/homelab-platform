@@ -3110,13 +3110,21 @@ repositories are brought up alone.
    sops secrets/server/r2-credentials.yaml
    ```
 
-   Replace both values and save. Publish, then deploy per section 37 step 15 so
-   `/run` carries the new key. The deployment reference is a digest, so `sudo
-   bootc upgrade` alone re-checks the build already running and moves nothing:
-   switch to the published digest, and take `bootc upgrade` only on a host
-   following `:latest`. A token rotated without a deployment leaves the old key
-   in use until the next boot. Do not create a second credentials file, and do
-   not touch the legacy migration bucket.
+   Replace both values and save. The host reads the ciphertext from
+   `/var/lib/smortress/secrets`, so the rotation lands there and is re-decrypted
+   without an image or a reboot:
+
+   ```sh
+   sudo install -m 0600 -o root -g root secrets/server/r2-credentials.yaml \
+     /var/lib/smortress/secrets/r2-credentials.yaml
+   sudo systemctl restart sops-decrypt.service
+   sudo systemctl restart smortress-restic-backup@ssd.service   # and the other three
+   ```
+
+   A container that mounts the decrypted file keeps the old one until it
+   restarts, and `/run` is tmpfs, so the next boot re-decrypts the new file. Do
+   not create a second credentials file, and do not touch the legacy migration
+   bucket.
 
 3. Create the Healthchecks.io check and commit its ping URL. In the
    Healthchecks.io dashboard create one check named `smortress restic
@@ -3139,10 +3147,17 @@ repositories are brought up alone.
    healthchecks.yaml       root  root  0400
    ```
 
-   Publish the image, then deploy it per section 37 step 15: switch to the
-   published digest, since `sudo bootc upgrade` moves a host only if it follows
-   `:latest`. The URL is a capability: never commit it plaintext, and treat a
-   leaked URL as a rotated check.
+   A *new* secret also needs its host copy, because the seed copies only the set
+   the image was built with:
+
+   ```sh
+   sudo install -m 0600 -o root -g root secrets/server/healthchecks.yaml \
+     /var/lib/smortress/secrets/healthchecks.yaml
+   sudo systemctl restart sops-decrypt.service
+   ```
+
+   The URL is a capability: never commit it plaintext, and treat a leaked URL as
+   a rotated check.
 
 4. Prove decryption, then initialise. `restic-init` never re-initialises an
    existing repository and refuses to create one under an unmounted mountpoint.
@@ -3635,7 +3650,7 @@ path, and the sudoers drop-in strips inherited `SOPS_AGE_*` variables, so plain
 
 ```sh
 sudo sops --decrypt --extract '["password"]' \
-  /etc/smortress/secrets/immich-db-password.yaml
+  /var/lib/smortress/secrets/immich-db-password.yaml
 ```
 
 Rotating a value that a container reads is one step; rotating a password the
@@ -3645,7 +3660,7 @@ Change the role first, on the running cluster:
 
 ```sh
 sudo podman exec -i immich-postgres psql -U immich -d immich \
-  -c "ALTER USER immich WITH PASSWORD '$(sudo sops --decrypt --extract '["password"]' /etc/smortress/secrets/immich-db-password.yaml)'"
+  -c "ALTER USER immich WITH PASSWORD '$(sudo sops --decrypt --extract '["password"]' /var/lib/smortress/secrets/immich-db-password.yaml)'"
 ```
 
 Then edit the ciphertext, publish a new image, reboot, and recreate the
@@ -3839,7 +3854,7 @@ the server, or rotate the ciphertext — otherwise the server cannot authenticat
 
 ```sh
 sudo podman exec -i drill-pg psql -U immich -d immich \
-  -c "ALTER USER immich WITH PASSWORD '$(sudo sops --decrypt --extract '["password"]' /etc/smortress/secrets/immich-db-password.yaml)'"
+  -c "ALTER USER immich WITH PASSWORD '$(sudo sops --decrypt --extract '["password"]' /var/lib/smortress/secrets/immich-db-password.yaml)'"
 ```
 
 **OPDShelf.** Nothing stateful to rebuild; prove the tree serves.

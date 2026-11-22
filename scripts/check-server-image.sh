@@ -689,6 +689,14 @@ while read -r name; do
   check "$name has committed ciphertext" test -s "secrets/server/$name"
 done < <(awk '!/^[[:space:]]*(#|$)/ { print $1 }' image/rootfs/etc/smortress/secrets.manifest)
 
+# The ciphertext moved from the image to /var: a rotation is an operator write and
+# a restart of the decrypt unit, not an OS image and a reboot. The baked set is
+# only the seed for a host that has none yet.
+check "the boot decrypt reads the host ciphertext" \
+  has 'SMORTRESS_SECRETS_SRC:-/var/lib/smortress/secrets' scripts/sops-decrypt.sh
+check "the boot decrypt seeds the host copy first" \
+  has 'ExecStartPre=/usr/libexec/smortress-secrets-seed' units/systemd/sops-decrypt.service
+
 # The smores account password (design #767, T3). It was an operator file Ignition
 # read at install time; bootc never reconciles /var, so the value ships as
 # ciphertext instead and is consumed twice -- by the renderer for the install and

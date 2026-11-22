@@ -6,7 +6,8 @@
 #
 # The auth key is optional. Without it the unit is skipped and the operator runs
 # `tailscale up --hostname smortress` once by hand. With it, the ciphertext in
-# /etc/smortress/secrets decrypts to /run at boot as `authkey: tskey-...`.
+# /var/lib/smortress/secrets/tailscale.yaml decrypts to /run at boot as
+# `authkey: tskey-...`.
 # Requires= is deliberate: a failed decrypt must not run `tailscale up` with an
 # empty key. The key reaches the command through a temporary file, never argv.
 #

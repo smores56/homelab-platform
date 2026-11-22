@@ -1,8 +1,9 @@
 [Unit]
 Description=Decrypt SOPS ciphertext into /run/smortress/secrets
-# Boot-ordered: after the root filesystem (and therefore the age identity on
-# /var) is available, before Quadlets that require it. A missing identity or a
-# missing ciphertext fails the unit, so every depending container fails closed.
+# Boot-ordered: after the root filesystem (and therefore the age identity and the
+# ciphertext on /var) is available, before Quadlets that require it. A missing
+# identity or a missing ciphertext fails the unit, so every depending container
+# fails closed.
 After=local-fs.target
 Before=multi-user.target
 
@@ -10,6 +11,9 @@ Before=multi-user.target
 Type=oneshot
 RemainAfterExit=yes
 UMask=0077
+# A host that predates the ciphertext's move to /var has none there yet; the seed
+# copies the baked set once and never overwrites a rotation.
+ExecStartPre=/usr/libexec/smortress-secrets-seed
 ExecStart=/usr/libexec/sops-decrypt
 
 [Install]
