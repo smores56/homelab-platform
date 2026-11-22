@@ -3,11 +3,9 @@
 #
 # Code delivery is the agent-proxy pattern (units/quadlet/agent-proxy.container):
 # the same pinned agent-runtime image, `Entrypoint=python3` instead of the image's
-# gateway dispatcher, and the program itself bind-mounted from the HOST. The
-# program is not in the upstream image, so image/Containerfile installs it under
-# /usr/lib/agent-facade and this unit mounts that tree read-only. Nothing here is
-# a second copy of the code: the host path is the only copy, and the mount is
-# what makes it exist inside this namespace.
+# gateway dispatcher, and the program in the image at the path PYTHONPATH names
+# (images/agent-runtime/Containerfile). No host mount: an agent change rebuilds
+# that container image, not the OS, and there is no second copy to drift.
 #
 # It publishes nothing, and that is the boundary: its only client is
 # smortress-agent-local, which reaches it by container name on
@@ -34,7 +32,7 @@ After=network-online.target zfs-ready@state-agent-local.service sops-decrypt.ser
 Wants=network-online.target
 
 [Container]
-Image=ghcr.io/smores56/homelab-platform/agent-runtime@sha256:276d44685c65c0cb2a25f190b63c65c8906f9dc76486fb1c05ae71b5826bda08
+Image=ghcr.io/smores56/homelab-platform/agent-runtime@sha256:f3bbf4f4c20402a681e81d2fc0ea34ebad065e7e0e36b3cdf5cbce780790b88f
 ContainerName=smortress-agent-facade-personal
 Network=agent-local.network
 User=1000:1000
@@ -42,12 +40,11 @@ Entrypoint=python3
 Exec=-m apps.agent_facade --transport http --deployment personal --token-file /run/secrets/agent-facade-personal-token --memory-root /memory --index-root /index --host 0.0.0.0 --port 18004
 Secret=agent-facade-personal-token,type=mount,target=/run/secrets/agent-facade-personal-token,uid=1000,gid=1000,mode=0400
 Environment=PYTHONPATH=/usr/lib/agent-facade/libs:/usr/lib/agent-facade
-# The code tree is mounted read-only, so a bytecode cache write can only fail.
+# The image layer carrying the code is read-only, so a bytecode cache write can only fail.
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=TZ=UTC
 # No :z here: /usr is a read-only composefs mount, so a relabel fails with EROFS.
 # /usr content is already readable by the container type; only dataset mounts relabel.
-Volume=/usr/lib/agent-facade:/usr/lib/agent-facade:ro
 Volume=/var/lib/agent/local/memory:/memory:z
 # The derived source index (apps/agent_facade/source_index.py): one SQLite file per
 # replica source and generation, rebuilt when a generation publishes a new one and

@@ -1178,14 +1178,12 @@ else
   ok "the image ships no facade test suite"
 fi
 for q in units/quadlet/agent-facade-personal.container units/quadlet/agent-facade-general.container; do
-  check "$q mounts the installed tree" \
-    has 'Volume=/usr/lib/agent-facade:/usr/lib/agent-facade:ro' "$q"
+  check "$q mounts no host copy of the facade" lacks 'Volume=/usr/lib/agent-facade' "$q"
 done
-# The other half of the same delivery: a program the image installs on the HOST has
-# to be mounted into the container that runs it. agent-proxy shipped its `Exec=`
-# with no mount, so python3 exited on a path that was not in its namespace.
-check "the proxy unit mounts its own program" \
-  has 'Volume=/usr/libexec/agent-proxy:/usr/libexec/agent-proxy:ro' units/quadlet/agent-proxy.container
+# The program lives in the runtime image now, so a mount from the host would be a
+# second copy that can drift from the one the pin names.
+check "the proxy unit mounts no host copy of its program" \
+  lacks 'Volume=/usr/libexec/agent-proxy' units/quadlet/agent-proxy.container
 # The browsing collector's provider half (`apps/brave_ingest/`: the seed planter and
 # the History snapshot) runs in the same agent-runtime image and imports nothing
 # outside that tree, so it ships beside the facade modules for the same reason: a
@@ -1196,8 +1194,7 @@ for module in apps/brave_ingest/*.py; do
 done
 for unit in units/systemd/smortress-agent-brave-seed.service \
   units/systemd/smortress-agent-collect-brave.service; do
-  check "$unit mounts the installed tree" \
-    has '--volume /usr/lib/agent-facade:/usr/lib/agent-facade:ro' "$unit"
+  check "$unit mounts no host copy of the tree" lacks '--volume /usr/lib/agent-facade' "$unit"
 done
 # The same programs are being moved out of this image and into the runtime image
 # (images/agent-runtime/Containerfile, publish-agent-runtime.yml), so an agent

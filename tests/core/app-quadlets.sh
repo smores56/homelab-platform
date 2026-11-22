@@ -690,13 +690,31 @@ else
 fi
 
 # 12. Code delivery. A Quadlet hands `Exec=`/`Entrypoint=` a program that has to
-#     exist inside the container's own filesystem, and the agent-runtime image is
-#     not ours: nothing this repository builds is in it. So every absolute path a
-#     unit names is either bind-mounted from the host tree or one of the
-#     interpreters every image carries. agent-proxy shipped
-#     `Exec=/usr/libexec/agent-proxy` with no mount, and python3 started against a
-#     path that was not there -- this is the assertion that would have caught it.
+#     exist inside the container's own filesystem. The agent-runtime image is ours
+#     now (images/agent-runtime/Containerfile), so a path is delivered when that
+#     image installs it, when a Volume= or Secret= puts it there, or when it is one
+#     of the interpreters every image carries. agent-proxy once shipped
+#     `Exec=/usr/libexec/agent-proxy` with neither a mount nor the program, and
+#     python3 started against a path that was not there -- this is the assertion
+#     that would have caught it.
 readonly image_interpreters=(/bin/sh /bin/bash /usr/bin/python3 /usr/bin/env /usr/bin/sh)
+readonly runtime_containerfile=images/agent-runtime/Containerfile
+runtime_image_paths() { # the destinations the runtime image COPYs into place
+  awk '/^COPY / { line = $0
+                 while (line ~ /\\$/) { getline nxt; line = line " " nxt }
+                 n = split(line, f, /[[:space:]]+/)
+                 if (f[n] ~ /^\//) print f[n] }' "$runtime_containerfile"
+}
+baked_by_runtime_image() { # path
+  local dest
+  while IFS= read -r dest; do
+    [[ -n $dest ]] || continue
+    # A parent directory is delivered too: installing a file creates it, which is
+    # how /usr/lib/agent-facade resolves though only its children are COPYed.
+    [[ $1 == "$dest" || $1 == "$dest"/* || $dest == "$1"/* ]] && return 0
+  done < <(runtime_image_paths)
+  return 1
+}
 volume_container_paths() { sed -n 's|^Volume=[^:]*:\([^:]*\).*|\1|p' "$1"; }
 secret_targets() { sed -n 's/^Secret=.*target=\([^,]*\).*/\1/p' "$1"; }
 covered_by_volume() { # quadlet path
@@ -721,12 +739,13 @@ for q in "${app_quadlets[@]}"; do
     for interpreter in "${image_interpreters[@]}"; do
       [[ $path == "$interpreter" ]] && accounted=1
     done
+    if ((!accounted)) && baked_by_runtime_image "$path"; then accounted=1; fi
     if ((!accounted)) && covered_by_volume "$q" "$path"; then accounted=1; fi
     if ((!accounted)) && covered_by_secret "$q" "$path"; then accounted=1; fi
     if ((accounted)); then
       ok "$q delivers $path"
     else
-      bad "$q delivers $path" "no Volume= or Secret= puts it inside the container"
+      bad "$q delivers $path" "neither the runtime image nor a Volume=/Secret= puts it inside the container"
     fi
   done < <(sed -n 's/^\(Exec\|Entrypoint\)=//p' "$q" | tr ' ' '\n' |
     grep -E '^/[A-Za-z0-9._/-]+$' | sort -u)
@@ -735,10 +754,10 @@ done
 # what has to be inside the container is the directory PYTHONPATH names.
 for q in units/quadlet/agent-facade-personal.container units/quadlet/agent-facade-general.container; do
   if [[ $(sed -n 's/^Environment=PYTHONPATH=//p' "$q") == /usr/lib/agent-facade/libs:/usr/lib/agent-facade ]] &&
-    covered_by_volume "$q" /usr/lib/agent-facade; then
-    ok "$q mounts the tree its PYTHONPATH names"
+    baked_by_runtime_image /usr/lib/agent-facade; then
+    ok "$q names a tree its own image carries"
   else
-    bad "$q mounts the tree its PYTHONPATH names"
+    bad "$q names a tree its own image carries"
   fi
 done
 # The collectors run the same package through a plain podman unit, where the
@@ -994,10 +1013,11 @@ for collector_case in "${collector_cases[@]}"; do
       bad "$name collector runs a pinned image from the table" "$image"
     fi
   done < <(grep -oE 'ghcr\.io/smores56/homelab-platform/[a-z-]+@sha256:[0-9a-f]{64}' "$collector")
-  if grep -qF -- '/usr/lib/agent-facade:/usr/lib/agent-facade:ro' "$collector"; then
-    ok "$name collector runs the code the booted image ships"
+  if baked_by_runtime_image /usr/lib/agent-facade &&
+    ! grep -qF -- '/usr/lib/agent-facade:/usr/lib/agent-facade:ro' "$collector"; then
+    ok "$name collector runs the code its own image ships"
   else
-    bad "$name collector runs the code the booted image ships"
+    bad "$name collector runs the code its own image ships"
   fi
   if [[ -f $collector_timer ]]; then
     eq "$(sed -n 's/^Unit=//p' "$collector_timer")" "$(basename "$collector")" \

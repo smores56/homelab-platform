@@ -4042,8 +4042,8 @@ sudo systemctl start agent-model.service agent-facade-personal.service agent-loc
 
 `systemctl cat` is the ground truth: it prints the unit the generator produced, so a
 `Network=` that resolved to nothing, a `Secret=` that no Podman secret satisfies, or
-a `Volume=` whose host path is missing (`statfs /usr/lib/agent-facade: no such file
-or directory`) is visible before anything is started.
+a `Volume=` whose host path is missing (`statfs /var/lib/agent/general/memory: no
+such file or directory`) is visible before anything is started.
 
 Start them in dependency order and read the one thing each step produces:
 

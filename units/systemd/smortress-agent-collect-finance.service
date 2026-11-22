@@ -41,12 +41,11 @@ ExecStart=/usr/bin/podman run --rm --name smortress-agent-collect-finance \
   --read-only --cap-drop=all --security-opt no-new-privileges \
   --tmpfs /tmp:rw,size=16m --user 1000:1000 \
   --secret simplefin-access-url,type=mount,uid=1000,gid=1000,mode=0400 \
-  --volume /usr/lib/agent-facade:/usr/lib/agent-facade:ro \
   --volume /var/lib/agent/local/replica:/replica:z \
   --env PYTHONPATH=/usr/lib/agent-facade/libs:/usr/lib/agent-facade \
   --env PYTHONDONTWRITEBYTECODE=1 \
   --entrypoint python3 \
-  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:276d44685c65c0cb2a25f190b63c65c8906f9dc76486fb1c05ae71b5826bda08 \
+  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:f3bbf4f4c20402a681e81d2fc0ea34ebad065e7e0e36b3cdf5cbce780790b88f \
   -m data_plane.collectors.raw --root /replica/finance \
   finance --access-url-file /run/secrets/simplefin-access-url --include-pending
 # The projection stage. It has no network (`--network none`, not the collector's),
@@ -62,13 +61,12 @@ ExecStart=/usr/bin/podman run --rm --name smortress-agent-collect-finance-hledge
   --network none \
   --read-only --cap-drop=all --security-opt no-new-privileges \
   --tmpfs /tmp:rw,size=16m --user 1000:1000 \
-  --volume /usr/lib/agent-facade:/usr/lib/agent-facade:ro \
   --volume /var/lib/agent/local/replica:/replica:ro \
   --volume /var/lib/agent/local/index:/index:z \
   --env PYTHONPATH=/usr/lib/agent-facade/libs:/usr/lib/agent-facade \
   --env PYTHONDONTWRITEBYTECODE=1 \
   --entrypoint python3 \
-  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:276d44685c65c0cb2a25f190b63c65c8906f9dc76486fb1c05ae71b5826bda08 \
+  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:f3bbf4f4c20402a681e81d2fc0ea34ebad065e7e0e36b3cdf5cbce780790b88f \
   -m data_plane.derived.hledger --replica /replica/finance \
   --accounts /index/hledger/accounts.json --out /index/hledger/finance.journal
 # A refusal exits 3 and publishes nothing; the next run tries again. Anything

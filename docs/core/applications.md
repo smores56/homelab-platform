@@ -57,21 +57,25 @@ the digest that run produced.
 | `opdshelf` | `…/opdshelf@sha256:b82f94f7…` | `docker.io/koalilla/opds-server@sha256:b82f94f7…` |
 | `syncthing` | `…/syncthing@sha256:2b71da7c…` | `docker.io/syncthing/syncthing:2.1.7` |
 | `agent-model` | `…/agent-model@sha256:26f89ebd…` | `ghcr.io/ggml-org/llama.cpp:server-cuda` (b12602) |
-| `agent-runtime` | `…/agent-runtime@sha256:276d4468…` | `docker.io/nousresearch/hermes-agent:v0.23.1` |
+| `agent-runtime` | `…/agent-runtime@sha256:f3bbf4f4…` | built from `images/agent-runtime/Containerfile` (base `docker.io/nousresearch/hermes-agent@sha256:276d4468…`) |
 | `agent-webui` | `…/agent-webui@sha256:fb50509e…` | built from `images/agent-webui/Containerfile` |
 
-`agent-webui` is the one built row. It is the same trust story with one
-difference: the digest is the last build's, so the row and the run that printed it
-are the record of what is deployed. Upstream's image cannot be mirrored into
+`agent-runtime`, `agent-webui`, `tuta-calendar`, `brave` and `agent-egress` are
+built rows. They are the same trust story with one difference: the digest is the
+last build's, so the row and the run that printed it are the record of what is
+deployed. Upstream's image cannot be mirrored into
 service, because its entrypoint installs the dependencies from PyPI at container
 start and the personal deployment has no route off the host; the Containerfile
 moves that install to build time.
 
-`agent-runtime` is drawn by five Quadlets: the two gateways, the hosted proxy and
-the two source facades. The proxy and the facades are Python programs in this
-repository (`apps/agent_proxy/`, `apps/agent_facade/`), so they need
-no image of their own and no package manager, and a third pin would be a third thing
-to mirror for no gain.
+`agent-runtime` is drawn by five Quadlets (the two gateways, the hosted proxy and
+the two source facades) and by the collector and mail units. The proxy, the facades
+and the collectors are Python programs in this repository (`apps/agent_proxy/`,
+`apps/agent_facade/`, `apps/brave_ingest/`), and they are built into this image: the
+derived Containerfile COPYs them onto the base at the paths the units already name.
+They used to ride the bootc image instead and be bind-mounted into the container,
+which made an agent-code change an OS rebuild and a reboot; now it rebuilds one
+container image and moves one pin.
 
 Immich stays on v3.0.3 until the cutover restore has passed: the existing
 database was written by that version, and moving a major version belongs in its
@@ -462,12 +466,11 @@ own records, not live data: what the split proves today is the reach, not the fe
 
 Both run the same `agent-runtime` digest as the gateways, with
 `Entrypoint=python3` replacing the image's gateway dispatcher, exactly as the proxy
-does. The program is not in the upstream image and cannot be, so
-`image/Containerfile` installs it and the data-plane libraries it imports under
-`/usr/lib/agent-facade` on the host, and each unit bind-mounts that tree
-`/usr/lib/agent-facade` read-only. `PYTHONPATH` points at it inside the container,
-so the code that runs is the code in the booted deployment -- no image of our own,
-no package manager, and no second copy to drift.
+does. `images/agent-runtime/Containerfile` installs the package and the
+`libs/data_plane/` it imports under `/usr/lib/agent-facade` in that image, and each
+unit sets `PYTHONPATH` to it. No host mount and no second copy: the code that runs
+is the code the pinned digest was built from, so a change to it is a rebuild of that
+image rather than of the host.
 
 Neither facade publishes a port. The gateway is their only client, and it reaches
 them by container name (`http://smortress-agent-facade-personal:18004/mcp`,

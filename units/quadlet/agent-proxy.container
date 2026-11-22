@@ -19,11 +19,10 @@
 # this container is one file and needs none of it. Overriding it is also what
 # lets the proxy run as uid 1000 with every capability dropped.
 #
-# The program is not in the agent-runtime image: image/Containerfile installs it
-# on the HOST, at /usr/libexec/agent-proxy. Without the read-only bind mount
-# below the container starts python3 against a path that does not exist in its
-# own filesystem and exits 2 (`can't open file`). ReadOnly=true still holds: the
-# mount is a file, and nothing in this namespace may write it.
+# The program is baked into the agent-runtime image by
+# images/agent-runtime/Containerfile, at /usr/libexec/agent-proxy. Nothing is
+# mounted for it: the running bytes and the reviewed bytes are the same image,
+# and a change to the proxy rebuilds that container image instead of the OS.
 #
 # The key is a mounted file, never an environment variable: the proxy reads
 # AGENT_PROXY_KEY_FILE at startup, keeps it in memory, and never logs it or
@@ -40,14 +39,13 @@ After=network-online.target sops-decrypt.service smortress-app-secrets.service
 Wants=network-online.target
 
 [Container]
-Image=ghcr.io/smores56/homelab-platform/agent-runtime@sha256:276d44685c65c0cb2a25f190b63c65c8906f9dc76486fb1c05ae71b5826bda08
+Image=ghcr.io/smores56/homelab-platform/agent-runtime@sha256:f3bbf4f4c20402a681e81d2fc0ea34ebad065e7e0e36b3cdf5cbce780790b88f
 ContainerName=smortress-agent-proxy
 Network=agent-general.network
 User=1000:1000
 Secret=agent-hosted-key,type=mount,target=/run/secrets/agent-hosted-key,uid=1000,gid=1000,mode=0400
 Entrypoint=python3
 Exec=/usr/libexec/agent-proxy
-Volume=/usr/libexec/agent-proxy:/usr/libexec/agent-proxy:ro
 Environment=AGENT_PROXY_KEY_FILE=/run/secrets/agent-hosted-key
 Environment=AGENT_PROXY_HOST=0.0.0.0
 Environment=AGENT_PROXY_PORT=18003

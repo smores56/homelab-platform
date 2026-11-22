@@ -35,13 +35,14 @@ app_images=(
   'opdshelf|docker.io/koalilla/opds-server@sha256:b82f94f72b41686fd9169a2269d65550f411a97dfa341a330df88b0bfab0af35|sha256:b82f94f72b41686fd9169a2269d65550f411a97dfa341a330df88b0bfab0af35'
   'syncthing|docker.io/syncthing/syncthing:2.1.7|sha256:2b71da7c0d0a91a6ae5285ad079226fecc0a365d08b27720e1f7037b018f7546'
   # Agent deployments (SDLC #711). agent-model is the pinned local inference
-  # server; agent-runtime is Hermes, used by both gateways and by the hosted
-  # proxy, which is why the proxy needs no third image and no package manager.
+  # server. agent-runtime is Hermes with this repository's facade, collector and
+  # proxy code baked in: those programs used to ride the bootc image and be
+  # bind-mounted in, which made an agent change an OS rebuild and a reboot.
   # b12602 is the first build carrying the merged Inkling 2 loop architecture
   # (llama.cpp PR #32694, merged 2026-11-20): the previous pin, b12464 of
   # 2026-11-17, cannot load an `inkling2_loop` GGUF at all.
   'agent-model|ghcr.io/ggml-org/llama.cpp:server-cuda|sha256:26f89ebd3bf17a5ecf6caee62bdabfa55abea3058150879f6f07b1fc786baa2d'
-  'agent-runtime|docker.io/nousresearch/hermes-agent:v0.23.1|sha256:276d44685c65c0cb2a25f190b63c65c8906f9dc76486fb1c05ae71b5826bda08'
+  'agent-runtime|built:images/agent-runtime/Containerfile|sha256:f3bbf4f4c20402a681e81d2fc0ea34ebad065e7e0e36b3cdf5cbce780790b88f'
   # Built by this repository (SDLC #775), not mirrored: upstream's entrypoint
   # installs its Python dependencies from PyPI at container start, which a sealed
   # deployment can never do. The digest is the publish-agent-webui run for the

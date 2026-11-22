@@ -186,13 +186,13 @@ reaches the facade by container name (`http://smortress-agent-facade-personal:18
 second route in with no consumer, and Tailscale Serve would have to be taught to
 skip it.
 
-Code delivery is a bind mount, not an image. The program is not in the upstream
-runtime image, so `image/Containerfile` installs it on the host at
-`/usr/lib/agent-facade` -- the package at `apps/agent_facade/`, the libraries it
-imports at `libs/data_plane/` -- and the units mount that tree read-only and point
-`PYTHONPATH` at it. The same pattern as `agent-proxy`, whose unit mounts
-`/usr/libexec/agent-proxy` for the same reason; a unit that names a program it does
-not mount is a container that cannot start.
+Code delivery is the image, not a mount. `images/agent-runtime/Containerfile`
+derives from the pinned Hermes runtime and installs the package at
+`/usr/lib/agent-facade` -- `apps/agent_facade/`, the `libs/data_plane/` it imports --
+and the units point `PYTHONPATH` at it. The proxy's program is baked in the same
+image at `/usr/libexec/agent-proxy`, and the collector and mail units import the
+same tree. Nothing is mounted from the host: the running bytes are the bytes the pin
+names, and an agent-code change rebuilds that image instead of the OS.
 
 Each container runs as uid 1000 with `ReadOnly=true`, `NoNewPrivileges=true` and
 `DropCapability=ALL`, holds one token as a mounted file, and writes nowhere but
