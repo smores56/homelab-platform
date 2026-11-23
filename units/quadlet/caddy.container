@@ -33,7 +33,7 @@ After=network-online.target zfs-ready@state-caddy.service sops-decrypt.service s
 Wants=network-online.target
 
 [Container]
-Image=ghcr.io/smores56/homelab-platform/caddy@sha256:4762c8756be74bf5633ea7c12ebb0f7c3f75886c9858d41ff6cc59b284051dc3
+Image=ghcr.io/smores56/homelab-platform/caddy@sha256:77d85e665ca9e966d8db933e56fd646968dedfcb487f0dd7e5ab9d136e1830ca
 ContainerName=smortress-caddy
 Network=host
 # uid 1000 is the image's `caddy` account and what a state dataset root belongs
