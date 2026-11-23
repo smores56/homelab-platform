@@ -118,16 +118,7 @@ def check(repo: Path, config: Path | None) -> int:
         if not found:
             err(f"no SOPS config under {repo}")
             return 1
-        profile, config = found[0]
-    else:
-        profile = next(
-            (
-                profile
-                for profile, spec in PROFILES.items()
-                if (repo / spec["config"]).resolve() == config
-            ),
-            None,
-        )
+        config = found[0][1]
 
     if not config.exists():
         err(f"{config} is missing")
@@ -144,6 +135,15 @@ def check(repo: Path, config: Path | None) -> int:
         return 1
     if not rules:
         err(f"{config} has no creation rule")
+        return 1
+    # The rule, not the config path, identifies the profile: platform and apps
+    # both commit a .sops.yaml, so the path alone is ambiguous.
+    profile = next(
+        (name for name, spec in PROFILES.items() if spec["rule"] in rules),
+        None,
+    )
+    if profile is None:
+        err(f"{config} matches no known policy profile")
         return 1
 
     problems = 0
