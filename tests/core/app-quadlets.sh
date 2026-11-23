@@ -1678,11 +1678,16 @@ if [[ -f $caddy_unit ]]; then
       bad "$caddy_unit sets $flag"
     fi
   done
-  # `type=env` hands the provider the bare token, so the manifest entry has to be
-  # `value`: a `yaml` entry would put `token:` in front of it and every order
-  # would fail on the API's 400.
-  eq "$(grep -cF -- 'Secret=cloudflare-acme-token,type=env,target=CF_API_TOKEN' "$caddy_unit")" 1 \
-    'the DNS provider token arrives as the variable the Caddyfile reads'
+  # The secret is mounted and read back through command substitution. Podman's
+  # `type=env` would hand the provider the decrypted bytes verbatim, trailing
+  # newline included, and the Cloudflare provider rejects that token; the
+  # substitution is also what makes the manifest entry `value` right -- a `yaml`
+  # entry would put `token:` in front of it and every order would fail on a 400.
+  eq "$(grep -cF -- 'Secret=cloudflare-acme-token' "$caddy_unit")" 1 \
+    'the DNS provider token is mounted, not exported verbatim'
+  # shellcheck disable=SC2016  # the unit text is literal, not expanded here
+  eq "$(grep -cF -- 'exec env CF_API_TOKEN="$(cat /run/secrets/cloudflare-acme-token)" caddy run' "$caddy_unit")" 1 \
+    'the token reaches the provider with the newline stripped'
   if grep -qE '^cloudflare-acme-token\.yaml[[:space:]].*[[:space:]]value$' \
     image/rootfs/usr/share/smortress/secrets.manifest; then
     ok 'the ACME token is a decrypt manifest value'

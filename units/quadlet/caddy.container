@@ -36,16 +36,21 @@ Wants=network-online.target
 Image=ghcr.io/smores56/homelab-platform/caddy@sha256:77d85e665ca9e966d8db933e56fd646968dedfcb487f0dd7e5ab9d136e1830ca
 ContainerName=smortress-caddy
 Network=host
-# uid 1000 is the image's `caddy` account and what a state dataset root belongs
-# to, so the account and certificate files land owned by the process that rewrites
-# them. Nothing here needs a privileged uid: the listener is above 1024.
+# uid 1000 is what a state dataset root belongs to, so the account and
+# certificate files land owned by the process that rewrites them. The image has no
+# passwd entry for it; that is fine for a numeric uid, and the listener is above
+# 1024 so nothing needs a capability.
 User=1000:1000
-# The image's entrypoint runs `caddy run --config /etc/caddy/Caddyfile`, so the
-# target is the path upstream already reads and no Exec override is needed.
+# The image's entrypoint runs `caddy run --config /etc/caddy/Caddyfile`; the Exec
+# below is that same invocation plus the token. The secret is mounted, not copied
+# into the environment: Podman's `type=env` passes the decrypted bytes verbatim,
+# trailing newline included, and the Cloudflare provider rejects that with
+# "appears invalid" instead of trimming it. Command substitution strips the
+# trailing newline, which is the whole difference.
 Volume=/usr/share/smortress/Caddyfile:/etc/caddy/Caddyfile:ro
-# XDG_DATA_HOME in this image: the ACME account, the certificates, the locks.
 Volume=/var/lib/caddy:/data:z
-Secret=cloudflare-acme-token,type=env,target=CF_API_TOKEN
+Secret=cloudflare-acme-token
+Exec=/bin/sh -c 'exec env CF_API_TOKEN="$(cat /run/secrets/cloudflare-acme-token)" caddy run --config /etc/caddy/Caddyfile'
 ReadOnly=true
 NoNewPrivileges=true
 DropCapability=ALL
