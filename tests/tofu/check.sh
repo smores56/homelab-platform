@@ -707,7 +707,8 @@ has 'the policy admits Serve traffic' '"tag:smortress:443", "tag:smortress:8443"
 has 'the policy admits Syncthing' '"tag:smortress:22000"'
 has 'the device is resolved by hostname' 'hostname[[:space:]]*=[[:space:]]*"smortress"'
 has 'the device carries the tag declaratively' 'resource "tailscale_device_tags" "smortress"'
-has 'the tag is applied before the policy names it' 'depends_on[[:space:]]*=[[:space:]]*\[tailscale_device_tags\.smortress\]'
+has 'the device tag and the Service exist before the policy names them' \
+  'depends_on[[:space:]]*=[[:space:]]*\[tailscale_device_tags\.smortress, tailscale_service\.agent_ui\]'
 has 'the policy keeps the owner in one group' '"group:owner"[[:space:]]*=[[:space:]]*\[var\.tailscale_login\]'
 has 'the tailnet login is its own variable' 'variable "tailscale_login"'
 has 'the tests name the tailnet login, not the Access email' 'src[[:space:]]*=[[:space:]]*var\.tailscale_login'
@@ -720,13 +721,13 @@ has 'the deploy tag is owned by the owner group' '"tag:deploy"[[:space:]]*=[[:sp
 has 'a test proves the deploy node reaches only the receiver' 'accept[[:space:]]*=[[:space:]]*\["tag:smortress:8484"\]'
 has 'the policy carries tests' 'tests[[:space:]]*=[[:space:]]*\['
 has 'a test proves every admitted port reaches the owner' \
-  'accept[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:10000", "tag:smortress:22000", "tag:vps:22"\]'
+  'accept[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:10000", "tag:smortress:22000", "tag:vps:22", "svc:agent-ui:443"\]'
 has 'a test proves the owner does not reach the edge ports' \
   'deny[[:space:]]*=[[:space:]]*\["tag:smortress:8446", "tag:smortress:8447", "tag:smortress:8484"\]'
 has 'a test proves the edge reaches only the two Serve ports' \
   'accept[[:space:]]*=[[:space:]]*\["tag:smortress:8446", "tag:smortress:8447"\]'
 has 'a test proves a tagged device reaches none of them' \
-  'deny[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8446", "tag:smortress:8447", "tag:vps:22"\]'
+  'deny[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8446", "tag:smortress:8447", "tag:vps:22", "svc:agent-ui:443"\]'
 
 # The agent UI's Service VIP (design #834). Tailscale owns the address, so it is
 # a grant destination and a test destination, never an `acl`: a grant names the
@@ -746,6 +747,15 @@ else
     bad "the Service is gated on var.tailnet"
   fi
 fi
+has 'the policy grants the owner the Service' 'dst[[:space:]]*=[[:space:]]*\["svc:agent-ui"\]'
+has 'the grant names the one service port' 'ip[[:space:]]*=[[:space:]]*\["443"\]'
+has 'the grant source is the owner group' 'grants[[:space:]]*=[[:space:]]*\['
+has 'the host auto-approves the Service' '"svc:agent-ui"[[:space:]]*=[[:space:]]*\["tag:smortress"\]'
+has 'the auto-approver is declared under services' 'autoApprovers[[:space:]]*=[[:space:]]*\{'
+# One accept and three denies: a fourth deny would be a tag that no longer exists,
+# and a fifth entry would widen the admitted set without a test to catch it.
+eq "$(grep -cF -- '"svc:agent-ui:443"' "$work/code.tf")" "4" \
+  "the Service port is one accept and three denies in the tests"
 has 'the tailscale provider is declared' 'provider "tailscale" \{\}'
 has 'the tailscale provider is pinned to the 0.29 line' 'version[[:space:]]*=[[:space:]]*"~> 0\.29'
 if grep -qE 'oauth_client_(id|secret)[[:space:]]*=[[:space:]]*"[^"]' "$work/code.tf"; then
