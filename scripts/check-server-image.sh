@@ -1187,6 +1187,11 @@ check "Serve declares the wallpaper library as static files" \
 # Web handler, so the `/apps/` prune below cannot remove it.
 check "Serve forwards the deploy receiver's loopback port" \
   has 'serve --bg --tcp=8484 tcp://127.0.0.1:8484' "$serve_script"
+# The agent UI's Service VIP (design #834) answers only when a tagged node
+# advertises its endpoint, and `--service` is the only spelling that does: without
+# it the declaration lands on the host's own 443 and the VIP stays unanswered.
+check "Serve advertises the agent UI Service" \
+  has 'serve --bg --service=svc:agent-ui --tcp=443 tcp://127.0.0.1:9443' "$serve_script"
 check "the wallpaper library is the dataset mount point" has 'WALLPAPERS_DIR:-/srv/wallpapers' "$serve_script"
 check "stale-route pruning only considers tenant handlers" \
   has 'select(startswith("/apps/"))' "$serve_script"

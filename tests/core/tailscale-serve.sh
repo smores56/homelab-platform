@@ -9,7 +9,8 @@
 # library as static files under `/wallpapers`, one route per app, pruning of an
 # app that left the plan without touching the static route or a core path, a
 # refused claim on a core path, and a refusal to build a route from a plan that
-# names a foreign path or port.
+# names a foreign path or port. The agent UI's Service VIP endpoint is counted the
+# same way: it is the last core declaration, and the fake logs it.
 #
 #   tests/core/tailscale-serve.sh
 set -uo pipefail
@@ -221,6 +222,26 @@ if [[ -n $forward_line && -n $wallpapers_line ]] && ((forward_line < wallpapers_
 else
     bad 'the forward is declared with the core routes, before the plan-dependent routes' \
         "forward at '$forward_line', wallpapers at '$wallpapers_line'"
+fi
+
+# --- the agent UI is a Service VIP, advertised once --------------------------
+#
+# The Service's address belongs to the tailnet, and it answers only when a tagged
+# node advertises the endpoint. The fake records a `--service` declaration under
+# TCP because it reads only `--tcp=`, which is exactly why the argv log is the
+# assertion: the flag has to be there, or the declaration lands on the host's own
+# 443 instead of the Service's. It is the last core declaration, so a Service the
+# tailnet does not have yet costs the UI and not the applications.
+service_line=$(grep -nF -- '--service=svc:agent-ui' "$log" | cut -d: -f1 || true)
+gateway_line=$(grep -nF -- '--set-path=/apps/agent-local ' "$log" | cut -d: -f1 || true)
+eq "$(grep -cF -- 'serve --bg --service=svc:agent-ui --tcp=443 tcp://127.0.0.1:9443' "$log")" 1 \
+    'the agent UI Service endpoint is declared exactly once'
+if [[ -n $service_line && -n $wallpapers_line && -n $gateway_line ]] &&
+    ((service_line > wallpapers_line && service_line > gateway_line)); then
+    ok 'the Service endpoint is declared after every other core route'
+else
+    bad 'the Service endpoint is declared after every other core route' \
+        "service at '$service_line', wallpapers at '$wallpapers_line', agent-local at '$gateway_line'"
 fi
 
 # --- the two agent gateways own a fixed path each on 443 ----------------------
