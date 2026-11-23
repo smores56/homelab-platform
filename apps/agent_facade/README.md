@@ -119,14 +119,17 @@ default bind is `127.0.0.1:18004`; `--transport` defaults to `stdio`,
 derived, so an unwritable root costs a scan and nothing else. Logs go to stderr, so
 stdout belongs to stdio alone.
 
-## Status: offline fixtures
+## Status: live replicas where wired, fixtures elsewhere
 
-Every adapter is a `FixtureAdapter`: deterministic records held in process, no
-network, no live personal data, no filesystem walk. Nothing here issues or stores
-a secret. `units/quadlet/agent-facade-{personal,general}.container` run this code
-as one container per deployment (`docs/agent-facade.md`, "Deployment"); a live
-adapter is still a separate step, so what a deployed facade answers today is its
-own fixtures.
+A source with a published raw generation is served by a `ReplicaAdapter`; the rest
+keep their deterministic in-process fixture. Today the personal deployment serves
+`mail`, `calendar`, `finance` and `brave` from `state/agent-local/replica`, while
+`notes`, `tasks`, `photos`, `music`, `workspace` and the general deployment's
+`repos`/`books` are still fixtures. The adapter checks for a newer published
+generation on each read/search (at most once per two seconds) and rebuilds its
+projection when the generation id changes, so a collector's next publication is
+visible without a facade restart. Before the first publication the source answers
+`unavailable`; the facade and its memory stay up.
 
 ## Test
 

@@ -46,6 +46,10 @@ class SourceNotFound(ValidationError):
     """The source has no record with that id."""
 
 
+class SourceUnavailable(ValidationError):
+    """The source is configured but has no published generation to answer from."""
+
+
 class SourceUnsupported(ValidationError):
     """The source does not expose the requested read or search capability."""
 

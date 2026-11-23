@@ -460,9 +460,11 @@ deployment (`apps/agent_facade/`, `docs/agent-facade.md`), and that process is a
 container: `agent-facade-personal` serves `notes`, `tasks`, `mail`, `calendar`,
 `finance`, `brave`, `photos`, `music` and `workspace`; `agent-facade-general`
 serves `repos` and `books`. A source outside the table is not refused by a policy
-check, it has no adapter in that process at all. Every adapter is still an
-in-process fixture (`apps/agent_facade/README.md`), so a deployed facade answers its
-own records, not live data: what the split proves today is the reach, not the feed.
+check, it has no adapter in that process at all. The personal deployment serves
+`mail`, `calendar`, `finance` and `brave` from published raw generations today;
+the remaining personal sources and the general `repos`/`books` are still
+in-process fixtures (`apps/agent_facade/README.md`), so the split proves reach for
+those, not feed.
 
 Both run the same `agent-runtime` digest as the gateways, with
 `Entrypoint=python3` replacing the image's gateway dispatcher, exactly as the proxy

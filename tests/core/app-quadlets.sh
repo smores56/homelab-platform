@@ -828,6 +828,18 @@ for spec in personal:local:18004 general:general:18005; do
   # The derived source index is personal: every raw collector is, so the general
   # deployment has no replica to index and takes neither the flag nor the mount.
   if [[ $deployment == personal ]]; then
+    for source in mail calendar finance brave; do
+      if [[ " $exec_line " == *" --replica $source=/replica/$source "* ]]; then
+        ok "$q serves $source from its published generation"
+      else
+        bad "$q serves $source from its published generation" "$exec_line"
+      fi
+    done
+    if grep -qxF 'Volume=/var/lib/agent/local/replica:/replica:ro,z' "$q"; then
+      ok "$q mounts the personal replica tree read-only"
+    else
+      bad "$q mounts the personal replica tree read-only"
+    fi
     if [[ " $exec_line " == *' --index-root /index '* ]] &&
       grep -qxF 'Volume=/var/lib/agent/local/index:/index:z' "$q"; then
       ok "$q indexes the replicas in the $state dataset's index directory"
@@ -835,10 +847,12 @@ for spec in personal:local:18004 general:general:18005; do
       bad "$q indexes the replicas in the $state dataset's index directory" "$exec_line"
     fi
   elif [[ " $exec_line " != *'--index-root'* ]] &&
-    ! grep -qE '^Volume=.*:/index(:z)?$' "$q"; then
-    ok "$q carries no index root"
+    ! grep -qE '^Volume=.*:/index(:z)?$' "$q" &&
+    [[ " $exec_line " != *'--replica'* ]] &&
+    ! grep -qE '^Volume=.*:/replica(:[^ ]*)?$' "$q"; then
+    ok "$q carries no index root and no personal replica"
   else
-    bad "$q carries no index root" "$exec_line"
+    bad "$q carries no index root and no personal replica" "$exec_line"
   fi
   # The gateway is the facade's only client, so its template must name the facade's
   # container and port, carry the placeholder rather than a token, and trust it.

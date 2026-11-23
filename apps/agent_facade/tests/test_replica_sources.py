@@ -23,21 +23,26 @@ from data_plane.errors import ContractError, ValidationError
 CAPTURED = "2026-11-19T00:00:00+00:00"
 
 
-def _mail_generation(root: Path) -> None:
+def _mail_generation(
+    root: Path,
+    generation_id: str = "gen-0001",
+    subject: str = "Boiler inspection",
+    body: str = "The boiler inspection is booked for the twelfth.",
+) -> None:
     maildir = root / "mail"
     for spool in ("cur", "new", "tmp"):
         (maildir / spool).mkdir(parents=True, exist_ok=True)
     (maildir / "new" / "aaa").write_bytes(
         (
             "From: someone@example.com\r\n"
-            "Subject: Boiler inspection\r\n"
+            f"Subject: {subject}\r\n"
             "Message-ID: <aaa@example.com>\r\n"
             "Date: Tue, 18 Nov 2026 10:00:00 +0000\r\n"
             "\r\n"
-            "The boiler inspection is booked for the twelfth.\r\n"
+            f"{body}\r\n"
         ).encode("utf-8")
     )
-    generation = StagingGeneration(root / "replica", "gen-0001", source_id="tuta.mail")
+    generation = StagingGeneration(root / "replica", generation_id, source_id="tuta.mail")
     collect_maildir(
         maildir, generation, uidvalidity={"INBOX": 7}, captured_at=CAPTURED
     )
@@ -222,6 +227,50 @@ class BraveReplicaTests(unittest.TestCase):
             hits = brave.search("cycling", 5)
             self.assertEqual([hit.id for hit in hits], ["urls::7"])
             self.assertEqual(brave.read("urls::7").title, "Quiet bike routes")
+
+
+class LiveRefreshTests(unittest.TestCase):
+    def test_a_new_generation_is_visible_without_rebuilding_the_adapter(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            _mail_generation(root)
+            mail = replica_sources.adapters_for(
+                sources.Visibility.PERSONAL,
+                {"mail": root / "replica"},
+                refresh_seconds=0,
+            )["mail"]
+            self.assertEqual(mail.read("mail::INBOX::aaa").title, "Boiler inspection")
+
+            _mail_generation(
+                root,
+                "gen-0002",
+                subject="Boiler inspection updated",
+                body="Rescheduled to the nineteenth.",
+            )
+
+            record = mail.read("mail::INBOX::aaa")
+            self.assertEqual(record.title, "Boiler inspection updated")
+            self.assertIn("Rescheduled", record.body)
+            self.assertEqual(
+                [hit.id for hit in mail.search("rescheduled", 5)],
+                ["mail::INBOX::aaa"],
+            )
+
+    def test_an_absent_generation_is_unavailable_and_recovers_later(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            mail = replica_sources.adapters_for(
+                sources.Visibility.PERSONAL,
+                {"mail": root / "replica"},
+                refresh_seconds=0,
+            )["mail"]
+            with self.assertRaises(sources.SourceUnavailable):
+                mail.read("mail::INBOX::aaa")
+            with self.assertRaises(sources.SourceUnavailable):
+                mail.search("boiler", 5)
+
+            _mail_generation(root)
+            self.assertEqual(mail.read("mail::INBOX::aaa").title, "Boiler inspection")
 
 
 class SplitTests(unittest.TestCase):
