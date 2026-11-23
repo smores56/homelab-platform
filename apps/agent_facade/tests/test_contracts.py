@@ -41,7 +41,7 @@ class ToolSetTestCase(unittest.TestCase):
                     contracts.parse_call(name, {})
 
     def test_schemas_refuse_unknown_fields(self) -> None:
-        for spec in contracts.TOOL_SPECS:
+        for spec in (*contracts.TOOL_SPECS, contracts.SHELL_TOOL):
             with self.subTest(tool=spec.name):
                 self.assertEqual(spec.input_schema["type"], "object")
                 self.assertFalse(spec.input_schema["additionalProperties"])
@@ -119,6 +119,62 @@ class ToolSetTestCase(unittest.TestCase):
             contracts.parse_call("memory.read", {"key": "k" * 129})
         with self.assertRaises(ValidationError):
             contracts.parse_call("sources.read", {"source": "s" * 65, "id": "note-1"})
+
+
+class ShellContractTestCase(unittest.TestCase):
+    """``shell.run``: one command, and the served set decides whether it exists."""
+
+    def test_the_shell_tool_is_not_in_the_base_set(self) -> None:
+        self.assertNotIn("shell.run", contracts.TOOL_NAMES)
+        self.assertNotIn(contracts.SHELL_TOOL, contracts.TOOL_SPECS)
+        with self.assertRaises(contracts.UnknownTool):
+            contracts.parse_call("shell.run", {"command": "ls"})
+
+    def test_the_schema_offers_only_a_command(self) -> None:
+        schema = contracts.SHELL_TOOL.input_schema
+        self.assertEqual(contracts.SHELL_TOOL.name, "shell.run")
+        self.assertEqual(list(schema["properties"]), ["command"])
+        self.assertEqual(schema["required"], ["command"])
+        self.assertFalse(schema["additionalProperties"])
+        self.assertEqual(
+            schema["properties"]["command"]["maxLength"], contracts.MAX_COMMAND_CHARS
+        )
+        for promise in ("unsupervised", "general", "capped"):
+            self.assertIn(promise, contracts.SHELL_TOOL.description)
+
+    def test_a_command_is_parsed_verbatim_with_tabs_and_newlines(self) -> None:
+        command = "printf 'a'\n\tprintf 'b'"
+        operation = contracts.parse_call(
+            "shell.run", {"command": command}, allow_shell=True
+        )
+        self.assertEqual(operation, contracts.ShellRun(command=command))
+        self.assertEqual(operation.command, command)
+
+    def test_a_refused_command_never_becomes_an_operation(self) -> None:
+        for arguments in (
+            {"command": "ls\u0000"},
+            {"command": "ls\u0007"},
+            {"command": "ls\r"},
+            {"command": "ls\u007f"},
+            {"command": ""},
+            {"command": "   "},
+            {"command": 7},
+            {"command": ["ls"]},
+            {"command": "x" * (contracts.MAX_COMMAND_CHARS + 1)},
+            {"command": "ls", "class": "personal"},
+            {"command": "ls", "image": "alpine"},
+            {},
+        ):
+            with self.subTest(arguments=arguments):
+                with self.assertRaises(ValidationError):
+                    contracts.parse_call("shell.run", arguments, allow_shell=True)
+
+    def test_the_maximum_command_length_is_accepted(self) -> None:
+        command = "x" * contracts.MAX_COMMAND_CHARS
+        self.assertEqual(
+            contracts.parse_call("shell.run", {"command": command}, allow_shell=True).command,
+            command,
+        )
 
 
 class LimitTestCase(unittest.TestCase):

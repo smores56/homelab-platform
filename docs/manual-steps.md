@@ -1057,6 +1057,42 @@ output over 1 MiB is truncated and reported; a job past 300 seconds has its cgro
 killed and any leftover container removed. Shell jobs are unsupervised by design:
 the only approval contract is the write broker's `libs/data_plane/approval.py`.
 
+A facade does not run an entry point itself: it holds a socket served by
+`smortress-agent-shell-bridge.service`, and that socket is the only path to a
+general job (`docs/agent-jobs.md#transport`). Its group is the facade container's
+gid, so the general class is provable from the host as uid 1000, and a uid outside
+the group is refused by the filesystem rather than by a check:
+
+```sh
+systemctl status smortress-agent-shell-bridge
+ls -l /run/smortress/agent-shell/general.sock      # srw-rw---- root 1000
+printf '%s\n' '{"command": "id -u; ls /var/srv/git | head -3"}' |
+  sudo -u '#1000' python3 -c '
+import socket, sys
+sock = socket.socket(socket.AF_UNIX)
+sock.connect("/run/smortress/agent-shell/general.sock")
+sock.sendall(sys.stdin.buffer.read())
+print(sock.makefile().readline())'
+sudo -u nobody python3 -c '
+import socket
+socket.socket(socket.AF_UNIX).connect("/run/smortress/agent-shell/general.sock")'    # Permission denied
+```
+
+The first answer names uid 1000 and the general tree, so the job is a container and
+not the host. The second is the reachability control itself: no group bit, no
+connection, and no gateway, model server or web UI has a mount to try with.
+`tools/list` on the general facade names `shell.run` and the personal facade does
+not, which is the same fact from the client's side:
+
+```sh
+sudo podman exec smortress-agent-facade-general python3 -c '
+import json, urllib.request
+body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).encode()
+request = urllib.request.Request(
+    "http://127.0.0.1:18005/mcp", data=body, headers={"Content-Type": "application/json"})
+print([tool["name"] for tool in json.load(urllib.request.urlopen(request))["result"]["tools"]])'
+```
+
 ### Run the agent runtime drill
 
 `scripts/agent-runtime-drill.sh` answers three rows of the T6 matrix that no static

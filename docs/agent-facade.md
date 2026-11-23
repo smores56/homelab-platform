@@ -118,6 +118,19 @@ deployment still serve fixtures until their collectors/adapters land.
 | `memory.write` | `{key, value, tags?, provenance}` | `{key, revision, digest}` | value over the cap, missing provenance, unknown provenance field |
 | `memory.search` | `{query, limit?}` | `{query, hits: [{key, snippet, revision}]}` | `limit` outside `1..50`, query with no word |
 | `memory.rebuild` | none | `{indexed}` | unknown argument |
+| `shell.run` | `{command}` | `{status, output, truncated}` | unknown argument, empty command, a control character other than a tab or a newline, a command over 32768 characters, no bridge socket, a bridge error |
+
+`shell.run` is the one tool that is not a typed read of a named source, and it is
+the only one whose presence is a deployment fact rather than a registry entry: a
+facade appends it to `tools/list` exactly when the process was started with
+`--shell-socket`, and refuses the name otherwise. The socket is a file only the
+general facade container mounts (`docs/agent-jobs.md`), so the personal deployment
+does not have a shell tool that refuses — it has no shell tool. The command is
+unsupervised YOLO by design, the same doctrine as the dispatcher: there is no
+approval, no review and no second submission surface, and what contains it is the
+container below the socket, not a check above it. Output is merged and capped at
+1 MiB, with `truncated` distinguishing a clipped run from a short one; the exit
+status is the job's, not a transport error.
 
 Rules that hold for every tool:
 
@@ -133,7 +146,10 @@ Rules that hold for every tool:
   are the repository's error shape, `{"error": {"code", "message"}}`.
 
 Error codes: `unauthorized`, `unknown_tool`, `validation`, `unknown_source`,
-`unsupported`, `not_found`, `internal`, `data_plane_error`.
+`unsupported`, `not_found`, `unavailable`, `shell_failed`, `internal`,
+`data_plane_error`. `unavailable` covers both a source whose replica has not
+published and a shell bridge that cannot be reached: in both cases the tool exists
+and the thing behind it does not, which is not a refusal of the request.
 
 ## Memory and index rules
 
@@ -163,10 +179,13 @@ Error codes: `unauthorized`, `unknown_tool`, `validation`, `unknown_source`,
 
 ## Non-goals
 
-- **No generic filesystem, SQL, URL or shell operation.** There is no tool whose
-  argument names a path, a query string, an endpoint or a command, and none will
-  be added: a facade is a typed contract over named sources, not a general-purpose
-  command surface.
+- **No generic filesystem, SQL or URL operation.** There is no tool whose argument
+  names a path, a query string or an endpoint: a facade is a typed contract over
+  named sources. The one command surface is `shell.run`, and it is not generic: it
+  takes one command, has no field for a class or an image, and is reachable only
+  where the deployment was given a bridge socket. It exists because a
+  coordination server needs to run a command, and the alternative to bounding it
+  here is an agent with a Podman socket.
 - **No delete tool.** A memory record is superseded, never removed by the facade;
   deletion is a `FileMemory` operation an operator performs on the profile.
 - **No cross-deployment import.** Records carry a profile and `import_records`
@@ -184,7 +203,7 @@ with `Entrypoint=python3` replacing the image's gateway dispatcher:
 | Quadlet | Container name | Network | Port | Writable mounts |
 | --- | --- | --- | --- | --- |
 | `agent-facade-personal` | `smortress-agent-facade-personal` | `agent-local.network` (no default route) | `18004` | `/memory` = `state/agent-local/memory`; `/index` = `state/agent-local/index` |
-| `agent-facade-general` | `smortress-agent-facade-general` | `agent-general.network` | `18005` | `/memory` = `state/agent-general/memory` |
+| `agent-facade-general` | `smortress-agent-facade-general` | `agent-general.network` | `18005` | `/memory` = `state/agent-general/memory`; `/run/agent-shell` = the bridge's socket directory (rw: `connect(2)` needs the inode's write bit) |
 
 Neither publishes a port. The only client is that deployment's gateway, which
 reaches the facade by container name (`http://smortress-agent-facade-personal:18004/mcp`,
@@ -204,11 +223,17 @@ Each container runs as uid 1000 with `ReadOnly=true`, `NoNewPrivileges=true` and
 `DropCapability=ALL`, holds one token as a mounted file, and writes nowhere but
 `/memory` and, on the personal side, `/index`. Only the personal facade takes
 `--index-root`: the general deployment has no replica source, so it has nothing to
-index. The gateway's `mcp_servers` entry sends that token as
-`X-Deployment-Token`; the image's config template carries the placeholder
-`__FACADE_TOKEN__` and `smortress-agent-config.service` substitutes the decrypted
-value when it seeds the file, so the token is in no image, no document and no
-command line.
+index. Only the general facade takes `--shell-socket`, and it mounts the bridge's
+socket directory into `/run/agent-shell`; the directory is 0710 root:1000 and the
+socket 0660, so the mount is what grants the group and nothing else on the host
+can open it. It is not `:ro`: connecting to a Unix socket needs write permission
+on the inode. Mounting the directory rather than the socket means a bridge
+restart is invisible to this container.
+
+The gateway's `mcp_servers` entry sends that token as `X-Deployment-Token`; the
+image's config template carries the placeholder `__FACADE_TOKEN__` and
+`smortress-agent-config.service` substitutes the decrypted value when it seeds the
+file, so the token is in no image, no document and no command line.
 
 ## Checks
 
@@ -217,4 +242,7 @@ python3 -m unittest discover -s apps/agent_facade/tests -t apps/agent_facade
 ```
 
 No network, no credentials: the fixtures are in process and the HTTP suite binds
-a random loopback port.
+a random loopback port. `shell.run` is proved twice without root: the facade's
+mapping against a stub runner (`apps/agent_facade/tests/test_server.py`), and the
+runner against a temporary Unix socket (`apps/agent_facade/tests/test_shell.py`). The bridge itself is
+`tests/agent-shell-bridge`; a live job needs the host (`docs/manual-steps.md#agent-shell-jobs`).

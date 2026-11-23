@@ -46,9 +46,19 @@ same table, so a client can discover the boundary without guessing.
 | `memory.write` | `{key, value, tags?, provenance}` | `{key, revision, digest}` |
 | `memory.search` | `{query, limit?}` | `{query, hits: [{key, snippet, revision}]}` |
 | `memory.rebuild` | none | `{indexed}` |
+| `shell.run` | `{command}` | `{status, output, truncated}` — general deployment only |
 
-There is no filesystem, SQL, URL or shell operation, no delete tool, and no way
-to name another deployment. Every argument is a bounded string or a bounded
+`shell.run` is the one exception to "no shell": it exists only when the process
+was started with `--shell-socket`, which is the general deployment's bridge
+(`scripts/agent-shell-bridge.py`, `docs/agent-jobs.md`). With no socket the tool
+is not in `tools/list` and the name is unknown, so the personal deployment has no
+shell at all. The command is unsupervised by design, its output is merged and
+capped at 1 MiB with `truncated` telling a clipped run from a short one, and it
+cannot name a class, an image, a mount, a network or a Podman flag: those are
+constants in the dispatcher behind the socket.
+
+There is no filesystem, SQL or URL operation, no delete tool, and no way to name
+another deployment. Every argument is a bounded string or a bounded
 integer; an unknown tool, an unknown argument, a wrong type, an over-long string,
 a `limit` outside `1..50`, or a `value` over the cap is refused rather than
 clipped or ignored. A tool refusal is an MCP `isError` result carrying
@@ -58,6 +68,8 @@ Caps: `--max-body-bytes` (default 256 KiB) bounds a returned `body` and a writte
 `value`; a returned body is clipped to it and says so with `truncated: true`, a
 written value over it is refused. `limit` defaults to 20 and never exceeds 50.
 A search hit is `id`, `title` and a one-line excerpt — never a record body.
+`shell.run` takes at most 32768 characters and its output at most 1 MiB, both of
+which the bridge enforces again on its own side of the socket.
 
 ## Identity
 
@@ -104,20 +116,23 @@ PYTHONPATH=libs AGENT_FACADE_TOKEN_FILE=/run/secrets/agent-facade-personal \
   python3 -m apps.agent_facade --deployment personal --transport http \
   --host 127.0.0.1 --port 18004 --memory-root /var/lib/agent-facade
 
-# general deployment, stdio MCP child
+# general deployment, stdio MCP child, with the bridge socket (shell.run)
 PYTHONPATH=libs AGENT_FACADE_TOKEN=... AGENT_FACADE_DEPLOYMENT=general \
+  AGENT_FACADE_SHELL_SOCKET=/run/agent-shell/general.sock \
   python3 -m apps.agent_facade --transport stdio
 ```
 
 Every flag also has an `AGENT_FACADE_*` environment variable:
 `AGENT_FACADE_TRANSPORT`, `AGENT_FACADE_DEPLOYMENT`, `AGENT_FACADE_TOKEN`,
 `AGENT_FACADE_TOKEN_FILE`, `AGENT_FACADE_MEMORY_ROOT`, `AGENT_FACADE_INDEX_ROOT`,
-`AGENT_FACADE_HOST`, `AGENT_FACADE_PORT`, `AGENT_FACADE_MAX_BODY_BYTES`. The HTTP
-default bind is `127.0.0.1:18004`; `--transport` defaults to `stdio`,
-`--deployment` has no default and is required. `--index-root` defaults to
-`/index`, the directory the personal Quadlet mounts; the source index below it is
-derived, so an unwritable root costs a scan and nothing else. Logs go to stderr, so
-stdout belongs to stdio alone.
+`AGENT_FACADE_HOST`, `AGENT_FACADE_PORT`, `AGENT_FACADE_MAX_BODY_BYTES`,
+`AGENT_FACADE_SHELL_SOCKET`. The last one is the general deployment's bridge
+socket; without it the process serves no `shell.run`, which is how the personal
+deployment has no shell. The HTTP default bind is `127.0.0.1:18004`; `--transport`
+defaults to `stdio`, `--deployment` has no default and is required. `--index-root`
+defaults to `/index`, the directory the personal Quadlet mounts; the source index
+below it is derived, so an unwritable root costs a scan and nothing else. Logs go
+to stderr, so stdout belongs to stdio alone.
 
 ## Status: live replicas where wired, fixtures elsewhere
 

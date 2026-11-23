@@ -119,8 +119,8 @@ one Restic snapshot names every dataset the unit restores.
 | OPDShelf | `raw/books` — `/srv/books`, the catalog | `state/opdshelf` — `/var/lib/opdshelf`, edits, annotations and covers | `/books`; `DATA_DIR=/state` |
 | Personal agent | none — no personal source is mounted | `state/agent-local` — `/var/lib/agent/local`, sessions, memory, skills | `/opt/data` |
 | General agent | none — no repository or book tree is mounted | `state/agent-general` — `/var/lib/agent/general`, same shape | `/opt/data` |
-| Personal facade | none — its adapters are in-process fixtures | `state/agent-local` — `/var/lib/agent/local/memory`, the `local` memory profile and its derived index, and `/var/lib/agent/local/index`, the derived full-text index over the replica sources (rebuilt from the generation, disposable); the rest of that dataset is the gateway's | `/memory` and `/index` (both writable) |
-| General facade | none | `state/agent-general` — `/var/lib/agent/general/memory`, the `external` profile | `/memory` (writable) |
+| Personal facade | none — its adapters are in-process fixtures | `state/agent-local` — `/var/lib/agent/local/memory`, the `local` memory profile and its derived index, and `/var/lib/agent/local/index`, the derived full-text index over the replica sources (rebuilt from the generation, disposable); the rest of that dataset is the gateway's | `/memory` and `/index` (both writable); no shell socket, so no `shell.run` |
+| General facade | none | `state/agent-general` — `/var/lib/agent/general/memory`, the `external` profile | `/memory` (writable), and `/run/agent-shell` — the bridge's socket directory, mounted rw because `connect(2)` needs the inode's write bit; the only deployment with one, and so the only one serving `shell.run` |
 | Local model | none | none: `state/agent-model` — `/var/lib/agent/model` is the GGUF file, and it is in no backup | `/models` (read-only) |
 | Syncthing | `raw/files` — `/srv/files`, the vault | `state/syncthing-config` — `/var/lib/syncthing/config`, identity and configuration | `/srv/files`; `/var/syncthing/config` |
 
@@ -498,6 +498,13 @@ the gateway's sessions, skills and `.env` stay out of reach. A facade therefore 
 recovery unit of its own -- its records restore with `agent-local` or
 `agent-general`, which is exactly what those units name -- and the SQLite FTS index
 beside them is derived, so a restore that loses it costs one rebuild.
+
+The general facade is also the only one with a shell: `smortress-agent-shell-bridge`
+serves `shell.run` over a Unix socket that only that container mounts
+(`docs/agent-jobs.md`). The personal facade is started without `--shell-socket`, so
+it has no such tool at all; both gateways, the model server and both web UIs have
+no path to the socket, since the directory is a tmpfiles 0710 under a root 0700
+parent, mounted into one container and published nowhere.
 
 The personal facade also writes `/index`, `state/agent-local/index`: its full-text
 index over the replica sources, one file per source and published generation. It

@@ -873,6 +873,72 @@ for spec in personal:local:18004 general:general:18005; do
     bad "the seed unit substitutes the $deployment placeholder"
   fi
 done
+# 13b. The one shell transport (T17, SDLC #859). `shell.run` exists in a facade
+#      only when the process was given a bridge socket, and the socket is a file
+#      in a root 0700 directory that only the general facade's container mounts.
+#      The control is that nowhere else has a mount or an address for it: the
+#      personal facade, both gateways, the model server and both web UIs must not
+#      name the path, and the bridge must publish nothing.
+shell_socket=/run/agent-shell/general.sock
+general_facade=units/quadlet/agent-facade-general.container
+personal_facade=units/quadlet/agent-facade-personal.container
+if grep -qF -- "--shell-socket $shell_socket " <<<"$(sed -n 's/^Exec=//p' "$general_facade") " ; then
+  ok 'the general facade runs with the bridge socket'
+else
+  bad 'the general facade runs with the bridge socket' "$(sed -n 's/^Exec=//p' "$general_facade")"
+fi
+if grep -qxF 'Volume=/run/smortress/agent-shell:/run/agent-shell:z' "$general_facade"; then
+  ok 'the general facade mounts the socket directory read-write, and connects because of that'
+else
+  bad 'the general facade mounts the socket directory read-write, and connects because of that'
+fi
+if grep -qE '^Requires=.*smortress-agent-shell-bridge\.service$' "$general_facade" &&
+  grep -qE '^After=.*smortress-agent-shell-bridge\.service$' "$general_facade"; then
+  ok 'the general facade starts after the bridge'
+else
+  bad 'the general facade starts after the bridge' \
+    "$(sed -n '/^\[Unit\]/,/^\[/p' "$general_facade")"
+fi
+if ! grep -qF -- '--shell-socket' "$personal_facade" &&
+  ! grep -qF '/run/agent-shell' "$personal_facade"; then
+  ok 'the personal facade takes neither the flag nor the mount'
+else
+  bad 'the personal facade takes neither the flag nor the mount' "$(grep -F -- '--shell-socket' "$personal_facade")"
+fi
+if grep -lF '/run/agent-shell' units/quadlet/*.container units/systemd/*.service |
+  grep -vxF -- "$general_facade" | grep -vxF -- 'units/systemd/smortress-agent-shell-bridge.service' | grep -q .; then
+  bad 'only the general facade and the bridge name the socket path' \
+    "$(grep -lF '/run/agent-shell' units/quadlet/*.container units/systemd/*.service)"
+else
+  ok 'only the general facade and the bridge name the socket path'
+fi
+# The one process that can run a job is root and it owns no container: a unit
+# that gained a Podman socket would be a second, unfiltered way to run one.
+bridge_service=units/systemd/smortress-agent-shell-bridge.service
+if grep -qx 'UMask=0077' "$bridge_service" &&
+  grep -qE '^ExecStart=/usr/libexec/agent-shell-bridge --class general --socket /run/smortress/agent-shell/general.sock --socket-group 1000$' "$bridge_service"; then
+  ok 'the bridge runs as root with a fixed class and a fixed socket'
+else
+  bad 'the bridge runs as root with a fixed class and a fixed socket' "$(cat "$bridge_service" 2>/dev/null)"
+fi
+# The directory is tmpfiles' so a bridge restart keeps the inode the container
+# already mounted; 0710 with the facade's gid is the traversal, and the parent
+# /run/smortress stays root 0700 so no host uid reaches it.
+tmpfiles=image/rootfs/etc/tmpfiles.d/smortress-agent-shell.conf
+if grep -qx 'd /run/smortress/agent-shell 0710 root 1000 -' "$tmpfiles" &&
+  grep -qx 'd /run/smortress 0700 root root -' image/rootfs/etc/tmpfiles.d/smortress.conf; then
+  ok 'tmpfiles owns the socket directory, 0710 root:1000 under a root 0700 parent'
+else
+  bad 'tmpfiles owns the socket directory, 0710 root:1000 under a root 0700 parent' \
+    "$(grep -n 'agent-shell' "$tmpfiles" 2>/dev/null)"
+fi
+if grep -qE '^(PublishPort|Network)=' "$bridge_service" ||
+  grep -qE 'podman\.sock|CONTAINER_HOST' "$bridge_service"; then
+  bad 'the bridge publishes nothing and holds no Podman socket'
+else
+  ok 'the bridge publishes nothing and holds no Podman socket'
+fi
+
 # A token in a template would be a credential in an image both gateways share, and
 # the placeholder is only safe while it is exactly the placeholder.
 if grep -rhn 'X-Deployment-Token:' "${agent_templates[@]}" | grep -qvE ': __FACADE_TOKEN__$'; then
