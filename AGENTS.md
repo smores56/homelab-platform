@@ -49,9 +49,11 @@ scripts/check-all.sh --changed   # only the groups this branch touches
 scripts/check-all.sh --list      # the groups and their commands
 ```
 
-The driver is the source of truth and runs the same commands CI does; CI keeps
-its jobs sharded for parallelism. `--changed` runs every group when a changed
-path no group claims, so a new directory can never fall through.
+The driver is the source of truth: CI invokes it once per shard with
+`--only <group>`, and `tests/check-all/ci-parity.sh` fails when a group is
+neither called by a workflow nor declared local-only. `--changed` runs every
+group when a changed path no group claims, and `--check-claims` proves every
+tracked file is covered.
 
 `tests/check-all/check.sh` is the driver's own test. Run it with any
 `scripts/check-all.sh` change.

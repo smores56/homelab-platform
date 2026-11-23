@@ -37,7 +37,7 @@ expect "a data-plane library change selects the data-plane tests" \
   "data-plane" "$(selected libs/data_plane/collectors/raw/mail.py)"
 expect "a schema renderer change selects the data-plane tests and lint" \
   $'data-plane\nlint' "$(selected scripts/render-source-schemas.py)"
-expect "a workflow change selects lint" "lint" \
+expect "a workflow change selects lint and actionlint" $'lint\nactionlint' \
   "$(selected .github/workflows/ci.yml)"
 expect "a docs change selects nothing" "" \
   "$(selected README.md docs/broker.md)"

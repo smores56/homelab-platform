@@ -12,6 +12,9 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Every job runs a check-all group, so a command is defined once in
+# scripts/check-all.sh. Job-level setup is only what the group needs to start:
+# a runtime, a pinned tool, or a package the tests shell out to.
 jobs:
   broker:
     name: broker unit tests
@@ -21,12 +24,8 @@ jobs:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           persist-credentials: false
-      # No third-party dependency: the runner's python3 runs the stdlib broker.
-      # The address policy, DNS pinning, redirect refusal, credential stripping,
-      # header/body redaction and the log shape are all asserted here, and the
-      # enrollment file is parsed by the same tests that the Deployment ships.
-      - name: run apps/broker unit tests
-        run: python3 -m unittest discover -s apps/broker/tests -t apps/broker -v
+      - name: broker
+        run: scripts/check-all.sh --only broker
 
   webhook:
     name: webhook unit tests
@@ -36,11 +35,30 @@ jobs:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           persist-credentials: false
-      # Stdlib only: signature verification, dedupe, the size limit, the
-      # capability store and the gateway frames are asserted here, including a
-      # fake gateway that speaks the researched WebSocket protocol.
-      - name: run apps/webhook unit tests
-        run: python3 -m unittest discover -s apps/webhook/tests -t apps/webhook -v
+      - name: webhook
+        run: scripts/check-all.sh --only webhook
+
+  agent-proxy:
+    name: agent-proxy unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      - name: agent-proxy
+        run: scripts/check-all.sh --only agent-proxy
+
+  agent-facade:
+    name: agent-facade unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      - name: agent-facade
+        run: scripts/check-all.sh --only agent-facade
 
   data-plane:
     name: data-plane unit tests
@@ -50,12 +68,8 @@ jobs:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           persist-credentials: false
-      # Stdlib only. Contracts, authority, identity, confirmation, event log,
-      # intents, the write broker, backup generations, collectors, file memory,
-      # restore planning, and the CLI are asserted with fixtures. No cluster,
-      # provider, restic, or live data is touched.
-      - name: run data-plane unit tests
-        run: tests/data-plane/check.sh
+      - name: data-plane
+        run: scripts/check-all.sh --only data-plane
 
   tuta-calendar:
     name: tuta-calendar unit tests
@@ -65,21 +79,14 @@ jobs:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           persist-credentials: false
-      # Not stdlib only, unlike the other Python suites: the dumper holds Tuta's
-      # crypto, so this job installs the pins the image ships
-      # (images/tuta-calendar/requirements.lock) into a throwaway venv and the
-      # seal's own runtime, gpg. Both are in the image, so a test that passes here
-      # is a test of what ships. No network in the tests themselves: the API
-      # transport is injected, and every entity is encrypted in-process.
-      - name: install the image's pinned dependencies
+      # gpg is the seal's own runtime and is in the image; the driver builds the
+      # pinned venv from images/tuta-calendar/requirements.lock itself.
+      - name: install gpg
         run: |
-          python3 -m venv "$RUNNER_TEMP/venv"
-          "$RUNNER_TEMP/venv/bin/pip" install --disable-pip-version-check \
-            -r images/tuta-calendar/requirements.lock
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends gnupg
-      - name: run tests
-        run: PATH="$RUNNER_TEMP/venv/bin:$PATH" tests/tuta-calendar/check.sh
+      - name: tuta-calendar
+        run: scripts/check-all.sh --only tuta-calendar
 
   agent-egress:
     name: agent-egress unit tests
@@ -89,13 +96,8 @@ jobs:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           persist-credentials: false
-      # Stdlib only, like the broker: the proxy and its resolver are the image that
-      # ships them, so the runner's python3 runs the same code. No network in the
-      # tests themselves: the proxy binds its own loopback port and dials an
-      # injected upstream, and the resolver answers through a socket stand-in, so
-      # every allowlist refusal and the log redaction are asserted in process.
-      - name: run agent-egress unit tests
-        run: tests/agent-egress/check.sh
+      - name: agent-egress
+        run: scripts/check-all.sh --only agent-egress
 
   brave:
     name: brave seed and snapshot unit tests
@@ -105,27 +107,8 @@ jobs:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           persist-credentials: false
-      # Stdlib only, like the broker: the seed planter and the snapshot are pure
-      # python3 and sqlite3, and the collector they hand a copy to is the same
-      # data-plane CLI the unit runs. No browser, no Sync chain, no proxy: the
-      # seed is a fixture in the contract form and History is one these tests
-      # write.
-      - name: run brave unit tests
-        run: tests/brave/check.sh
-
-  yamllint:
-    name: yamllint
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-        with:
-          persist-credentials: false
-      - name: lint every tracked YAML file
-        run: |
-          yamllint --version
-          { git ls-files -z '*.yaml' '*.yml'; printf 'provision/smortress/user-data\0'; } \
-            | xargs -0 yamllint -c .yamllint.yaml
+      - name: brave
+        run: scripts/check-all.sh --only brave
 
   tofu:
     name: tofu fmt and validate
@@ -139,17 +122,13 @@ jobs:
         run: |
           scripts/install-ci-tools.sh "$RUNNER_TEMP/bin"
           echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
-      - name: fmt
-        run: tofu fmt -check -recursive tofu
       - name: validate
         # No backend and no secrets: validate only needs provider schemas.
         run: |
           tofu -chdir=tofu init -backend=false -input=false
           tofu -chdir=tofu validate
-      - name: static Access and DNS assertions
-        # Default-deny shape, the public bypass list, CAA pins, the retired
-        # hostnames and the tunnel split. No token, no API call.
-        run: tests/tofu/check.sh
+      - name: tofu-check and tofu-fmt
+        run: scripts/check-all.sh --only tofu-check,tofu-fmt
 
   backrest:
     name: backrest reader
@@ -159,110 +138,35 @@ jobs:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           persist-credentials: false
-      # The Worker is the read-only boundary and its typecheck is the only
-      # compiler check on that logic. The static tests cover config shape,
-      # redaction, the verified-only rule and the deploy wrapper.
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.0.0
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: backrest/package-lock.json
-      - name: install
-        run: npm ci --prefix backrest
-      - name: typecheck
-        run: npm --prefix backrest run typecheck
-      - name: unit tests
-        # Node strips the .ts types the wire module is written in; no extra
-        # toolchain (deno, ts-node) is needed on the runner.
-        run: npm --prefix backrest test
-      - name: static checks
-        run: tests/backrest/check.sh
+      - name: backrest
+        run: scripts/check-all.sh --only backrest
 
-  shellcheck:
-    name: shellcheck
+  lint:
+    name: lint (yaml, shell, pins, boundaries)
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           persist-credentials: false
-      - name: lint scripts
-        run: |
-          shellcheck --version
-          shellcheck scripts/*.sh tests/tofu/*.sh \
-            tests/access/*.sh tests/tuta-calendar/*.sh \
-            tests/agent-egress/*.sh tests/brave/*.sh \
-            provision/*/*.sh tests/provision/*.sh \
-            scripts/core/*.sh tests/core/*.sh \
-            backrest/scripts/*.sh backrest/container/entrypoint.sh tests/backrest/*.sh \
-            tests/apps/*.sh tests/deploy/*.sh
-      - name: provision static checks
-        run: tests/provision/check.sh
-      - name: core gate static checks
-        run: tests/core/check.sh
-      - name: storage layout checks
-        run: tests/core/storage-layout.sh
-      - name: restore drill checks
-        run: tests/core/restic-drill.sh
-      - name: Serve route checks
-        run: tests/core/tailscale-serve.sh
-      - name: apps tenant egress checks
-        run: tests/core/apps-egress.sh
-      - name: apps tenant user checks
-        run: tests/core/apps-user.sh
-      - name: agent runtime drill checks
-        run: tests/core/agent-drill.sh
-      - name: apps schema checks
-        run: tests/apps/check.sh
-      - name: apps render checks
-        run: tests/apps/render.sh
-      - name: apps quota checks
-        run: tests/apps/quota.sh
-      - name: apps ingress tests
-        run: tests/apps/ingress.sh
-      - name: deploy state tests
-        run: tests/deploy/state.sh
-      - name: deploy receiver tests
-        run: tests/deploy/receiver.sh
-      - name: deploy verify tests
-        run: tests/deploy/verify.sh
-      - name: deploy platform gate tests
-        run: tests/deploy/platform.sh
-      - name: deploy boot gate tests
-        run: tests/deploy/boot.sh
-      - name: deploy apps apply tests
-        run: tests/deploy/apps.sh
-      # The event path, the backstop and the dead-man: the notify job's shape and
-      # the signed bytes it sends, the hourly poll's refusal to decide anything,
-      # and the heartbeat's two failure reasons.
-      - name: deploy notify job tests
-        run: tests/deploy/notify.sh
-      - name: deploy poll tests
-        run: tests/deploy/poll.sh
-      - name: deploy heartbeat tests
-        run: tests/deploy/heartbeat.sh
+      - name: lint
+        run: scripts/check-all.sh --only lint
 
-  action-pins:
-    name: action SHA pins
+  gates:
+    name: core, apps, deploy, provision
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           persist-credentials: false
-      - name: every action is pinned to a full SHA
-        run: scripts/check-action-pins.sh
-
-  codeowners:
-    name: CODEOWNERS coverage
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-        with:
-          persist-credentials: false
-      - name: CODEOWNERS covers every Kanbei-critical path
-        run: scripts/check-codeowners.sh
+      - name: gates
+        run: scripts/check-all.sh --only provision,core,apps,deploy
 
   fork-pr-secret-boundary:
     name: fork-pr-secret-boundary
