@@ -8,12 +8,15 @@
 # agent-general.network and never sees the key.
 #
 # context_length is the hosted model's window, so the runtime does not have to
-# discover it per request.
+# discover it per request. It must match the model named here: the runtime pins
+# the window, so a stale pin silently truncates a larger model's context.
+# DeepSeek V4.1 Flash advertises 1,048,560 on neuralwatt; the previous pin was
+# Qwen 3.8 27B's 262,128.
 model:
   provider: custom
   base_url: http://smortress-agent-proxy:18003/v1
-  default: qwen-3.8-27b
-  context_length: 262128
+  default: deepseek-v4.1-flash
+  context_length: 1048560
 
 # Nothing in this deployment approves its own tool use: an approval is presented
 # in the chat and decided outside the runtime.
