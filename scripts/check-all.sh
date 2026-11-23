@@ -61,6 +61,7 @@ backrest|npm ci --prefix backrest && npm --prefix backrest run typecheck && npm 
 tofu-check|tests/tofu/check.sh|tests/tofu/*,tofu/*
 tofu-fmt|tofu fmt -check -recursive tofu|tofu/*
 provision|tests/provision/check.sh|tests/provision/*,provision/*
+docs|python3 scripts/check-doc-refs.py|*.md,docs/*,scripts/check-doc-refs.py,scripts/doc-refs-baseline.txt
 secrets|tests/secrets/policy.sh && python3 scripts/sops-policy.py check --repo .|secrets/*,.sops.yaml,scripts/sops-policy.py,tests/secrets/*
 server-image|scripts/check-server-image.sh && scripts/render-ignition.sh --synthetic --check && tests/core/ignition-boundary.sh && scripts/render-ignition.sh --synthetic --stock --check|image/*,ignition/*,units/*,images/*,tests/fixtures/*,docs/core/server-image.md,scripts/check-server-image.sh
 edge|tests/edge/check.sh|tests/edge/*,scripts/verify-public-edge.sh

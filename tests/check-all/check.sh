@@ -39,7 +39,7 @@ expect "a schema renderer change selects the data-plane tests and lint" \
   $'data-plane\nlint' "$(selected scripts/render-source-schemas.py)"
 expect "a workflow change selects lint and actionlint" $'lint\nactionlint' \
   "$(selected .github/workflows/ci.yml)"
-expect "a docs change selects nothing" "" \
+expect "a docs change selects the docs group" "docs" \
   "$(selected README.md docs/broker.md)"
 expect "an image change selects the server-image group" "server-image" \
   "$(selected image/Containerfile)"
