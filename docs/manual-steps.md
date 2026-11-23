@@ -1101,16 +1101,16 @@ The gate and its evidence live in `docs/core/t0-gate.md`; the kit contract is
 every step below is done and its evidence is posted on #703.
 
 ```sh
-sudo scripts/core/freeze-legacy.sh --check
-sudo scripts/core/freeze-legacy.sh --apply     # --resume restores the recorded state
+sudo scripts/legacy/freeze-legacy.sh --check
+sudo scripts/legacy/freeze-legacy.sh --apply     # --resume restores the recorded state
 sudo systemctl stop syncthing.service 2>/dev/null || true
 sudo tar -C /var/lib -c syncthing syncthing-versions \
   | zstd -T0 -o /var/backup/t0-syncthing-state.tar.zst
 sudo sha256sum /var/backup/t0-syncthing-state.tar.zst
 sudo systemctl start syncthing.service 2>/dev/null || true
 sudo systemctl start restic-backups-local.service restic-backups-r2.service
-sudo scripts/core/verify-legacy-backups.sh --keep
-sudo scripts/core/legacy-audit.sh --out /var/tmp/t0-audit.md
+sudo scripts/legacy/verify-legacy-backups.sh --keep
+sudo scripts/legacy/legacy-audit.sh --out /var/tmp/t0-audit.md
 ```
 
 The Syncthing step rescues what no backup holds: the identity and the vault version
@@ -1147,7 +1147,7 @@ A restored tree is root-owned and unlabelled, because the restore runs as root a
 Restic does not carry `security.selinux`: the `chown` and `chcon` are what make it a
 tree the application can write and Podman may mount, and a real restore needs both.
 Start the units again as "Validate the units" gives, then the dump timer.
-`scripts/retirement-gate.sh` runs the same helper over every unit and destination
+`scripts/legacy/retirement-gate.sh` runs the same helper over every unit and destination
 for the T6 gate.
 
 
@@ -1255,9 +1255,9 @@ The gate's evidence is a cold restore of every recovery unit from every destinat
 plus the two agent drills:
 
 ```sh
-sudo scripts/retirement-gate.sh --dry-run
-sudo scripts/retirement-gate.sh                  # the whole matrix
-sudo scripts/retirement-gate.sh --keep           # leave the targets for inspection
+sudo scripts/legacy/retirement-gate.sh --dry-run
+sudo scripts/legacy/retirement-gate.sh                  # the whole matrix
+sudo scripts/legacy/retirement-gate.sh --keep           # leave the targets for inspection
 ```
 
 ### Decommission checklist
@@ -1266,7 +1266,7 @@ sudo scripts/retirement-gate.sh --keep           # leave the targets for inspect
    kit drill dated in `docs/core/recovery-kit.md`.
 2. **The three repositories are fresh** — "Bring the restic plane up", and
    `smortress-restic-verify` exits 0 on every unit.
-3. **The retirement matrix is green** — `scripts/retirement-gate.sh` with no failed
+3. **The retirement matrix is green** — `scripts/legacy/retirement-gate.sh` with no failed
    row, plus `scripts/agent-runtime-drill.sh mounts`, `credentials` and `restore`
    for both agent datasets.
 4. **The old plane is proven and then frozen** — the T0 verifier tables; stop

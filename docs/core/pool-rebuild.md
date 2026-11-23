@@ -253,7 +253,7 @@ not passed: under the old `dump` method it wrote 39 GiB of 520 expanded GB in 24
 minutes, which could not finish inside the helper's four-hour deadline. What
 stands in its place:
 
-- `scripts/retirement-gate.sh` cold-restores every unit from each destination
+- `scripts/legacy/retirement-gate.sh` cold-restores every unit from each destination
   and matches one sample file per dataset against the live tree. That matrix is
   the retirement evidence.
 - 400 files spread across the first 383,794 restored files of `agent-local`

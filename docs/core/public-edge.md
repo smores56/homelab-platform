@@ -98,7 +98,7 @@ Before any of it, prove the host copy is the authoritative library:
 ```sh
 CLUSTER_URL=https://photos.sammohr.dev CLUSTER_API_KEY=… \
 HOST_URL=https://smortress.<tailnet>.ts.net HOST_API_KEY=… \
-  scripts/compare-photos-origin.sh
+  scripts/legacy/compare-photos-origin.sh
 ```
 
 It compares `/api/server/statistics` on both copies; a difference means the
@@ -271,7 +271,7 @@ waits for the retirement gate and the origin-parity comparison, not for the box.
    reach smortress on 443.
 7. **The cutover.** Prove the host copy is the authoritative library first, with
    `CLUSTER_URL=… CLUSTER_API_KEY=… HOST_URL=… HOST_API_KEY=…
-   scripts/compare-photos-origin.sh`: both counts must match, and usage within
+   scripts/legacy/compare-photos-origin.sh`: both counts must match, and usage within
    `EDGE_USAGE_DELTA` if you allow one. Then record 30 days of `photos` + `opds`
    transfer from Cloudflare's analytics; if it is a meaningful fraction of 10 TB,
    stop and size the plan instead.
