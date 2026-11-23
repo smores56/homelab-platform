@@ -4,7 +4,9 @@ The agent runtime never runs a shell itself and never holds a Podman socket. A
 shell request reaches one of two class-fixed entry points, and
 `scripts/agent-job.sh` alone builds a `podman run` vector from constants: the
 image, every mount, the network authority, the limits and the environment. The
-caller supplies one shell command and nothing else.
+caller supplies one shell command and nothing else. What a caller addresses is a
+Unix socket served by `scripts/agent-shell-bridge.py`, not the dispatcher
+(see [Transport](#transport)).
 
 ## Two classes, two entry points
 
@@ -25,6 +27,51 @@ container's read-only root. General content cannot be copied, sourced or
 interpreted into a personal job because the personal job cannot see a general
 tree. A general job sees the one general tree and no personal dataset, no
 private workspace and no agent state.
+
+## Transport
+
+The dispatcher has no network surface at all. One program above it does the
+addressing, and it is the whole transport (SDLC #859):
+
+| Piece | Where it lives | Who can reach it |
+| --- | --- | --- |
+| `smortress-agent-shell-bridge.service` | root service, `scripts/agent-shell-bridge.py` at `/usr/libexec/agent-shell-bridge` | — |
+| `/run/smortress/agent-shell/general.sock` | a tmpfiles directory, 0710 root:1000, under the root 0700 `/run/smortress`; the socket is 0660, group 1000 | the general facade container, by a mount of that directory |
+| `/usr/libexec/agent-job-general` | a constant in the bridge, chosen by `--class` at startup | the bridge |
+
+The bridge serves one tool, `shell.run`, to one client. A request is one JSON
+line whose only field is `command`: unknown fields, a non-string or empty command,
+one over 32768 characters, a NUL, a line over 64 KiB or a missing newline are
+refused with `{"error": {"code": "invalid_request", ...}}`. The reply is `{status,
+output, truncated}` — the dispatcher's exit status, its merged stderr and stdout,
+and whether the 1 MiB cap clipped it — or `{"error": {"code": "timeout" |
+"unavailable" | ...}}`. One request per connection, four at a time; a fifth caller
+is told to come back rather than queued behind a 300 s job. The bridge's own
+deadline (330 s) is a backstop above the dispatcher's `RuntimeMaxSec=300` and
+kills the dispatcher's process group.
+
+Why a socket and not a port: the class is a constant and the command is the only
+field, so what is left to protect is *who can ask at all*. A Unix socket answers
+that with the filesystem — the parent is root 0700, the socket's directory is
+0710 with one group and the inode is 0660, and only that group's container mounts
+the directory. The directory rather than the file is mounted so a bridge restart
+rebinds a socket this container still sees. A TCP listener would be a second
+way in with no consumer, reachable by anything that can route to the host, needing
+its own authentication on top of a token that already exists for the MCP surface.
+There is no such listener, and the gateway, the model server and the web UI have
+no path to the socket to use instead.
+
+The facade mounts that one inode, so it is `Requires=`, `After=` and `PartOf=`
+the bridge unit: the bridge must exist before the mount (a missing source would
+make podman create a directory at the path), and a bridge restart recreates the
+socket, which a facade that did not restart with it would see as an unlinked
+inode that refuses every connection.
+
+The bridge never creates its directory: systemd does, and a bridge that could
+create it could also create it permissively. The personal class is the same
+program with a different `--class`; its bridge is T18 of #702 and does not exist
+yet, so the personal facade has no shell tool at all rather than a tool that
+refuses.
 
 ## Containment
 
@@ -72,6 +119,9 @@ accounts; nothing names their ids. `smortress-agent-job-provision.service` runs
 `scripts/agent-job-provision.sh --check` reports drift and writes nothing. The
 dispatcher re-loads the egress table itself before every launch, so a skipped or
 failed boot unit cannot leave a job running without the boundary.
+`smortress-agent-shell-bridge.service` requires and follows that unit, because a
+bridge serving a socket whose every job fails is worse than one that did not
+start.
 
 ## Approval seam
 

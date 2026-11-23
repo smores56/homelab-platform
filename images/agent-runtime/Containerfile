@@ -25,6 +25,7 @@ COPY apps/agent_facade/__init__.py apps/agent_facade/__main__.py \
      apps/agent_facade/contracts.py apps/agent_facade/memory.py \
      apps/agent_facade/server.py apps/agent_facade/sources.py \
      apps/agent_facade/replica_sources.py apps/agent_facade/source_index.py \
+     apps/agent_facade/shell.py \
      /usr/lib/agent-facade/apps/agent_facade/
 COPY apps/brave_ingest/__init__.py apps/brave_ingest/seed.py \
      apps/brave_ingest/snapshot.py /usr/lib/agent-facade/apps/brave_ingest/

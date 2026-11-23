@@ -150,6 +150,12 @@ COPY image/cosign.pub /etc/pki/containers/smortress.pub
 # change to them rebuilds that container image instead of this one.
 COPY scripts/apps-schema.py /usr/libexec/apps-schema
 COPY scripts/secrets-index.py /usr/libexec/secrets-index
+# The shell bridge (SDLC #859): the one root program a facade's request reaches.
+# It runs the class-fixed dispatcher and owns the socket the general facade
+# mounts, so it belongs to the host image and not to agent-runtime: the code that
+# decides what a shell request may be must be pinned with the OS, not with the
+# agent's own image.
+COPY scripts/agent-shell-bridge.py /usr/libexec/agent-shell-bridge
 # The base ships %sudo ALL=(ALL) NOPASSWD: ALL in /etc/sudoers.d/coreos-sudo-group.
 # A NOPASSWD line reaches authsucc without consulting pam_authenticate, so the
 # touch, the password fallback and the faillock tally all stop applying: the
@@ -162,7 +168,7 @@ RUN set -eux; \
     for f in /usr/libexec/smortress-src/*.sh; do install -m 0755 "$f" "/usr/libexec/$(basename "${f%.sh}")"; done; \
     rm -rf /usr/libexec/smortress-src; \
     ln -sf /usr/libexec/smortress-deploy /usr/bin/smortress-deploy; \
-    chmod 0755 /usr/libexec/apps-schema /usr/libexec/secrets-index; \
+    chmod 0755 /usr/libexec/apps-schema /usr/libexec/secrets-index /usr/libexec/agent-shell-bridge; \
     chmod 0644 /usr/share/smortress/secrets.index.json; \
     chmod 0644 /etc/pki/containers/smortress.pub /usr/share/smortress/secrets.manifest; \
     chmod 0600 /etc/smortress/secrets/*.json; \
@@ -248,6 +254,7 @@ RUN set -eux; \
       smortress-app-secrets.service \
       smortress-agent-config.service \
       smortress-agent-job-provision.service \
+      smortress-agent-shell-bridge.service \
       smortress-nvidia-cdi.service \
       smortress-selinux-nvidia-map.service \
       smortress-apps-user.service \

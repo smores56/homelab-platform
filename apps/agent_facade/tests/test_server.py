@@ -20,7 +20,7 @@ from data_plane.errors import ContractError
 from data_plane.model import Visibility
 
 from apps.agent_facade import __main__ as cli
-from apps.agent_facade import memory, server, sources
+from apps.agent_facade import memory, server, shell, sources
 from apps.agent_facade.tests import support
 
 TOKEN_HEADER = server.TOKEN_HEADER
@@ -324,6 +324,114 @@ class StdioTransportTestCase(support.FacadeCase):
         self.assertNotIn(support.TOKEN, self.output)
 
 
+class _StubRunner:
+    """A stand-in for ``shell.ShellRunner``: the facade's mapping, not a socket's."""
+
+    def __init__(
+        self,
+        result: shell.ShellResult | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        self.result = result or shell.ShellResult(status=0, output="", truncated=False)
+        self.error = error
+        self.commands: list[str] = []
+
+    def run(self, command: str) -> shell.ShellResult:
+        self.commands.append(command)
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+
+class ShellToolTestCase(support.FacadeCase):
+    """``shell.run`` exists only for a facade that was given a bridge socket."""
+
+    def facade_with(self, runner: _StubRunner) -> server.Facade:
+        return server.Facade(
+            deployment=self.deployment,
+            catalog=self.catalog,
+            store=self.store,
+            token=support.TOKEN,
+            max_body_bytes=support.MAX_BYTES,
+            shell=runner,
+        )
+
+    def names(self, facade: server.Facade) -> list[str]:
+        return [tool["name"] for tool in facade.handle("tools/list", None)["tools"]]
+
+    def test_a_facade_without_a_runner_does_not_serve_it(self) -> None:
+        self.assertEqual(self.names(self.facade), list(server.contracts.TOOL_NAMES))
+        self.assertNotIn("shell.run", self.names(self.facade))
+        error = self.refusal("shell.run", {"command": "ls"})
+        self.assertEqual(error["code"], "unknown_tool")
+        self.assertNotIn("shell.run", error["message"])
+
+    def test_a_facade_with_a_runner_serves_it(self) -> None:
+        facade = self.facade_with(_StubRunner())
+        names = self.names(facade)
+        self.assertEqual(names[-1], "shell.run")
+        self.assertEqual(names[:-1], list(server.contracts.TOOL_NAMES))
+
+    def test_a_successful_run_is_a_result_not_an_error(self) -> None:
+        runner = _StubRunner(shell.ShellResult(status=3, output="out\n", truncated=True))
+        result = self.facade_with(runner).handle(
+            "tools/call", {"name": "shell.run", "arguments": {"command": "false; true"}}
+        )
+        self.assertFalse(result["isError"], result)
+        self.assertEqual(
+            result["structuredContent"],
+            {"status": 3, "output": "out\n", "truncated": True},
+        )
+        self.assertEqual(runner.commands, ["false; true"])
+
+    def test_a_command_with_newlines_and_tabs_reaches_the_runner(self) -> None:
+        runner = _StubRunner()
+        command = "printf 'a'\n\tprintf 'b'"
+        facade = self.facade_with(runner)
+        result = facade.handle("tools/call", {"name": "shell.run", "arguments": {"command": command}})
+        self.assertFalse(result["isError"], result)
+        self.assertEqual(runner.commands, [command])
+
+    def test_an_extra_field_is_an_error_result(self) -> None:
+        runner = _StubRunner()
+        facade = self.facade_with(runner)
+        result = facade.handle(
+            "tools/call",
+            {"name": "shell.run", "arguments": {"command": "ls", "class": "personal"}},
+        )
+        self.assertTrue(result["isError"])
+        self.assertEqual(result["structuredContent"]["error"]["code"], "validation")
+        self.assertEqual(runner.commands, [])
+
+    def test_a_control_character_is_refused_before_the_runner(self) -> None:
+        runner = _StubRunner()
+        facade = self.facade_with(runner)
+        for command in ("ls\u0000", "ls\u0007", "ls\r", "x" * 32769, "", "   "):
+            with self.subTest(command=command):
+                result = facade.handle(
+                    "tools/call", {"name": "shell.run", "arguments": {"command": command}}
+                )
+                self.assertTrue(result["isError"], result)
+                self.assertEqual(result["structuredContent"]["error"]["code"], "validation")
+        self.assertEqual(runner.commands, [])
+
+    def test_an_unavailable_bridge_maps_to_the_unavailable_code(self) -> None:
+        runner = _StubRunner(error=shell.ShellUnavailable("the shell bridge is not reachable"))
+        result = self.facade_with(runner).handle(
+            "tools/call", {"name": "shell.run", "arguments": {"command": "ls"}}
+        )
+        self.assertTrue(result["isError"])
+        self.assertEqual(result["structuredContent"]["error"]["code"], "unavailable")
+
+    def test_a_bridge_error_maps_to_shell_failed(self) -> None:
+        runner = _StubRunner(error=shell.ShellError("the job exceeded its wall clock"))
+        result = self.facade_with(runner).handle(
+            "tools/call", {"name": "shell.run", "arguments": {"command": "ls"}}
+        )
+        self.assertTrue(result["isError"])
+        self.assertEqual(result["structuredContent"]["error"]["code"], "shell_failed")
+
+
 class TokenConfigurationTestCase(support.FacadeCase):
     def test_environment_token_is_used(self) -> None:
         with mock.patch.dict("os.environ", {"AGENT_FACADE_TOKEN": "from-env"}, clear=False):
@@ -403,6 +511,40 @@ class TokenConfigurationTestCase(support.FacadeCase):
         self.assertEqual(facade.deployment, Visibility.GENERAL)
         self.assertEqual(facade.store.profile, memory.PROFILE_BY_DEPLOYMENT[Visibility.GENERAL])
         self.assertTrue(facade.token_configured)
+
+    def test_the_shell_socket_is_optional_and_builds_a_runner(self) -> None:
+        environment = {
+            "AGENT_FACADE_TOKEN": support.TOKEN,
+            "AGENT_FACADE_TOKEN_FILE": "",
+            "AGENT_FACADE_SHELL_SOCKET": "",
+        }
+        with mock.patch.dict("os.environ", environment, clear=False):
+            plain = cli._parser().parse_args(
+                ["--deployment", "general", "--memory-root", self.directory.name]
+            )
+            self.assertIsNone(cli.build_facade(plain).shell)
+            wired = cli._parser().parse_args(
+                [
+                    "--deployment",
+                    "general",
+                    "--memory-root",
+                    self.directory.name,
+                    "--shell-socket",
+                    "/run/agent-shell/general.sock",
+                ]
+            )
+            facade = cli.build_facade(wired)
+        self.assertIsNotNone(facade.shell)
+        self.assertEqual(facade.shell.socket_path, "/run/agent-shell/general.sock")
+
+    def test_the_environment_fills_the_shell_socket(self) -> None:
+        with mock.patch.dict(
+            "os.environ",
+            {"AGENT_FACADE_SHELL_SOCKET": "/run/agent-shell/general.sock"},
+            clear=False,
+        ):
+            args = cli._parser().parse_args([])
+        self.assertEqual(args.shell_socket, "/run/agent-shell/general.sock")
 
 
 if __name__ == "__main__":

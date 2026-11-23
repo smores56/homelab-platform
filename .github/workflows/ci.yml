@@ -60,6 +60,17 @@ jobs:
       - name: agent-facade
         run: scripts/check-all.sh --only agent-facade
 
+  agent-shell-bridge:
+    name: agent-shell-bridge unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      - name: agent-shell-bridge
+        run: scripts/check-all.sh --only agent-shell-bridge
+
   data-plane:
     name: data-plane unit tests
     runs-on: ubuntu-latest

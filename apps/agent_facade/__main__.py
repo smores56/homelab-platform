@@ -29,7 +29,7 @@ from typing import Iterable
 
 from data_plane.errors import DataPlaneError
 
-from . import contracts, memory, replica_sources, server, sources
+from . import contracts, memory, replica_sources, server, shell as shell_transport, sources
 
 DEFAULT_TRANSPORT = "stdio"
 DEFAULT_HOST = "127.0.0.1"
@@ -39,6 +39,9 @@ DEFAULT_MEMORY_ROOT = "state/agent-facade"
 #: an unwritable root only means searches scan (apps/agent_facade/source_index.py).
 DEFAULT_INDEX_ROOT = "/index"
 TOKEN_ENV = "AGENT_FACADE_TOKEN"
+#: The bridge socket, and with it ``shell.run``: a deployment that is not given
+#: one serves no shell tool at all. The personal deployment is never given one.
+SHELL_SOCKET_ENV = "AGENT_FACADE_SHELL_SOCKET"
 TRANSPORTS = ("stdio", "http")
 
 LOG = logging.getLogger("agent-facade")
@@ -109,6 +112,14 @@ def _parser() -> argparse.ArgumentParser:
         help="root of the derived full-text index over replica sources",
     )
     parser.add_argument(
+        "--shell-socket",
+        default=_env(SHELL_SOCKET_ENV),
+        help=(
+            "bridge socket serving shell.run; general deployment only, and its "
+            "absence is the absence of the tool"
+        ),
+    )
+    parser.add_argument(
         "--replica",
         action="append",
         default=[],
@@ -171,12 +182,19 @@ def build_facade(args: argparse.Namespace) -> server.Facade:
     replacements = replica_sources.adapters_for(
         deployment, _replicas(args.replica), args.index_root
     )
+    shell = None
+    if args.shell_socket:
+        shell = shell_transport.ShellRunner(args.shell_socket)
+        LOG.info("shell.run: enabled over %s", args.shell_socket)
+    else:
+        LOG.info("shell.run: absent (no --shell-socket)")
     return server.Facade(
         deployment=deployment,
         catalog=sources.Catalog.for_deployment(deployment, replacements=replacements),
         store=memory.MemoryIndex(args.memory_root, deployment),
         token=token,
         max_body_bytes=args.max_body_bytes,
+        shell=shell,
     )
 
 

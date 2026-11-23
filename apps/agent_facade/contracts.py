@@ -12,6 +12,13 @@ outside its own deployment by naming it.
 Caps are module constants. ``parse_call`` takes the byte cap because the service
 has one ``--max-body-bytes`` knob that bounds both a returned body and a written
 value.
+
+The one exception is ``shell.run`` (SDLC #859): its argument is a command, and it
+exists only for a facade that was given a bridge socket, so it is not in
+``TOOL_NAMES`` and ``parse_call`` refuses the name unless the caller allows it. The
+isolation is in the path, not in the argument: the command reaches a dispatcher
+that builds every mount, image and flag from constants, so there is nothing else
+for a request field to name.
 """
 
 from __future__ import annotations
@@ -37,6 +44,9 @@ MAX_TAG_CHARS = 64
 MAX_TAGS = 16
 MAX_PROVENANCE_CHARS = 256
 SNIPPET_CHARS = 160
+#: One shell command, counted in characters rather than bytes: the bridge holds
+#: the same bound and refuses a longer line before it parses it.
+MAX_COMMAND_CHARS = 32768
 
 #: Source names, record ids, and memory keys are one path segment: lowercase
 #: alphanumerics plus ``-`` and ``_``, never a dot, so an id can never address a
@@ -93,6 +103,18 @@ class MemoryRebuild:
     """Rebuild the derived index from the record files."""
 
 
+@dataclass(frozen=True)
+class ShellRun:
+    """One command for the general shell class, run unsupervised.
+
+    The class is not a field: the bridge was started with one class and a
+    request names nothing else. Neither is an image, a mount, a network or a
+    Podman flag -- the dispatcher builds that argument vector from constants.
+    """
+
+    command: str
+
+
 Operation = (
     Describe
     | SourceRead
@@ -101,6 +123,7 @@ Operation = (
     | MemoryWrite
     | MemorySearch
     | MemoryRebuild
+    | ShellRun
 )
 
 
@@ -225,6 +248,19 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
 
 TOOL_NAMES: tuple[str, ...] = tuple(spec.name for spec in TOOL_SPECS)
 
+#: The one operation that is not a typed source read, and the only tool whose
+#: presence is a deployment fact rather than a registry entry: a facade appends
+#: it to ``tools/list`` when it was given a bridge socket, and refuses the name
+#: otherwise. It is deliberately outside ``TOOL_NAMES`` so "this deployment has
+#: a shell" cannot be read off a module constant.
+SHELL_TOOL = ToolSpec(
+    "shell.run",
+    "Run one shell command unsupervised in the general shell class. Output and "
+    "errors are merged and capped; the command cannot name a class, an image, a "
+    "mount, a network or a Podman flag.",
+    _schema({"command": {"type": "string", "maxLength": MAX_COMMAND_CHARS}}, ("command",)),
+)
+
 
 def _arguments(value: Any) -> Mapping[str, Any]:
     if value is None:
@@ -256,6 +292,29 @@ def _text(value: Any, name: str, max_chars: int) -> str:
         raise ValidationError(f"{name} exceeds {max_chars} characters")
     if any(ord(character) < 32 or ord(character) == 127 for character in value):
         raise ValidationError(f"{name} contains control characters")
+    return value
+
+
+#: A shell command needs its own control-character rule: it is source code, so a
+#: newline and a tab are structure, while NUL and every other control character
+#: are how a value smuggles a second one.
+_COMMAND_CONTROLS = frozenset("\t\n")
+
+
+def _command(value: Any) -> str:
+    if not isinstance(value, str):
+        raise ValidationError("command must be a string")
+    if not value.strip():
+        raise ValidationError("command must be non-empty")
+    if len(value) > MAX_COMMAND_CHARS:
+        raise ValidationError(f"command exceeds {MAX_COMMAND_CHARS} characters")
+    for character in value:
+        if character in _COMMAND_CONTROLS:
+            continue
+        if ord(character) < 32 or ord(character) == 127:
+            raise ValidationError(
+                "command contains a control character other than a tab or a newline"
+            )
     return value
 
 
@@ -379,6 +438,11 @@ def _parse_memory_rebuild(arguments: Mapping[str, Any], max_bytes: int) -> Memor
     return MemoryRebuild()
 
 
+def _parse_shell_run(arguments: Mapping[str, Any], max_bytes: int) -> ShellRun:
+    _fields(arguments, ("command",))
+    return ShellRun(command=_command(arguments["command"]))
+
+
 Parser = Callable[[Mapping[str, Any], int], Operation]
 
 _PARSERS: Mapping[str, Parser] = MappingProxyType(
@@ -390,16 +454,28 @@ _PARSERS: Mapping[str, Parser] = MappingProxyType(
         "memory.write": _parse_memory_write,
         "memory.search": _parse_memory_search,
         "memory.rebuild": _parse_memory_rebuild,
+        SHELL_TOOL.name: _parse_shell_run,
     }
 )
 
 
 def parse_call(
-    name: Any, arguments: Any, *, max_bytes: int = MAX_BODY_BYTES
+    name: Any,
+    arguments: Any,
+    *,
+    max_bytes: int = MAX_BODY_BYTES,
+    allow_shell: bool = False,
 ) -> Operation:
-    """Turn one tool call into a typed operation, or refuse it."""
+    """Turn one tool call into a typed operation, or refuse it.
+
+    ``allow_shell`` is the deployment's answer to "does this process have a
+    bridge socket": without it the name is unknown here, exactly as a source of
+    the other deployment is absent from its table rather than refused by a check.
+    """
 
     parser = _PARSERS.get(name) if isinstance(name, str) else None
+    if parser is _parse_shell_run and not allow_shell:
+        parser = None
     if parser is None:
         # The name is not echoed: a caller-supplied string has no place in a
         # log line or an error a client sees, and the served set is public.

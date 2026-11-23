@@ -37,7 +37,7 @@ from urllib.parse import urlsplit
 from data_plane.errors import ContractError, DataPlaneError, ValidationError
 from data_plane.model import Visibility
 
-from . import contracts, memory, sources
+from . import contracts, memory, shell, sources
 
 LOG = logging.getLogger("agent-facade")
 
@@ -56,6 +56,8 @@ UNAUTHORIZED = -32001
 
 # Most specific first: several of these are ValidationError subclasses.
 _ERROR_CODES: tuple[tuple[type[DataPlaneError], str], ...] = (
+    (shell.ShellUnavailable, "unavailable"),
+    (shell.ShellError, "shell_failed"),
     (sources.UnknownSource, "unknown_source"),
     (sources.SourceUnsupported, "unsupported"),
     (sources.SourceUnavailable, "unavailable"),
@@ -146,6 +148,7 @@ class Facade:
         store: memory.MemoryIndex,
         token: str | None = None,
         max_body_bytes: int = contracts.MAX_BODY_BYTES,
+        shell: shell.ShellRunner | None = None,
     ) -> None:
         if catalog.deployment is not deployment:
             raise ContractError(
@@ -166,6 +169,10 @@ class Facade:
         self.catalog = catalog
         self.store = store
         self.max_body_bytes = max_body_bytes
+        # The socket is the only way this process can run a command, so its
+        # presence is the whole of ``shell.run``: no socket, no tool, no name to
+        # call. The personal deployment is started without one.
+        self.shell = shell
         self._token = token or None
 
     @property
@@ -187,7 +194,10 @@ class Facade:
         if method == "ping":
             return {}
         if method == "tools/list":
-            return {"tools": [spec.as_tool() for spec in contracts.TOOL_SPECS]}
+            specs = contracts.TOOL_SPECS
+            if self.shell is not None:
+                specs = (*specs, contracts.SHELL_TOOL)
+            return {"tools": [spec.as_tool() for spec in specs]}
         if method == "tools/call":
             return self._call_tool(params)
         raise MethodNotFound(f"method not found: {method[:contracts.MAX_SOURCE_CHARS]}")
@@ -211,7 +221,10 @@ class Facade:
         name, arguments = _tool_call_arguments(params)
         try:
             operation = contracts.parse_call(
-                name, arguments, max_bytes=self.max_body_bytes
+                name,
+                arguments,
+                max_bytes=self.max_body_bytes,
+                allow_shell=self.shell is not None,
             )
         except contracts.UnknownTool as error:
             return _tool_error("unknown_tool", str(error))
@@ -286,6 +299,17 @@ class Facade:
             }
         if isinstance(operation, contracts.MemoryRebuild):
             return {"indexed": self.store.rebuild()}
+        if isinstance(operation, contracts.ShellRun):
+            if self.shell is None:
+                # Unreachable through ``parse_call``; stated so a later edit that
+                # adds another caller cannot silently fall into a local shell.
+                raise ContractError("this facade has no shell socket configured")
+            result = self.shell.run(operation.command)
+            return {
+                "status": result.status,
+                "output": result.output,
+                "truncated": result.truncated,
+            }
         raise ContractError(f"unhandled operation {type(operation).__name__}")
 
 
