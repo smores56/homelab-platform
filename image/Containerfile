@@ -111,6 +111,7 @@ COPY scripts/storage-layout.sh scripts/zfs-ready.sh scripts/sops-decrypt.sh \
      scripts/agent-config-seed.sh \
      scripts/smortress-password.sh scripts/agent-job.sh scripts/agent-job-personal.sh scripts/agent-job-general.sh scripts/agent-job-provision.sh \
      /usr/libexec/smortress-src/
+COPY scripts/deploy/apps/ /usr/libexec/deploy/apps/
 # The operator CLI is one command, not a second name for the drain: the loop
 # above names a helper after its file, so it is staged under the name the
 # runbook uses and the loop installs it as /usr/libexec/smortress-deploy.

@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
-"""Unpack the encrypted host-secret bundle into a decrypted directory.
+"""Unpack the encrypted host-secret bundles into a decrypted directory.
 
 Each bundle value is the exact content of one file: the restic password is the
-same printable string kept in the password manager, the R2 pair is the raw
-32/64-character hex value, and ``consumers_json`` is JSON text. Nothing is
-decoded, so what the operator stores is what the host uses.
+same printable string kept in the password manager and ``consumers_json`` is
+JSON text. The restic R2 write pair is not in the host bundle: it is one of the
+credentials in ``secrets/cloudflare.yaml``, the single operator file for every
+Cloudflare token, and is read from there. Nothing is decoded, so what the
+operator stores is what the host uses.
 
-    sops -d secrets/660-host.yaml > /dev/shm/host-secrets.yaml
+    sops -d secrets/660-host.yaml   > /dev/shm/host-secrets.yaml
+    sops -d secrets/cloudflare.yaml > /dev/shm/cloudflare.yaml
     sudo scripts/unpack-host-secrets.py --bundle /dev/shm/host-secrets.yaml \
-      --dest /run/operator-secrets
-    shred -u /dev/shm/host-secrets.yaml
+      --cloudflare /dev/shm/cloudflare.yaml --dest /run/operator-secrets
+    shred -u /dev/shm/host-secrets.yaml /dev/shm/cloudflare.yaml
 """
 
 from __future__ import annotations
@@ -21,23 +24,23 @@ import re
 import sys
 from pathlib import Path
 
-# bundle key -> destination relative to the secret root, and how it is written.
-# `env` composes a KEY=value file from several bundle keys.
+# bundle key -> destination relative to the secret root.
 FILES = {
-    "restic_password": ("restic/data-plane.password", "raw"),
-    "r2_access_key_id": ("restic/r2.env", "env"),
-    "r2_secret_access_key": ("restic/r2.env", "env"),
-    "event_append_token": ("event-service/append-token", "raw"),
-    "event_read_token": ("event-service/read-token", "raw"),
-    "consumers_json": ("event-service/consumers.json", "raw"),
-    "broker_identity": ("write-broker/identity", "raw"),
-    "broker_operator_key": ("write-broker/operator-key", "raw"),
-}
-ENV_NAMES = {
-    "r2_access_key_id": "AWS_ACCESS_KEY_ID",
-    "r2_secret_access_key": "AWS_SECRET_ACCESS_KEY",
+    "restic_password": "restic/data-plane.password",
+    "event_append_token": "event-service/append-token",
+    "event_read_token": "event-service/read-token",
+    "consumers_json": "event-service/consumers.json",
+    "broker_identity": "write-broker/identity",
+    "broker_operator_key": "write-broker/operator-key",
 }
 REQUIRED = tuple(FILES)
+
+# The R2 write pair lives in secrets/cloudflare.yaml, whose keys name the
+# credential rather than the file. The old host-bundle names stay accepted for
+# one migration so a checkout that has not re-encrypted 660-host.yaml still
+# unpacks, but the cloudflare pair wins when both are present.
+R2_KEYS = ("restic-backup-rw-access-key-id", "restic-backup-rw-secret-access-key")
+LEGACY_R2_KEYS = ("r2_access_key_id", "r2_secret_access_key")
 HEX_ID = re.compile(r"^[0-9a-f]{32}$")
 HEX_SECRET = re.compile(r"^[0-9a-f]{64}$")
 
@@ -54,7 +57,7 @@ def _scalar(raw: str) -> str:
     return value
 
 
-def parse_bundle(text: str) -> dict[str, str]:
+def _flat(text: str) -> dict[str, str]:
     values: dict[str, str] = {}
     for number, line in enumerate(text.splitlines(), 1):
         stripped = line.strip()
@@ -67,22 +70,27 @@ def parse_bundle(text: str) -> dict[str, str]:
         if key in values:
             raise ValueError(f"duplicate key {key}")
         values[key] = _scalar(value)
+    return values
 
-    unknown = set(values) - set(FILES)
+
+def _validate_pair(key_id: str, secret: str) -> tuple[str, str]:
+    if not HEX_ID.fullmatch(key_id):
+        raise ValueError(f"{R2_KEYS[0]} must be the raw 32-character hex value")
+    if not HEX_SECRET.fullmatch(secret):
+        raise ValueError(f"{R2_KEYS[1]} must be the raw 64-character hex value")
+    return key_id, secret
+
+
+def parse_bundle(text: str) -> dict[str, str]:
+    values = _flat(text)
+
+    unknown = set(values) - set(FILES) - set(LEGACY_R2_KEYS)
     if unknown:
         raise ValueError(f"unknown bundle keys: {', '.join(sorted(unknown))}")
     missing = [key for key in REQUIRED if not values.get(key)]
     if missing:
         raise ValueError(f"bundle is missing: {', '.join(sorted(missing))}")
 
-    if not HEX_ID.fullmatch(values["r2_access_key_id"]):
-        raise ValueError(
-            "r2_access_key_id must be the raw 32-character hex value, not base64"
-        )
-    if not HEX_SECRET.fullmatch(values["r2_secret_access_key"]):
-        raise ValueError(
-            "r2_secret_access_key must be the raw 64-character hex value, not base64"
-        )
     if values["event_append_token"] == values["event_read_token"]:
         raise ValueError("the append and read tokens must differ")
     try:
@@ -95,7 +103,7 @@ def parse_bundle(text: str) -> dict[str, str]:
         not isinstance(consumers, dict)
         or not consumers
         or any(
-            not isinstance(name, str) or not name or not isinstance(secret, str) or not secret
+            not isinstance(name, str) or not name or not isinstance(secret, str)
             for name, secret in consumers.items()
         )
     ):
@@ -105,13 +113,26 @@ def parse_bundle(text: str) -> dict[str, str]:
     return values
 
 
-def unpack(values: dict[str, str], dest: Path) -> list[str]:
-    grouped: dict[str, dict[str, str]] = {}
-    for key, (relative, kind) in FILES.items():
-        if kind == "env":
-            grouped.setdefault(relative, {})[ENV_NAMES[key]] = values[key]
-        else:
-            grouped[relative] = {"": values[key]}
+def parse_cloudflare(text: str) -> tuple[str, str]:
+    """Read the restic write pair out of the single Cloudflare credential file."""
+    values = _flat(text)
+    missing = [key for key in R2_KEYS if not values.get(key)]
+    if missing:
+        raise ValueError(f"cloudflare bundle is missing: {', '.join(missing)}")
+    return _validate_pair(values[R2_KEYS[0]], values[R2_KEYS[1]])
+
+
+def unpack(
+    values: dict[str, str], dest: Path, r2: tuple[str, str] | None = None
+) -> list[str]:
+    grouped: dict[str, dict[str, str]] = {
+        relative: {"": values[key]} for key, relative in FILES.items()
+    }
+    if r2 is not None:
+        grouped["restic/r2.env"] = {
+            "AWS_ACCESS_KEY_ID": r2[0],
+            "AWS_SECRET_ACCESS_KEY": r2[1],
+        }
     written: list[str] = []
     for relative in sorted(grouped):
         target = dest / relative
@@ -134,7 +155,11 @@ def unpack(values: dict[str, str], dest: Path) -> list[str]:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="unpack-host-secrets")
-    parser.add_argument("--bundle", required=True, help="decrypted bundle YAML")
+    parser.add_argument("--bundle", required=True, help="decrypted 660-host.yaml")
+    parser.add_argument(
+        "--cloudflare",
+        help="decrypted secrets/cloudflare.yaml; source of the restic R2 write pair",
+    )
     parser.add_argument("--dest", required=True, help="bundle directory to fill")
     return parser
 
@@ -143,7 +168,29 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
         values = parse_bundle(Path(args.bundle).read_text(encoding="utf-8"))
-        written = unpack(values, Path(args.dest))
+        if args.cloudflare:
+            pair = parse_cloudflare(Path(args.cloudflare).read_text(encoding="utf-8"))
+            if any(key in values for key in LEGACY_R2_KEYS):
+                print(
+                    "unpack-host-secrets: warning: 660-host.yaml still carries "
+                    "r2_access_key_id/r2_secret_access_key; the cloudflare pair is used",
+                    file=sys.stderr,
+                )
+        elif all(key in values for key in LEGACY_R2_KEYS):
+            pair = _validate_pair(
+                values[LEGACY_R2_KEYS[0]], values[LEGACY_R2_KEYS[1]]
+            )
+            print(
+                "unpack-host-secrets: warning: reading the restic R2 pair from "
+                "660-host.yaml is deprecated; pass --cloudflare",
+                file=sys.stderr,
+            )
+        else:
+            raise ValueError(
+                "no restic R2 pair: pass --cloudflare with the decrypted "
+                "secrets/cloudflare.yaml"
+            )
+        written = unpack(values, Path(args.dest), pair)
     except (OSError, ValueError) as exc:
         print(f"unpack-host-secrets: {exc}", file=sys.stderr)
         return 1
