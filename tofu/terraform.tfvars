@@ -25,7 +25,11 @@ cluster_tunnel_id = "16a461e2-b28e-4535-b79d-eca2f6e9b001"
 # step 16. The CAA records are created only once this is set.
 acme_account_id = ""
 
-cluster_hosts = ["agent", "agent-hooks", "memory", "music", "ntfy"]
+# `agent` is deliberately absent: k3s is gone, so its CNAME pointed at a tunnel
+# with no connector, and the name has to be free before the A record for the
+# tailnet name service (design #834, task #847) can be created -- Cloudflare
+# refuses two records at one name. Removing the rest is #833's apply.
+cluster_hosts = ["agent-hooks", "memory", "music", "ntfy"]
 
 # The public edge VPS (#725). Setting it creates the two grey-cloud A
 # records; the previous commit already took both names off the cluster
