@@ -77,6 +77,28 @@ def anchors(path: Path) -> set[str]:
     return found
 
 
+def ignored(candidate: str) -> bool:
+    """A gitignored path is operator-local state, not repository content."""
+    result = subprocess.run(
+        ["git", "-C", str(ROOT), "check-ignore", "-q", "--", candidate],
+        capture_output=True,
+    )
+    return result.returncode == 0
+
+
+def token_like_skip(target: str) -> bool:
+    """Tokens that cannot be repository paths: a flag, a URL, a prose elision,
+    a hostname, or a path that starts outside this repository."""
+    if target.startswith(("-", "~", "/")) or "://" in target or "..." in target:
+        return True
+    if any(ch in target for ch in "<>{}$|\\"):
+        return True
+    first = target.partition("#")[0].partition("/")[0]
+    if first and first not in {".", ".."} and "." in first:
+        return True
+    return False
+
+
 def normalize(target: str, doc: Path) -> tuple[str, str] | None:
     target = target.strip().strip("'\"")
     if not target or target.startswith(("#", "http://", "https://", "mailto:", "~", "/")):
@@ -85,7 +107,7 @@ def normalize(target: str, doc: Path) -> tuple[str, str] | None:
         return None
     path, _, anchor = target.partition("#")
     path = path.strip().rstrip(".,;:")
-    if not path:
+    if not path or not repo_path(path):
         return None
     candidates = [path]
     if doc.parent != ROOT:
@@ -97,17 +119,37 @@ def normalize(target: str, doc: Path) -> tuple[str, str] | None:
             return candidate, anchor
         if (ROOT / candidate).exists():
             return (candidate, anchor) if anchor else None
+        if ignored(candidate):
+            return None
         if candidate.endswith(tuple(EXTENSIONS)) or "/" in candidate:
             return candidate, anchor
     return None
 
 
+TOP_LEVEL = {entry.name for entry in ROOT.iterdir()}
+
+
+def repo_path(target: str) -> bool:
+    """A relative path is only checkable when it starts in this repository.
+
+    A first segment that is not a top-level entry names runtime state
+    (`state/agent-local`, `db-dumps/`), a directory inside one (`webui/`), or a
+    path in another repository, and none of those can be checked from here.
+    """
+    first = target.partition("/")[0]
+    return first in TOP_LEVEL or first in {"docs", "README.md"}
+
+
 def looks_like_path(token: str) -> bool:
-    if " " in token or token.startswith(("http://", "https://", "mailto:", "~", "/")):
+    if " " in token or token.startswith(("http://", "https://", "mailto:", "~", "/", "-")):
+        return False
+    if "://" in token or "..." in token:
         return False
     if any(ch in token for ch in "<>{}$|"):
         return False
     path = token.partition("#")[0]
+    if not repo_path(path):
+        return False
     if path in {"CODEOWNERS"}:
         return True
     # A bare filename is a unit or key name in prose far more often than a
@@ -122,6 +164,9 @@ def failures() -> list[tuple[str, str]]:
     files = tracked()
     for rel in files:
         path = ROOT / rel
+        if not path.exists():
+            # A deleted-but-not-yet-committed file has nothing to check.
+            continue
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
         except (IsADirectoryError, UnicodeDecodeError):

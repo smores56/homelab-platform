@@ -102,7 +102,7 @@ replacement model, including why the App lost, is `docs/agent-identity.md`.
 It is plain HTTP with `allow_private: true` — the documented private exception —
 and injects `Authorization: Bearer <memory-mcp-token>`. The value is the one the
 wrapper already uses, projected from the graphiti Secret into
-`broker-credentials` by docs/manual-steps.md step 32. The enrollment sets
+`broker-credentials` at its own start. The enrollment sets
 `optional_secret`, so until that file exists the host answers
 `credential_unavailable` (503) and the rest of the broker is unaffected; a
 request is never forwarded without the credential.
@@ -258,144 +258,10 @@ logical=<host> method=<method> path=<path> status=<status> bytes=<n> outcome=<pr
   transforms or re-encrypts a secret can still echo it undetected; that is the
   documented residual (spec §6.7), not a guarantee.
 
-## Address policy in the CNI
-
-The broker's own check is authoritative; `NetworkPolicy` is the coarse layer.
-It bounds broker traffic only: the tenant also has its own direct public egress
-(`platform/network/tenant-egress.yaml`, `docs/tenancy.md`), so a call that
-skips the broker gets none of the guarantees below — no address policy, no
-redirect refusal, no credential stripping, no redaction.
-
-- `broker` egress: TCP 443 to global unicast only (`0.0.0.0/0` with every
-  non-global IPv4 range in `except`, and the IPv6 equivalents), plus TCP 3100
-  to `loki-gateway` and 9101 to `status-exporter` (`observability/network/`),
-  plus TCP 8081 to `tenant-apps` for the `self` host
-  (`broker/egress-agent-control.yaml`) and 8182 to `graphiti/memory-mcp` for the
-  `memory` host (`broker/egress-memory.yaml`, paired with
-  `platform/network/data-flows.yaml`'s `memory-mcp-from-broker`). The broker
-  namespace is an egress allowlist: an unlisted destination is dropped by the
-  CNI before the broker's own check sees it.
-- `broker` ingress: tenant tier on 8080 only (`platform/network/tenant-broker.yaml`).
-- DNS: `kube-system` on 53 (`platform/network/dns-egress.yaml`).
-- Tunnel: `ingress/cloudflared` to `tenant-apps/nanobot` on 8080 only
-  (`platform/network/agent-ingress.yaml`), paired with the tenant-side rule in
-  `homelab-apps`.
-
-## Agent identity and debug RBAC
-
-`platform/rbac/agent-nanobot.yaml` creates ServiceAccount `nanobot` in
-`tenant-apps` with `automountServiceAccountToken: false`. The trusted controller
-is the platform's own Flux `kustomize-controller`: the tenant reconciler has no
-`serviceaccounts` rule, so the tenant cannot mint an identity or a token. The
-admission policy `agent-identity` pins `serviceAccountName: nanobot` and
-`automountServiceAccountToken: false` for every nanobot-labelled pod, and
-`broker-runtime` pins gVisor, non-root and read-only rootfs for the broker.
-
-In each data namespace (`immich`, `navidrome`, `opdshelf`, `graphiti`) Role
-`agent-debug` grants exactly:
-
-| Resource | Verbs |
-| --- | --- |
-| `events` | `get`, `list` |
-| `pods` | `delete` (restart only) |
-
-Everything else is absent on purpose: no `pods/log`, `pods/exec`,
-`pods/attach`, `pods/portforward`, `pods/proxy`, no `get`/`list pods` (the
-status exporter answers state), no secrets or configmaps, no
-`patch`/`update deployments`, no `nodes` or `nodes/metrics` (the broker's
-`status` logical host is the only metrics path).
-
-The pod carries no token and its NetworkPolicy has no route to the API server,
-so the grant is a declared ceiling for a short-lived, human-minted token
-(`kubectl -n tenant-apps create token nanobot --duration=15m`) used for a
-break-glass restart. It is not a credential the agent can reach on its own.
-
-## Routing contract: `agent.sammohr.dev`
-
-The hostname terminates on the **cluster** tunnel, not the host tunnel:
-
-```text
-agent.sammohr.dev --Access--> cluster tunnel --HTTP--> nanobot.tenant-apps.svc:80 --> pod:8080
-```
-
-- Access application `agent` exists in `tofu/access.tf` with the owner's email
-  policy (precedence 1) and the `service auth` policy (precedence 2,
-  `any_valid_service_token`). No bypass.
-- maki uses an account service token in `cloudflared access`; the owner uses
-  the browser identity. Access is evaluated at the edge, before the tunnel.
-- `nanobot.sammohr.dev` is retired (SDLC #583). Its Access application was
-  removed from `tofu/access.tf`; the operator runs `tofu state rm` first because
-  the block carried `prevent_destroy` (`docs/manual-steps.md` step 20).
-- nanobot holds **no Cloudflare token**: the tunnel token lives in `ingress`,
-  and the agent's egress policy admits the broker and DNS only.
-
-### OpenTofu: `tofu/cluster.tf`
-
-The tunnel config is managed, not dashboard-only. `tofu/cluster.tf` maps every
-`var.cluster_hosts` entry to one ingress rule through `local.cluster_ingress`
-and appends the `http_status:404` catch-all. The plan refuses a `cluster_hosts`
-entry with no rule, so a DNS cutover cannot leave a name on the catch-all.
-
-```hcl
-# tofu/cluster.tf, excerpt
-locals {
-  cluster_ingress = {
-    agent = "http://nanobot.tenant-apps.svc.cluster.local:80"
-  }
-}
-
-resource "cloudflare_zero_trust_tunnel_cloudflared_config" "cluster" {
-  count      = var.cluster_tunnel_id == "" ? 0 : 1
-  account_id = var.account_id
-  tunnel_id  = var.cluster_tunnel_id
-  config = {
-    ingress = concat(local.cluster_ingress_rules, [{ hostname = null, service = "http_status:404" }])
-  }
-}
-```
-
-`tofu/dns.tf` creates the proxied CNAME per `cluster_hosts` entry, and a
-specific record wins over `*.sammohr.dev`. The apply is:
-
-```sh
-tofu -chdir=tofu plan -no-color    # one CNAME + the tunnel config, no replacements
-tofu -chdir=tofu apply -no-color
-```
-
-Verification after apply:
-
-```sh
-dig +short agent.sammohr.dev            # CNAME <cluster-uuid>.cfargotunnel.com
-curl -sS -o /dev/null -D - https://agent.sammohr.dev/ | head -3
-# expect HTTP/2 302 to *.cloudflareaccess.com, never an origin response
-```
-
-### Repository mirror cross-reference
-
-The repository mirror uses a separate operator-owned fine-grained read-only PAT,
-not the agent's identity and not a broker logical host: it is scoped to
-`Contents: read` on the repositories it mirrors.
-
-### GitHub identity (retired from the broker)
-
-`smores56-homelab-agent` and its per-request installation tokens are gone as a
-deployed capability, and so is the code behind them: `apps/broker/config/broker.json`
-carries no `github_app` block, no `github-*` enrollment exists, `test_config.py`
-asserts neither returns, and the minting module, its parser and its tests were
-deleted rather than left dormant. `docs/agent-identity.md` records the measured
-app-only auto-merge that made the App unnecessary. The live GitHub identity is
-the machine user's PAT; no broker path holds it.
-
-## Inbound webhooks: `agent-hooks.sammohr.dev`
-
-The broker is egress-only and the agent has no inbound listener. Deliveries
-terminate on the platform-owned receiver in the `webhook` namespace
-(`clusters/homelab/webhook/`, `apps/webhook/`): an unguessable capability URL,
-an optional GitHub HMAC, a 1 MiB limit and delivery-id dedupe, then one
-enqueue call to this gateway's WebSocket listener on 8765. The hostname is an
-Access bypass by construction and is not rate limited. Contract, threat model
-and the researched gateway frames: `docs/webhook.md`.
-
+The broker is not deployed by this repository: no unit under `units/` runs it, so
+the address policy, the agent identity and the `agent.sammohr.dev` routing that
+the retired cluster enforced here are gone with it. What survives is the request
+contract and the identity rules above, which `apps/broker/` still implements.
 ## Verification
 
 ```sh

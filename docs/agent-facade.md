@@ -168,7 +168,7 @@ Error codes: `unauthorized`, `unknown_tool`, `validation`, `unknown_source`,
   one deployment's memory to the other.
 - **No deployment wiring here.** Quadlets, image pins and secret delivery are
   described in `docs/core/applications.md` ("Source facades") and
-  `docs/manual-steps.md` section 40; this document stops at the process.
+  `docs/manual-steps.md#applications-and-agents`; this document stops at the process.
 
 ## Deployment
 

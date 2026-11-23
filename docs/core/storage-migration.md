@@ -193,7 +193,7 @@ Re-link the dotfiles as `smores` (the absolute symlinks under `~` still point at
 `/var/home/core`) and confirm `sshd -T | grep allowusers` reports `smores`. The
 YubiKey needs no enrolment on the host: mint the sudo credential on a client,
 commit its public half to `image/rootfs/etc/ssh/sudo_authorized_keys`, deploy,
-and prove the tap with the drill in `docs/manual-steps.md` section 44.
+and prove the tap with the drill in `docs/manual-steps.md#the-tailnet-policy-sshd-and-sudo`.
 
 Two stores under `~` record the old home path as absolute state and fail after
 the rename, because `usermod -m` moves the tree without rewriting them:
@@ -211,7 +211,7 @@ podman unshare rm -rf ~/.local/share/containers/storage.stale-core
 mise install -f yamllint python
 ```
 
-`scripts/bootstrap-task.sh` already reinstalls `conda:zsh` when its modules fail
+`nix-config`'s bootstrap task reinstalled `conda:zsh` when its modules fail
 to load. The `dotfiles` SSH config names `smores` instead of `core`; the
 wallpaper SFTP transport this step used to name was deleted with the legacy
 stack, so there is nothing to rename there any more.

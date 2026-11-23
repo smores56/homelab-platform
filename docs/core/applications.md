@@ -8,7 +8,7 @@ hosted-model proxy and one source facade per deployment, split by authority
 (section "Agent deployments" below). This
 document covers what each container is allowed to read and write, how its image
 reaches the host, how it is reached from the tailnet, and what its restore
-actually consists of. Operator steps are in `docs/manual-steps.md` section 40;
+actually consists of. Operator steps are in `docs/manual-steps.md#applications-and-agents`;
 the Restic units they rely on are in `docs/core/restic-plane.md`. Agent-managed
 tenant apps from `homelab-apps` are a separate, unprivileged plane: see
 `docs/core/apps-tenant.md`.
@@ -301,7 +301,7 @@ like every other application image -- is the mail provider half: it holds the
 account session, decrypts in process and presents the mailbox as local IMAP with
 `IDLE`, which pushes new-mail and expunge events to a connected client. Its
 volume is a copy of the login and belongs in the same Restic snapshot as the
-replica it feeds (`docs/manual-steps.md` section 40.15). It shares
+replica it feeds (`docs/manual-steps.md#collector-sign-ins`). It shares
 `agent-collect.network` with the finance collector: both are personal-authority
 processes writing into the personal dataset, and neither can reach a deployment.
 
@@ -376,7 +376,7 @@ cannot reach the proxy even if it were asked to. The profile volume it shares wi
 the seed unit is the chain membership -- the planted seed and the sync engine's
 device id live in it -- so it is mounted into the browser and written by exactly
 one other process, `smortress-agent-brave-seed.service`, before the browser starts
-(`docs/manual-steps.md` section 40.17).
+(`docs/manual-steps.md#collector-sign-ins`).
 
 The model server (`agent-model`) is llama.cpp pinned at
 `ghcr.io/ggml-org/llama.cpp:server-cuda` build **b12602**, the first release with
@@ -385,7 +385,7 @@ the merged Inkling 2 loop architecture. The GGUF is
 Thinking Machines' `thinkingmachines/Inkling-2-Mini` -- 26.4B MoE with 3.4B active
 (5.4B with the three loop passes), 1M native context, Apache-2.0. It is fetched
 into `state/agent-model` by hand and verified by checksum
-(`docs/manual-steps.md` section 40.8); it is the one dataset in no backup unit.
+(`docs/manual-steps.md#fetch-the-pinned-model`); it is the one dataset in no backup unit.
 The Uncensored fine-tune of the same weights is deliberately not used: it costs
 fidelity at the same quant and removes a weak tripwire on a profile that reads
 attacker-influenced mail and calendar text.
@@ -418,7 +418,7 @@ silently, until it was measured. `smortress-selinux-nvidia-map.service` loads on
 CIL rule (`image/rootfs/usr/share/selinux/smortress/agent-nvidia-map.cil`) before
 `agent-model` starts, on every boot, because a base update recompiles the policy
 store. `nvidia-smi --query-compute-apps` listing `llama-server` is the proof that
-it took effect; `docs/manual-steps.md` section 40.9 checks it.
+it took effect; `docs/manual-steps.md#validate-the-units-and-check-the-listeners` checks it.
 
 `smortress-agent-config.service` seeds each deployment's `config.yaml` from the
 image's template *once* (`cp -n`): the runtime rewrites that file and an operator
@@ -487,7 +487,7 @@ the image carries the placeholder `__FACADE_TOKEN__`;
 ciphertext when the config is first seeded, so no token is in the image, in this
 document, or in a command line. Because that file is seeded with `cp -n`, rotating
 a token is `sops`, then delete the seeded `config.yaml` and let the unit seed it
-again (`docs/manual-steps.md` section 40.11).
+again (`docs/manual-steps.md#rotate-the-agents-credentials`).
 
 Memory is the write target both facades share: `/memory` is
 `state/agent-local/memory` and `state/agent-general/memory`, the `local` and
@@ -558,7 +558,7 @@ automatically on first Serve). Without them Serve fails and the unit says so.
 ## Restore paths
 
 The acceptance for T5 is that each application restores *on scratch storage*,
-before any of it touches `/srv`. `docs/manual-steps.md` section 40 has the
+before any of it touches `/srv`. `docs/manual-steps.md#applications-and-agents` has the
 commands; the shape is:
 
 - **Immich, logical** — restore `photos` to scratch, take `db-dumps/immich.dump`,
@@ -665,3 +665,178 @@ successful start — it is proven by serving representative data from it.
   the runtime reads `API_SERVER_KEY` from `$HERMES_HOME/.env` in `state/agent-*`,
   so they are in Restic snapshots in R2 exactly as Syncthing's GUI key already is.
   Both are self-issued and revocable. The provider key is in no dataset at all.
+
+## Collector sign-ins
+
+### The Brave sync seed
+
+Brave has no CLI to join a Sync chain, so membership is a **seed**: the OSCrypt blob
+a desktop's own join wrote, planted into the profile's `Preferences` before the
+browser starts. The seed is the chain's key. Export it from a desktop profile in the
+chain, with Brave **closed**; both sides run with `--password-store=basic`, whose
+fixed key is what makes the blob portable.
+
+```sh
+prefs="$HOME/.config/BraveSoftware/Brave-Browser/Default/Preferences"
+seed="v10$(jq -r '.brave_sync_v2.seed' "$prefs" | base64 -d | tail -c +4 | base64 -w0)"
+printf '%s\n' "${#seed}"        # hundreds of characters, never 0
+( umask 077
+  printf 'brave_sync_seed: %s\n' "$seed" >/tmp/brave-sync-seed.yaml
+  sops --encrypt --input-type yaml --output-type yaml \
+    --filename-override secrets/server/brave-sync-seed.yaml \
+    /tmp/brave-sync-seed.yaml >secrets/server/brave-sync-seed.yaml
+  rm -f /tmp/brave-sync-seed.yaml
+  unset seed
+)
+head -1 secrets/server/brave-sync-seed.yaml   # must be `brave_sync_seed: ENC[`
+```
+
+Commit, merge, wait for the publish run, then `sudo bootc upgrade` and reboot.
+`smortress-agent-brave-seed.service` runs before the browser at every boot and is
+idempotent, so it replants a rotated seed: the journal line is `{"event": "seed",
+"planted": true, …}` on the first boot and `… "unchanged": true …` after, and a
+`{"event": "refused", …}` line means the seeder wrote nothing — fix the ciphertext
+and reboot, not the unit.
+
+```sh
+sudo journalctl -u smortress-agent-brave-seed.service -n 5 --no-pager
+sudo podman logs --tail 40 smortress-agent-brave
+sudo journalctl -u agent-egress-proxy.service --since '-30 min' --no-pager | tail -40
+gen=$(sudo ls -1 /var/lib/agent/local/replica/brave/published | tail -n 1)
+sudo jq -r '.rows[] | "\(.[1]) \(.[2])"' \
+  "/var/lib/agent/local/replica/brave/published/$gen/objects/brave%3A%3Atable%3A%3Aurls"
+```
+
+The proxy's journal names `sync-v2.brave.com:443` and nothing else, because
+`image/rootfs/etc/smortress/agent/egress-policy.json` grants the `brave` label
+exactly that hostname, and the resolver refuses every other name Chromium tries. A
+visit on a phone in the same chain appears in that `urls` object. `deleted` is
+always `0`: retention expiry, a deletion in the browser and a recreated profile all
+look the same from here (`docs/raw-replicas.md`).
+
+Rotating the seed is the same two steps with a new chain. The real revocation is
+removing the `smortress` device in Brave's Sync settings on a desktop; to remove it
+here, stop the browser, delete the profile and replace the ciphertext with a value
+that is not a `v10` blob, which the seeder refuses.
+
+### The Tuta mail bridge
+
+Tuta serves no IMAP, so `agent-tmail` talks to Tuta's API in process and presents
+the mailbox as local IMAP. It needs a Tuta session, created interactively with the
+account password and a TOTP code; the Tuta password is never stored here.
+
+```sh
+sudo systemctl start agent-tmail.service
+sudo podman exec -it smortress-agent-tmail init      # address, password, code; echoes nothing
+sudo podman healthcheck run smortress-agent-tmail
+sudo podman exec smortress-agent-tmail tutabridge health
+```
+
+`is-active` alone proves nothing: the container stays `active` while it waits for
+`init`, after a rejected session, and when Tuta refuses this client version. The
+session lands in `/var/lib/agent/local/quarantine/tmail`. Read the local IMAP
+password the bridge generated into ciphertext, and deploy it before the collector
+can use it:
+
+```sh
+sudo podman exec smortress-agent-tmail password
+sops secrets/server/tmail-bridge-password.yaml   # set tmail_bridge_password:
+git commit -am 'chore(agent): set the TutaBridge password'
+git push && sudo bootc upgrade && sudo systemctl reboot
+sudo systemctl start smortress-agent-mail-stream.service
+sudo journalctl -u smortress-agent-mail-stream.service -f
+```
+
+`smortress-agent-mail-stream.service` is long-running, not a timer: it publishes an
+initial generation whose `details.folders` must contain `INBOX` with a non-zero
+count, then holds one IDLE connection per folder. Sending yourself a message
+produces a second JSON line within a minute, whose `generation_id` sorts after the
+first and whose `objects` grew by one. `uidvalidity changed` or `folders
+disappeared` is a refusal: the service has exited and needs a fresh sign-in or the
+restore rule below.
+
+The volume holds the session, the per-folder UID counters, the GPG key and the
+password. The IMAP server always reports `UIDVALIDITY 1`, so a restore that returns
+the replica but not the volume gives every message a new UID: restore
+`/var/lib/agent/local/quarantine/tmail` and
+`/var/lib/agent/local/replica/mail` from the same snapshot, or neither. If the
+volume is genuinely lost, move the replica aside too and let the bridge resync.
+
+### The Tuta calendar exporter
+
+`apps/tuta_calendar/` ships in `images/tuta-calendar/`;
+`smortress-agent-collect-calendar.service` runs the exporter and then the collector
+every two hours, and skips the run while the seal is missing
+(`ConditionPathExists=`), so a start that leaves nothing in the journal means the
+sign-in has not run.
+
+```sh
+image=$(bash -c 'source scripts/app-images.sh; app_image_ref tuta-calendar')
+sudo podman run --rm -it \
+  -v /var/lib/agent/local/quarantine/tuta-calendar:/data:z \
+  "$image" init --store /data          # prints: session for <address> sealed at /data/session.gpg
+sudo find /var/lib/agent/local/quarantine/tuta-calendar -maxdepth 1 -printf '%u:%g %m %p\n'
+sudo grep -c accessToken /var/lib/agent/local/quarantine/tuta-calendar/session.gpg   # 0
+```
+
+The seal must be `1000:1000 600` and the keyring directory `700`; a grep hit means
+the seal is not encrypted, so treat the store as compromised. A refusal instead of a
+session is the run refusing to store something it could not prove.
+
+```sh
+sudo podman run --rm \
+  -v /var/lib/agent/local/quarantine/tuta-calendar:/data:z \
+  -v /var/lib/agent/local/quarantine/calendar:/out:z \
+  "$image" dump --store /data --out /out      # one JSON line, exit 0; exit 3 writes nothing
+cd /srv/git/github.com/smores56/homelab-platform/main
+sudo PYTHONPATH=libs python3 -m data_plane.collectors.raw \
+  --root /var/lib/agent/local/replica/calendar calendar \
+  --entities /var/lib/agent/local/quarantine/calendar
+sudo systemctl start smortress-agent-collect-calendar.service
+```
+
+The report's `objects` must equal the dump's count and `deleted` must be `0`: this
+source has no tombstone, so a missing event is carried forward as absent-unknown.
+Expect the version floor: `HTTP 474 InvalidSoftwareVersionError` means
+`CLIENT_VERSION` in `apps/tuta_calendar/api.py` is below the server minimum (read
+`versionNumber` from the web client and republish); `HTTP 412` means the model
+version moved; `HTTP 401`/`403` means the session was revoked, so sign in again.
+
+### The SimpleFIN access URL
+
+The finance collector needs the access URL SimpleFIN issues for your account; the
+ciphertext ships seeded with a random value, which fails at the first request
+rather than silently. Claim the setup token in the SimpleFIN dashboard (base64
+decode it for the claim URL, `curl -X POST <claim-url>` answers with the access URL
+— it embeds the account credentials, so do not paste it into a shell that logs),
+then deploy it:
+
+```sh
+sops secrets/server/simplefin-access-url.yaml   # set access_url: to the claimed URL
+git commit -am 'chore(core): claim the SimpleFIN access URL'
+git push && sudo bootc upgrade && sudo systemctl reboot
+sudo systemctl start smortress-agent-collect-finance.service
+sudo journalctl -u smortress-agent-collect-finance.service -n 20 --no-pager
+```
+
+The run is good when `published` names a generation and `objects` counts the
+transactions; a refusal exits 3, publishes nothing, and names the endpoint by host
+and path, never the credential. Every published generation must be owned by uid
+1000, and a `.staging` directory left behind is safe to remove.
+
+The third stage renders the newest generation as an hledger journal and needs to
+know which hledger account each SimpleFIN account is. The file is seeded as `{}`
+and never overwritten, so the edit is one-time per account; an unmapped entry
+renders as `assets:unknown:<id>`:
+
+```sh
+sudo grep -ho '"object_id": "finance::account::[^"]*"' \
+  /var/lib/agent/local/replica/finance/published/*/manifest.json | sort -u
+sudo vi /var/lib/agent/local/index/hledger/accounts.json   # {"<id>": "assets:bank:checking"}
+sudo systemctl start smortress-agent-collect-finance.service
+```
+
+A mapping that is not a JSON object of string to string, or a name that is empty or
+starts with `-`, `!` or `;`, is refused with exit 3. The journal follows the
+provider's sign, `expenses:unknown` carries the negation, and an unchanged journal
+is not rewritten.

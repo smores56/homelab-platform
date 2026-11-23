@@ -6,7 +6,7 @@ Ansible. Podman Quadlets are the only container control plane; ZFS recovery
 datasets under `/var/srv` and `/var/lib` are the only service-data layout.
 
 This document covers the image, its signing policy, the Ignition install and the
-rollback path. Operator-only actions are in `docs/manual-steps.md` section 37.
+rollback path. Operator-only actions are in `docs/manual-steps.md#install-a-host-from-the-image`.
 
 ## What the image contains
 
@@ -53,7 +53,7 @@ rollback path. Operator-only actions are in `docs/manual-steps.md` section 37.
 | `/usr/lib/systemd/system/smortress-deploy-poll.timer`, `/usr/lib/systemd/system/smortress-deploy-poll.service`, `/usr/lib/systemd/system/smortress-deploy-heartbeat.timer`, `/usr/lib/systemd/system/smortress-deploy-heartbeat.service`, `/usr/lib/systemd/system/smortress-deploy-retry.timer`, `/usr/lib/systemd/system/smortress-boot-gate.service` | The daily 03:00 deploy window, the dead-man beat for the `deploy` Healthchecks check, the five-minute retry of a deferred queue entry, and the gate that runs `Before=boot-complete.target`. |
 | `/usr/lib/systemd/system/smortress-apps-health.timer`, `/usr/lib/systemd/system/smortress-apps-health.service` | The five-minute probe of the tenant's apps, `OnBootSec=5min` then `OnUnitActiveSec=5min` with `Persistent=false`: a host that was off owes no probe for the window nothing was running. Ordered after `smortress-tailscale-serve.service`, because a base path is checked against the routes that unit declares. |
 | `/usr/share/smortress/deploy-units.txt` | The units the boot gate requires: what "serving" means for this host. The receiver's own units are deliberately absent — a missing deploy secret must page, not roll the host back — and so is every unit that reads the tenant's plan (`smortress-tailscale-serve`, `smortress-apps-quota`), because one that exits 1 on an app definition would denylist the platform digest for an app's fault. |
-| `/usr/lib/bootupd/grub2-static/configs.d/10-smortress-count.cfg` | The three-attempt boot counter. It is **not active on this host**: `bootupd` reports every component current and has no way to force a regeneration, so the snippet never reaches `grub.cfg` (`docs/manual-steps.md` §49.5). The gate journals `boot-counting-absent` each boot. |
+| `/usr/lib/bootupd/grub2-static/configs.d/10-smortress-count.cfg` | The three-attempt boot counter. It is **not active on this host**: `bootupd` reports every component current and has no way to force a regeneration, so the snippet never reaches `grub.cfg` (`docs/manual-steps.md#the-boot-gate-and-its-denials`). The gate journals `boot-counting-absent` each boot. |
 | `/etc/systemd/system.conf.d/10-watchdog.conf` | `RuntimeWatchdogSec=1min`, so a hung PID 1 becomes a reboot. No `kernel.panic`: without a bootloader counter, a panic reboot would loop the same image. |
 | `/etc/tmpfiles.d/smortress.conf` | Creates `/var/lib/homelab/deploy`, `queue` and `work` at `0700 root`: the receiver's state tree, outside every recovery group because the journal and `bootc status` rebuild it. |
 
@@ -468,7 +468,7 @@ zero select the previous deployment (`default=1`).
 **On this host that mechanism is not active.** `bootupctl status` reports every
 component at its latest version and `bootupctl update` has no way to force a
 regeneration, so the snippet never reaches `/boot/grub2/grub.cfg`; the host was
-measured, not assumed (`docs/manual-steps.md` §49.5). The gate therefore journals
+measured, not assumed (`docs/manual-steps.md#the-boot-gate-and-its-denials`). The gate therefore journals
 `boot-counting-absent` on every boot and writes no GRUB flags, and the image ships
 no `kernel.panic`: a panic that reboots with no counter would loop the same image
 forever. `RuntimeWatchdogSec=1min` stays armed, with the same caveat for a PID 1
@@ -648,7 +648,7 @@ it with `chpasswd -e`, guarded so an empty or non-sha512crypt value fails the un
 instead of writing a field nobody can log in with. The manifest marks it `value`:
 `chpasswd -e` takes the bare hash, not a YAML document. Reinstalling therefore
 needs no operator file, and the password is changed by minting new ciphertext
-(`docs/manual-steps.md` section 37), not by touching the host.
+(`docs/manual-steps.md#rotate-the-smores-account-password`), not by touching the host.
 
 ## Static checks
 
@@ -727,3 +727,162 @@ masked units, ciphertext mode and the `drop` default zone all matched this
 document. `sops-decrypt.service`'s script was then exercised in that image with
 a temporary age identity; it wrote `canary: sops-decrypt-ok` at mode 0400 root.
 
+## Access: the tailnet policy, sshd, and sudo
+
+### The tailnet policy and the enrollment key
+
+`tofu/tailscale.tf` owns the policy: one `tailscale_acl`, gated on `var.tailnet`,
+admitting `group:owner` to smortress on 22, Serve's 443/8443/10000 and Syncthing's
+22000, and nothing else. The group member is `var.tailscale_login`, the tailnet's
+own `user@provider`, **not** the Access `var.email`: Tailscale accepts a member it
+does not know and then admits nobody. The policy's `tests` run on every save, so a
+rule that widens access fails the plan instead of reaching the tailnet.
+
+```sh
+( umask 077
+  printf 'authkey: %s\n' 'tskey-auth-...' >/tmp/tailscale.yaml
+  sops --encrypt --input-type yaml --output-type yaml \
+    --filename-override secrets/server/tailscale.yaml \
+    /tmp/tailscale.yaml >secrets/server/tailscale.yaml
+  rm -f /tmp/tailscale.yaml
+)
+gh secret set TAILSCALE_OAUTH_CLIENT_ID --env cloudflare --repo smores56/homelab-platform
+gh secret set TAILSCALE_OAUTH_CLIENT_SECRET --env cloudflare --repo smores56/homelab-platform
+gh secret set TAILSCALE_OAUTH_CLIENT_ID --env cloudflare-plan --repo smores56/homelab-platform
+gh secret set TAILSCALE_OAUTH_CLIENT_SECRET --env cloudflare-plan --repo smores56/homelab-platform
+tofu -chdir=tofu plan          # expect: tailscale_acl.this will be created
+```
+
+The auth key is minted in the admin console (reusable off, pre-approved if device
+approval is on); `smortress-tailscale-up.service` reads `authkey:` and skips
+enrollment when the ciphertext is absent, so the file and its manifest line land
+together. The OAuth client is scope `policy_file` only, encrypted to the admin
+identity, and both environments need it because Terraform configures a provider
+whenever a resource of that provider is in the configuration, `count = 0` included.
+
+```sh
+tailscale status                          # expect: smortress listed
+ssh smortress true                        # expect: success
+curl -sS --max-time 5 http://smortress:80/ && echo open || echo closed
+# expect: closed — the policy admits 22, 443, 8443, 10000 and 22000 only
+```
+
+From a device outside `group:owner`, port 22 must not answer while `tailscale ping
+smortress` still succeeds: the policy drops the port, not the node. A re-enrolment
+with an untagged key strips the tag — mint it with `--advertise-tags=tag:smortress`,
+or re-apply with the client's `devices:core` scope. The tailnet Service needs
+`services` write on the same client.
+
+### Tailnet-only sshd
+
+`image/rootfs/etc/ssh/sshd_config.d/05-tailnet-ssh.conf` is the only drop-in: no
+`ListenAddress`, and `AuthorizedKeysFile` points at
+`/etc/ssh/authorized_keys.d/smores`, the one `ssh-ed25519` line shipped in the image.
+The network half is firewalld: default zone `drop`, `tailscale0` alone in the
+`tailscale` zone, which accepts `ssh` and Syncthing's 22000/tcp+udp. The file sorts
+at `05-` because uCore ships `90-enable-localhost-passwords.conf` and sshd keeps the
+*earlier* value for a directive re-read in a `Match` block. **The order is a lockout
+guard**: the tailnet route has to work first, or the host is reachable only from the
+console.
+
+```sh
+sudo ss -ltnp '( sport = :22 )'                    # one wildcard socket per family
+grep -rn ListenAddress /etc/ssh/sshd_config /etc/ssh/sshd_config.d/   # expect: none
+sudo firewall-cmd --get-default-zone               # drop
+sudo firewall-cmd --zone=tailscale --list-all      # ssh, 22000/tcp+udp, tailscale0
+sudo sshd -T -C addr=127.0.0.1,user=smores | \
+  grep -iE '^(passwordauthentication|kbdinteractiveauthentication|permitrootlogin|allowusers|authorizedkeysfile|pubkeyauthoptions|permituserrc|maxauthtries|logingracetime|allowtcpforwarding|allowstreamlocalforwarding|allowagentforwarding) '
+ls -lZ /etc/ssh/authorized_keys.d/smores            # root 0644, etc_t
+ssh smortress true                                 # from a tailnet laptop, no prompt
+```
+
+The grep is case-insensitive on purpose: OpenSSH 10 prints CamelCase names, so a
+lowercase pattern matches nothing and "no output" would read as success. Expected:
+`PasswordAuthentication` `no` in both queries, `KbdInteractiveAuthentication` `no`,
+`PermitRootLogin` `no`, `AllowUsers` `smores`, `AuthorizedKeysFile`
+`/etc/ssh/authorized_keys.d/smores`, `PubkeyAuthOptions` `none`, `PermitUserRC` `no`,
+`MaxAuthTries` `10`, `LoginGraceTime` `60`, `AllowTcpForwarding` `no`,
+`AllowStreamLocalForwarding` `no`, `AllowAgentForwarding` `yes` — the last is what
+makes the sudo tap work. From a machine that is **not** on the tailnet, `nc -vz
+smortress 22` must hang and then time out.
+
+### Retire Tailscale SSH
+
+`smortress-tailscale-up.service` does not pass `--ssh`, and
+`smortress-tailscale-ssh-off.service` runs `tailscale set --ssh=false` on every boot,
+because tailscaled persists the preference in its state file. sshd listens on every
+address now, so this is what stops tailscaled from intercepting port 22.
+
+```sh
+sudo systemctl status smortress-tailscale-ssh-off.service
+tailscale debug prefs | jq -r .RunSSH    # expect: false
+```
+
+### sudo: one touch on a forwarded agent, password fallback
+
+`ssh -A smortress` forwards the client's agent, which holds a touch-required
+`sk-ssh-ed25519` resident credential, and `/etc/pam.d/sudo` asks the key in the
+laptop for a signature; the account password sits behind it as the fallback. The
+image carries `image/rootfs/etc/pam.d/sudo` (`pam_faillock` preauth,
+`libpam_rssh.so` against `/etc/ssh/sudo_authorized_keys`, `pam_unix` as the
+fallback), `image/rootfs/etc/ssh/sudo_authorized_keys`, the `sudo-build` stage that
+compiles `pam_rssh` at the pin in `image/pins.env`, and
+`image/rootfs/etc/sudoers.d/10-human-gate` (`timestamp_timeout=30`,
+`timestamp_type=tty`, `log_subcmds`, and `Defaults env_keep += "SSH_AUTH_SOCK"` —
+without the last one every escalation falls back to the password). There is no
+host-local secret; the retired TOTP usersfile under `/var/lib/homelab/sudo` can be
+deleted.
+
+The login key is not a token credential: `authorized_keys.d/smores` ships one plain
+`ssh-ed25519` key, so `ssh smortress` is touch-free. The only thing on a YubiKey is
+the **sudo** credential.
+
+```sh
+ssh-keygen -t ed25519-sk -O resident -C "smores-sudo-key1" -f ~/.ssh/id_smortress_sudo_1
+cat ~/.ssh/id_smortress_sudo_*.pub >>    image/rootfs/etc/ssh/sudo_authorized_keys
+scripts/check-server-image.sh     # refuses anything but sk lines, no no-touch-required
+```
+
+One file per key, the `-C` suffix matching the file (`_2`, `_3`), and the `ykman
+info` serial written next to the physical label. A replacement laptop fetches the
+resident credentials with `cd ~/.ssh && ssh-keygen -K`, which writes
+`id_ed25519_sk*`: rename each handle **and its `.pub`** to
+`~/.ssh/id_smortress_sudo_<n>` and `ssh-add` them, because dotfiles' loader adds
+every `id_smortress_sudo*` handle and nothing else. Do **not** add
+`-O no-touch-required`: that is the whole difference between the two credentials. An
+empty `sudo_authorized_keys` is a `PAM_AUTH_ERR` — the password is the way in until
+the lines land — and bootc's `/etc` merge keeps a locally modified copy
+(`sudo diff /usr/etc/ssh/sudo_authorized_keys /etc/ssh/sudo_authorized_keys`).
+
+```sh
+ssh -A -t smortress 'sudo -k; sudo true'      # "Please touch the device.", one tap
+ssh -t smortress 'sudo -k; sudo true'         # no tap, the account password
+ssh -A -t smortress 'sudo -k; sudo true'      # key unplugged: the account password
+ssh -A -t smortress 'sudo -k; sudo true'      # cover the sensor: the account password
+ssh -o IdentitiesOnly=yes -i ~/.ssh/id_smortress_sudo_1 smortress true   # refused
+for _ in 1 2 3 4 5; do ssh -t smortress 'sudo -k; sudo -S true < /dev/null'; done
+faillock --user smores --reset                # every factor refused for 300s until this
+```
+
+The covered-sensor case is the only proof the credential is touch-required: the
+public half records no touch policy and `pam_rssh` never reads the user-presence
+bit, so a credential minted with `-O no-touch-required` signs anyway and looks
+identical. `default=ignore` swallows every failure, so a stack mistake degrades to
+the password and shows only here:
+
+```sh
+sudo journalctl -t sudo -g 'SSH agent|authorized_keys|keys passed' -n 20 --no-pager
+```
+
+`SSH agent socket address not configured` means no `SSH_AUTH_SOCK` in sudo's
+environment, `Broken pipe` a dead socket, and `None of these keys passed
+authentication` with per-key lines means the agent holds keys the file does not.
+`IdentitiesOnly=yes` is not decoration: without it the agent offers the login
+credential and the "refused" line passes for the wrong reason. The console is not a
+way around the tally: Fedora's `login` pulls in `system-auth` and runs `deny=3
+unlock_time=600`.
+
+```sh
+ssh -A -t smortress 'echo "$SSH_AUTH_SOCK"; ls -ld ~/.ssh/agent'
+sudo ausearch -m avc -c sudo                  # empty after a working tap
+```

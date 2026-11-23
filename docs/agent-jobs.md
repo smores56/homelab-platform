@@ -86,7 +86,7 @@ nothing here may be used to record or complete one.
 
 ## Operator steps
 
-See `docs/manual-steps.md` section 47 for prepulling the pinned image as each
+See `docs/manual-steps.md#agent-shell-jobs` for prepulling the pinned image as each
 runner, verifying the units, and running the two probes. `tests/core/agent-jobs.sh`
 covers the offline half: class-fixed entry points, the mount/network split, the
 containment flags, the firewall ranges, the digest pin and the subuid overlap

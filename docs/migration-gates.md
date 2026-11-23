@@ -273,7 +273,7 @@ condition is the only way to change a result.
    generation id in the recovery kit.
 5. Boot the 970 rollback disk and record that it boots. Do not modify it.
 6. Create the new repositories and prove one real cycle before the gate can
-   mean anything (`docs/manual-steps.md` step 35, items 3-7): `backup-init` per
+   mean anything (`docs/manual-steps.md#bringing-the-plane-up`): `backup-init` per
    group, one `homelab-backup` run, `backup-check`, then the plan-driven gate:
 
    ```sh

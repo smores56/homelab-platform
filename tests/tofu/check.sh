@@ -210,10 +210,10 @@ fi
 
 # The operator-facing half of the same contract: the state-rm order for a
 # prevent_destroy object and the service-token mint step.
-if grep -qF 'state rm cloudflare_zero_trust_access_application.nanobot' docs/manual-steps.md; then
-  ok "manual steps remove the nanobot state entry first"
+if grep -qF 'state rm cloudflare_zero_trust_access_application.kanbei' docs/manual-steps.md; then
+  ok "manual steps remove the kanbei state entry first"
 else
-  bad "manual steps remove the nanobot state entry first"
+  bad "manual steps remove the kanbei state entry first"
 fi
 if grep -qF 'kanbei.sammohr.dev' docs/manual-steps.md && grep -qiF 'service auth' docs/manual-steps.md; then
   ok "manual steps cover the Kanbei route and service token"
@@ -797,7 +797,7 @@ has 'provider is pinned to v5' 'version = "~> 5\.0"'
 hasnt "no v4 record resource" 'resource "cloudflare_record"'
 hasnt "no deprecated self_hosted_domains" 'self_hosted_domains'
 if scripts/check-action-pins.sh >"$work/pins.log" 2>&1; then ok "Actions stay SHA-pinned (scripts/check-action-pins.sh)"; else bad "Actions stay SHA-pinned (scripts/check-action-pins.sh)" "$(cat "$work/pins.log")"; fi
-if grep -q 'tests/tofu/check.sh' .github/workflows/ci.yml; then ok "ci.yml runs this check"; else bad "ci.yml runs this check"; fi
+if grep -q 'check-all.sh --only tofu-check' .github/workflows/ci.yml; then ok "ci.yml runs this check"; else bad "ci.yml runs this check"; fi
 
 printf '\n%s: %d passed, %d failed\n' tofu "$pass" "$fail"
 ((fail == 0)) || exit 1

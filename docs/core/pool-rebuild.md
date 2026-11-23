@@ -235,7 +235,7 @@ Then, in order:
 1. `sudo install -d -o 1000 -g 1000` on the group roots if `init-zpool` did not
    own them; application trees are uid 1000 and Podman may only mount labelled
    content, so `sudo chcon -R -t container_file_t` the restored trees as
-   `docs/manual-steps.md` section 40.18 does for a drill.
+   `docs/manual-steps.md#run-the-agent-runtime-drill` does for a drill.
 2. `sudo /usr/libexec/zfs-ready raw-files` (and `state-immich-postgres`) before
    any unit that `Requires=` them starts.
 3. Start the applications, then the timers.
