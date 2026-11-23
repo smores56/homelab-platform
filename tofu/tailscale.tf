@@ -77,6 +77,27 @@ locals {
       },
     ]
 
+    # A Service VIP is an address the tailnet owns rather than one a device
+    # holds, so it cannot be named as an `acl` destination: that form is a host's
+    # port, and the VIP is no host. A grant names the service instead, and only
+    # the owner may reach its one port (design #834).
+    grants = [
+      {
+        src = ["group:owner"]
+        dst = ["svc:agent-ui"]
+        ip  = ["443"]
+      },
+    ]
+
+    # The advertisement is the host's own, so it approves itself: without an
+    # auto-approver every re-advertise waits for the owner to approve it by hand
+    # and the VIP stays dark until someone notices.
+    autoApprovers = {
+      services = {
+        "svc:agent-ui" = ["tag:smortress"]
+      }
+    }
+
     # One group, one member: the login Tailscale shows for the owner. It is not
     # the Access email: Tailscale accepts a member it does not know and admits
     # nobody, so this value has to be the tailnet's own `user@provider`.
@@ -111,7 +132,7 @@ locals {
     tests = [
       {
         src    = var.tailscale_login
-        accept = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:10000", "tag:smortress:22000", "tag:vps:22"]
+        accept = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:10000", "tag:smortress:22000", "tag:vps:22", "svc:agent-ui:443"]
       },
       {
         # The owner reaches the edge login, never the edge's upstream ports and
@@ -122,17 +143,17 @@ locals {
       },
       {
         src  = "tag:untrusted"
-        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8446", "tag:smortress:8447", "tag:vps:22"]
+        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8446", "tag:smortress:8447", "tag:vps:22", "svc:agent-ui:443"]
       },
       {
         # The edge reaches the two Serve ports and nothing else: no sshd, no
-        # agent gateway, no Syncthing, no deploy receiver.
+        # agent gateway, no Syncthing, no deploy receiver, no Service VIP.
         src    = "tag:vps"
         accept = ["tag:smortress:8446", "tag:smortress:8447"]
       },
       {
         src  = "tag:vps"
-        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8484"]
+        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8484", "svc:agent-ui:443"]
       },
       {
         # The deploy node reaches the receiver and nothing else.
@@ -141,7 +162,7 @@ locals {
       },
       {
         src  = "tag:deploy"
-        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8446", "tag:smortress:8447", "tag:vps:22"]
+        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8446", "tag:smortress:8447", "tag:vps:22", "svc:agent-ui:443"]
       },
     ]
   }
@@ -166,9 +187,11 @@ resource "tailscale_device_tags" "smortress" {
 resource "tailscale_acl" "this" {
   count = var.tailnet == "" ? 0 : 1
 
-  # The tag must exist before a rule names it, or the policy names a tag no
-  # device carries and the route closes in the same apply that opens it.
-  depends_on = [tailscale_device_tags.smortress]
+  # The tag and the Service must exist before a rule names them, or the policy
+  # names a tag no device carries and a service the tailnet does not have, and
+  # the validator refuses it: the route would close in the same apply that opens
+  # it.
+  depends_on = [tailscale_device_tags.smortress, tailscale_service.agent_ui]
 
   # This resource is the whole policy, not a patch: the provider refuses to
   # replace a policy it did not write unless that is said out loud, and the
