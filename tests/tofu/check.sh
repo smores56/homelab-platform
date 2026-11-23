@@ -289,6 +289,35 @@ else
   fi
 fi
 
+# The agent UI's Service VIP (design #834) is the one name that answers with an
+# address Tailscale computes. A specific record overrides `*.<zone>`, so the name
+# has to be grey cloud with an explicit TTL: a proxied record over a tailnet
+# address has no origin Cloudflare can reach.
+assistant_dns=$(extract cloudflare_dns_record.assistant)
+if [[ -z $assistant_dns ]]; then
+  bad "assistant DNS record exists"
+else
+  ok "assistant DNS record exists"
+  if grep -qF 'name    = "assistant.${var.domain}"' <<<"$assistant_dns"; then
+    ok "assistant DNS publishes assistant.<zone>"
+  else
+    bad "assistant DNS publishes assistant.<zone>"
+  fi
+  if grep -qF 'type    = "A"' <<<"$assistant_dns"; then ok "assistant DNS is an address record"; else bad "assistant DNS is an address record"; fi
+  if grep -qF 'content = tailscale_service.agent_ui[0].addrs[0]' <<<"$assistant_dns"; then
+    ok "assistant DNS points at the Service's computed address"
+  else
+    bad "assistant DNS points at the Service's computed address"
+  fi
+  if grep -qF 'proxied = false' <<<"$assistant_dns"; then ok "assistant DNS is grey cloud"; else bad "assistant DNS is grey cloud"; fi
+  if grep -qE 'ttl[[:space:]]*=[[:space:]]*300' <<<"$assistant_dns"; then ok "assistant DNS carries an explicit TTL"; else bad "assistant DNS carries an explicit TTL"; fi
+  if grep -qE 'count[[:space:]]*=[[:space:]]*var\.tailnet == "" \? 0 : 1' <<<"$assistant_dns"; then
+    ok "assistant DNS is gated on var.tailnet"
+  else
+    bad "assistant DNS is gated on var.tailnet"
+  fi
+fi
+
 # The cluster tunnel's hostname config lives here, not in a dashboard (SDLC #583).
 echo "== cluster tunnel ingress"
 cluster_cfg=$(extract cloudflare_zero_trust_tunnel_cloudflared_config.cluster)
@@ -698,6 +727,25 @@ has 'a test proves the edge reaches only the two Serve ports' \
   'accept[[:space:]]*=[[:space:]]*\["tag:smortress:8446", "tag:smortress:8447"\]'
 has 'a test proves a tagged device reaches none of them' \
   'deny[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8446", "tag:smortress:8447", "tag:vps:22"\]'
+
+# The agent UI's Service VIP (design #834). Tailscale owns the address, so it is
+# a grant destination and a test destination, never an `acl`: a grant names the
+# service and the port, and the auto-approver is what lets the host advertise it
+# without the owner approving each advertisement by hand.
+has 'the agent UI is a tailscale_service' 'resource "tailscale_service" "agent_ui"'
+service_block=$(extract tailscale_service.agent_ui)
+if [[ -z $service_block ]]; then
+  bad "the agent UI Service exists"
+else
+  ok "the agent UI Service exists"
+  if grep -qF 'name  = "svc:agent-ui"' <<<"$service_block"; then ok "the Service is svc:agent-ui"; else bad "the Service is svc:agent-ui"; fi
+  if grep -qF 'ports = ["tcp:443"]' <<<"$service_block"; then ok "the Service advertises tcp:443"; else bad "the Service advertises tcp:443"; fi
+  if grep -qE 'count[[:space:]]*=[[:space:]]*var\.tailnet == "" \? 0 : 1' <<<"$service_block"; then
+    ok "the Service is gated on var.tailnet"
+  else
+    bad "the Service is gated on var.tailnet"
+  fi
+fi
 has 'the tailscale provider is declared' 'provider "tailscale" \{\}'
 has 'the tailscale provider is pinned to the 0.29 line' 'version[[:space:]]*=[[:space:]]*"~> 0\.29'
 if grep -qE 'oauth_client_(id|secret)[[:space:]]*=[[:space:]]*"[^"]' "$work/code.tf"; then

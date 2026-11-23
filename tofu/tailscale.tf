@@ -178,3 +178,16 @@ resource "tailscale_acl" "this" {
 
   acl = jsonencode(local.tailnet_policy)
 }
+
+# The agent UI's Service VIP (design #834). Tailscale assigns the address when
+# the Service is created -- `addrs` is the API's, not the host's -- and the host
+# advertisement (scripts/tailscale-serve.sh) is what makes that address answer.
+# The policy admits the owner to its one port, so the name resolves on the tailnet
+# without any device's own address appearing in DNS; tofu/dns.tf reads `addrs`
+# rather than being told the address.
+resource "tailscale_service" "agent_ui" {
+  count = var.tailnet == "" ? 0 : 1
+
+  name  = "svc:agent-ui"
+  ports = ["tcp:443"]
+}
