@@ -526,8 +526,8 @@ mapping file.
 | Personal agent gateway | `127.0.0.1:18001` | `https://smortress.<tailnet>.ts.net/apps/agent-local/v1` |
 | General agent gateway | `127.0.0.1:18002` | `https://smortress.<tailnet>.ts.net/apps/agent-general/v1` |
 | Hosted proxy | `127.0.0.1:18003` | none, on purpose: a tailnet path would let any device spend the provider key |
-| Personal web UI | `127.0.0.1:18006` | `https://smortress.<tailnet>.ts.net:8444/` |
-| General web UI | `127.0.0.1:18007` | `https://smortress.<tailnet>.ts.net:8445/` |
+| Personal web UI | `127.0.0.1:18006` | `https://smortress.<tailnet>.ts.net:8444/` and, tailnet-only, `https://assistant.sammohr.dev/` |
+| General web UI | `127.0.0.1:18007` | `https://smortress.<tailnet>.ts.net:8445/` and, tailnet-only, `https://agent.sammohr.dev/` |
 | Source facades | nothing published | none: each gateway reaches its own facade by container name, and no device outside the deployment has any reason to |
 
 The two agent paths are a second table in `scripts/tailscale-serve.sh`
@@ -538,6 +538,25 @@ send the browser to the tailnet root, which is Immich -- and they get two more
 entries in `core_routes` (8444 and 8445) instead. A tenant
 plan that claims either path is refused whole, and the stale-route pruning skips
 both, so a run without a plan cannot delete them.
+
+The two UIs also answer by a `sammohr.dev` name on 443, with a publicly trusted
+certificate (design #834): `https://assistant.sammohr.dev/` is the personal one and
+`https://agent.sammohr.dev/` the general one. One Tailscale Service,
+`svc:agent-ui`, owns one VIP; `tofu/dns.tf` publishes a grey-cloud `A` record per
+name at that VIP, Serve forwards the Service's `tcp:443` to Caddy on loopback, and
+Caddy routes by SNI with a DNS-01 certificate per name. Nothing new is public: the
+VIP is in `100.64.0.0/10`, so the names resolve anywhere and route only on the
+tailnet, and the ACL's single grant of `svc:agent-ui:443` to `group:owner` covers
+both names because a grant names the service and the port, never the name. The
+`:8444` and `:8445` routes stay as the rollback: they answer whether the names do
+or not.
+
+`agent.sammohr.dev` already existed as the dead cluster tunnel's proxied CNAME,
+which #833 retires, and Cloudflare refuses two records at one name, so the two
+applies cannot travel together: PR #120 drops the `agent` entry from
+`local.cluster_ingress` and applies that destroy first, and the record above is
+created in the zone's own apply afterwards. Between the two the name falls through
+to the wildcard, which is the Access deny: refused, not served.
 
 The two edge ports are a third kind: not for people, but for `tag:vps` only
 (`tofu/tailscale.tf`), because the public names proxy to a dedicated port each

@@ -1001,6 +1001,11 @@ each deployment's own password, read from its bundle at the key the index names:
 sops -d --extract '["ui"]["personal_password"]' secrets/agents.json
 ```
 
+The same two UIs answer at `https://assistant.sammohr.dev/` and
+`https://agent.sammohr.dev/` once the zone has applied the `A` records that point
+them at the Service VIP. That is a second apply, after #833's destroy of the old
+`agent` CNAME (PR #120), because Cloudflare refuses two records at one name.
+
 The first-run wizard is disabled, so `Missing imports: run_agent` is expected;
 the facades are the tool surface.
 
