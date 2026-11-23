@@ -213,7 +213,7 @@ check "the enrollment unit creates the state directory at the same mode" \
 # first means clean: reading both as ok would pass a tree the grep never read.
 sk_status=0
 git grep -qF -- 'sk-ssh-ed25519@openssh.com' -- . \
-  ':(exclude)scripts/check-server-image.sh' \
+  ':(exclude)scripts/check-server-image.sh' ':(exclude)scripts/check/image/*' \
   ':(exclude)image/rootfs/etc/ssh/sudo_authorized_keys' || sk_status=$?
 case $sk_status in
   1) ok "no sk- handle is committed anywhere but the sudo key file" ;;
@@ -371,4 +371,3 @@ check "no pam_userdb assert remains" lacks 'pam_userdb' image/Containerfile
 check "no gdbmtool assert remains" lacks 'gdbmtool' image/Containerfile
 check "tmpfiles no longer creates a sudo usersfile directory" \
   lacks '/var/lib/homelab/sudo' image/rootfs/etc/tmpfiles.d/smortress.conf
-

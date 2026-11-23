@@ -322,4 +322,3 @@ cmd_apply() {
   say "$commit is running"
   return 0
 }
-

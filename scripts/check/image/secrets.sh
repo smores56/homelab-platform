@@ -352,4 +352,3 @@ check "a hung PID 1 reboots" \
 # A panic must not reboot until a bootloader counter can fall back: otherwise a
 # kernel panic loops the same image forever with no userspace to roll back.
 check "no panic reboot without a counter" no_file_exists image/rootfs/etc/sysctl.d/10-panic.conf
-

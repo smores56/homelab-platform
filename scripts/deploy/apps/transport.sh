@@ -221,4 +221,3 @@ system_stop() { # <unit>
   ((rc == 0 || rc == 5)) && return 0
   return 1
 }
-

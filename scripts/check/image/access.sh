@@ -57,7 +57,7 @@ check "the image wires no policy loader" lacks 'smortress-selinux-sudo-rssh' ima
 # nothing reads and the runbooks would still describe.
 check "the enrollment script is gone" test ! -e scripts/enroll-yubikey-totp.sh
 if git grep -qF -e 'pam_oath' -e 'users.oath' -e 'HOTP/T30' -- . \
-    ':(exclude)scripts/check-server-image.sh' ':(exclude)image/Containerfile'; then
+    ':(exclude)scripts/check-server-image.sh' ':(exclude)scripts/check/image/*' ':(exclude)image/Containerfile'; then
   bad "no TOTP artifact is left anywhere"
 else
   ok "no TOTP artifact is left anywhere"
@@ -333,4 +333,3 @@ for name in agent-github-token.yaml sdlc-github-token.yaml; do
     grep -qE "^${name//./\\.}[[:space:]]+[^[:space:]]+[[:space:]]+[^[:space:]]+[[:space:]]+root[[:space:]]+root[[:space:]]+0400[[:space:]]+value$" \
     image/rootfs/usr/share/smortress/secrets.manifest
 done
-
