@@ -485,20 +485,14 @@ YubiKeys. On the host: `secrets/server/<name>.yaml` in git, written by the opera
 boot seed; `/run/smortress/secrets/<name>` at the manifest's mode, written by
 `sops-decrypt.service` at every boot.
 
-`image/rootfs/usr/share/smortress/secrets.manifest` is the contract: one line per
-ciphertext, `name uid gid mode [format]`, where `value` writes the bare scalar and
-`yaml` (the default) writes the document verbatim. It is image-owned — the seed
-copies it over `/etc/smortress/secrets.manifest` at every boot — so a new line is a
-build, and `sops-decrypt.service` fails closed on a missing ciphertext, an unlisted
-ciphertext or a bad mode. A rotation is an operator write plus a unit restart, never
-a rebuild; a container that already mounts the decrypted file keeps the old value
-until it restarts, and `/run` is tmpfs:
+`secrets/index.json` is the contract; the seed renders
+`/etc/smortress/secrets.manifest` from it at every boot. A rotation is one
+operator path, never a rebuild; a container that already mounts the decrypted
+file keeps the old value until it restarts, and `/run` is tmpfs:
 
 ```sh
-sops secrets/server/r2-credentials.yaml       # edit the value in place
-sudo install -m 0600 -o root -g root secrets/server/r2-credentials.yaml \
-  /var/lib/smortress/secrets/r2-credentials.yaml
-sudo systemctl restart sops-decrypt.service
+scripts/secret.sh edit r2-credentials.yaml
+scripts/secret.sh stage r2-credentials.yaml
 ```
 
 Only a secret whose *manifest line* changes needs the image and a reboot.

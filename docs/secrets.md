@@ -50,16 +50,16 @@ The image also carries the same set under `/etc/smortress/secrets`, and that cop
 is *only* a seed. `sops-decrypt.service`'s `ExecStartPre` copies each ciphertext
 the host does not have yet and never overwrites one that is there, so a *new*
 secret reaches `/var` on the next boot by itself, while a rotation stays a host
-write. A rotation is an operator write plus a restart of the unit — no image, no
-reboot:
+write. One procedure covers every value:
 
 ```sh
-sops secrets/server/<name>.yaml                     # edit the committed ciphertext
-sudo install -m 0600 -o root -g root secrets/server/<name>.yaml \
-  /var/lib/smortress/secrets/<name>.yaml
-sudo systemctl restart sops-decrypt.service
-# then the consumers, or reboot; /run is tmpfs and is rebuilt at every boot
+scripts/secret.sh edit <output>     # opens the committed ciphertext
+scripts/secret.sh stage <output>    # installs it, restarts the decrypt unit,
+                                    # and names the consumers to restart
+scripts/secret.sh verify            # keyless policy and index checks
 ```
+
+`scripts/secret.sh rotate <output>` also generates a new data key first.
 
 The seed and the baked copy go away in the release after this one, at which point
 a fresh install stages the ciphertext from the checkout next to the age identity.

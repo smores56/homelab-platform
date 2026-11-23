@@ -8,6 +8,8 @@ program because the boot path must not parse JSON in shell.
 usage:
   scripts/secrets-index.py render-manifest [--index PATH] [--out PATH]
   scripts/secrets-index.py bundles [--index PATH]
+  scripts/secrets-index.py bundle <output-or-bundle> [--index PATH]
+  scripts/secrets-index.py list [--index PATH]
 """
 from __future__ import annotations
 
@@ -25,13 +27,27 @@ def load(path: Path) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["render-manifest", "bundles"])
+    parser.add_argument("command", choices=["render-manifest", "bundles", "bundle", "list"])
+    parser.add_argument("name", nargs="?")
     parser.add_argument("--index", default=str(DEFAULT_INDEX))
     parser.add_argument("--out")
     args = parser.parse_args()
 
     index = load(Path(args.index))
     outputs = index.get("outputs", [])
+    if args.command == "list":
+        for output in outputs:
+            print(f"{output['name']}\t{output['bundle']}\t{output.get('consumer', '')}")
+        return 0
+    if args.command == "bundle":
+        if not args.name:
+            parser.error("bundle needs an output or bundle name")
+        for output in outputs:
+            if args.name in {output["name"], output["bundle"]}:
+                print(output["bundle"])
+                return 0
+        print(f"secrets-index: {args.name} is not an output or bundle", file=sys.stderr)
+        return 1
     if args.command == "bundles":
         for bundle in sorted({output["bundle"] for output in outputs}):
             print(bundle)
