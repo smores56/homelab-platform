@@ -54,6 +54,7 @@ readonly app_quadlets=(
   units/quadlet/agent-webui-general.container
   units/quadlet/agent-tmail.container
   units/quadlet/agent-brave.container
+  units/quadlet/caddy.container
 )
 
 # Ports that are published on loopback for the operator's own curl and are
@@ -1533,6 +1534,83 @@ if grep -qF 'brave-sync-seed' scripts/app-secrets.sh; then
   ok "brave-sync-seed becomes a Podman secret"
 else
   bad "brave-sync-seed becomes a Podman secret"
+fi
+
+# 9. The name service's terminator (design #834, task #845). Serve forwards the
+#    agent UI Service's tcp/443 to a loopback port, so Caddy is what answers the
+#    TLS handshake there, and the certificate is issued over DNS-01 because no
+#    public CA can reach a tailnet VIP and the edge's 443 is already spoken for.
+#    Each of those is a line in a file, so a moved port, a wildcard bind, a host
+#    network for some other reason or a missing provider fails here rather than at
+#    the first handshake.
+caddy_unit=units/quadlet/caddy.container
+caddyfile=image/rootfs/usr/share/smortress/Caddyfile
+serve_target=$(sed -n 's|.*--service=svc:agent-ui --tcp=[0-9]* tcp://127\.0\.0\.1:\([0-9]*\).*|\1|p' scripts/tailscale-serve.sh)
+if [[ $serve_target =~ ^[0-9]+$ ]]; then
+  ok 'Serve forwards the Service to a loopback port'
+else
+  bad 'Serve forwards the Service to a loopback port' "got '$serve_target'"
+fi
+if [[ -f $caddyfile ]]; then
+  ok "$caddyfile exists"
+  eq "$(grep -cE "^assistant\.sammohr\.dev:${serve_target} \{" "$caddyfile")" 1 \
+    'the site answers on the port Serve forwards to'
+  for line in 'admin off' 'auto_https disable_redirects' 'bind 127.0.0.1' \
+    'dns cloudflare {env.CF_API_TOKEN}'; do
+    if sed -n 's/^[[:space:]]*//p' "$caddyfile" | grep -qxF -- "$line"; then
+      ok "the Caddyfile sets $line"
+    else
+      bad "the Caddyfile sets $line"
+    fi
+  done
+  # The proxy target is the personal UI's published port, derived rather than
+  # repeated: moving the UI has to fail this line too.
+  ui_port=$(sed -n 's/^PublishPort=127\.0\.0\.1:\([0-9]*\):.*/\1/p' units/quadlet/agent-webui-personal.container)
+  eq "$(sed -n 's/^[[:space:]]*reverse_proxy http:\/\/127\.0\.0\.1:\([0-9]*\)$/\1/p' "$caddyfile")" \
+    "$ui_port" 'Caddy proxies to the personal UI loopback port'
+  if grep -qF 'COPY image/rootfs/ /' image/Containerfile; then
+    ok 'the Caddyfile ships with the deployment, not in /etc'
+  else
+    bad 'the Caddyfile ships with the deployment, not in /etc'
+  fi
+else
+  bad "$caddyfile exists"
+fi
+if [[ -f $caddy_unit ]]; then
+  ok "$caddy_unit exists"
+  # The mount names the path inside the deployment, which is the rootfs tree
+  # without its `image/rootfs` build prefix.
+  eq "$(grep -cF -- "Volume=${caddyfile#image/rootfs}:/etc/caddy/Caddyfile:ro" "$caddy_unit")" 1 \
+    'the Caddyfile is mounted read-only where the image reads it'
+  # The account id is the reason for the dataset; a /var/lib path with no dataset
+  # would be shadowed at mount time and Caddy would register a second account.
+  eq "$(grep -cF -- "Volume=$(mountpoint_for state/caddy):/data:z" "$caddy_unit")" 1 \
+    'the ACME account and certificates live on their dataset'
+  eq "$(grep -cE '^Network=' "$caddy_unit")" 1 'Caddy joins exactly one network'
+  eq "$(grep -cE '^AddCapability=' "$caddy_unit")" 0 \
+    'Caddy holds no capability: its listener is above 1024'
+  eq "$(grep -cE '^PublishPort=' "$caddy_unit")" 0 \
+    'Caddy publishes nothing: Serve reaches it on loopback'
+  for flag in 'Network=host' 'User=1000:1000' 'ReadOnly=true' 'NoNewPrivileges=true' 'DropCapability=ALL'; do
+    if grep -qxF "$flag" "$caddy_unit"; then
+      ok "$caddy_unit sets $flag"
+    else
+      bad "$caddy_unit sets $flag"
+    fi
+  done
+  # `type=env` hands the provider the bare token, so the manifest entry has to be
+  # `value`: a `yaml` entry would put `token:` in front of it and every order
+  # would fail on the API's 400.
+  eq "$(grep -cF -- 'Secret=cloudflare-acme-token,type=env,target=CF_API_TOKEN' "$caddy_unit")" 1 \
+    'the DNS provider token arrives as the variable the Caddyfile reads'
+  if grep -qE '^cloudflare-acme-token\.yaml[[:space:]].*[[:space:]]value$' \
+    image/rootfs/usr/share/smortress/secrets.manifest; then
+    ok 'the ACME token is a decrypt manifest value'
+  else
+    bad 'the ACME token is a decrypt manifest value'
+  fi
+else
+  bad "$caddy_unit exists"
 fi
 
 # `systemctl enable` on a unit with no [Install] section is a silent no-op: the

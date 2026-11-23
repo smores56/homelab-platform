@@ -127,7 +127,7 @@ for key in "${dataset_unrestored[@]}"; do
   [[ -n ${seen[$key]:-} ]] && unrestored_orphan=$((unrestored_orphan + 1))
 done
 eq "$unrestored_orphan" 0 'a dataset in no unit is known and in no unit'
-eq "${dataset_unrestored[0]:-}" state/agent-model 'only the model blob is outside every unit'
+eq "${dataset_unrestored[0]:-}" state/agent-model 'the model blob and the name service state carry no restore unit'
 
 eq "$(unit_keys files)" $'raw/files\nstate/syncthing-config' 'files pairs the vault with Syncthing state'
 eq "$(unit_keys photos)" $'raw/photos\nstate/immich-postgres\nstate/immich-dumps' \
