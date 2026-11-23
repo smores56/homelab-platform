@@ -57,7 +57,7 @@ the digest that run produced.
 | `opdshelf` | `…/opdshelf@sha256:b82f94f7…` | `docker.io/koalilla/opds-server@sha256:b82f94f7…` |
 | `syncthing` | `…/syncthing@sha256:2b71da7c…` | `docker.io/syncthing/syncthing:2.1.7` |
 | `agent-model` | `…/agent-model@sha256:26f89ebd…` | `ghcr.io/ggml-org/llama.cpp:server-cuda` (b12602) |
-| `agent-runtime` | `…/agent-runtime@sha256:f3bbf4f4…` | built from `images/agent-runtime/Containerfile` (base `docker.io/nousresearch/hermes-agent@sha256:276d4468…`) |
+| `agent-runtime` | `…/agent-runtime@sha256:4ea73e6d…` | built from `images/agent-runtime/Containerfile` (base `docker.io/nousresearch/hermes-agent@sha256:276d4468…`) |
 | `agent-webui` | `…/agent-webui@sha256:fb50509e…` | built from `images/agent-webui/Containerfile` |
 
 `agent-runtime`, `agent-webui`, `tuta-calendar`, `brave` and `agent-egress` are
