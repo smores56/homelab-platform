@@ -35,3 +35,19 @@ assistant.sammohr.dev:9443 {
 
 	reverse_proxy http://127.0.0.1:18006
 }
+
+# The general UI is the second name on the same Service and VIP. SNI picks the
+# site, so what a second name needs is a second site and nothing else: the port,
+# the bind, the provider and the ACME account are shared, and one Service with
+# one Serve endpoint already answers both because the certificate never leaves
+# this process. Only the target differs -- each deployment's UI is its own
+# container on its own loopback port.
+agent.sammohr.dev:9443 {
+	bind 127.0.0.1
+
+	tls {
+		dns cloudflare {env.CF_API_TOKEN}
+	}
+
+	reverse_proxy http://127.0.0.1:18007
+}

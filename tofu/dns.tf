@@ -74,6 +74,29 @@ resource "cloudflare_dns_record" "assistant" {
   comment = "agent UI Service VIP (design #834)"
 }
 
+# The general UI's name (task #847) rides the same Service and VIP: Caddy routes
+# by SNI, so one address answers both names and the record differs only in the
+# label. A record per name rather than a wildcard, for the same reason as above:
+# `*.<domain>` is the host tunnel's deny and a name has to override it to move.
+#
+# This create came after the CNAME's destroy for the same reason it could not
+# share a plan with it: Cloudflare refuses two records at one name and OpenTofu
+# cannot order a destroy before a create, so PR #120's apply removed the proxied
+# cluster record first. Until this record exists the name falls through to
+# `*.<domain>`, which is the host tunnel's deny; the rest of that retirement is
+# #833's.
+resource "cloudflare_dns_record" "agent" {
+  count = var.tailnet == "" ? 0 : 1
+
+  zone_id = data.cloudflare_zone.this.zone_id
+  name    = "agent.${var.domain}"
+  type    = "A"
+  content = tailscale_service.agent_ui[0].addrs[0]
+  proxied = false
+  ttl     = 300
+  comment = "general agent UI Service VIP (design #834, task #847)"
+}
+
 # CAA pins issuance for the zone to the ACME account Kanbei's in-VM client uses
 # (docs/cloudflare.md, "CAA"). Two tags because a wildcard order is authorized
 # by issuewild, not issue.

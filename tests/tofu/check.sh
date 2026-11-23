@@ -289,34 +289,44 @@ else
   fi
 fi
 
-# The agent UI's Service VIP (design #834) is the one name that answers with an
-# address Tailscale computes. A specific record overrides `*.<zone>`, so the name
-# has to be grey cloud with an explicit TTL: a proxied record over a tailnet
-# address has no origin Cloudflare can reach.
-assistant_dns=$(extract cloudflare_dns_record.assistant)
-if [[ -z $assistant_dns ]]; then
-  bad "assistant DNS record exists"
-else
-  ok "assistant DNS record exists"
-  if grep -qF 'name    = "assistant.${var.domain}"' <<<"$assistant_dns"; then
-    ok "assistant DNS publishes assistant.<zone>"
-  else
-    bad "assistant DNS publishes assistant.<zone>"
+# The agent UI's Service VIP (design #834) is the one address that Tailscale
+# computes. A specific record overrides `*.<zone>`, so each name has to be grey
+# cloud with an explicit TTL: a proxied record over a tailnet address has no
+# origin Cloudflare can reach.
+#
+# Both names (task #847) are that record with a different label, because Caddy
+# routes by SNI behind one Service. The per-name loop is what keeps that
+# property: a second address, a proxied record or an ungated one fails here.
+for name in assistant agent; do
+  dns=$(extract "cloudflare_dns_record.$name")
+  if [[ -z $dns ]]; then
+    bad "$name DNS record exists"
+    continue
   fi
-  if grep -qF 'type    = "A"' <<<"$assistant_dns"; then ok "assistant DNS is an address record"; else bad "assistant DNS is an address record"; fi
-  if grep -qF 'content = tailscale_service.agent_ui[0].addrs[0]' <<<"$assistant_dns"; then
-    ok "assistant DNS points at the Service's computed address"
+  ok "$name DNS record exists"
+  if grep -qF "name    = \"$name.\${var.domain}\"" <<<"$dns"; then
+    ok "$name DNS publishes $name.<zone>"
   else
-    bad "assistant DNS points at the Service's computed address"
+    bad "$name DNS publishes $name.<zone>"
   fi
-  if grep -qF 'proxied = false' <<<"$assistant_dns"; then ok "assistant DNS is grey cloud"; else bad "assistant DNS is grey cloud"; fi
-  if grep -qE 'ttl[[:space:]]*=[[:space:]]*300' <<<"$assistant_dns"; then ok "assistant DNS carries an explicit TTL"; else bad "assistant DNS carries an explicit TTL"; fi
-  if grep -qE 'count[[:space:]]*=[[:space:]]*var\.tailnet == "" \? 0 : 1' <<<"$assistant_dns"; then
-    ok "assistant DNS is gated on var.tailnet"
+  if grep -qF 'type    = "A"' <<<"$dns"; then ok "$name DNS is an address record"; else bad "$name DNS is an address record"; fi
+  if grep -qF 'content = tailscale_service.agent_ui[0].addrs[0]' <<<"$dns"; then
+    ok "$name DNS points at the Service's computed address"
   else
-    bad "assistant DNS is gated on var.tailnet"
+    bad "$name DNS points at the Service's computed address"
   fi
-fi
+  if grep -qF 'proxied = false' <<<"$dns"; then ok "$name DNS is grey cloud"; else bad "$name DNS is grey cloud"; fi
+  if grep -qE 'ttl[[:space:]]*=[[:space:]]*300' <<<"$dns"; then ok "$name DNS carries an explicit TTL"; else bad "$name DNS carries an explicit TTL"; fi
+  if grep -qE 'count[[:space:]]*=[[:space:]]*var\.tailnet == "" \? 0 : 1' <<<"$dns"; then
+    ok "$name DNS is gated on var.tailnet"
+  else
+    bad "$name DNS is gated on var.tailnet"
+  fi
+done
+# One VIP answers both names, which is what lets one grant and one set of deny
+# tests cover them. A record of its own would need its own destination.
+eq "$(grep -c 'content = tailscale_service.agent_ui\[0\].addrs\[0\]' "$work/code.tf")" "2" \
+  "both names answer with the one Service VIP"
 
 # The cluster tunnel's hostname config lives here, not in a dashboard (SDLC #583).
 echo "== cluster tunnel ingress"
@@ -752,6 +762,11 @@ has 'the grant names the one service port' 'ip[[:space:]]*=[[:space:]]*\["443"\]
 has 'the grant source is the owner group' 'grants[[:space:]]*=[[:space:]]*\['
 has 'the host auto-approves the Service' '"svc:agent-ui"[[:space:]]*=[[:space:]]*\["tag:smortress"\]'
 has 'the auto-approver is declared under services' 'autoApprovers[[:space:]]*=[[:space:]]*\{'
+# Both UI names ride this one Service, so the grant and the deny tests below
+# cover both: the destination is the service and the port, never the name, and a
+# second grant would be the only thing a second address could add.
+eq "$(grep -cE 'dst[[:space:]]*=[[:space:]]*\["svc:agent-ui"\]' "$work/code.tf")" "1" \
+  "one grant covers both names"
 # One accept and three denies: a fourth deny would be a tag that no longer exists,
 # and a fifth entry would widen the admitted set without a test to catch it.
 eq "$(grep -cF -- '"svc:agent-ui:443"' "$work/code.tf")" "4" \
