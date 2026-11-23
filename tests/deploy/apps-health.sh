@@ -4,10 +4,11 @@
 # The prober asks the three questions that define a serving app: the Quadlet's
 # unit active in the tenant's manager, the plan's loopback port accepting a
 # connect, and the app's base path declared by Serve. It reports to the journal
-# and nothing else, so every case here also proves the run wrote no deploy record,
-# requested no reboot and pinged no check: a prober that could roll the host back
-# would be the boot gate's coupling again, with a different clock, and one that
-# pinged the deploy check would fight the heartbeat that keeps it green.
+# and to the tenant's own Healthchecks check, and nothing else: every case here
+# also proves the run wrote no deploy record, requested no reboot and never
+# touched the deploy dead-man -- a prober that could roll the host back would be
+# the boot gate's coupling again, with a different clock, and one that pinged the
+# deploy check would fight the heartbeat that keeps it green.
 #
 # `systemctl`, `tailscale` and `curl` are fakes on PATH and the state is a
 # throwaway directory; the journal and the command lines are real. The ingress
@@ -75,6 +76,7 @@ state_dir=$work/state
 install -d -m 0755 "$bin" "$log"
 export DEPLOY_STATE_DIR=$state_dir
 export DEPLOY_PING_SECRET=$work/deploy-ping-url.yaml
+export APPS_HEALTH_SECRET=$work/healthchecks.yaml
 export APPS_PLAN=$work/plan.json
 export STUB_LOG=$log
 export PATH="$bin:$PATH"
@@ -83,6 +85,7 @@ source "$lib"
 deploy_state_init || exit 1
 
 ping_url=https://hc.invalid/ping/abc
+tenant_ping_url=https://hc.invalid/ping/tenant
 # Two ports: one a real listener holds, one nothing ever binds. The closed one is
 # a fixed number rather than a second ephemeral bind, so a rerun on another host
 # keeps meaning the same thing.
@@ -137,14 +140,18 @@ fi
 exit 0
 EOF
 
-# deploy_notify hands the URL over as a curl config on stdin, never in argv.
+# deploy_notify hands the URL over as a curl config on stdin, never in argv; the
+# tenant ping passes it as an argument. Both are recorded with their body so a
+# case can assert the suffix and the reason the check received.
 cat >"$bin/curl" <<'EOF'
 #!/usr/bin/env bash
 url=
+body=
 while (($#)); do
   case $1 in
     --config) shift 2 ;;
-    --max-time | --retry | --connect-timeout) shift 2 ;;
+    --data-binary) body=${2-}; shift 2 ;;
+    --max-time | --retry | --connect-timeout | --retry-delay | -o) shift 2 ;;
     -*) shift ;;
     *) url=$1; shift ;;
   esac
@@ -152,7 +159,7 @@ done
 if [[ -z $url ]]; then
   url=$(sed -n 's/^url = "\(.*\)"$/\1/p' | head -n 1)
 fi
-printf '%s\n' "$url" >>"$STUB_LOG/curl-urls"
+printf '%s\t%s\n' "${url:-}" "$body" >>"$STUB_LOG/curl-urls"
 exit 0
 EOF
 chmod 0755 "$bin"/*
@@ -200,13 +207,16 @@ journal_field() { # <event> <jq path>
 
 reset_case() {
   rm -f "$state_dir"/state.json "$state_dir"/pending.json "$state_dir"/apply.json \
-    "$state_dir"/denylist.json "$state_dir"/journal.jsonl "$DEPLOY_PING_SECRET"
+    "$state_dir"/denylist.json "$state_dir"/journal.jsonl "$DEPLOY_PING_SECRET" \
+    "$APPS_HEALTH_SECRET"
   : >"$log/systemctl-calls"
   : >"$log/probe-order"
   : >"$log/tailscale-calls"
   : >"$log/curl-urls"
   unset STUB_TAILSCALE_EXIT STUB_TAILSCALE_APPLY
   printf '%s\n' "$ping_url" >"$DEPLOY_PING_SECRET"
+  printf 'restic-ping-url: https://hc.invalid/ping/restic\napps-ping-url: %s\n' \
+    "$tenant_ping_url" >"$APPS_HEALTH_SECRET"
   printf 'demo.service\n' >"$STUB_SYSTEMCTL_USER_ACTIVE"
   printf 'demo.service\n' >"$STUB_SYSTEMCTL_ACTIVE"
   jq -nc --argjson port "$app_port" \
@@ -240,10 +250,22 @@ no_side_effects() { # <label>
   else
     ok "$1 requests no reboot"
   fi
-  if [[ -s $log/curl-urls ]]; then
-    bad "$1 pings no deploy check" "$(cat "$log/curl-urls")"
+  if [[ -s $log/curl-urls ]] && grep -qvF "${tenant_ping_url}" "$log/curl-urls"; then
+    bad "$1 pings only the tenant check" "$(cat "$log/curl-urls")"
   else
-    ok "$1 pings no deploy check"
+    ok "$1 pings only the tenant check"
+  fi
+}
+
+# <url suffix> <body> <label>. The suffix and the body are the page's whole
+# content; a /fail without the reason is what the deploy check's dead-man sends.
+check_ping() {
+  local want_url="${tenant_ping_url}$1" want_body=$2 label=$3 got_url='' got_body=''
+  IFS=$'\t' read -r got_url got_body <"$log/curl-urls" 2>/dev/null || true
+  if [[ $got_url == "$want_url" && $got_body == "$want_body" ]]; then
+    ok "$label"
+  else
+    bad "$label" "want '$want_url' body '$want_body', got '$got_url' body '$got_body'"
   fi
 }
 
@@ -268,6 +290,7 @@ check_grep "$log/systemctl-calls" '--machine=apps@.host is-active demo.service' 
 check_grep "$log/systemctl-calls" 'is-active demo.service' \
   "the plan's Quadlet name is asked about the .service unit it generates"
 check_grep "$log/tailscale-calls" 'serve status --json' "the base path is checked against Serve"
+check_ping "" "1 app(s) are serving" "a healthy tick pings the tenant check green"
 no_side_effects "a healthy plan"
 
 # --- 2. an app whose unit is not active -------------------------------------
@@ -279,6 +302,8 @@ check_eq "$(journal_field apps-health-failed '.app')" demo "the journal names th
 check_eq "$(journal_field apps-health-failed '.unit')" demo.service "the journal names the unit"
 check_grep <(printf '%s\n' "$out") 'not serving: tenant-unit-inactive:demo' \
   "the unit's own stderr names the reason too"
+check_ping /fail "not serving: tenant-unit-inactive:demo" \
+  "a failure reports the reason to the tenant check in the same tick"
 
 # --- 3. an app whose loopback port nothing answers --------------------------
 reset_case
@@ -338,6 +363,8 @@ if [[ -s $log/systemctl-calls ]]; then
 else
   ok "an apply in flight probes no unit"
 fi
+check_ping "" "apps apply in flight; nothing was probed" \
+  "an apply in flight keeps the tenant check green"
 no_side_effects "an apply in flight"
 
 # An apply that begins after the run's first look is the same window: the record
@@ -360,6 +387,8 @@ if [[ -n $(journal_field apps-health-failed '.reason') ]]; then
 else
   ok "an apply that starts mid-probe journals no failure"
 fi
+check_ping "" "apps apply in flight; nothing was reported" \
+  "an apply that starts mid-probe keeps the tenant check green"
 no_side_effects "an apply that starts mid-probe"
 
 # --- 7. no plan is a host with no tenant -----------------------------------
@@ -369,6 +398,7 @@ reset_case
 rm -f "$APPS_PLAN"
 run_prober
 check_rc 0 "no plan passes"
+check_ping "" "no tenant plan" "no plan still pings the tenant check green"
 if [[ -s $log/systemctl-calls ]]; then bad "no plan probes no unit" "$(cat "$log/systemctl-calls")"; else ok "no plan probes no unit"; fi
 no_side_effects "no plan"
 
@@ -394,6 +424,30 @@ check_eq "$(grep -c 'apps-health-failed' "$state_dir/journal.jsonl")" 1 \
   "a run with two inactive apps journals one failure"
 check_eq "$(journal_field apps-health-failed '.reason')" tenant-unit-inactive:alpha \
   "the first failing app decides the reason"
+
+# --- 9. an unstaged check is silent, not a failure -------------------------
+# The URL is an operator step: until it is in the decrypted file the prober has
+# nothing to ping, and the tenant verdict must still be journaled normally.
+reset_case
+printf 'restic-ping-url: https://hc.invalid/ping/restic\n' >"$APPS_HEALTH_SECRET"
+run_prober
+check_rc 0 "a missing apps-ping-url key does not fail the probe"
+check_eq "$(wc -l <"$log/curl-urls" | tr -d ' ')" 0 \
+  "a missing apps-ping-url key pings nothing"
+: >"$STUB_SYSTEMCTL_USER_ACTIVE"
+run_prober
+check_rc 1 "a missing apps-ping-url key still fails a broken tenant"
+check_eq "$(journal_field apps-health-failed '.reason')" tenant-unit-inactive:demo \
+  "a missing apps-ping-url key still journals the reason"
+check_eq "$(wc -l <"$log/curl-urls" | tr -d ' ')" 0 \
+  "a broken tenant with no check configured pings nothing"
+
+# The deploy check is never pinged from here, whatever the tenant's state.
+if [[ -e $DEPLOY_PING_SECRET ]] && grep -qF "$ping_url" "$log/curl-urls" 2>/dev/null; then
+  bad "the tenant prober never pings the deploy check" "$(cat "$log/curl-urls")"
+else
+  ok "the tenant prober never pings the deploy check"
+fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 ((fail == 0))

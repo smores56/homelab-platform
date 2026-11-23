@@ -16,14 +16,13 @@
 # that rolls back a boot it judged healthy is a platform whose rollback means
 # nothing. So nothing here reboots, stages, rolls back or reverts an apply.
 #
-# The signal is the journal and this unit's stderr, not a phone page. The one
-# Healthchecks check this host owns is the deploy check, the heartbeat pings it
-# green every five minutes, and `deploy_notify fail` sends a bare `/fail` with no
-# reason: a prober pinging from here would produce a down/recover pair per tick
-# for one crash-looping app and page nothing an operator could act on. A tenant
-# check of its own is the follow-up that restores paging, and it needs an
-# operator-created Healthchecks URL, so it is not this program yet
-# (docs/core/server-image.md).
+# The signal is two-faced on purpose: the journal names the failing app, and the
+# tenant's own Healthchecks check carries the page. It is a different check from
+# the deploy dead-man -- one check answered by two programs would turn one
+# crash-looping app into a down/recover pair every five minutes -- and it stays
+# silent until the operator stages its URL (`apps-ping-url` in
+# healthchecks.yaml). A green tick pings it; a failure pings `/fail` with the
+# reason, so the page arrives in the same tick rather than after a grace period.
 #
 # An apps apply in flight is not a fault. deploy-apps installs the new plan
 # before it writes the units and restarts Serve, with a bounded health wait in
@@ -77,6 +76,12 @@ apps_user=${APPS_USER:-apps}
 ctl_timeout=${APPS_HEALTH_CTL_TIMEOUT:-10}
 probe_timeout=${APPS_HEALTH_PROBE_TIMEOUT:-10}
 connect_timeout=${APPS_HEALTH_CONNECT_TIMEOUT:-5}
+# The tenant check's URL is the capability to keep it green, so it is read from
+# the decrypted file and never echoed; both overrides exist for the suite.
+healthchecks_secret=${APPS_HEALTH_SECRET:-/run/smortress/secrets/healthchecks.yaml}
+healthchecks_url_override=${APPS_HEALTH_PING_URL:-}
+curl_bin=${CURL_BIN:-curl}
+ping_timeout=${APPS_HEALTH_PING_TIMEOUT:-10}
 
 say() { printf 'smortress-apps-health: %s\n' "$*"; }
 warn() { printf 'smortress-apps-health: %s\n' "$*" >&2; }
@@ -85,6 +90,39 @@ reason=
 app=
 unit=
 serving=0
+
+# The decrypted Healthchecks file is plain YAML with top-level scalars; the restic
+# plane reads the same file with the same rule. A malformed or absent file means
+# the operator has not staged this check, which is not a failure of the tenant.
+healthchecks_url() {
+  local value
+  if [[ -n $healthchecks_url_override ]]; then
+    printf '%s\n' "$healthchecks_url_override"
+    return 0
+  fi
+  [[ -r $healthchecks_secret ]] || return 1
+  value=$(sed -n 's/^apps-ping-url:[[:space:]]*//p' "$healthchecks_secret" | head -n 1)
+  value=${value%\"}
+  value=${value#\"}
+  [[ -n $value ]] || return 1
+  printf '%s\n' "$value"
+}
+
+# <suffix> <body>. Never echo the URL: its UUID is the capability. A ping that
+# cannot be sent is a warning, not a probe failure -- the tenant's verdict is
+# already journaled, and a broken check is the check's own dead-man's business.
+ping_check() {
+  local url suffix=$1 body=$2
+  local -a args=(--fail --silent --show-error --max-time "$ping_timeout" -o /dev/null)
+  url=$(healthchecks_url) || return 0
+  if [[ -n $body ]]; then
+    args+=(--data-binary "$body")
+  fi
+  timeout --signal=TERM --kill-after=2 "$((ping_timeout + 5))" \
+    "$curl_bin" "${args[@]}" "$url$suffix" >/dev/null 2>&1 ||
+    warn "the tenant Healthchecks check could not be pinged"
+  return 0
+}
 
 # The single quotes are the point: the port is expanded by the child bash that
 # opens the connection, not by this shell, so no path here can be a hostname.
@@ -173,20 +211,25 @@ report_failure() {
     --arg unit "$unit" '{reason:$reason,app:$app,unit:$unit}')" ||
     warn "cannot journal the failure"
   warn "not serving: $reason"
+  ping_check /fail "not serving: $reason"
 }
 
 if [[ -e $deploy_state_dir/apply.json ]]; then
   say "an apps apply is in flight; nothing was probed"
+  ping_check "" "apps apply in flight; nothing was probed"
   exit 0
 fi
 
 if probe_plan; then
   if ((serving)); then
     say "$serving app(s) are serving"
+    ping_check "" "$serving app(s) are serving"
   elif [[ -e $apps_plan ]]; then
     say "the plan names no app; nothing to probe"
+    ping_check "" "the plan names no app"
   else
     say "no tenant plan at $apps_plan; nothing to probe"
+    ping_check "" "no tenant plan"
   fi
   exit 0
 fi
@@ -195,6 +238,7 @@ fi
 # halfway through would put a false line on the tenant's only signal.
 if [[ -e $deploy_state_dir/apply.json ]]; then
   say "an apps apply started during the probe; nothing was reported"
+  ping_check "" "apps apply in flight; nothing was reported"
   exit 0
 fi
 report_failure

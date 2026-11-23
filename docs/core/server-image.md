@@ -47,7 +47,7 @@ rollback path. Operator-only actions are in `docs/manual-steps.md` section 37.
 | `/usr/libexec/{deploy-state,deploy-drain,deploy-platform,deploy-apps,deploy-poll,deploy-heartbeat}` | `scripts/deploy-*.sh`: the state library, the queue drain (single writer of `state.json`), the platform snapshot gate and stage, the apps apply and revert, the daily deploy window and the five-minute dead-man. |
 | `/usr/libexec/smortress-boot-gate` | `scripts/smortress-boot-gate.sh`: reconciles an interrupted apps apply, then keeps or rolls back the deployment this host just booted. |
 | `/usr/libexec/smortress-deploy` | `scripts/deploy-cli.sh`, staged under the name the runbook uses: `status`, `release --force`, `unblock`, `bootstrap`. |
-| `/usr/libexec/smortress-apps-health` | `scripts/smortress-apps-health.sh`: the tenant's prober. For every app in `plan.json`, the Quadlet's unit active in the tenant's manager, the plan's loopback port accepting a connect, and the app's base path declared by Serve. Journals `apps-health-failed` with the reason, the app and the unit; reboots, stages, rolls back and reverts nothing, and pings no check. |
+| `/usr/libexec/smortress-apps-health` | `scripts/smortress-apps-health.sh`: the tenant's prober. For every app in `plan.json`, the Quadlet's unit active in the tenant's manager, the plan's loopback port accepting a connect, and the app's base path declared by Serve. Journals `apps-health-failed` with the reason, the app and the unit, and pings the tenant's own Healthchecks check: green on a healthy tick or an apply in flight, `/fail` with the reason on a broken one. Reboots, stages, rolls back and reverts nothing, and never touches the deploy check. |
 | `/usr/lib/systemd/system/smortress-deploy-listener.service` | The listener, `Restart=always`, `Requires=` and `After=` on `sops-decrypt.service`, sandboxed with the state tree as its only writable path. |
 | `/usr/lib/systemd/system/smortress-deploy.path`, `/usr/lib/systemd/system/smortress-deploy.service` | The queue trigger (`DirectoryNotEmpty=/var/lib/homelab/deploy/queue`) and the one drain of it, `TimeoutStartSec=12600`. |
 | `/usr/lib/systemd/system/smortress-deploy-poll.timer`, `/usr/lib/systemd/system/smortress-deploy-poll.service`, `/usr/lib/systemd/system/smortress-deploy-heartbeat.timer`, `/usr/lib/systemd/system/smortress-deploy-heartbeat.service`, `/usr/lib/systemd/system/smortress-deploy-retry.timer`, `/usr/lib/systemd/system/smortress-boot-gate.service` | The daily 03:00 deploy window, the dead-man beat for the `deploy` Healthchecks check, the five-minute retry of a deferred queue entry, and the gate that runs `Before=boot-complete.target`. |
@@ -428,16 +428,20 @@ plan that cannot be read is a `plan-unreadable` failure.
 
 A failure journals `apps-health-failed` with the reason, the app and the unit,
 and writes the same reason to the unit's stderr; it stops at the first broken app,
-so one outage is one line. **The tenant's signal is that journal**, read with
+so one outage is one line. The journal is the record: read it with
 `sudo tail -n 20 /var/lib/homelab/deploy/journal.jsonl | jq -c .` or
-`journalctl -u smortress-apps-health.service` — not a phone page. The one
-Healthchecks check this host owns is the deploy check, and two things make it the
-wrong bell here: the heartbeat pings it green every five minutes, so a prober on
-the same cadence would turn one crash-looping app into a down/recover pair per
-tick, and `deploy_notify fail` appends a bare `/fail` that carries no reason.
-**Paging is the follow-up step**: it needs a Healthchecks check of its own, which
-means an operator-created URL in the decrypt manifest. Until then this program
-journals and names the app instead.
+`journalctl -u smortress-apps-health.service`.
+
+Paging is the tenant's own Healthchecks check, `apps`, five-minute period and
+five-minute grace (`docs/manual-steps.md` 49.3): a healthy tick, a plan with no
+apps and an apply in flight all ping it green, and a failure pings `/fail` with
+`not serving: <reason>` as the body, so the page names the app instead of only
+reporting silence. It is deliberately a different check from `deploy`: one check
+answered by the heartbeat and by the prober would turn one crash-looping app
+into a down/recover pair every five minutes, and `deploy`'s dead-man needs
+silence as a signal. The URL is read from `/run/smortress/secrets/healthchecks.yaml`
+(key `apps-ping-url`), and until the operator stages that key the prober
+journals only.
 
 An apply in flight passes silently rather than reporting: `deploy-apps` installs
 the new plan before it writes the units and restarts Serve, and both the drain

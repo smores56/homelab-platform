@@ -6208,18 +6208,43 @@ owner is `group:owner`; a client that mints any other tag is refused, and the
    log shows the node joining, the POST answers `202`, and the node disappears
    from `tailscale status` when the job ends.
 
-### 49.3 Create the `deploy` Healthchecks check
+### 49.3 Create the `deploy` and `apps` Healthchecks checks
 
-One check, five-minute period, is the receiver's only notification path: every
-failure, hold and rollback pings `/fail`, every successful apply and every healthy
-boot gate pings success, and Pushover's own integration is what reaches the
-phone.
+Two checks, both five-minute period and five-minute grace, and they are separate
+on purpose: `deploy` is the receiver's dead-man (silence means the listener is
+gone), while `apps` is the tenant prober's verdict, whose `/fail` carries the
+reason. One check answered by both would turn one crash-looping app into a
+down/recover pair every five minutes and would make the dead-man's silence
+unreadable. Pushover's own integration is what reaches the phone.
 
 1. Healthchecks → **Add Check**: name `deploy`, period **5 minutes**, grace time
    **5 minutes**, no schedule, integration **Pushover**. Simple `ping/<uuid>` URL.
 2. Record the URL; it goes into `secrets/server/deploy-ping-url.yaml` (49.4), not
    into a workflow and not into this repository's plaintext.
-3. Confirm the dead-man is what keeps it green: the beat is
+3. Add the second check the same way: name `apps`, period **5 minutes**, grace
+   **5 minutes**, integration **Pushover**. Its URL goes into the existing
+   `secrets/server/healthchecks.yaml` as a second key, so the manifest line and
+   the host copy are already there:
+
+   ```sh
+   sops secrets/server/healthchecks.yaml
+   # add the line, keeping restic-ping-url:
+   #   apps-ping-url: https://hc-ping.com/<uuid>
+   ```
+
+   The host reads the ciphertext from `/var`, so the key lands there and is
+   decrypted without an image or a reboot:
+
+   ```sh
+   sudo install -m 0600 -o root -g root secrets/server/healthchecks.yaml \
+     /var/lib/smortress/secrets/healthchecks.yaml
+   sudo systemctl restart sops-decrypt.service
+   sudo grep -q '^apps-ping-url:' /run/smortress/secrets/healthchecks.yaml && echo apps-check-ok
+   ```
+
+   From the next probe the prober pings it, and a failing app pages with
+   `not serving: <reason>` instead of only writing the journal.
+4. Confirm the dead-man is what keeps `deploy` green: the beat is
    `smortress-deploy-heartbeat.timer` every five minutes, and it pings `/fail`
    when the listener does not answer `/healthz` or a queue entry is older than
    30 minutes. A stopped listener therefore pages, which is the point.
