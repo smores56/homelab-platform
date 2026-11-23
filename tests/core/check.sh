@@ -354,7 +354,7 @@ done
 checks=$((checks + 1))
 seeded=
 while IFS= read -r secret; do
-  grep -qE "^${secret//./\\.}[[:space:]]" image/rootfs/etc/smortress/secrets.manifest || {
+  grep -qE "^${secret//./\\.}[[:space:]]" image/rootfs/usr/share/smortress/secrets.manifest || {
     fail "$secret is read by the deploy path but is not in the decrypt manifest"
     seeded=1
   }
