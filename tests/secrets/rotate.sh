@@ -15,7 +15,7 @@ fail=0
 ok() { pass=$((pass + 1)); printf 'ok   %s\n' "$*"; }
 no() { fail=$((fail + 1)); printf 'FAIL %s\n' "$*" >&2; }
 
-if scripts/secret.sh list | grep -q $'^restic-password.yaml\trestic-password.yaml\t'; then
+if scripts/secret.sh list | grep -q $'^restic-password.yaml\tboot.json\t'; then
   ok "list shows the output, bundle, and consumer"
 else
   no "list shows the output, bundle, and consumer"
@@ -25,7 +25,7 @@ dst=$work/dst
 if SMORTRESS_SECRETS_SRC=$dst SMORTRESS_ROOT_CMD= \
   SMORTRESS_STAGE_OWNER=$(id -un) SMORTRESS_STAGE_GROUP=$(id -gn) \
   scripts/secret.sh stage restic-password.yaml --no-restart >/dev/null; then
-  if [[ -s $dst/restic-password.yaml ]]; then ok "stage writes the bundle with its mode"; else no "stage writes the bundle with its mode"; fi
+  if [[ -s $dst/boot.json ]]; then ok "stage writes the bundle with its mode"; else no "stage writes the bundle with its mode"; fi
 else
   no "stage writes the bundle with its mode"
 fi
@@ -38,7 +38,7 @@ SH
 chmod +x "$work/bin/sops"
 export SOPS_LOG=$work/sops.args
 if PATH="$work/bin:$PATH" SOPS_BIN=sops scripts/secret.sh edit restic-password.yaml; then
-  if grep -q 'secrets/server/restic-password.yaml' "$SOPS_LOG"; then ok "edit opens the committed ciphertext"; else no "edit opens the committed ciphertext"; fi
+  if grep -q 'secrets/boot.json' "$SOPS_LOG"; then ok "edit opens the committed ciphertext"; else no "edit opens the committed ciphertext"; fi
 else
   no "edit opens the committed ciphertext"
 fi

@@ -16,7 +16,7 @@ rollback path. Operator-only actions are in `docs/manual-steps.md#install-a-host
 | `/etc/containers/registries.d/ghcr.io-smortress.yaml` | Enables cosign signature lookup for our GHCR repository. |
 | `/etc/pki/containers/smortress.pub` | Public half of the operator cosign key. The private half is an environment secret and a recovery-kit item. |
 | `/usr/bin/{sops,age,age-keygen,restic}` | Hash-pinned release binaries from `image/pins.env`; no distribution drift. |
-| `/var/lib/smortress/secrets/*.yaml` | SOPS ciphertext only, root-only (`0700` dir, `0600` files), on `/var` so an image never overwrites it. `image/rootfs/usr/share/smortress/secrets.manifest` fixes the decrypted owner, group and mode; the seed copies it over `/etc/smortress/secrets.manifest` at every boot, because bootc keeps a host's `/etc` across a rebase. The image also carries a copy of the ciphertext under `/etc/smortress/secrets`, which only seeds a host that has none yet (`scripts/smortress-secrets-seed.sh`). |
+| `/var/lib/smortress/secrets/*.json` | The SOPS bundles `boot.json`, `apps.json` and `agents.json`, root-only (`0700` dir, `0600` files), on `/var` so an image never overwrites it. `image/rootfs/usr/share/smortress/secrets.manifest` fixes each output's bundle, dotted key, decrypted owner, group, mode and format; the seed copies it over `/etc/smortress/secrets.manifest` at every boot, because bootc keeps a host's `/etc` across a rebase. The image also carries a copy of the ciphertext under `/etc/smortress/secrets`, which only seeds a host that has none yet (`scripts/smortress-secrets-seed.sh`). |
 | `/usr/lib/systemd/system/zfs-ready@.service` | One readiness instance per recovery group; verifies the mount, not the directory. |
 | `/usr/lib/systemd/system/sops-decrypt.service` | Boot-ordered decrypt into `/run/smortress/secrets`. |
 | `/usr/lib/systemd/system/smortress-password.service` | Re-applies the `smores` account password hash through `chpasswd -e` at every boot from `/run/smortress/secrets/smores-password-hash.yaml`; bootc never reconciles `/var`, so `/etc/shadow` would otherwise be whatever the install left there. |
@@ -612,14 +612,16 @@ one, and `scripts/check-server-image.sh` asserts that tree-wide.
 
 ## Secrets
 
-SOPS/age remains the versioned format. `secrets/server/*.yaml` is ciphertext for
-the host and admin age recipients in `.sops.yaml`: the host identity is staged
+SOPS/age remains the versioned format. `secrets/boot.json`, `secrets/apps.json`
+and `secrets/agents.json` are ciphertext for the host and admin age recipients in
+`.sops.yaml`: the host identity is staged
 root-only at `/var/lib/homelab/age/keys.txt` from the offline kit (unwrapped to
 the `AGE-SECRET-KEY-...` form there; the kit container itself is not readable
 without the paper passphrase), while the admin identity stays with the operator
 and is the one the install-time render decrypts with.
-`sops-decrypt.service` decrypts on every boot into `/run/smortress/secrets`
-with the owner/group/mode in `secrets.manifest`. A missing identity, a missing
+`sops-decrypt.service` decrypts on every boot into `/run/smortress/secrets`,
+extracting each output's dotted key from its bundle with the owner/group/mode and
+`format` in `secrets.manifest`. A missing identity, a missing
 ciphertext, an unlisted ciphertext or a manifest mismatch fails the unit, so
 dependent Quadlets fail closed. Services mount the decrypted file; they do not
 receive it as an environment variable.
@@ -635,12 +637,12 @@ manifest disagree" and the boot gate rolled the deployment back. Adding a secret
 is now one commit; a hand edit of `/etc/smortress/secrets.manifest` is neither
 needed nor kept.
 
-The T2 probe is `secrets/server/canary.yaml`: ciphertext whose plaintext is
+The T2 probe is `["canary"]` in `secrets/boot.json`: ciphertext whose plaintext is
 `canary: sops-decrypt-ok`. It proves the image, age identity, unit and
 least-privilege write path without adding an application secret.
 
-`secrets/server/smores-password-hash.yaml` is the one secret with two readers,
-because `/var` and the install are not the same state. The install render
+`["smores"]["password_hash"]` in `secrets/boot.json` is the one secret with two
+readers, because `/var` and the install are not the same state. The install render
 (`scripts/render-ignition.sh`) decrypts it with the operator's identity and writes
 the hash into the Ignition `passwd.users[0].password_hash`; on the host,
 `smortress-password.service` reads the decrypted copy from `/run` and re-applies
@@ -739,13 +741,9 @@ does not know and then admits nobody. The policy's `tests` run on every save, so
 rule that widens access fails the plan instead of reaching the tailnet.
 
 ```sh
-( umask 077
-  printf 'authkey: %s\n' 'tskey-auth-...' >/tmp/tailscale.yaml
-  sops --encrypt --input-type yaml --output-type yaml \
-    --filename-override secrets/server/tailscale.yaml \
-    /tmp/tailscale.yaml >secrets/server/tailscale.yaml
-  rm -f /tmp/tailscale.yaml
-)
+scripts/secret.sh edit tailscale.yaml     # tailscale.authkey: tskey-auth-...
+scripts/secret.sh stage tailscale.yaml
+scripts/secret.sh verify
 gh secret set TAILSCALE_OAUTH_CLIENT_ID --env cloudflare --repo smores56/homelab-platform
 gh secret set TAILSCALE_OAUTH_CLIENT_SECRET --env cloudflare --repo smores56/homelab-platform
 gh secret set TAILSCALE_OAUTH_CLIENT_ID --env cloudflare-plan --repo smores56/homelab-platform
@@ -755,8 +753,9 @@ tofu -chdir=tofu plan          # expect: tailscale_acl.this will be created
 
 The auth key is minted in the admin console (reusable off, pre-approved if device
 approval is on); `smortress-tailscale-up.service` reads `authkey:` and skips
-enrollment when the ciphertext is absent, so the file and its manifest line land
-together. The OAuth client is scope `policy_file` only, encrypted to the admin
+enrollment when its decrypted file is absent, so the key is minted before the boot
+that enrolls the host. The OAuth client is scope `policy_file` only, encrypted to
+the admin
 identity, and both environments need it because Terraform configures a provider
 whenever a resource of that provider is in the configuration, `count = 0` included.
 

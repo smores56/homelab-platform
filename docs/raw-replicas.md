@@ -325,8 +325,8 @@ writes the same three preferences Brave's join UI writes -- `brave_sync_v2.seed`
 nothing -- into `Default/Preferences` before the browser starts, and the browser
 runs with `--password-store=basic` so the fixed key that decrypts the blob is the
 one it uses. The seed lives in one ciphertext
-(`secrets/server/brave-sync-seed.yaml`) and reaches exactly one unit, as a Podman
-secret; `docs/manual-steps.md#collector-sign-ins` is the operator's half, including
+(`["brave"]["sync_seed"]` in `secrets/agents.json`) and reaches exactly one unit,
+as a Podman secret; `docs/manual-steps.md#collector-sign-ins` is the operator's half, including
 rotation and removal.
 
 The browser's only egress is the allowlist proxy on `agent-brave.network`, which

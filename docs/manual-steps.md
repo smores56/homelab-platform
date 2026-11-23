@@ -27,7 +27,7 @@ rm -f /tmp/tang-adv.json                            # both thumbprints must be i
 ls -l /dev/tpmrm0                                   # P2: TPM2 present and healthy
 cat /sys/class/tpm/tpm0/tpm_version_major
 export SOPS_AGE_KEY_FILE=/path/to/admin-keys.txt    # P3: the kit decrypts (expect $6$)
-sops --decrypt --extract '["hash"]' secrets/server/smores-password-hash.yaml | cut -c1-3
+sops --decrypt --extract '["smores"]["password_hash"]' secrets/boot.json | cut -c1-3
 disk=$(cat ignition/operator/disk)                  # P4: the disk is the 980
 lsblk -dno MODEL,SIZE,TRAN "$disk"
 lsblk -bno SIZE "$disk"
@@ -101,10 +101,10 @@ shred -u /tmp/smortress-kit/root-recovery-passphrase \
 rmdir /tmp/smortress-kit
 ```
 
-`secrets/server/smores-password-hash.yaml` is not an operator file: it ships as
-ciphertext because bootc never reconciles `/var`, and both the renderer and
-`smortress-password.service` read it. Minting a new one is "Rotate the smores
-account password".
+The account hash (`["smores"]["password_hash"]` in `secrets/boot.json`) is not
+an operator file: it ships as ciphertext because bootc never reconciles `/var`,
+and both the renderer and `smortress-password.service` read it. Minting a new one
+is "Rotate the smores account password".
 
 ### Render Ignition and install
 
@@ -479,11 +479,12 @@ password and recovery codes never enter a job, a manifest or this repo.
 ### Where a secret lives
 
 `.sops.yaml` is rendered by `scripts/sops-policy.py` and encrypts every
-`secrets/**/*.yaml` to the admin identity, the machine (host) identity and the three
-YubiKeys. On the host: `secrets/server/<name>.yaml` in git, written by the operator;
-`/var/lib/smortress/secrets/<name>.yaml` root `0600`, written by a rotation or the
-boot seed; `/run/smortress/secrets/<name>` at the manifest's mode, written by
-`sops-decrypt.service` at every boot.
+`secrets/*.json` and `secrets/*.yaml` to the admin identity, the machine (host)
+identity and the three YubiKeys. In git: `secrets/boot.json`, `secrets/apps.json`
+and `secrets/agents.json`, written by the operator at the dotted key the index
+names; on the host `/var/lib/smortress/secrets/<bundle>` root `0600`, written by a
+rotation or the boot seed; `/run/smortress/secrets/<name>` at the manifest's mode,
+written by `sops-decrypt.service` at every boot.
 
 `secrets/index.json` is the contract; the seed renders
 `/etc/smortress/secrets.manifest` from it at every boot. A rotation is one
@@ -493,28 +494,25 @@ file keeps the old value until it restarts, and `/run` is tmpfs:
 ```sh
 scripts/secret.sh edit r2-credentials.yaml
 scripts/secret.sh stage r2-credentials.yaml
+scripts/secret.sh verify
 ```
 
 Only a secret whose *manifest line* changes needs the image and a reboot.
 
-### Seed a ciphertext the image has not shipped yet
+### Add an output the index does not name
+
+An output the index already names is `edit` and `stage`, nothing else. A new one is
+an index line plus its key in a bundle, in one commit: the manifest the decrypt
+reads is rendered from the index, so the image carries the line before any value
+can reach `/run`. `deploy-ping-url.yaml` is already such an output, so the shape
+below is its rotation, not a step still to run:
 
 ```sh
-( umask 077
-  printf 'deploy-ping-url: %s\n' 'https://hc-ping.com/<uuid>' >/tmp/deploy-ping-url.yaml
-  sops --encrypt --input-type yaml --output-type yaml \
-    --filename-override secrets/server/deploy-ping-url.yaml \
-    /tmp/deploy-ping-url.yaml >secrets/server/deploy-ping-url.yaml
-  rm -f /tmp/deploy-ping-url.yaml
-)
-head -1 secrets/server/deploy-ping-url.yaml   # must be `deploy-ping-url: ENC[`
-```
-
-```sh
-sudo install -m 0600 -o root -g root secrets/server/deploy-ping-url.yaml \
-  /var/lib/smortress/secrets/deploy-ping-url.yaml
-sudo systemctl restart sops-decrypt.service
-sudo grep -q '^deploy-ping-url:' /run/smortress/secrets/deploy-ping-url.yaml && echo staged
+python3 scripts/secrets-index.py list | grep deploy-ping-url   # bundle and consumer
+scripts/secret.sh edit deploy-ping-url.yaml    # deploy.ping_url
+scripts/secret.sh stage deploy-ping-url.yaml
+scripts/secret.sh verify                       # policy, index and bundles agree
+python3 scripts/secrets-check.py --shadow      # manifest matches the index
 ```
 
 ### Rotate the smores account password
@@ -523,21 +521,19 @@ sudo grep -q '^deploy-ping-url:' /run/smortress/secrets/deploy-ping-url.yaml && 
 and `smortress-password.service` re-applies it through `chpasswd -e`.
 
 ```sh
-( umask 077
-  read -rsp 'smores account password: ' password; echo
-  printf 'hash: %s\n' \
-    "$(printf '%s\n' "$password" | openssl passwd -6 -stdin)" \
-    >secrets/server/smores-password-hash.yaml
-  unset password
-)
-sops --encrypt --in-place secrets/server/smores-password-hash.yaml
-head -1 secrets/server/smores-password-hash.yaml   # must be `hash: ENC[`
+read -rsp 'smores account password: ' password; echo
+printf '%s\n' "$password" | openssl passwd -6 -stdin   # the hash to paste
+unset password
+scripts/secret.sh edit smores-password-hash.yaml     # smores.password_hash
+scripts/secret.sh stage smores-password-hash.yaml
+scripts/secret.sh verify
 ```
 
-Commit the ciphertext, put the password in the recovery kit, deploy and reboot.
-Prove it at the console, never over the SSH session the old password protects:
+Commit the bundle, put the password in the recovery kit, then apply and prove it at
+the console, never over the SSH session the old password protects:
 
 ```sh
+sudo systemctl restart smortress-password.service
 sudo journalctl -b -u smortress-password.service --no-pager
 sudo getent shadow smores | cut -d: -f2 | cut -c1-3   # must print $6$
 ```
@@ -548,46 +544,47 @@ failed unit leaves the previous password in place, which is recoverable over SSH
 ### Rotate an application secret
 
 The age identity is linked at root's default sops path and the sudoers drop-in
-strips inherited `SOPS_AGE_*` variables, so plain `sudo sops` is the whole command:
+strips inherited `SOPS_AGE_*` variables, so plain `sudo sops` is the whole command.
+Rotate the ciphertext and stage it, then change the password in PostgreSQL from the
+staged copy before restarting the containers that read it:
 
 ```sh
-sudo sops --decrypt --extract '["password"]' \
-  /var/lib/smortress/secrets/immich-db-password.yaml
-```
-
-```sh
+scripts/secret.sh edit immich-db-password.yaml   # immich.db_password: openssl rand -hex 32
+scripts/secret.sh stage immich-db-password.yaml
 sudo podman exec -i immich-postgres psql -U immich -d immich \
-  -c "ALTER USER immich WITH PASSWORD '$(sudo sops --decrypt --extract '["password"]' /var/lib/smortress/secrets/immich-db-password.yaml)'"
-sops secrets/server/immich-db-password.yaml
+  -c "ALTER USER immich WITH PASSWORD '$(sudo sops --decrypt --extract '["immich"]["db_password"]' /var/lib/smortress/secrets/apps.json)'"
+sudo systemctl restart smortress-app-secrets.service immich-postgres.service immich-server.service
 git commit -am 'chore(core): rotate the Immich database password'
 git push
-sudo bootc upgrade && sudo systemctl reboot
 ```
 
 ### Rotate the agent's credentials
 
-Gateway keys and UI passwords are rewritten at every boot by
-`smortress-agent-config.service` (`.env` and `webui.env`), so a rotation lands with
-the next boot:
+Gateway keys and UI passwords are rewritten by `smortress-agent-config.service`
+(`.env` and `webui.env`) on every start, so a rotation lands when that service
+restarts:
 
 ```sh
-sops secrets/server/agent-local-api-key.yaml       # api_key: openssl rand -hex 32
-sops secrets/server/agent-general-api-key.yaml     # same
-sops secrets/server/agent-hosted-key.yaml          # the provider's key, not ours
-sops secrets/server/agent-ui-personal-password.yaml
-sudo bootc upgrade && sudo systemctl reboot
+scripts/secret.sh edit agent-local-api-key.yaml       # agent.local_api_key: openssl rand -hex 32
+scripts/secret.sh edit agent-general-api-key.yaml     # agent.general_api_key: same
+scripts/secret.sh edit agent-hosted-key.yaml          # agent.hosted_key: the provider's key, not ours
+scripts/secret.sh edit agent-ui-personal-password.yaml   # ui.personal_password
+scripts/secret.sh stage agent-local-api-key.yaml      # all four are in agents.json
+sudo systemctl restart smortress-agent-config.service
 sudo systemctl restart agent-webui-personal.service
 ```
 
 A facade token lives in three places that must move together: the ciphertext, the
 Podman secret the facade mounts, and the gateway's seeded `config.yaml`. The first
-two follow the image; the third does not, because the seed uses `cp -n`. Rotate the
-ciphertext and deploy it first — reseeding before that copies the *old* token back:
+two follow `edit` and `stage`; the third does not, because the seed uses `cp -n`.
+Rotate the ciphertext and stage it first — reseeding before that copies the *old*
+token back:
 
 ```sh
-sops secrets/server/agent-facade-personal-token.yaml   # token: openssl rand -hex 32
+scripts/secret.sh edit agent-facade-personal-token.yaml   # facade.personal_token: openssl rand -hex 32
+scripts/secret.sh stage agent-facade-personal-token.yaml
 git commit -am 'chore(core): rotate the personal facade token'
-git push && sudo bootc upgrade && sudo systemctl reboot
+git push
 sudo rm /var/lib/agent/local/config.yaml
 sudo systemctl restart smortress-agent-config.service
 sudo stat -c '%u:%g %a %n' /var/lib/agent/local/config.yaml   # 1000:1000 0600
@@ -596,15 +593,17 @@ sudo systemctl restart agent-facade-personal.service agent-local.service
 
 ### Rotate the deploy webhook key
 
-`webhook-secret` is what both notify jobs sign with today and `webhook-secret-next`
-is the rotation slot; the listener accepts either, so there is no window in which
-the old key is refused. Write the new key into `webhook-secret-next.yaml`, commit
-and deploy; change `DEPLOY_WEBHOOK_SECRET` in both `deploy-notify` Environments;
-move the key into `webhook-secret.yaml`, put a fresh random value in the next slot,
-commit and deploy. The next merge journals `queue-enqueued`; a body signed with the
-retired key is a `deploy-rejected` with reason `bad-signature`. The listener
-refuses to start when `webhook-secret.yaml` is empty or missing, so a failed
-decrypt answers nothing rather than accepting unsigned requests.
+`webhook.secret` is what both notify jobs sign with today and `webhook.next` is the
+rotation slot; the decrypt writes them to
+`/run/smortress/secrets/webhook-secret.yaml` and
+`/run/smortress/secrets/webhook-secret-next.yaml`; the listener accepts either, so there is no window in which the old
+key is refused. Write the new key into `["webhook"]["next"]` in `secrets/boot.json`,
+commit and stage; change `DEPLOY_WEBHOOK_SECRET` in both `deploy-notify`
+Environments; move the key into `["webhook"]["secret"]`, put a fresh random value
+in the next slot, commit and stage. The next merge journals `queue-enqueued`; a body
+signed with the retired key is a `deploy-rejected` with reason `bad-signature`. The
+listener refuses to start when `["webhook"]["secret"]` is empty or missing, so a
+failed decrypt answers nothing rather than accepting unsigned requests.
 
 ## Deploy
 
@@ -618,13 +617,13 @@ receiver to deploy (`docs/core/server-image.md`, "The deploy path").
 ### Create the notify environment
 
 Both repositories have a `notify` job on `environment: deploy-notify` with
-`permissions: {}` and no checkout. The webhook key is the value already encrypted at
-`secrets/server/webhook-secret.yaml`, and both Environments and the host must agree
-on it byte for byte.
+`permissions: {}` and no checkout. The webhook key is the `["webhook"]["secret"]`
+value already encrypted in `secrets/boot.json`, and both Environments and the host
+must agree on it byte for byte.
 
 ```sh
 OWNER=$(cat ~/.config/smores56-agent/owner-token)
-WEBHOOK=$(sops decrypt --extract '["webhook-secret"]' secrets/server/webhook-secret.yaml)
+WEBHOOK=$(sops decrypt --extract '["webhook"]["secret"]' secrets/boot.json)
 for repo in homelab-platform homelab-apps; do
   GH_TOKEN="$OWNER" gh api -X PUT "repos/smores56/$repo/environments/deploy-notify" \
     --input - <<'JSON'
@@ -994,9 +993,14 @@ sudo podman logs --since 2m smortress-agent-local 2>&1 | grep -c 'POST /v1'
 
 From a tailnet device open `https://smortress.<tailnet>.ts.net:8444/` (personal, the
 pinned local model) and `:8445` (general, through `agent-proxy`), signing in with
-each deployment's own password (`sops -d
-secrets/server/agent-ui-personal-password.yaml`). The first-run wizard is disabled,
-so `Missing imports: run_agent` is expected; the facades are the tool surface.
+each deployment's own password, read from its bundle at the key the index names:
+
+```sh
+sops -d --extract '["ui"]["personal_password"]' secrets/agents.json
+```
+
+The first-run wizard is disabled, so `Missing imports: run_agent` is expected;
+the facades are the tool surface.
 
 ### Fetch the pinned model
 

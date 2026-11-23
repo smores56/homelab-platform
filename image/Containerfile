@@ -135,7 +135,7 @@ COPY units/quadlet/immich.network units/quadlet/immich-postgres.container \
      units/quadlet/agent-egress-proxy.container \
      units/quadlet/agent-egress-dns.container \
      /usr/share/containers/systemd/
-COPY secrets/server/ /etc/smortress/secrets/
+COPY secrets/boot.json secrets/apps.json secrets/agents.json /etc/smortress/secrets/
 COPY secrets/index.json /usr/share/smortress/secrets.index.json
 COPY image/cosign.pub /etc/pki/containers/smortress.pub
 
@@ -163,7 +163,7 @@ RUN set -eux; \
     chmod 0755 /usr/libexec/apps-schema /usr/libexec/secrets-index; \
     chmod 0644 /usr/share/smortress/secrets.index.json; \
     chmod 0644 /etc/pki/containers/smortress.pub /usr/share/smortress/secrets.manifest; \
-    chmod 0600 /etc/smortress/secrets/*.yaml; \
+    chmod 0600 /etc/smortress/secrets/*.yaml /etc/smortress/secrets/*.json; \
     chmod 0644 /etc/pam.d/sudo; \
     chmod 0600 /etc/ssh/sudo_authorized_keys; \
     chmod 0440 /etc/sudoers.d/10-human-gate /etc/sudoers.d/20-sops-env; \

@@ -38,6 +38,11 @@ def tracked() -> list[str]:
 
 def top_keys(path: Path) -> list[str]:
     text = path.read_text(encoding="utf-8", errors="replace")
+    if path.suffix == ".json":
+        try:
+            return [key for key in json.loads(text) if key != "sops"]
+        except json.JSONDecodeError:
+            return []
     return [key for key in KEY.findall(text) if key != "sops"]
 
 
@@ -127,9 +132,12 @@ def main() -> int:
 
     for name in sorted(set(bundles) - names):
         bad(f"bundles has {name} with no output")
-    for path in sorted((SECRETS / "server").glob("*.yaml")):
-        if path.name not in set(bundles.values()):
-            bad(f"{path.relative_to(ROOT)} is ciphertext but not a declared bundle")
+    for pattern in ("server/*.yaml", "*.json"):
+        for path in sorted(SECRETS.glob(pattern)):
+            if path.name in {"index.json", "index.bundles.json"}:
+                continue
+            if path.name not in set(bundles.values()):
+                bad(f"{path.relative_to(ROOT)} is ciphertext but not a declared bundle")
     for name in operators:
         path = SECRETS / name
         if not path.exists():

@@ -38,9 +38,9 @@ prove the plane on their own. Nothing in the plane skips or mutes a destination
 that is not there.
 
 The R2 bucket and repository path already exist. The write key pair is read from
-SOPS (`r2_access_key_id`, `r2_secret_access_key`); when either is absent or
-empty the `r2` jobs record failures and the verifier stays red rather than
-skipping the destination. The legacy migration repository is a different bucket
+`secrets/boot.json` (`["r2"]["r2_access_key_id"]`, `["r2"]["r2_secret_access_key"]`);
+when either is absent or empty the `r2` jobs record failures and the verifier stays
+red rather than skipping the destination. The legacy migration repository is a different bucket
 and is never referenced by this plane.
 
 ## Restore units and snapshot paths
@@ -300,19 +300,19 @@ host sends notifications, and no ntfy or observability stack is involved.
 
 | File (decrypted at boot) | Key | Use |
 | --- | --- | --- |
-| `/run/smortress/secrets/restic-password.yaml` | single value | `RESTIC_PASSWORD_FILE` for all three repositories |
-| `/run/smortress/secrets/r2-credentials.yaml` | `r2_access_key_id`, `r2_secret_access_key` | exported as `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` for `r2` only |
-| `/run/smortress/secrets/healthchecks.yaml` | `restic-ping-url` | verifier ping URL |
+| `/run/smortress/secrets/restic-password.yaml` | `["restic"]["password"]` | `RESTIC_PASSWORD_FILE` for all three repositories |
+| `/run/smortress/secrets/r2-credentials.yaml` | `["r2"]["r2_access_key_id"]`, `["r2"]["r2_secret_access_key"]` | exported as `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` for `r2` only |
+| `/run/smortress/secrets/healthchecks.yaml` | `["healthchecks"]["restic-ping-url"]` | verifier ping URL |
 
+All three outputs are extracted from one ciphertext, `secrets/boot.json`.
 `restic-password.yaml` is decrypted with `format=value` in
 `image/rootfs/usr/share/smortress/secrets.manifest`, so the file contains only the
 password; restic cannot read a YAML document with a key. Credentials reach
 restic through the environment, never argv, and are never printed.
 `r2-credentials.yaml` is committed ciphertext and is listed in the manifest.
-`healthchecks.yaml` is absent until the operator creates the check (section 38
-step 3): listing a ciphertext before it exists fails `sops-decrypt.service`
-and every dependent unit, so the file and its manifest line are added in the
-same image build.
+`healthchecks.yaml` carries the ping URL the operator creates in section 38 step 3,
+and the verifier treats an empty URL as a failed check rather than pinging a
+placeholder.
 
 ## Restore by hand
 
@@ -466,8 +466,9 @@ each one names before the unbroken tree is allowed to pass.
 
 ## Bringing the plane up
 
-Prerequisites: the age identity is staged and `secrets/server/restic-password.yaml`
-decrypts. The 5 TB HDD is already formatted `LABEL=restic-hdd`; the 970 carries
+Prerequisites: the age identity is staged and `secrets/boot.json` decrypts
+(`scripts/secret.sh verify` is keyless and proves the policy, the index and the
+bundles agree). The 5 TB HDD is already formatted `LABEL=restic-hdd`; the 970 carries
 `LABEL=restic-ssd` once fitted. Destinations, retention and readiness are
 `docs/core/restic-plane.md`.
 
@@ -504,5 +505,6 @@ Prove the failure boundaries: with the HDD unmounted the job prints `failure
 repo-not-mounted`, the verifier exits non-zero, and the SSD jobs still succeed. The
 Healthchecks.io check `smortress restic freshness` (1 hour, 30 minute grace,
 Pushover) pages on that, and its ping URL is `restic-ping-url` in
-`secrets/server/healthchecks.yaml`. Record the three repository URIs, the shared
-password, the R2 write token and the check name in the kit.
+`secrets/boot.json` (`["healthchecks"]["restic-ping-url"]`). Record the three
+repository URIs, the shared password, the R2 write token and the check name in the
+kit.

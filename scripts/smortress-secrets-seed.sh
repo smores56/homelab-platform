@@ -48,7 +48,7 @@ rollback() {
     exit 1
   fi
   install -d -m 0700 "$dst"
-  for file in "$run"/*.yaml; do
+  for file in "$run"/*.yaml "$run"/*.json; do
     [[ -e $file ]] || continue
     name=$(basename -- "$file")
     if [[ -e $dst/$name ]]; then
@@ -77,7 +77,7 @@ fi
 # construction; `install -m` keeps the source's 0600 and the destination's 0700.
 seeded=0
 shopt -s nullglob
-files=("$baked"/*.yaml)
+files=("$baked"/*.yaml "$baked"/*.json)
 if ((${#files[@]})); then
   install -d -m 0700 "$dst"
   for file in "${files[@]}"; do
@@ -102,7 +102,7 @@ if [[ -s $baked_index && -x $index_bin ]] && bundles=$("$index_bin" bundles --in
   done <<<"$bundles"
   run=''
   moved=0
-  for file in "$dst"/*.yaml; do
+  for file in "$dst"/*.yaml "$dst"/*.json; do
     name=$(basename -- "$file")
     [[ -n ${keep[$name]:-} ]] && continue
     if [[ -z $run ]]; then

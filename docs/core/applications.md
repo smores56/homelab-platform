@@ -152,17 +152,17 @@ though it belongs to the `files` unit.
 
 | Value | Ciphertext | Decrypted as | Consumed as |
 | --- | --- | --- | --- |
-| Immich database password | `secrets/server/immich-db-password.yaml` | `/run/smortress/secrets/immich-db-password.yaml` (`value`, root 0400) | Podman secret `immich-db-password`, mounted at uid 1000 mode 0400; the server reads `DB_PASSWORD_FILE`, Postgres reads `POSTGRES_PASSWORD_FILE` |
-| OPDShelf admin password | `secrets/server/opdshelf-admin-password.yaml` | `/run/smortress/secrets/opdshelf-admin-password.yaml` (`value`, root 0400) | Podman secret `opdshelf-admin-password`, `type=env` as `ADMIN_PASSWORD` (the image has no `_FILE` variant) |
-| Personal gateway key | `secrets/server/agent-local-api-key.yaml` | `/run/smortress/secrets/agent-local-api-key.yaml` (`value`, root 0400) | Podman secret `agent-local-api-key`, also mounted at uid 1000 mode 0400; `smortress-agent-config.service` writes it into `/var/lib/agent/local/.env` as `API_SERVER_KEY` (the runtime has no `_FILE` variant, and Podman's `type=env` keeps the file's trailing newline) |
-| General gateway key | `secrets/server/agent-general-api-key.yaml` | `/run/smortress/secrets/agent-general-api-key.yaml` (`value`, root 0400) | Same shape, `agent-general-api-key`, `/var/lib/agent/general/.env` |
-| Hosted provider key | `secrets/server/agent-hosted-key.yaml` | `/run/smortress/secrets/agent-hosted-key.yaml` (`value`, root 0400) | Podman secret `agent-hosted-key`, mounted read-only at `/run/secrets/agent-hosted-key` in `agent-proxy` only. Never in an environment, never in a config file, never in argv |
-| Personal facade token | `secrets/server/agent-facade-personal-token.yaml` | `/run/smortress/secrets/agent-facade-personal-token.yaml` (`value`, root 0400) | Podman secret `agent-facade-personal-token`, mounted at uid 1000 mode 0400 as `/run/secrets/agent-facade-personal-token` in `agent-facade-personal` only, which reads it through `--token-file`. The personal gateway holds the same value in its seeded `config.yaml` as `X-Deployment-Token` (section "Source facades") |
-| General facade token | `secrets/server/agent-facade-general-token.yaml` | `/run/smortress/secrets/agent-facade-general-token.yaml` (`value`, root 0400) | Same shape for `agent-facade-general` and the general gateway |
-| Personal UI password | `secrets/server/agent-ui-personal-password.yaml` | `/run/smortress/secrets/agent-ui-personal-password.yaml` (`value`, root 0400) | Not a Podman secret: `smortress-agent-config.service` writes it into `/var/lib/agent/local/webui.env` as `HERMES_WEBUI_PASSWORD`, which `agent-webui-personal` reads through `EnvironmentFile=`. The UI has no `_FILE` variant, and `type=env` would carry the file's trailing newline into a comparison that never matches |
-| General UI password | `secrets/server/agent-ui-general-password.yaml` | `/run/smortress/secrets/agent-ui-general-password.yaml` (`value`, root 0400) | Same shape, `/var/lib/agent/general/webui.env`. One password per deployment: the two UIs are separate authority domains, so a leak on one must not open the other |
-| SimpleFIN access URL | `secrets/server/simplefin-access-url.yaml` | `/run/smortress/secrets/simplefin-access-url.yaml` (`value`, root 0400) | Podman secret `simplefin-access-url`, mounted at uid 1000 mode 0400 in `smortress-agent-collect-finance.service` only, which reads it through `--access-url-file` |
-| TutaBridge password | `secrets/server/tmail-bridge-password.yaml` | `/run/smortress/secrets/tmail-bridge-password.yaml` (`value`, root 0400) | Podman secret `tmail-bridge-password`, mounted at uid 1000 mode 0400 in `smortress-agent-collect-mail.service` only, where isync's `PassCmd` reads it. The bridge generates this password locally; the Tuta account password is never stored in this repository |
+| Immich database password | `secrets/apps.json` `["immich"]["db_password"]` | `/run/smortress/secrets/immich-db-password.yaml` (`value`, root 0400) | Podman secret `immich-db-password`, mounted at uid 1000 mode 0400; the server reads `DB_PASSWORD_FILE`, Postgres reads `POSTGRES_PASSWORD_FILE` |
+| OPDShelf admin password | `secrets/apps.json` `["opdshelf"]["admin_password"]` | `/run/smortress/secrets/opdshelf-admin-password.yaml` (`value`, root 0400) | Podman secret `opdshelf-admin-password`, `type=env` as `ADMIN_PASSWORD` (the image has no `_FILE` variant) |
+| Personal gateway key | `secrets/agents.json` `["agent"]["local_api_key"]` | `/run/smortress/secrets/agent-local-api-key.yaml` (`value`, root 0400) | Podman secret `agent-local-api-key`, also mounted at uid 1000 mode 0400; `smortress-agent-config.service` writes it into `/var/lib/agent/local/.env` as `API_SERVER_KEY` (the runtime has no `_FILE` variant, and Podman's `type=env` keeps the file's trailing newline) |
+| General gateway key | `secrets/agents.json` `["agent"]["general_api_key"]` | `/run/smortress/secrets/agent-general-api-key.yaml` (`value`, root 0400) | Same shape, `agent-general-api-key`, `/var/lib/agent/general/.env` |
+| Hosted provider key | `secrets/agents.json` `["agent"]["hosted_key"]` | `/run/smortress/secrets/agent-hosted-key.yaml` (`value`, root 0400) | Podman secret `agent-hosted-key`, mounted read-only at `/run/secrets/agent-hosted-key` in `agent-proxy` only. Never in an environment, never in a config file, never in argv |
+| Personal facade token | `secrets/agents.json` `["facade"]["personal_token"]` | `/run/smortress/secrets/agent-facade-personal-token.yaml` (`value`, root 0400) | Podman secret `agent-facade-personal-token`, mounted at uid 1000 mode 0400 as `/run/secrets/agent-facade-personal-token` in `agent-facade-personal` only, which reads it through `--token-file`. The personal gateway holds the same value in its seeded `config.yaml` as `X-Deployment-Token` (section "Source facades") |
+| General facade token | `secrets/agents.json` `["facade"]["general_token"]` | `/run/smortress/secrets/agent-facade-general-token.yaml` (`value`, root 0400) | Same shape for `agent-facade-general` and the general gateway |
+| Personal UI password | `secrets/agents.json` `["ui"]["personal_password"]` | `/run/smortress/secrets/agent-ui-personal-password.yaml` (`value`, root 0400) | Not a Podman secret: `smortress-agent-config.service` writes it into `/var/lib/agent/local/webui.env` as `HERMES_WEBUI_PASSWORD`, which `agent-webui-personal` reads through `EnvironmentFile=`. The UI has no `_FILE` variant, and `type=env` would carry the file's trailing newline into a comparison that never matches |
+| General UI password | `secrets/agents.json` `["ui"]["general_password"]` | `/run/smortress/secrets/agent-ui-general-password.yaml` (`value`, root 0400) | Same shape, `/var/lib/agent/general/webui.env`. One password per deployment: the two UIs are separate authority domains, so a leak on one must not open the other |
+| SimpleFIN access URL | `secrets/agents.json` `["simplefin"]["access_url"]` | `/run/smortress/secrets/simplefin-access-url.yaml` (`value`, root 0400) | Podman secret `simplefin-access-url`, mounted at uid 1000 mode 0400 in `smortress-agent-collect-finance.service` only, which reads it through `--access-url-file` |
+| TutaBridge password | `secrets/agents.json` `["tmail"]["bridge_password"]` | `/run/smortress/secrets/tmail-bridge-password.yaml` (`value`, root 0400) | Podman secret `tmail-bridge-password`, mounted at uid 1000 mode 0400 in `smortress-agent-collect-mail.service` only, where isync's `PassCmd` reads it. The bridge generates this password locally; the Tuta account password is never stored in this repository |
 
 `smortress-app-secrets.service` creates all nine Podman secrets with
 `--replace` on every boot, before any container that declares one. The values
@@ -680,23 +680,18 @@ fixed key is what makes the blob portable.
 prefs="$HOME/.config/BraveSoftware/Brave-Browser/Default/Preferences"
 seed="v10$(jq -r '.brave_sync_v2.seed' "$prefs" | base64 -d | tail -c +4 | base64 -w0)"
 printf '%s\n' "${#seed}"        # hundreds of characters, never 0
-( umask 077
-  printf 'brave_sync_seed: %s\n' "$seed" >/tmp/brave-sync-seed.yaml
-  sops --encrypt --input-type yaml --output-type yaml \
-    --filename-override secrets/server/brave-sync-seed.yaml \
-    /tmp/brave-sync-seed.yaml >secrets/server/brave-sync-seed.yaml
-  rm -f /tmp/brave-sync-seed.yaml
-  unset seed
-)
-head -1 secrets/server/brave-sync-seed.yaml   # must be `brave_sync_seed: ENC[`
+scripts/secret.sh edit brave-sync-seed.yaml    # brave.sync_seed, set to $seed
+scripts/secret.sh stage brave-sync-seed.yaml
+scripts/secret.sh verify
+unset seed
 ```
 
-Commit, merge, wait for the publish run, then `sudo bootc upgrade` and reboot.
-`smortress-agent-brave-seed.service` runs before the browser at every boot and is
-idempotent, so it replants a rotated seed: the journal line is `{"event": "seed",
-"planted": true, …}` on the first boot and `… "unchanged": true …` after, and a
+Commit and push. `smortress-agent-brave-seed.service` replants the seed
+idempotently, so `sudo systemctl restart smortress-agent-brave-seed.service` picks
+a rotation up without a reboot: the journal line is `{"event": "seed",
+"planted": true, …}` on the first run and `… "unchanged": true …` after, and a
 `{"event": "refused", …}` line means the seeder wrote nothing — fix the ciphertext
-and reboot, not the unit.
+and restart, not the unit.
 
 ```sh
 sudo journalctl -u smortress-agent-brave-seed.service -n 5 --no-pager
@@ -740,9 +735,10 @@ can use it:
 
 ```sh
 sudo podman exec smortress-agent-tmail password
-sops secrets/server/tmail-bridge-password.yaml   # set tmail_bridge_password:
+scripts/secret.sh edit tmail-bridge-password.yaml   # tmail.bridge_password
+scripts/secret.sh stage tmail-bridge-password.yaml
 git commit -am 'chore(agent): set the TutaBridge password'
-git push && sudo bootc upgrade && sudo systemctl reboot
+git push
 sudo systemctl start smortress-agent-mail-stream.service
 sudo journalctl -u smortress-agent-mail-stream.service -f
 ```
@@ -812,9 +808,10 @@ decode it for the claim URL, `curl -X POST <claim-url>` answers with the access 
 then deploy it:
 
 ```sh
-sops secrets/server/simplefin-access-url.yaml   # set access_url: to the claimed URL
+scripts/secret.sh edit simplefin-access-url.yaml   # simplefin.access_url
+scripts/secret.sh stage simplefin-access-url.yaml
 git commit -am 'chore(core): claim the SimpleFIN access URL'
-git push && sudo bootc upgrade && sudo systemctl reboot
+git push
 sudo systemctl start smortress-agent-collect-finance.service
 sudo journalctl -u smortress-agent-collect-finance.service -n 20 --no-pager
 ```
