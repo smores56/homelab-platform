@@ -311,7 +311,8 @@ fi
 # A real parser is better than greps. A user + network namespace gives nft the
 # capability it needs without root, and loading twice there proves the reload
 # is a no-op; a runner without unprivileged namespaces says so instead.
-if command -v nft >/dev/null 2>&1 && unshare -rn true 2>/dev/null; then
+if command -v nft >/dev/null 2>&1 && unshare -rn true 2>/dev/null &&
+    getent passwd apps >/dev/null 2>&1; then
     for file in "$rules" "$deny"; do
         if unshare -rn nft -c -f "$file" >/dev/null 2>&1; then
             ok "nft parses $file"
@@ -344,7 +345,7 @@ if command -v nft >/dev/null 2>&1 && unshare -rn true 2>/dev/null; then
         bad 'the allow-list replaces the deny table instead of stacking on it' "$swapped"
     fi
 else
-    printf 'skip nft parse (no unprivileged namespaces)\n'
+    printf 'skip nft parse (no unprivileged namespaces or no apps account)\n'
 fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

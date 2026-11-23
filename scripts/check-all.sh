@@ -57,7 +57,7 @@ broker|python3 -m unittest discover -s apps/broker/tests -t apps/broker|apps/bro
 webhook|python3 -m unittest discover -s apps/webhook/tests -t apps/webhook|apps/webhook/*
 agent-proxy|python3 -m unittest discover -s apps/agent_proxy/tests -t apps/agent_proxy|apps/agent_proxy/*
 agent-facade|python3 -m unittest discover -s apps/agent_facade/tests -t apps|apps/agent_facade/*
-backrest|npm ci --prefix backrest && npm --prefix backrest run typecheck && npm --prefix backrest test && tests/backrest/check.sh|backrest/*
+backrest|if ! npm --version >/dev/null 2>&1; then d="${XDG_CACHE_HOME:-$HOME/.cache}/check-all/node"; mkdir -p "$d"; for t in node npm npx; do printf '#!/bin/sh\nexec mise x node@22.23.5 -- %s "$@"\n' "$t" > "$d/$t"; chmod +x "$d/$t"; done; PATH="$d:$PATH"; export PATH; fi; npm ci --prefix backrest && npm --prefix backrest run typecheck && npm --prefix backrest test && tests/backrest/check.sh|backrest/*
 tofu-check|tests/tofu/check.sh|tests/tofu/*,tofu/*
 tofu-fmt|tofu fmt -check -recursive tofu|tofu/*
 provision|tests/provision/check.sh|tests/provision/*,provision/*
@@ -67,7 +67,7 @@ server-image|scripts/check-server-image.sh && scripts/render-ignition.sh --synth
 edge|tests/edge/check.sh|tests/edge/*,scripts/verify-public-edge.sh
 core|tests/core/check.sh && tests/core/storage-layout.sh && tests/core/restic-drill.sh && tests/core/tailscale-serve.sh && tests/core/apps-egress.sh && tests/core/apps-user.sh && tests/core/agent-drill.sh|tests/core/*,scripts/core/*,scripts/access-*
 apps|tests/apps/check.sh && tests/apps/render.sh && tests/apps/quota.sh && tests/apps/ingress.sh|tests/apps/*,scripts/apps-*
-recovery-page|cd apps/recovery-page && deno task typecheck && deno task test|apps/recovery-page/*
+recovery-page|deno=deno; if ! deno --version >/dev/null 2>&1; then deno="mise x deno@2.9.8 -- deno"; fi; cd apps/recovery-page && $deno task typecheck && $deno task test|apps/recovery-page/*
 deploy|tests/deploy/state.sh && tests/deploy/receiver.sh && tests/deploy/verify.sh && tests/deploy/platform.sh && tests/deploy/boot.sh && tests/deploy/apps.sh && tests/deploy/apps-health.sh && tests/deploy/notify.sh && tests/deploy/poll.sh && tests/deploy/heartbeat.sh|tests/deploy/*,scripts/deploy-*,scripts/smortress-boot-gate.sh,scripts/smortress-apps-health.sh
 data-plane|scripts/render-source-schemas.py --check && tests/data-plane/check.sh|tests/data-plane/*,apps/data_plane/*,libs/data_plane/*,scripts/render-source-schemas.py,recovery/*,deploy/data-plane/*
 tuta-calendar|venv="${XDG_CACHE_HOME:-$HOME/.cache}/check-all/tuta-calendar"; if [ ! -x "$venv/bin/python" ]; then python3 -m venv "$venv" && "$venv/bin/pip" install -q --disable-pip-version-check -r images/tuta-calendar/requirements.lock; fi; PATH="$venv/bin:$PATH" tests/tuta-calendar/check.sh|tests/tuta-calendar/*,apps/tuta_calendar/*
