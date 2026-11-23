@@ -93,6 +93,7 @@ COPY units/systemd/ /usr/lib/systemd/system/
 COPY units/quadlet/pattern.container /usr/share/smortress/quadlet/pattern.container
 # /usr/local is a symlink to /var on bootc, so helpers go under /usr/libexec
 # and lose the .sh suffix that the units would otherwise have to know about.
+COPY scripts/lib/ /usr/libexec/lib/
 COPY scripts/storage-layout.sh scripts/zfs-ready.sh scripts/sops-decrypt.sh \
      scripts/smortress-secrets-seed.sh scripts/init-zpool.sh \
      scripts/init-data-luks.sh \

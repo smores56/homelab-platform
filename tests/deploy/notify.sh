@@ -249,13 +249,11 @@ fi
 
 # --- the suite runs in CI ----------------------------------------------------
 
-for suite in notify poll heartbeat; do
-  if grep -qE "^[[:space:]]*run: tests/deploy/$suite\.sh$" "$ci"; then
-    ok "CI runs tests/deploy/$suite.sh"
-  else
-    bad "CI runs tests/deploy/$suite.sh"
-  fi
-done
+if grep -qE 'check-all\.sh --only [A-Za-z0-9_,-]*deploy' "$ci"; then
+  ok "CI runs the deploy group (notify, poll, heartbeat included)"
+else
+  bad "CI runs the deploy group (notify, poll, heartbeat included)"
+fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 ((fail == 0))

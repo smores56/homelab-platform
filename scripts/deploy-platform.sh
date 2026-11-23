@@ -39,6 +39,11 @@
 #
 # shellcheck disable=SC2154  # deploy-state.sh assigns these at source time
 set -euo pipefail
+# shellcheck source=/dev/null
+_smolib=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/lib/log.sh
+[[ -r $_smolib ]] || _smolib=/usr/libexec/lib/log.sh
+# shellcheck source=/dev/null
+source "$_smolib"
 
 self_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 # The image installs the library as /usr/libexec/deploy-state (the smortress-src
@@ -92,8 +97,6 @@ gate_backup_timeout=${DEPLOY_GATE_BACKUP_TIMEOUT:-1800}
 gate_lock_wait=${DEPLOY_GATE_LOCK_WAIT:-900}
 gate_deadline=0
 
-say() { printf 'deploy-platform: %s\n' "$*"; }
-warn() { printf 'deploy-platform: %s\n' "$*" >&2; }
 
 usage() {
   cat >&2 <<'EOF'

@@ -46,6 +46,11 @@
 #
 # shellcheck disable=SC2154  # deploy-state.sh assigns these at source time
 set -euo pipefail
+# shellcheck source=/dev/null
+_smolib=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/lib/log.sh
+[[ -r $_smolib ]] || _smolib=/usr/libexec/lib/log.sh
+# shellcheck source=/dev/null
+source "$_smolib"
 
 self_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 state_lib=${DEPLOY_STATE_LIB:-}
@@ -83,8 +88,6 @@ healthchecks_url_override=${APPS_HEALTH_PING_URL:-}
 curl_bin=${CURL_BIN:-curl}
 ping_timeout=${APPS_HEALTH_PING_TIMEOUT:-10}
 
-say() { printf 'smortress-apps-health: %s\n' "$*"; }
-warn() { printf 'smortress-apps-health: %s\n' "$*" >&2; }
 
 reason=
 app=

@@ -63,7 +63,7 @@ tofu-fmt|tofu fmt -check -recursive tofu|tofu/*
 provision|tests/provision/check.sh|tests/provision/*,provision/*
 docs|python3 scripts/check-doc-refs.py|*.md,docs/*,scripts/check-doc-refs.py,scripts/doc-refs-baseline.txt
 secrets|tests/secrets/policy.sh && python3 scripts/sops-policy.py check --repo .|secrets/*,.sops.yaml,scripts/sops-policy.py,tests/secrets/*
-server-image|scripts/check-server-image.sh && scripts/render-ignition.sh --synthetic --check && tests/core/ignition-boundary.sh && scripts/render-ignition.sh --synthetic --stock --check|image/*,ignition/*,units/*,images/*,tests/fixtures/*,docs/core/server-image.md,scripts/check-server-image.sh
+server-image|scripts/check-server-image.sh && scripts/render-ignition.sh --synthetic --check && tests/core/ignition-boundary.sh && scripts/render-ignition.sh --synthetic --stock --check|scripts/lib/*,image/*,ignition/*,units/*,images/*,tests/fixtures/*,docs/core/server-image.md,scripts/check-server-image.sh
 edge|tests/edge/check.sh|tests/edge/*,scripts/verify-public-edge.sh
 core|tests/core/check.sh && tests/core/storage-layout.sh && tests/core/restic-drill.sh && tests/core/tailscale-serve.sh && tests/core/apps-egress.sh && tests/core/apps-user.sh && tests/core/agent-drill.sh|tests/core/*,scripts/core/*,scripts/access-*
 apps|tests/apps/check.sh && tests/apps/render.sh && tests/apps/quota.sh && tests/apps/ingress.sh|tests/apps/*,scripts/apps-*
@@ -73,7 +73,7 @@ data-plane|scripts/render-source-schemas.py --check && tests/data-plane/check.sh
 tuta-calendar|venv="${XDG_CACHE_HOME:-$HOME/.cache}/check-all/tuta-calendar"; if [ ! -x "$venv/bin/python" ]; then python3 -m venv "$venv" && "$venv/bin/pip" install -q --disable-pip-version-check -r images/tuta-calendar/requirements.lock; fi; PATH="$venv/bin:$PATH" tests/tuta-calendar/check.sh|tests/tuta-calendar/*,apps/tuta_calendar/*
 agent-egress|tests/agent-egress/check.sh|tests/agent-egress/*,apps/agent_egress/*
 brave|tests/brave/check.sh|tests/brave/*,apps/brave_ingest/*
-lint|yamllint -c .yamllint.yaml $(git ls-files '*.yaml' '*.yml') provision/smortress/user-data && shellcheck scripts/*.sh tests/tofu/*.sh tests/access/*.sh tests/tuta-calendar/*.sh tests/agent-egress/*.sh tests/brave/*.sh provision/*/*.sh tests/provision/*.sh scripts/legacy/*.sh tests/core/*.sh backrest/scripts/*.sh backrest/container/entrypoint.sh tests/backrest/*.sh tests/apps/*.sh tests/deploy/*.sh tests/edge/*.sh tests/check-all/*.sh .githooks/* && scripts/check-action-pins.sh && scripts/check-pr-secret-boundary.sh && scripts/check-codeowners.sh && tests/check-all/ci-parity.sh && git diff --check "${BASE:-origin/main}"|.github/*,CODEOWNERS,.sops.yaml,.yamllint.yaml,scripts/*,tests/*,provision/*,backrest/*,.githooks/*,recovery/*
+lint|yamllint -c .yamllint.yaml $(git ls-files '*.yaml' '*.yml') provision/smortress/user-data && shellcheck scripts/*.sh tests/tofu/*.sh tests/access/*.sh tests/tuta-calendar/*.sh tests/agent-egress/*.sh tests/brave/*.sh provision/*/*.sh tests/provision/*.sh scripts/lib/*.sh scripts/legacy/*.sh tests/core/*.sh backrest/scripts/*.sh backrest/container/entrypoint.sh tests/backrest/*.sh tests/apps/*.sh tests/deploy/*.sh tests/edge/*.sh tests/check-all/*.sh .githooks/* && scripts/check-action-pins.sh && scripts/check-pr-secret-boundary.sh && scripts/check-codeowners.sh && tests/check-all/ci-parity.sh && git diff --check "${BASE:-origin/main}"|.github/*,CODEOWNERS,.sops.yaml,.yamllint.yaml,scripts/*,tests/*,provision/*,backrest/*,.githooks/*,recovery/*
 actionlint|actionlint|.github/*
 EOF
 

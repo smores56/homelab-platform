@@ -72,6 +72,11 @@
 #
 # shellcheck disable=SC2154  # deploy-state.sh assigns these at source time
 set -euo pipefail
+# shellcheck source=/dev/null
+_smolib=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/lib/log.sh
+[[ -r $_smolib ]] || _smolib=/usr/libexec/lib/log.sh
+# shellcheck source=/dev/null
+source "$_smolib"
 
 self_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 # The image installs the library as /usr/libexec/deploy-state (the smortress-src
@@ -149,8 +154,6 @@ if [[ -z $apps_bin ]]; then
 fi
 apps_revert_timeout=${DEPLOY_APPS_REVERT_TIMEOUT:-1200}
 
-say() { printf 'smortress-boot-gate: %s\n' "$*"; }
-warn() { printf 'smortress-boot-gate: %s\n' "$*" >&2; }
 
 # --- the GRUB flags ---------------------------------------------------------
 # The counter is the only rollback that exists before userspace, so an absent
