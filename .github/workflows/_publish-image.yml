@@ -22,6 +22,11 @@ on:
         description: path used in the pin row before the digest
         required: true
         type: string
+      context:
+        description: docker build context
+        required: false
+        default: "."
+        type: string
 
 permissions:
   contents: read
@@ -73,7 +78,7 @@ jobs:
             --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
             --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
             -f "${{ inputs.dockerfile }}" \
-            -t "$image:$tag" .
+            -t "$image:$tag" "${{ inputs.context }}"
           docker push "$image:$tag"
           digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$image:$tag" | cut -d@ -f2)
           [[ $digest =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "no digest in RepoDigests"; exit 1; }

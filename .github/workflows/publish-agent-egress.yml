@@ -1,14 +1,7 @@
-# Builds, signs and proves the collector egress gate image.
+# Builds, signs and proves the egress proxy image.
 #
-# The proxy and its allowlist resolver (apps/agent_egress/) are stdlib-only Python
-# with no upstream counterpart to mirror: the bytes are ours, so there is no
-# upstream digest to preserve -- the digest is the last build's, and it is what
-# scripts/app-images.sh will pin and a Quadlet will reference once the listener
-# wiring exists (a later slice), so the run ends by printing the table row for a
-# human to commit.
-#
-# The signing key is an environment secret; a pull_request run never sees it, and
-# this workflow does not run on pull requests at all.
+# The steps are the shared contract in `_publish-image.yml`; this file owns only
+# the trigger and the image-specific inputs.
 name: publish-agent-egress
 
 on:
@@ -18,6 +11,7 @@ on:
       - "apps/agent_egress/**"
       - "images/agent-egress/**"
       - ".github/workflows/publish-agent-egress.yml"
+      - ".github/workflows/_publish-image.yml"
   workflow_dispatch:
 
 permissions:
@@ -30,106 +24,9 @@ concurrency:
 
 jobs:
   publish:
-    name: build, sign, verify
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    environment: server-image
-    steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-        with:
-          persist-credentials: false
-      - name: install skopeo
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends skopeo
-      - name: install pinned cosign
-        run: |
-          set -euo pipefail
-          . image/pins.env
-          mkdir -p "$RUNNER_TEMP/bin"
-          curl -fsSLo "$RUNNER_TEMP/bin/cosign" \
-            "https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/cosign-linux-amd64"
-          echo "${COSIGN_SHA256}  $RUNNER_TEMP/bin/cosign" | sha256sum -c -
-          chmod 0755 "$RUNNER_TEMP/bin/cosign"
-          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
-      - name: the environment key matches the committed public key
-        env:
-          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
-          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
-        run: |
-          set -euo pipefail
-          test -s image/cosign.pub
-          cosign public-key --key env://COSIGN_PRIVATE_KEY >"$RUNNER_TEMP/cosign.pub"
-          diff -u image/cosign.pub "$RUNNER_TEMP/cosign.pub"
-      - name: build and push
-        id: build
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          image=ghcr.io/smores56/homelab-platform/agent-egress
-          tag="sha-${GITHUB_SHA::12}"
-          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-          docker build \
-            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
-            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
-            -f images/agent-egress/Containerfile \
-            -t "$image:$tag" .
-          docker push "$image:$tag"
-          digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$image:$tag" | cut -d@ -f2)
-          [[ $digest =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "no digest in RepoDigests"; exit 1; }
-          echo "digest=$digest" >>"$GITHUB_OUTPUT"
-          echo "tag=$tag" >>"$GITHUB_OUTPUT"
-      - name: sign and verify
-        env:
-          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
-          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
-        run: |
-          set -euo pipefail
-          ref="ghcr.io/smores56/homelab-platform/agent-egress@${{ steps.build.outputs.digest }}"
-          cosign sign --key env://COSIGN_PRIVATE_KEY --yes "$ref"
-          cosign verify --key image/cosign.pub "$ref"
-      - name: prove a policy-checked, anonymous pull
-        run: |
-          set -euo pipefail
-          # The entry under test is the host's own, with the key it names: the
-          # bootc image and the Quadlets pull with no registry credential, so a
-          # private or unsigned package 401s or is rejected on the first run
-          # after deploy.
-          #
-          # The rest of the committed policy is dropped because the runner's
-          # skopeo predates the `keyPaths` key that the ublue entry uses
-          # ("invalid policy ... Unknown key \"keyPaths\""), and no entry here
-          # pulls anything but an application image.
-          sudo install -D -m 0644 image/cosign.pub /etc/pki/containers/smortress.pub
-          sudo install -D -m 0644 \
-            image/rootfs/etc/containers/registries.d/ghcr.io-smortress.yaml \
-            /etc/containers/registries.d/ghcr.io-smortress.yaml
-          jq '{"default": [{"type": "reject"}],
-               "transports": {"docker": {"ghcr.io/smores56/homelab-platform":
-                 .transports.docker["ghcr.io/smores56/homelab-platform"]}}}' \
-            image/rootfs/etc/containers/policy.json >"$RUNNER_TEMP/policy.json"
-          printf '{}' >"$RUNNER_TEMP/empty-auth.json"
-          skopeo copy --retry-times 2 --authfile "$RUNNER_TEMP/empty-auth.json" \
-            --policy "$RUNNER_TEMP/policy.json" \
-            "docker://ghcr.io/smores56/homelab-platform/agent-egress@${{ steps.build.outputs.digest }}" \
-            "dir:$RUNNER_TEMP/pull"
-          rm -rf "$RUNNER_TEMP/pull"
-          echo "policy-checked anonymous pull ok: agent-egress"
-      - name: summary
-        run: |
-          set -euo pipefail
-          {
-            echo "### agent-egress image"
-            echo
-            echo "\`ghcr.io/smores56/homelab-platform/agent-egress:${{ steps.build.outputs.tag }}\`"
-            echo
-            echo "\`ghcr.io/smores56/homelab-platform/agent-egress@${{ steps.build.outputs.digest }}\`"
-            echo
-            echo "Pin it by adding this row to \`scripts/app-images.sh\`:"
-            echo
-            echo '```'
-            echo "  'agent-egress|built:images/agent-egress/Containerfile|${{ steps.build.outputs.digest }}'"
-            echo '```'
-          } >>"$GITHUB_STEP_SUMMARY"
-          echo "pin: agent-egress|built:images/agent-egress/Containerfile|${{ steps.build.outputs.digest }}"
+    uses: ./.github/workflows/_publish-image.yml
+    with:
+      name: agent-egress
+      dockerfile: images/agent-egress/Containerfile
+      pin_prefix: images/agent-egress/Containerfile
+    secrets: inherit
