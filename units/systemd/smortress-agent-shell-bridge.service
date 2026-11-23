@@ -29,6 +29,11 @@ Description=Agent shell bridge: one Unix socket from the general facade to the j
 # and not before: an unprovisioned boot serves a socket whose every job fails.
 Requires=smortress-agent-job-provision.service
 After=smortress-agent-job-provision.service
+# The socket's connectto check is against this process's domain, so the policy
+# must be loaded before the socket exists; a bridge that starts without it
+# serves a socket no container can connect to.
+Wants=smortress-selinux-agent-shell.service
+After=smortress-selinux-agent-shell.service
 
 [Service]
 Type=simple

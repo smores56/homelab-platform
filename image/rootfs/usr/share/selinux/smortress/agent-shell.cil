@@ -1,0 +1,15 @@
+;; The general facade container connects to the shell bridge's Unix socket.
+;;
+;; For AF_UNIX the `connectto` check compares the *creating process's* domain,
+;; not the socket file's label: the bridge runs as the unconfined system service
+;; (`unconfined_service_t`), the facade container is `container_t:s0:cX,cY`, and
+;; the relabel that `:z` applies to the file changes nothing about the socket's
+;; security ID. Without this rule every connect() is EACCES at the inode that
+;; looks perfectly accessible -- 0660 on the bridge's group -- and `shell.run`
+;; fails as if the socket were broken.
+;;
+;; The surface is one domain pair and one socket class: no file, process or
+;; network permission is widened, and a container still reaches the socket only
+;; if the socket is mounted into it.
+(allow container_t unconfined_service_t (unix_stream_socket (connectto getattr getopt read write shutdown)))
+(allow unconfined_service_t container_t (unix_stream_socket (getattr getopt read write sendto recvfrom shutdown)))

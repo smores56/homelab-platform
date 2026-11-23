@@ -1,0 +1,24 @@
+# /usr/lib/systemd/system/smortress-selinux-agent-shell.service
+[Unit]
+Description=Allow the general facade container to connect to the shell bridge socket
+# A Unix socket's `connectto` check uses the domain of the process that created
+# it, so the bridge's socket is unconfined_service_t no matter what label the
+# file carries, and container_t may not connect to it. The rule is a file in the
+# image; this unit loads it on every boot, because a base update can recompile
+# the policy store without it. Without it shell.run answers EACCES on a socket
+# whose mode and group are correct.
+ConditionPathExists=/usr/share/selinux/smortress/agent-shell.cil
+ConditionSecurity=selinux
+After=local-fs.target
+# The bridge must start with the rule loaded: a socket created before it is
+# still denied, and a bridge restart is the operator's retry path.
+Before=smortress-agent-shell-bridge.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/semodule -i /usr/share/selinux/smortress/agent-shell.cil
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

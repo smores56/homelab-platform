@@ -939,6 +939,20 @@ if grep -qE '^(PublishPort|Network)=' "$bridge_service" ||
 else
   ok 'the bridge publishes nothing and holds no Podman socket'
 fi
+# A Unix socket's connectto check is against the domain of the process that
+# created it, not the file's label, so a container may not connect to an
+# unconfined system service's socket without a rule. The rule is one domain pair
+# and one socket class, and the bridge orders itself after the unit that loads it.
+shell_cil=image/rootfs/usr/share/selinux/smortress/agent-shell.cil
+shell_selinux_unit=units/systemd/smortress-selinux-agent-shell.service
+if grep -qE '^\(allow container_t unconfined_service_t \(unix_stream_socket \(connectto ' "$shell_cil" &&
+  grep -qx 'Before=smortress-agent-shell-bridge.service' "$shell_selinux_unit" &&
+  grep -qx 'ExecStart=/usr/bin/semodule -i /usr/share/selinux/smortress/agent-shell.cil' "$shell_selinux_unit" &&
+  grep -qx 'Wants=smortress-selinux-agent-shell.service' "$bridge_service"; then
+  ok 'one CIL rule permits the socket connect and the bridge loads it first'
+else
+  bad 'one CIL rule permits the socket connect and the bridge loads it first' "$(cat "$shell_cil" 2>/dev/null | head -3)"
+fi
 
 # A token in a template would be a credential in an image both gateways share, and
 # the placeholder is only safe while it is exactly the placeholder.

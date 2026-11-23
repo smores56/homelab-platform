@@ -61,6 +61,13 @@ its own authentication on top of a token that already exists for the MCP surface
 There is no such listener, and the gateway, the model server and the web UI have
 no path to the socket to use instead.
 
+One SELinux rule makes the mount usable: for AF_UNIX the `connectto` check is
+against the domain of the process that created the socket, so the bridge's socket
+is `unconfined_service_t` whatever label `:z` puts on the file, and `container_t`
+may not connect to it. `smortress-selinux-agent-shell.service` loads
+`image/rootfs/usr/share/selinux/smortress/agent-shell.cil` before the bridge; the
+rule pairs those two domains on `unix_stream_socket` and widens nothing else.
+
 The facade mounts that one inode, so it is `Requires=`, `After=` and `PartOf=`
 the bridge unit: the bridge must exist before the mount (a missing source would
 make podman create a directory at the path), and a bridge restart recreates the
