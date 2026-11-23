@@ -53,7 +53,7 @@ closed when the set and the manifest disagree:
 ```
 
 ```text
-# image/rootfs/etc/smortress/secrets.manifest
+# image/rootfs/usr/share/smortress/secrets.manifest
 agent-github-token.yaml  root  root  0400  value
 sdlc-github-token.yaml   root  root  0400  value
 ```

@@ -28,7 +28,24 @@ none of the five can read `clusters/**`.
 `sops-decrypt.service` reads the ciphertext from `/var/lib/smortress/secrets`
 (root-only, `0700`/`0600`) and writes each file into `/run/smortress/secrets` with
 the owner, mode and `format` named in
-`image/rootfs/etc/smortress/secrets.manifest`.
+`image/rootfs/usr/share/smortress/secrets.manifest`.
+
+That manifest is metadata — a name, an owner, a mode — never a secret, so the
+image owns it. It does **not** ship under `/etc`: bootc merges `/etc` once per
+deployment and keeps whatever the host already had, so a line a later image adds
+never reaches an existing host. It ships at
+`/usr/share/smortress/secrets.manifest`, a path bootc does update, and the seed
+copies it over `/etc/smortress/secrets.manifest` — which is what
+`sops-decrypt.service` reads — on every run. The copy is skipped when the content
+is unchanged and renamed into place when it changes, so a new manifest line is
+one boot and a crash cannot leave half a manifest. Adding a secret is therefore a
+commit; a hand edit of `/etc/smortress/secrets.manifest` is neither needed nor
+kept.
+
+`/etc` stays the path the decrypt reads on purpose: a rollback to a deployment
+whose seed predates this copy must still find a manifest where its own
+`sops-decrypt.service` looks for it, and the `/etc` copy is the one that survives
+a rebase.
 
 The image also carries the same set under `/etc/smortress/secrets`, and that copy
 is *only* a seed. `sops-decrypt.service`'s `ExecStartPre` copies each ciphertext

@@ -234,7 +234,7 @@ for secret in $declared; do
   else
     bad "secret $secret is created from a decrypted file"
   fi
-  if grep -qE "^${secret//./\\.}\.yaml[[:space:]]" image/rootfs/etc/smortress/secrets.manifest; then
+  if grep -qE "^${secret//./\\.}\.yaml[[:space:]]" image/rootfs/usr/share/smortress/secrets.manifest; then
     ok "secret $secret has a decrypt manifest entry"
   else
     bad "secret $secret has a decrypt manifest entry"
@@ -1284,7 +1284,7 @@ else
   bad "the collector network ships in the image"
 fi
 for secret in simplefin-access-url tmail-bridge-password; do
-  if grep -qE "^${secret//./\\.}\\.yaml[[:space:]]" image/rootfs/etc/smortress/secrets.manifest; then
+  if grep -qE "^${secret//./\\.}\\.yaml[[:space:]]" image/rootfs/usr/share/smortress/secrets.manifest; then
     ok "$secret has a decrypt manifest entry"
   else
     bad "$secret has a decrypt manifest entry"
@@ -1524,7 +1524,7 @@ for module in apps/brave_ingest/*.py; do
   fi
 done
 if grep -qE '^brave-sync-seed\.yaml[[:space:]]+root[[:space:]]+root[[:space:]]+0400[[:space:]]+value' \
-  image/rootfs/etc/smortress/secrets.manifest; then
+  image/rootfs/usr/share/smortress/secrets.manifest; then
   ok "brave-sync-seed has a decrypt manifest entry"
 else
   bad "brave-sync-seed has a decrypt manifest entry"

@@ -6,6 +6,13 @@
 # host that has none; see scripts/smortress-secrets-seed.sh.) No plaintext is
 # written outside /run.
 #
+# The manifest this reads is /etc's copy, which is itself a copy: the image owns
+# it at /usr/share/smortress/secrets.manifest and the seed rewrites /etc from it
+# on every run, because bootc merges /etc once per deployment and would otherwise
+# keep a stale set. Reading /etc rather than the image path is deliberate — a
+# rollback to a deployment whose seed predates this one must still find a
+# manifest where its own unit expects it, and the /etc copy is what survives.
+#
 # The manifest has five columns: name uid gid mode [format]. `format` is `yaml`
 # (the default; the decrypted file is written verbatim) or `value` (the sole
 # top-level scalar is written, which is what a restic password file must be).
