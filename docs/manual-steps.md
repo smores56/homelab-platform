@@ -1041,10 +1041,11 @@ getfacl -p /var/srv/git | grep agent-shell-general
 image=$(cat /etc/smortress/agent/job-image)
 for runner in agent-shell-personal agent-shell-general; do
   state=${runner#agent-shell-}
-  runtime=/run/smortress/agent-job/$runner
-  sudo install -d -o "$runner" -g "$runner" -m 0700 "$runtime"
+  # The runtime directory is logind's, never one under /run/smortress: rootless
+  # Podman fails in namespace setup with any other path.
+  sudo loginctl enable-linger "$runner"
   sudo -u "$runner" env -i HOME="/var/lib/agent-shell/$state" \
-    XDG_RUNTIME_DIR="$runtime" PATH=/usr/bin:/bin podman pull "$image"
+    XDG_RUNTIME_DIR="/run/user/$(id -u "$runner")" PATH=/usr/bin:/bin podman pull "$image"
 done
 sudo /usr/libexec/agent-job-personal \
   'id; test ! -e /var/srv/git && echo "no general tree"; test -e /run/podman/podman.sock && echo "socket" || echo "no podman socket"'

@@ -63,6 +63,16 @@ job_run_root() { printf '%s\n' "${SMORTRESS_AGENT_JOB_ROOT:-$JOB_DEFAULT_ROOT}";
 job_state_root() { printf '%s\n' "${SMORTRESS_AGENT_JOB_STATE_ROOT:-$JOB_DEFAULT_STATE_ROOT}"; }
 job_workspace() { printf '%s\n' "${SMORTRESS_AGENT_JOB_WORKSPACE:-$JOB_DEFAULT_WORKSPACE}"; }
 
+# job_runtime_dir_for USER -> the logind runtime directory for that account.
+#
+# Rootless Podman's namespace setup only accepts a real /run/user/<uid>: handed a
+# private directory it fails with "error opening namespace handles: Permission
+# denied", even when the runner owns it. systemd-logind creates the path for a
+# lingering account, so provisioning turns linger on and this never creates it.
+job_runtime_dir_for() {
+  printf '%s/%s\n' "${SMORTRESS_AGENT_JOB_RUNTIME_BASE:-/run/user}" "$(id -u "$1")"
+}
+
 # job_read_image -> the one image this dispatcher may run, on stdout.
 #
 # The reference is a root-owned file with a digest, never a tag and never a
@@ -169,10 +179,11 @@ job_build_podman_argv() {
 # job's cgroup on timeout. `Delegate=yes` lets Podman manage any nested cgroup
 # it wants; the limits above it still apply.
 job_build_systemd_argv() {
-  local class=$1 name=$2 command=$3
+  local class=$1 name=$2 command=$3 runtime_dir=${4:-}
   job_build_podman_argv "$class" "$name" "$command"
   job_unit="smortress-agent-job-${class}-${name}"
-  job_runtime_dir=$(job_run_root)/"$job_user"
+  [[ -n $runtime_dir ]] || runtime_dir=$(job_runtime_dir_for "$job_user")
+  job_runtime_dir=$runtime_dir
   job_systemd_argv=(
     systemd-run
     --quiet
@@ -213,10 +224,17 @@ job_require_root() {
 }
 
 job_prepare_runtime() {
+  # Rootless Podman needs a logind runtime directory, not a path we invent: given
+  # anything else it fails in namespace setup with "error opening namespace
+  # handles". systemd-logind creates /run/user/<uid> for a lingering account, so
+  # the check is the provisioning contract and never a directory we create.
   local runtime_dir
-  runtime_dir=$(job_run_root)/"$job_user"
+  runtime_dir=$(job_runtime_dir_for "$job_user")
+  [[ -d $runtime_dir ]] ||
+    job_die "$runtime_dir is missing; run scripts/agent-job-provision.sh (loginctl enable-linger $job_user)"
+  [[ $(stat -c %u "$runtime_dir") == "$(id -u "$job_user")" ]] ||
+    job_die "$runtime_dir is not owned by $job_user; run scripts/agent-job-provision.sh"
   install -d -m 0700 "$(job_run_root)"
-  install -d -o "$job_user" -g "$job_group" -m 0700 "$runtime_dir"
 }
 
 # Fail closed on the uid firewall before a job exists. The table is keyed by the

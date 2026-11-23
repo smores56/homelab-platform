@@ -123,14 +123,32 @@ job_class_config personal
 job_build_podman_argv personal probe-1 'echo hello'
 personal_argv=("${job_podman_argv[@]}")
 personal_systemd=()
-job_build_systemd_argv personal probe-1 'echo hello'
+job_build_systemd_argv personal probe-1 'echo hello' /run/user/971
 personal_systemd=("${job_systemd_argv[@]}")
 
 job_class_config general
 job_build_podman_argv general probe-2 'echo hello'
 general_argv=("${job_podman_argv[@]}")
-job_build_systemd_argv general probe-2 'echo hello'
+job_build_systemd_argv general probe-2 'echo hello' /run/user/970
 general_systemd=("${job_systemd_argv[@]}")
+
+# Rootless Podman only accepts a logind runtime directory; a private one fails in
+# namespace setup, which is why the dispatcher passes this exact path and why
+# provisioning turns linger on. Both halves are asserted here because either one
+# alone leaves every job failing closed.
+if has --setenv=XDG_RUNTIME_DIR=/run/user/971 "${personal_systemd[@]}" &&
+  has --setenv=XDG_RUNTIME_DIR=/run/user/970 "${general_systemd[@]}"; then
+  ok 'each class points XDG_RUNTIME_DIR at its logind runtime directory'
+else
+  bad 'each class points XDG_RUNTIME_DIR at its logind runtime directory'
+fi
+if grep -q 'enable-linger "$runner"' "$provision" &&
+  grep -q 'Linger=yes' "$provision" &&
+  grep -q 'job_runtime_dir_for' "$core"; then
+  ok 'provisioning enables linger and the dispatcher derives /run/user from it'
+else
+  bad 'provisioning enables linger and the dispatcher derives /run/user from it'
+fi
 
 # The containment every command gets, on both classes.
 for flag in --read-only --cap-drop=all --security-opt=no-new-privileges \
@@ -296,10 +314,15 @@ fi
 # --- provisioning --------------------------------------------------------------
 
 mkdir -p "$work/bin" "$work/subids" "$work/git"
-for stub in id nft setfacl getfacl newuidmap newgidmap pasta podman; do
+for stub in nft setfacl getfacl newuidmap newgidmap pasta podman; do
   printf '#!/bin/sh\nexit 0\n' >"$work/bin/$stub"
   chmod 0755 "$work/bin/$stub"
 done
+# id maps the two runners to fixed uids so the runtime-directory check is real.
+printf '#!/bin/sh\ncase "$*" in\n  "-u agent-shell-personal") echo 971 ;;\n  "-u agent-shell-general") echo 970 ;;\n  *) exit 0 ;;\nesac\n' >"$work/bin/id"
+printf '#!/bin/sh\ncase "$1" in\n  show-user) printf "Linger=yes\\n" ;;\n  *) exit 0 ;;\nesac\n' >"$work/bin/loginctl"
+chmod 0755 "$work/bin/id" "$work/bin/loginctl"
+mkdir -p "$work/run/970" "$work/run/971"
 
 run_provision() {
   PATH=$work/bin:$PATH \
@@ -307,6 +330,7 @@ run_provision() {
     AGENT_JOB_SUBGID_FILE=$work/subids/subgid \
     AGENT_JOB_WORKSPACE=$work/git \
     AGENT_JOB_NFT_FILE=$root/$nft \
+    AGENT_JOB_RUNTIME_BASE=$work/run \
     "$provision" "$@"
 }
 
@@ -337,7 +361,8 @@ fi
 printf 'agent-shell-personal:300000:65536\n' >"$work/subids/check"
 if PATH=$work/bin:$PATH AGENT_JOB_SUBUID_FILE=$work/subids/check \
   AGENT_JOB_SUBGID_FILE=$work/subids/check AGENT_JOB_WORKSPACE=$work/git \
-  AGENT_JOB_NFT_FILE=$root/$nft "$provision" --check >/dev/null 2>&1; then
+  AGENT_JOB_NFT_FILE=$root/$nft AGENT_JOB_RUNTIME_BASE=$work/run \
+  "$provision" --check >/dev/null 2>&1; then
   bad '--check succeeds on a host that has no allocation yet'
 else
   ok '--check reports a missing allocation without writing one'

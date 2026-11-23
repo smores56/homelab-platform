@@ -68,14 +68,14 @@ may not connect to it. `smortress-selinux-agent-shell.service` loads
 `image/rootfs/usr/share/selinux/smortress/agent-shell.cil` before the bridge; the
 rule pairs those two domains on `unix_stream_socket` and widens nothing else.
 
-The facade mounts that one inode, so it is `Requires=`, `After=` and `PartOf=`
-the bridge unit: the bridge must exist before the mount (a missing source would
-make podman create a directory at the path), and a bridge restart recreates the
-socket, which a facade that did not restart with it would see as an unlinked
-inode that refuses every connection.
+The facade mounts the socket's *directory*, not the socket: tmpfiles owns that
+directory for the boot, so a bridge restart rebinds the socket inside an inode the
+container already has mounted and no facade restart is needed. The quadlet still
+`Requires=`/`After=` the bridge, because the mount source must exist before the
+container starts.
 
-The bridge never creates its directory: systemd does, and a bridge that could
-create it could also create it permissively. The personal class is the same
+The bridge never creates its directory: tmpfiles does, and the bridge refuses to
+serve from one that is writable by group or other. The personal class is the same
 program with a different `--class`; its bridge is T18 of #702 and does not exist
 yet, so the personal facade has no shell tool at all rather than a tool that
 refuses.
@@ -120,8 +120,16 @@ accounts; nothing names their ids. `smortress-agent-job-provision.service` runs
 
 1. add a non-overlapping subuid/subgid range to each runner (300000:65536 and
    400000:65536; an overlap is refused, never remapped);
-2. apply the general runner's ACL and default ACL on `/var/srv/git`;
-3. load the egress table before any job exists.
+2. enable linger, which is what makes logind create and keep `/run/user/<uid>`;
+3. apply the general runner's ACL and default ACL on `/var/srv/git`;
+4. load the egress table before any job exists.
+
+The runtime directory is a prerequisite, not an implementation detail: handed a
+private directory under `/run/smortress`, rootless Podman fails in namespace setup
+with `error opening namespace handles: Permission denied` even when the runner
+owns it, and the same command succeeds under `/run/user/<uid>`. The dispatcher
+therefore never creates that path; it derives it from the account and refuses to
+start a job whose runtime directory is missing or owned by someone else.
 
 `scripts/agent-job-provision.sh --check` reports drift and writes nothing. The
 dispatcher re-loads the egress table itself before every launch, so a skipped or
