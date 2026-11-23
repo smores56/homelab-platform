@@ -9,6 +9,7 @@ cd "$root" || exit 1
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 export SOPS_AGE_KEY_FILE=$work/key.txt
+printf 'creation_rules:\n  - path_regex: .*\n' >"$work/.sops.yaml"
 age-keygen -o "$SOPS_AGE_KEY_FILE" >/dev/null 2>&1
 recipient=$(grep '^# public key:' "$SOPS_AGE_KEY_FILE" | awk '{print $NF}')
 
@@ -18,7 +19,7 @@ src=$work/src
 dst=$work/dst
 mkdir -p "$src"
 printf '{"restic":{"password":"foo"},"misc":{"flag":"bar"}}' >"$work/bundle.json"
-sops --encrypt --age "$recipient" --input-type json --output-type json "$work/bundle.json" >"$src/boot.json"
+sops --config "$work/.sops.yaml" --encrypt --age "$recipient" --input-type json --output-type json "$work/bundle.json" >"$src/boot.json"
 
 cat >"$work/manifest" <<M
 restic-password.yaml boot.json restic.password $uid $gid 0400 value
@@ -40,7 +41,7 @@ expect "$dst/misc.yaml" "bar" "a bundle subtree is extracted as YAML"
 legacy=$work/legacy
 mkdir -p "$legacy/src"
 printf 'password: old\n' >"$work/old.yaml"
-sops --encrypt --age "$recipient" --input-type yaml --output-type yaml "$work/old.yaml" >"$legacy/src/old.yaml"
+sops --config "$work/.sops.yaml" --encrypt --age "$recipient" --input-type yaml --output-type yaml "$work/old.yaml" >"$legacy/src/old.yaml"
 printf 'old.yaml %s %s 0400 value\n' "$uid" "$gid" >"$legacy/manifest"
 SMORTRESS_AGE_KEY=$work/key.txt SMORTRESS_SECRETS_SRC=$legacy/src SMORTRESS_SECRETS_DST=$legacy/dst \
   SMORTRESS_SECRETS_MANIFEST=$legacy/manifest scripts/sops-decrypt.sh >/dev/null 2>&1
