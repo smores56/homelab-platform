@@ -53,6 +53,27 @@ resource "cloudflare_dns_record" "edge" {
   }
 }
 
+# The agent UI's Service VIP (design #834) is an address Tailscale computes, so
+# the record is one name rather than a set. A specific record overrides
+# `*.<domain>`, which is the point: this name answers with the VIP while every
+# other name keeps resolving to the host tunnel. Grey cloud and an explicit TTL
+# for the same reason as the edge records: Tailscale answers, not Cloudflare, and
+# a proxied record would look for an origin Cloudflare cannot reach.
+#
+# Gated with the Service itself, so a checkout that only manages the zone plans
+# no record pointing at an address that does not exist yet.
+resource "cloudflare_dns_record" "assistant" {
+  count = var.tailnet == "" ? 0 : 1
+
+  zone_id = data.cloudflare_zone.this.zone_id
+  name    = "assistant.${var.domain}"
+  type    = "A"
+  content = tailscale_service.agent_ui[0].addrs[0]
+  proxied = false
+  ttl     = 300
+  comment = "agent UI Service VIP (design #834)"
+}
+
 # CAA pins issuance for the zone to the ACME account Kanbei's in-VM client uses
 # (docs/cloudflare.md, "CAA"). Two tags because a wildcard order is authorized
 # by issuewild, not issue.
