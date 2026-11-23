@@ -61,7 +61,10 @@ any provider plumbing runs, and every tool test uses them.
 A published raw generation can answer for a source instead. `--replica
 SOURCE=DIR` (repeatable) builds a `ReplicaAdapter` over the newest published
 generation at `DIR`, and `Catalog.for_deployment(deployment, replacements=...)`
-puts it in the table. Two properties make that safe:
+puts it in the table. The adapter re-resolves the newest generation at most once
+per two seconds and discards its projection when the id changes, so a publication
+is visible without a restart; before the first one the source answers
+`unavailable` instead of failing startup. Three properties make that safe:
 
 - The replacement may only take the place of a source the deployment's table
   already names, and it must carry **that table's contract**. Visibility is
@@ -73,6 +76,9 @@ puts it in the table. Two properties make that safe:
   nothing is written back. Provenance carries exactly the three fields a memory
   record may cite: `source_id`, `revision` (the sha256 of the object that
   produced the record) and `captured_at` (the collector's stamp).
+- A missing generation is not a startup failure and a newer one is not a restart:
+  the source answers `unavailable` until the first publication, then serves the
+  newest generation on the next read or search.
 
 Derived objects are not records: the Maildir epoch map, the ICS projection, the
 AccountSet summary and the account/connection objects are skipped, and Brave
@@ -97,9 +103,9 @@ same rule as the memory index: query words are quoted and AND-joined by
 `contracts.search_expression` and travel as a bound parameter, so FTS5 syntax in a
 query stays literal.
 
-The Quadlets do not pass `--replica` yet: a source only gains one when its
-collector's dataset exists on the host, which arrives with the collector units.
-Until then both deployments serve the fixtures.
+The personal Quadlet passes `--replica` for `mail`, `calendar`, `finance` and
+`brave` and mounts the replica tree read-only. The other sources and the general
+deployment still serve fixtures until their collectors/adapters land.
 
 ## Tool contract
 

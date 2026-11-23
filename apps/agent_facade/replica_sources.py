@@ -32,6 +32,7 @@ import email
 import email.policy
 import hashlib
 import json
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -169,19 +170,67 @@ ROW_PROJECTORS: Mapping[str, Callable[[Mapping[str, Any], bytes], list[tuple[str
 )
 
 
+class RefreshingReplica:
+    """A replica root that resolves its newest published generation on demand.
+
+    A collector publishes by rename, so a facade that cached the generation id at
+    startup would serve yesterday's bytes until it restarted. This wrapper checks
+    the directory at most once per ``refresh_seconds`` and rebuilds ``RawReplica``
+    only when the newest generation changes. Before the first publication it
+    raises ``SourceUnavailable`` on use, which keeps the facade (and memory) up.
+    """
+
+    def __init__(self, root: str | Path, refresh_seconds: float = 2.0) -> None:
+        if refresh_seconds < 0:
+            raise ValueError("refresh_seconds must not be negative")
+        self._root = Path(root)
+        self._refresh_seconds = refresh_seconds
+        self._replica: RawReplica | None = None
+        self._checked = 0.0
+
+    def current(self) -> RawReplica:
+        now = time.monotonic()
+        if self._replica is not None and now - self._checked < self._refresh_seconds:
+            return self._replica
+        self._checked = now
+        latest = RawReplica.latest_generation(self._root)
+        if latest is None:
+            self._replica = None
+            raise sources.SourceUnavailable(
+                f"source has no published generation at {self._root}"
+            )
+        if self._replica is None or self._replica.generation_id != latest:
+            self._replica = RawReplica(self._root, latest)
+        return self._replica
+
+    @property
+    def generation_id(self) -> str:
+        return self.current().generation_id
+
+    def entries(self):
+        return self.current().entries()
+
+    def read(self, object_id: str) -> bytes:
+        return self.current().read(object_id)
+
+
 class ReplicaAdapter:
     """One source answered from one published generation.
 
-    Records are projected on first use and kept, because a published generation
-    is immutable: the directory is a specific generation id, and a new collection
-    publishes a new one.
+    Records are projected on first use and kept until the published generation
+    changes; a generation is immutable, so a new one is the only reason to
+    rebuild. A ``RefreshingReplica`` is checked on each read/search (bounded by
+    its own TTL) and the caches are dropped when it moves forward.
 
     ``index_root`` adds the derived full-text index (``source_index``): searches
     over words a trigram can match use it, and everything else keeps scanning.
     """
 
     def __init__(
-        self, contract, replica: RawReplica, index_root: str | Path | None = None
+        self,
+        contract,
+        replica: RawReplica | RefreshingReplica,
+        index_root: str | Path | None = None,
     ) -> None:
         contract.validate()
         if contract.source_id not in _PROJECTORS and contract.source_id not in ROW_PROJECTORS:
@@ -192,6 +241,7 @@ class ReplicaAdapter:
         self.contract = contract
         self.replica = replica
         self.index_root = None if index_root is None else Path(index_root)
+        self._generation_id = replica.generation_id if isinstance(replica, RawReplica) else None
         self._records: dict[str, sources.SourceRecord] | None = None
         self._index: source_index.SourceIndex | None = None
         self._index_attempted = False
@@ -200,7 +250,21 @@ class ReplicaAdapter:
     def name(self) -> str:
         return self.contract.source_id
 
+    def _refresh(self) -> None:
+        """Pick up a newer generation and drop everything derived from the old one."""
+
+        if not isinstance(self.replica, RefreshingReplica):
+            return
+        current = self.replica.current()
+        if current.generation_id == self._generation_id:
+            return
+        self._generation_id = current.generation_id
+        self._records = None
+        self._index = None
+        self._index_attempted = False
+
     def read(self, record_id: str) -> sources.SourceRecord:
+        self._refresh()
         record = self._built().get(record_id)
         if record is None:
             raise sources.SourceNotFound(
@@ -209,6 +273,7 @@ class ReplicaAdapter:
         return record
 
     def search(self, query: str, limit: int) -> tuple[sources.SearchHit, ...]:
+        self._refresh()
         if limit < 1:
             raise ValidationError("limit must be at least 1")
         words = contracts.query_words(query)
@@ -344,6 +409,7 @@ def adapters_for(
     deployment,
     roots: Mapping[str, str | Path],
     index_root: str | Path | None = None,
+    refresh_seconds: float = 2.0,
 ) -> Mapping[str, ReplicaAdapter]:
     """Build one adapter per ``source -> replica root``, from the table's contracts.
 
@@ -362,5 +428,7 @@ def adapters_for(
                 f"source {name!r} is not reachable from the {deployment.value} "
                 f"deployment; it serves {', '.join(sorted(table))}"
             )
-        built[name] = ReplicaAdapter(base.contract, RawReplica(root), index_root)
+        built[name] = ReplicaAdapter(
+            base.contract, RefreshingReplica(root, refresh_seconds), index_root
+        )
     return MappingProxyType(built)

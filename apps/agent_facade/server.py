@@ -58,6 +58,7 @@ UNAUTHORIZED = -32001
 _ERROR_CODES: tuple[tuple[type[DataPlaneError], str], ...] = (
     (sources.UnknownSource, "unknown_source"),
     (sources.SourceUnsupported, "unsupported"),
+    (sources.SourceUnavailable, "unavailable"),
     (sources.SourceNotFound, "not_found"),
     (memory.MemoryNotFound, "not_found"),
     (ValidationError, "validation"),
