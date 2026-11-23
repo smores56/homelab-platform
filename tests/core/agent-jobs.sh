@@ -142,11 +142,22 @@ for flag in --read-only --cap-drop=all --security-opt=no-new-privileges \
     bad "both classes carry $flag"
   fi
 done
-if has_prefix --tmpfs=/tmp: "${general_argv[@]}" && has_prefix --tmpfs=/tmp: "${personal_argv[@]}" &&
-  has_prefix --tmpfs=/work: "${general_argv[@]}" && has_prefix --tmpfs=/work: "${personal_argv[@]}"; then
-  ok 'both classes get bounded tmpfs scratch'
+if has_prefix --tmpfs=/tmp: "${general_argv[@]}" && has_prefix --tmpfs=/tmp: "${personal_argv[@]}"; then
+  ok 'both classes get a bounded /tmp'
 else
-  bad 'both classes get bounded tmpfs scratch'
+  bad 'both classes get a bounded /tmp'
+fi
+if has_prefix --tmpfs=/work: "${personal_argv[@]}"; then
+  ok 'personal jobs get a bounded /work scratch'
+else
+  bad 'personal jobs get a bounded /work scratch'
+fi
+# A tmpfs on /work is applied after the bind, so it would shadow the general
+# tree and leave every general job with an empty directory.
+if has_prefix --tmpfs=/work: "${general_argv[@]}"; then
+  bad 'general jobs do not shadow the /work bind with a tmpfs' "${general_argv[*]}"
+else
+  ok 'general jobs do not shadow the /work bind with a tmpfs'
 fi
 # Nothing may hand a job a host namespace, a device, extra capability, a
 # relabel of the shared root, or a Podman socket.

@@ -86,6 +86,7 @@ job_read_image() {
 job_class_config() {
   local class=$1
   job_class=$class
+  job_work_tmpfs=()
   case $class in
     personal)
       job_user=agent-shell-personal
@@ -94,6 +95,9 @@ job_class_config() {
       job_network=none
       job_resolvers=()
       job_binds=()
+      # The personal class has no host mount, so /work is disposable scratch.
+      # shellcheck disable=SC2054  # one --tmpfs value; the commas are not array separators
+      job_work_tmpfs=(--tmpfs=/work:rw,size=512m,nosuid,nodev)
       ;;
     general)
       job_user=agent-shell-general
@@ -146,7 +150,7 @@ job_build_podman_argv() {
     "${job_binds[@]}"
     --workdir=/work
     "--tmpfs=/tmp:rw,size=64m,nosuid,nodev,noexec"
-    "--tmpfs=/work:rw,size=512m,nosuid,nodev"
+    "${job_work_tmpfs[@]}"
     --ulimit=nofile=1024:1024
     --umask=0077
     --env=HOME=/tmp
