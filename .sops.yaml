@@ -11,7 +11,7 @@ keys:
   - &yk2 age1zepedng5vqafu95hysrxl0kadreshg2yc07epfqky5fuq2nmy5fqg649lf
   - &yk3 age1xqpw0qy2mk98ptvvh5y0sxtlrxs036nng2868zd6dc4wdcrrm5mqd6pnpf
 creation_rules:
-  - path_regex: ^secrets/.*\.yaml$
+  - path_regex: ^secrets/.*\.(yaml|json)$
     key_groups:
       - age:
           - *admin

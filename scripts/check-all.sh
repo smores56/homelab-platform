@@ -62,7 +62,7 @@ tofu-check|tests/tofu/check.sh|tests/tofu/*,tofu/*
 tofu-fmt|tofu fmt -check -recursive tofu|tofu/*
 provision|tests/provision/check.sh|tests/provision/*,provision/*
 docs|python3 scripts/check-doc-refs.py|*.md,docs/*,scripts/check-doc-refs.py,scripts/doc-refs-baseline.txt
-secrets|tests/secrets/policy.sh && tests/secrets/migration.sh && tests/secrets/rotate.sh && python3 scripts/sops-policy.py check --repo . && python3 scripts/secrets-check.py --shadow && python3 scripts/secrets-check.py|secrets/*,.sops.yaml,scripts/sops-policy.py,tests/secrets/*
+secrets|tests/secrets/policy.sh && tests/secrets/migration.sh && tests/secrets/decrypt.sh && tests/secrets/bundles.sh && tests/secrets/rotate.sh && python3 scripts/sops-policy.py check --repo . && python3 scripts/secrets-check.py --shadow && python3 scripts/secrets-check.py|secrets/*,.sops.yaml,scripts/sops-policy.py,tests/secrets/*
 server-image|scripts/check-server-image.sh && scripts/render-ignition.sh --synthetic --check && tests/core/ignition-boundary.sh && scripts/render-ignition.sh --synthetic --stock --check|scripts/lib/*,image/*,ignition/*,units/*,images/*,tests/fixtures/*,docs/core/server-image.md,scripts/check-server-image.sh
 edge|tests/edge/check.sh|tests/edge/*,scripts/verify-public-edge.sh
 core|tests/core/check.sh && tests/core/storage-layout.sh && tests/core/restic-drill.sh && tests/core/tailscale-serve.sh && tests/core/apps-egress.sh && tests/core/apps-user.sh && tests/core/agent-drill.sh|tests/core/*,scripts/core/*,scripts/access-*

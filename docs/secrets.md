@@ -61,6 +61,24 @@ scripts/secret.sh verify            # keyless policy and index checks
 
 `scripts/secret.sh rotate <output>` also generates a new data key first.
 
+### Bundling the ciphertext
+
+`secrets/index.bundles.json` is the target: the same outputs, grouped into
+`boot.json`, `apps.json`, and `agents.json` with dotted keys. The migration is
+operator-run because it decrypts every value:
+
+```sh
+python3 scripts/secrets-bundle.py --apply --write-index
+scripts/secret.sh verify
+git diff                                      # bundles + target index
+git mv secrets/index.bundles.json secrets/index.json
+git rm -r secrets/server                      # after the diff is reviewed
+```
+
+The tool decrypts each current file, writes and encrypts the bundles, verifies
+every value round-trips, and leaves the old set in place. The seed retires the
+old names on the first boot after the swap, so a rollback keeps them.
+
 The seed and the baked copy go away in the release after this one, at which point
 a fresh install stages the ciphertext from the checkout next to the age identity.
 
