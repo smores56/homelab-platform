@@ -246,8 +246,8 @@ the failure modes are `docs/core/backrest.md`.
 export GATE=/var/tmp/backrest-gate
 export RESTIC_REPOSITORY="s3:https://385f7d47e2e8438fbda5d6f76d760434.r2.cloudflarestorage.com/homelab-restic/gate"
 export AWS_DEFAULT_REGION=auto
-export AWS_ACCESS_KEY_ID=$(mise x -- sops -d --extract '["r2"]["r2_access_key_id"]' secrets/boot.json)
-export AWS_SECRET_ACCESS_KEY=$(mise x -- sops -d --extract '["r2"]["r2_secret_access_key"]' secrets/boot.json)
+export AWS_ACCESS_KEY_ID=$(mise x -- sops -d --extract '["restic-backup-ro-access-key-id"]' secrets/cloudflare.yaml)
+export AWS_SECRET_ACCESS_KEY=$(mise x -- sops -d --extract '["restic-backup-ro-secret-access-key"]' secrets/cloudflare.yaml)
 read -rsp 'gate restic password: ' RESTIC_PASSWORD && export RESTIC_PASSWORD
 restic init
 truncate -s 100G "$GATE/big.bin"; head -c 1M /dev/urandom >"$GATE/small.bin"

@@ -36,7 +36,7 @@ if [[ -z ${CLOUDFLARE_API_TOKEN:-} ]]; then
     printf 'tofu-cloudflare: cannot read %s; set CLOUDFLARE_SECRETS_FILE\n' "$secrets_file" >&2
     exit 1
   }
-  CLOUDFLARE_API_TOKEN=$(sops -d --extract '["cloudflare-api-token"]' "$secrets_file")
+  CLOUDFLARE_API_TOKEN=$(sops -d --extract '["platform-zone-rw-api-token"]' "$secrets_file")
   export CLOUDFLARE_API_TOKEN
 fi
 
@@ -49,10 +49,10 @@ if [[ -z ${AWS_ACCESS_KEY_ID:-} || -z ${AWS_SECRET_ACCESS_KEY:-} ]]; then
     printf 'tofu-cloudflare: cannot read %s; set CLOUDFLARE_SECRETS_FILE\n' "$secrets_file" >&2
     exit 1
   }
-  AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-$(sops -d --extract '["r2-state-access-key-id"]' "$secrets_file" 2>/dev/null || true)}
-  AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-$(sops -d --extract '["r2-state-secret-access-key"]' "$secrets_file" 2>/dev/null || true)}
+  AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-$(sops -d --extract '["homelab-tofu-state-rw-access-key-id"]' "$secrets_file" 2>/dev/null || true)}
+  AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-$(sops -d --extract '["homelab-tofu-state-rw-secret-access-key"]' "$secrets_file" 2>/dev/null || true)}
   if [[ -z ${AWS_ACCESS_KEY_ID:-} || -z ${AWS_SECRET_ACCESS_KEY:-} ]]; then
-    printf 'tofu-cloudflare: r2-state-access-key-id / r2-state-secret-access-key are missing from %s.\n' "$secrets_file" >&2
+    printf 'tofu-cloudflare: homelab-tofu-state-rw-access-key-id / homelab-tofu-state-rw-secret-access-key are missing from %s.\n' "$secrets_file" >&2
     printf 'Add the state-scoped R2 pair (docs/secrets.md); the restic pair is not used here.\n' >&2
     exit 1
   fi

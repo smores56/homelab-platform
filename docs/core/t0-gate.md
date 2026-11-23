@@ -143,7 +143,7 @@ and the cluster; this table names locations, not secrets.
 | smortress SSH host key | `/etc/ssh/ssh_host_ed25519_key`; also the host's SOPS age identity | kept in the kit: `provision/smortress/build-seed.sh` needs it, and it decrypts the old secrets |
 | Restic password | sops `restic-password` → `/run/secrets/restic-password` | kept until the legacy repositories are retired; the three new repositories share a new password (T3) |
 | R2 access key pair | sops `r2-access-key-id` / `r2-secret-access-key` → `/run/secrets/restic-r2.env` | kept for legacy reads; T3 creates a new write token, T4 a read-only recovery token |
-| Cloudflare API token | sops `cloudflare-api-token` (tofu) | rotated for the T4 objects; scope narrowed to R2, Access and DNS |
+| Cloudflare API token | sops `platform-zone-rw-api-token` (tofu) | rotated for the T4 objects; scope narrowed to R2, Access and DNS |
 | cloudflared tunnel credentials | sops `cloudflared-credentials` | retired with the host tunnel; the derived image ships no connector, since SSH is tailnet-only (design #767) |
 | `cloudflare-access-ssh-token` | sops, the `ssh.sammohr.dev` path | retired: `ssh.sammohr.dev` has no Cloudflare route at all (design #767), so no token of any kind reaches sshd |
 | k3s cluster token | sops `k3s-cluster-token` | retired with the guest |

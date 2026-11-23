@@ -34,8 +34,6 @@ class BundleTests(unittest.TestCase):
     def bundle(self, **overrides) -> str:
         values = {
             "restic_password": PASSWORD,
-            "r2_access_key_id": "a" * 32,
-            "r2_secret_access_key": "b" * 64,
             "event_append_token": APPEND,
             "event_read_token": READ,
             "consumers_json": '{"confirmation-surface":"ccc"}',
@@ -45,10 +43,19 @@ class BundleTests(unittest.TestCase):
         values.update(overrides)
         return "\n".join(f"{key}: {value}" for key, value in values.items()) + "\n"
 
+    def cloudflare(self, **overrides) -> str:
+        values = {
+            "restic-backup-rw-access-key-id": "a" * 32,
+            "restic-backup-rw-secret-access-key": "b" * 64,
+            "platform-zone-rw-api-token": "cf-token",
+        }
+        values.update(overrides)
+        return "\n".join(f"{key}: {value}" for key, value in values.items()) + "\n"
+
     def test_round_trip_writes_the_declared_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             values = unpacker.parse_bundle(self.bundle())
-            written = unpacker.unpack(values, Path(tmp))
+            written = unpacker.unpack(values, Path(tmp), ("a" * 32, "b" * 64))
             self.assertEqual(
                 written,
                 [
@@ -80,7 +87,9 @@ class BundleTests(unittest.TestCase):
 
     def test_base64_values_are_refused_with_the_reason(self):
         with self.assertRaises(ValueError) as raised:
-            unpacker.parse_bundle(self.bundle(r2_access_key_id="QUJD" * 8))
+            unpacker.parse_cloudflare(
+                self.cloudflare(**{"restic-backup-rw-access-key-id": "QUJD" * 8})
+            )
         self.assertIn("raw 32-character hex", str(raised.exception))
 
         with self.assertRaises(ValueError) as raised:
@@ -100,10 +109,18 @@ class BundleTests(unittest.TestCase):
         self.assertIn("event_read_token", str(raised.exception))
 
     def test_half_an_r2_pair_is_refused(self):
-        text = self.bundle().replace(f"r2_secret_access_key: {'b' * 64}\n", "")
+        text = self.cloudflare().replace(
+            f"restic-backup-rw-secret-access-key: {'b' * 64}\n", ""
+        )
         with self.assertRaises(ValueError) as raised:
-            unpacker.parse_bundle(text)
-        self.assertIn("r2_secret_access_key", str(raised.exception))
+            unpacker.parse_cloudflare(text)
+        self.assertIn("restic-backup-rw-secret-access-key", str(raised.exception))
+
+    def test_legacy_r2_keys_are_accepted_for_one_migration(self):
+        values = unpacker.parse_bundle(
+            self.bundle(r2_access_key_id="c" * 32, r2_secret_access_key="d" * 64)
+        )
+        self.assertEqual(values["r2_access_key_id"], "c" * 32)
 
     def test_unknown_key_is_refused(self):
         with self.assertRaises(ValueError):
@@ -112,20 +129,54 @@ class BundleTests(unittest.TestCase):
     def test_the_mapping_is_the_host_secret_policy(self):
         all_vars, _ = render.load_group_vars()
         declared = {entry["src"] for entry in all_vars["host_secret_files"]}
-        mounted = {relative for relative, _ in unpacker.FILES.values()}
+        mounted = set(unpacker.FILES.values()) | {"restic/r2.env"}
         self.assertEqual(declared, mounted)
+
+    def test_cloudflare_pair_wins_over_the_legacy_host_pair(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bundle = Path(tmp) / "bundle.yaml"
+            bundle.write_text(
+                self.bundle(r2_access_key_id="c" * 32, r2_secret_access_key="d" * 64)
+            )
+            cloudflare = Path(tmp) / "cloudflare.yaml"
+            cloudflare.write_text(self.cloudflare())
+            unpacker.main(
+                [
+                    "--bundle",
+                    str(bundle),
+                    "--cloudflare",
+                    str(cloudflare),
+                    "--dest",
+                    str(Path(tmp) / "out"),
+                ]
+            )
+            env = (Path(tmp) / "out/restic/r2.env").read_text()
+            self.assertEqual(
+                env,
+                f"AWS_ACCESS_KEY_ID={'a' * 32}\nAWS_SECRET_ACCESS_KEY={'b' * 64}\n",
+            )
 
     def test_no_value_reaches_stdout(self):
         with tempfile.TemporaryDirectory() as tmp:
             bundle = Path(tmp) / "bundle.yaml"
             bundle.write_text(self.bundle())
+            cloudflare = Path(tmp) / "cloudflare.yaml"
+            cloudflare.write_text(self.cloudflare())
             buffer = io.StringIO()
             with contextlib.redirect_stdout(buffer):
                 unpacker.main(
-                    ["--bundle", str(bundle), "--dest", str(Path(tmp) / "out")]
+                    [
+                        "--bundle",
+                        str(bundle),
+                        "--cloudflare",
+                        str(cloudflare),
+                        "--dest",
+                        str(Path(tmp) / "out"),
+                    ]
                 )
             self.assertNotIn(PASSWORD, buffer.getvalue())
             self.assertNotIn("ccc", buffer.getvalue())
+            self.assertNotIn("b" * 64, buffer.getvalue())
 
 
 if __name__ == "__main__":

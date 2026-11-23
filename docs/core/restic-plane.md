@@ -38,7 +38,9 @@ prove the plane on their own. Nothing in the plane skips or mutes a destination
 that is not there.
 
 The R2 bucket and repository path already exist. The write key pair is read from
-`secrets/boot.json` (`["r2"]["r2_access_key_id"]`, `["r2"]["r2_secret_access_key"]`);
+`secrets/boot.json` (`["r2"]["r2_access_key_id"]`, `["r2"]["r2_secret_access_key"]`)
+and is derived from `secrets/cloudflare.yaml` key `restic-backup-rw-*` by
+`scripts/cloudflare-derive.sh`;
 when either is absent or empty the `r2` jobs record failures and the verifier stays
 red rather than skipping the destination. The legacy migration repository is a different bucket
 and is never referenced by this plane.
@@ -309,7 +311,7 @@ All three outputs are extracted from one ciphertext, `secrets/boot.json`.
 `image/rootfs/usr/share/smortress/secrets.manifest`, so the file contains only the
 password; restic cannot read a YAML document with a key. Credentials reach
 restic through the environment, never argv, and are never printed.
-`r2-credentials.yaml` is committed ciphertext and is listed in the manifest.
+`r2-credentials.yaml` is derived into `boot.json` from the Cloudflare bundle and is listed in the manifest.
 `healthchecks.yaml` carries the ping URL the operator creates in section 38 step 3,
 and the verifier treats an empty URL as a failed check rather than pinging a
 placeholder.

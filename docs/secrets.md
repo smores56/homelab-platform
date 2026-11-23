@@ -108,23 +108,34 @@ the hash on the installer media.
 
 ## This repository's operator store
 
-`secrets/cloudflare.yaml` holds the Cloudflare credentials the tofu runs need:
-`cloudflare-api-token` (the zone token) and the state-backend pair
-`r2-state-access-key-id` / `r2-state-secret-access-key`. The state token is
-scoped to `homelab-tofu-state` alone and is deliberately **not** the host's
-restic pair: state decides what the next apply does, so a backup credential must
-not be able to rewrite it.
+`secrets/cloudflare.yaml` is the single source for every Cloudflare credential:
+the zone pair (`platform-zone-rw-api-token`, `platform-zone-ro-api-token`), the
+state pair (`homelab-tofu-state-rw-*`, `homelab-tofu-state-ro-*`), the backup
+pair (`restic-backup-rw-*`, `restic-backup-ro-*`), and the ACME token
+(`tailnet-dns-api-token`). Each R2 token is an access-key id and secret. The
+state pair is scoped to `homelab-tofu-state` alone and is deliberately **not**
+the backup pair: state decides what the next apply does, so a backup credential
+must not be able to rewrite it.
+
+GitHub environments, the host and the edge are sinks, never sources. The
+`cloudflare` and `cloudflare-plan` environment secrets are set from this file.
+The boot R2 pair is derived from `restic-backup-rw-*` into `secrets/boot.json`
+key `r2` by `scripts/cloudflare-derive.sh`; never hand-edit that object. The
+backup write pair reaches the data-plane host through
+`unpack-host-secrets.py --cloudflare`, and the backup read pair is installed in
+`/etc/backrest/env` on the edge.
 
 `secrets/660-host.yaml` is the host-plane bundle: a freshly generated restic
-password, the event and broker tokens, and the R2 read-only pair. Each value is
-the exact content of one file — the password and tokens verbatim, the R2 pair as
-raw hex, `consumers_json` as JSON text — so what the operator stores is what the
-host uses. `scripts/unpack-host-secrets.py` writes exactly the paths
-`host_secret_files` names and never prints a value.
+password, the event and broker tokens, and `consumers_json`. The R2 pair is not
+authored there: the unpacker accepts the existing `r2_access_key_id` /
+`r2_secret_access_key` keys for one migration, warns, and ignores them when
+`--cloudflare` is passed. `scripts/unpack-host-secrets.py` writes exactly the
+paths `host_secret_files` names and never prints a value.
 
-`scripts/tofu-cloudflare.sh` reads that file by default; `CLOUDFLARE_SECRETS_FILE`
-overrides it, and pre-set `AWS_*` / `CLOUDFLARE_API_TOKEN` skip SOPS entirely
-(that is how CI runs).
+`scripts/tofu-cloudflare.sh` reads `platform-zone-rw-api-token` and the
+`homelab-tofu-state-rw-*` pair from this file; `CLOUDFLARE_SECRETS_FILE` overrides
+the path, and pre-set `AWS_*` / `CLOUDFLARE_API_TOKEN` skip SOPS entirely (that is
+how CI runs).
 
 Create or edit it interactively, which keeps values out of shell history:
 

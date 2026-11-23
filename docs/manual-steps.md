@@ -492,7 +492,9 @@ operator path, never a rebuild; a container that already mounts the decrypted
 file keeps the old value until it restarts, and `/run` is tmpfs:
 
 ```sh
-scripts/secret.sh edit r2-credentials.yaml
+# The R2 pair is authored only in the Cloudflare bundle, then derived.
+sops secrets/cloudflare.yaml          # restic-backup-rw-*
+scripts/cloudflare-derive.sh
 scripts/secret.sh stage r2-credentials.yaml
 scripts/secret.sh verify
 ```
