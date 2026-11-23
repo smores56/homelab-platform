@@ -1,0 +1,63 @@
+# The tailnet name service's half (design #834): Caddy, plus one DNS provider.
+#
+# A stock `caddy` image cannot answer a DNS-01 challenge: the ACME client lives in
+# a compiled-in module (`tls.dns.*`) that upstream does not ship, and Cloudflare is
+# the only DNS host this repository's names live on. Without this module Caddy
+# falls back to HTTP-01 for every name, which requires the public edge to be
+# reachable before the certificate that serves it exists. So the module is the
+# entire reason this image exists, and its absence has to fail the build rather
+# than the first ACME order -- see the check in the final stage.
+#
+# The base is pinned by digest, not tagged: a tag would move under the next build
+# and the digest this repository signs and (in #845) points a Quadlet at would then
+# name different bytes than the ones reviewed. Both stages come from the same
+# Caddy release, so the binary the builder compiles for the matching tag is the one
+# the runtime layer already carries libraries for; a release bump is one change
+# across the four refs below.
+#
+# The pins live here rather than in `image/pins.env` because that file is the
+# *host* image's bill of materials -- `scripts/build-image.sh` and
+# `scripts/check-server-image.sh` source it to build and gate the bootc image, and
+# its header scopes it to "every external reference the derived image consumes".
+# This image is not part of that build, and adding rows there would drag it onto
+# the server image's rebuild path.
+#
+#   caddy 2.11.9
+#     https://hub.docker.com/r/library/caddy
+#     index digest sha256:4851e54a46b206517c574821bb5cc67f170d2156041e9fbc4c9193b45e84a75b
+#   caddy 2.11.9-builder
+#     index digest sha256:cda07fe9d82728c7ac44d844306d435e98131423dc7b114f05a8a8ecfff94707
+#   github.com/caddy-dns/cloudflare v0.2.4 (no GitHub release object; the tag is
+#     the coordinate xcaddy resolves, not a branch)
+
+# `xcaddy` and the Go toolchain: upstream builds this stage for exactly this. The
+# version is whatever the pinned tag contains, so the compiler is a reviewed fact
+# and not "latest Go".
+FROM docker.io/library/caddy:2.11.9-builder@sha256:cda07fe9d82728c7ac44d844306d435e98131423dc7b114f05a8a8ecfff94707 AS builder
+
+# The module tag is an ARG because it is the one input a reader should be able to
+# override for a trial build without editing a digest line.
+ARG CADDY_DNS_CLOUDFLARE_VERSION=v0.2.4
+
+# No `--output`: xcaddy writes `/usr/bin/caddy` in the builder stage, which is the
+# path the final stage copies from. The build is offline-unfriendly by nature (it
+# fetches the module and its Go dependencies), so it happens here and nowhere else.
+RUN xcaddy build \
+      --with "github.com/caddy-dns/cloudflare@${CADDY_DNS_CLOUDFLARE_VERSION}"
+
+# The stock image, unchanged: config layout, `caddy` user, XDG paths and the
+# default `caddy run --config /etc/caddy/Caddyfile` entrypoint all come from
+# upstream and none of them are redefined here.
+FROM docker.io/library/caddy:2.11.9@sha256:4851e54a46b206517c574821bb5cc67f170d2156041e9fbc4c9193b45e84a75b
+
+COPY --from=builder /usr/bin/caddy /usr/bin/caddy
+
+# Both assertions are the difference between a build failure and a runtime
+# surprise: `caddy version` proves the copied binary is the release both refs
+# above name (a mistyped digest would otherwise ship a binary the runtime layer
+# was not reviewed against), and `list-modules` proves the provider registered --
+# an `xcaddy build --with` that silently dropped the module produces a working
+# Caddy that only fails at the first DNS-01 order.
+RUN set -eux; \
+    caddy version | grep -qx 'v2\.11\.9 .*'; \
+    caddy list-modules | grep -qx 'dns.providers.cloudflare'
