@@ -45,12 +45,24 @@ ARG CADDY_DNS_CLOUDFLARE_VERSION=v0.2.4
 RUN xcaddy build \
       --with "github.com/caddy-dns/cloudflare@${CADDY_DNS_CLOUDFLARE_VERSION}"
 
-# The stock image, unchanged: config layout, `caddy` user, XDG paths and the
-# default `caddy run --config /etc/caddy/Caddyfile` entrypoint all come from
-# upstream and none of them are redefined here.
+# The stock image: config layout, XDG paths and the default
+# `caddy run --config /etc/caddy/Caddyfile` entrypoint all come from upstream and
+# none of them are redefined here. (There is no `caddy` account in it; the
+# image runs as root and relies on the file capability below to bind 80/443.)
 FROM docker.io/library/caddy:2.11.9@sha256:4851e54a46b206517c574821bb5cc67f170d2156041e9fbc4c9193b45e84a75b
 
 COPY --from=builder /usr/bin/caddy /usr/bin/caddy
+
+# The binary arrives carrying `cap_net_bind_service` as a *file* capability, so
+# upstream can bind 80/443 without root. COPY preserves it, and a file capability
+# is refused outright when the container runs with `NoNewPrivileges=true` and
+# `DropCapability=ALL`: execve fails with EPERM before Caddy reads its config, so
+# the container never starts at all. This image binds one unprivileged loopback
+# port (127.0.0.1:9443), so the capability buys nothing and the hardening is the
+# better trade -- strip it after the copy that reintroduces it.
+RUN set -eux; \
+    setcap -r /usr/bin/caddy; \
+    ! getcap /usr/bin/caddy | grep -q .
 
 # Both assertions are the difference between a build failure and a runtime
 # surprise: `caddy version` proves the copied binary is the release both refs
