@@ -23,6 +23,11 @@
 #
 # The deploy receiver gets one raw TCP forward (8484) rather than an HTTPS route:
 # the caller is a curl in a CI job that joins the tailnet for this one request.
+#
+# The agent UI is published as a Service VIP (design #834) instead of a host port:
+# `svc:agent-ui` is an address the tailnet owns, and this host advertises its one
+# endpoint on 443. The policy admits the owner to that service port, so the name
+# resolves to the VIP and no device address has to appear in DNS.
 set -euo pipefail
 
 tailscale_bin=${TAILSCALE_BIN:-tailscale}
@@ -143,6 +148,15 @@ done
 [[ -d $wallpapers ]] || fail "$wallpapers is missing"
 if ! "$tailscale_bin" serve --bg --https=443 --set-path=/wallpapers "$wallpapers"; then
   fail "could not serve $wallpapers on https/443/wallpapers"
+fi
+
+# The agent UI's Service VIP (design #834), the last of the core declarations.
+# Tailscale assigns the Service its address; this host's advertisement is what
+# makes it answer, on the one port the policy grants. Declared after every other
+# core route, so a Service the tailnet does not have yet costs the UI alone, and
+# before the status read and the tenant prune, which never touch a Service.
+if ! "$tailscale_bin" serve --bg --service=svc:agent-ui --tcp=443 tcp://127.0.0.1:9443; then
+  fail "could not advertise the agent UI Service on svc:agent-ui tcp/443"
 fi
 
 # The status is only needed to prune stale app routes; if it cannot be read,
