@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -32,13 +33,13 @@ def json_path(key: str) -> str:
     return "".join(f'["{part}"]' for part in key.split("."))
 
 
-def decrypt(path: Path, key: str, sops: str) -> object:
+def decrypt(path: Path, key: str, sops: str, env: dict) -> object:
     input_type = "json" if path.suffix == ".json" else "yaml"
     args = [sops, "--decrypt", "--input-type", input_type, "--output-type", "json"]
     if key != "*":
         args += ["--extract", json_path(key)]
     args.append(str(path))
-    text = subprocess.check_output(args, text=True).strip()
+    text = subprocess.check_output(args, text=True, env=env).strip()
     try:
         return json.loads(text)
     except json.JSONDecodeError:
@@ -58,7 +59,7 @@ def assign(data: dict, key: str, value: object) -> None:
     cur[parts[-1]] = value
 
 
-def encrypt(path: Path, data: dict, config: Path, sops: str) -> None:
+def encrypt(path: Path, data: dict, config: Path, sops: str, env: dict) -> None:
     with tempfile.TemporaryDirectory() as tmp:
         plain = Path(tmp) / "plain.json"
         plain.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
@@ -78,6 +79,7 @@ def encrypt(path: Path, data: dict, config: Path, sops: str) -> None:
             ],
             capture_output=True,
             text=True,
+            env=env,
         )
         if result.returncode != 0:
             raise RuntimeError(result.stderr.strip() or "sops encrypt failed")
@@ -106,6 +108,19 @@ def main() -> int:
     out_index = Path(args.out_index).resolve() if args.out_index else repo / "secrets" / "index.bundles.json"
     config = repo / ".sops.yaml"
     sops = "sops"
+    env = os.environ.copy()
+    keycmd = Path.home() / ".local" / "bin" / "sops-age-key"
+    if (
+        not env.get("SOPS_AGE_KEY_CMD")
+        and not env.get("SOPS_AGE_KEY_FILE")
+        and not env.get("SOPS_AGE_KEY")
+        and keycmd.is_file()
+    ):
+        env["SOPS_AGE_KEY_CMD"] = str(keycmd)
+        print(f"using {keycmd} as SOPS_AGE_KEY_CMD", file=sys.stderr)
+    canonical = Path.home() / ".config" / "sops" / "sops.yaml"
+    if not env.get("SOPS_CONFIG") and canonical.is_file():
+        env["SOPS_CONFIG"] = str(canonical)
 
     index = load(index_path)
     spec = load(spec_path)
@@ -141,13 +156,23 @@ def main() -> int:
                 }
             )
 
-    if args.write_index:
-        out_index.write_text(json.dumps(target, indent=2) + "\n", encoding="utf-8")
-        print(f"ok   wrote {out_index}")
-
     if not args.apply:
+        if args.write_index:
+            out_index.write_text(json.dumps(target, indent=2) + "\n", encoding="utf-8")
+            print(f"ok   wrote {out_index}")
         print(f"ok   spec covers {len(outputs)} output(s) in {len(spec)} bundle(s)")
         return 0
+
+    if any(output.get("bundle", "").endswith(".json") for output in outputs.values()):
+        err("index.json already points at bundles; nothing to migrate")
+        return 1
+    missing = [name for name in outputs if not (repo / "secrets" / "server" / name).exists()]
+    if missing:
+        err(f"{len(missing)} source ciphertext(s) are missing; restore the set first:")
+        err("  git checkout HEAD -- secrets/server")
+        for name in missing[:5]:
+            err(f"  {name}")
+        return 1
 
     if not config.exists():
         err(f"{config} is missing")
@@ -157,30 +182,38 @@ def main() -> int:
     values: dict[str, object] = {}
     for name, key in ((n, k) for entries in spec.values() for n, k in entries.items()):
         old = repo / "secrets" / "server" / name
-        if not old.exists():
-            err(f"{old} is missing; nothing to migrate")
-            return 1
-        value = decrypt(old, outputs[name].get("key", "*"), sops)
+        value = decrypt(old, outputs[name].get("key", "*"), sops, env)
         values[name] = value
         bundle = target["bundles"][name]
         assign(data.setdefault(bundle, {}), key, value)
 
-    for bundle, payload in data.items():
-        path = repo / "secrets" / bundle
-        if path.exists() and not args.force:
-            err(f"{path} exists; pass --force to replace it")
-            return 1
-        encrypt(path, payload, config, sops)
-        print(f"ok   wrote {path}")
+    written: list[Path] = []
+    try:
+        for bundle, payload in data.items():
+            path = repo / "secrets" / bundle
+            if path.exists() and not args.force:
+                err(f"{path} exists; pass --force to replace it")
+                return 1
+            encrypt(path, payload, config, sops, env)
+            written.append(path)
+            print(f"ok   wrote {path}")
 
-    for output in target["outputs"]:
-        path = repo / "secrets" / output["bundle"]
-        got = decrypt(path, output["key"], sops)
-        if got != values[output["name"]]:
-            err(f"{output['name']} does not round-trip through {output['bundle']}")
-            return 1
+        for output in target["outputs"]:
+            path = repo / "secrets" / output["bundle"]
+            got = decrypt(path, output["key"], sops, env)
+            if got != values[output["name"]]:
+                err(f"{output['name']} does not round-trip through {output['bundle']}")
+                return 1
+    except (RuntimeError, subprocess.CalledProcessError) as exc:
+        for path in written:
+            path.unlink(missing_ok=True)
+        err(str(exc))
+        return 1
 
-    print(f"ok   verified {len(values)} output(s); review, swap index.json, remove secrets/server/")
+    if args.write_index:
+        out_index.write_text(json.dumps(target, indent=2) + "\n", encoding="utf-8")
+        print(f"ok   wrote {out_index}")
+    print(f"ok   verified {len(values)} output(s); review, then swap index.json and remove secrets/server/")
     return 0
 
 

@@ -59,5 +59,17 @@ else
   no "a map round-trips through the bundle (got '$(cat "$work/run/b.yaml")')"
 fi
 
+rm -f "$work/secrets/server/a.yaml" "$work/secrets/index.bundles.json"
+if python3 scripts/secrets-bundle.py --repo "$work" --apply --write-index >/dev/null 2>&1; then
+  no "a missing source set is refused before anything is written"
+else
+  ok "a missing source set is refused before anything is written"
+fi
+if [[ -e $work/secrets/index.bundles.json ]]; then
+  no "a failed apply does not write the target index"
+else
+  ok "a failed apply does not write the target index"
+fi
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 ((fail == 0))
