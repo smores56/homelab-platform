@@ -7,7 +7,7 @@ import pathlib
 import tempfile
 import unittest
 
-from broker.config import ConfigError, load_app_signing, load_config, load_secrets
+from broker.config import ConfigError, load_config, load_secrets
 
 KEY_PEM = "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----\n"
 
@@ -47,24 +47,22 @@ class ShippedConfigTest(unittest.TestCase):
             self.assertEqual(enrollment.scheme, "http", name)
         self.assertEqual(dict(self.config.hosts["loki"].headers)["X-Scope-OrgID"], "data")
 
-    def test_credentialed_enrollments_name_secrets_or_an_app_scope_and_use_https(self) -> None:
+    def test_credentialed_enrollments_name_a_secret_and_use_https(self) -> None:
         for name, enrollment in self.config.hosts.items():
             if enrollment.injection.kind == "none":
                 self.assertEqual(enrollment.secret_name, "", name)
-                self.assertIsNone(enrollment.app, name)
             else:
                 # Public hosts must be TLS; the in-cluster gateway is the one
                 # private exception and is asserted separately.
                 self.assertTrue(enrollment.scheme == "https" or enrollment.allow_private, name)
-                self.assertTrue(enrollment.secret_name or enrollment.app, name)
+                self.assertTrue(enrollment.secret_name, name)
 
     def test_no_github_identity_survives(self) -> None:
         # One credential serves GitHub: the machine user's classic PAT, held by
         # the shell and the agent, not an App installation token. The App
-        # registration, its key and every enrollment that used it were retired
-        # on 2026-11-22 (docs/agent-identity.md). Re-adding one is a decision,
-        # not a config edit, so it has to fail here first.
-        self.assertIsNone(self.config.github_app)
+        # registration, its minting code and every enrollment that used it are
+        # gone (docs/agent-identity.md). Re-adding one is a decision, not a
+        # config edit, so it has to fail here first.
         github = [name for name in self.config.hosts if name.startswith("github")]
         self.assertEqual(github, [])
         for name in ("github-apps", "github-agent-apps"):
@@ -323,83 +321,6 @@ class PredicateConfigTest(unittest.TestCase):
         ):
             with self.assertRaises(ConfigError, msg=repr(overrides)):
                 load_config(self.write(self.base(**overrides)), env={})
-
-
-class GithubAppEnrollmentTest(unittest.TestCase):
-    def write(self, raw: object) -> str:
-        directory = tempfile.mkdtemp()
-        path = pathlib.Path(directory, "broker.json")
-        path.write_text(json.dumps(raw))
-        return str(path)
-
-    def app_base(self, **overrides: object) -> dict:
-        enrollment = {
-            "scheme": "https",
-            "host": "github.com",
-            "port": 443,
-            "github_app": {
-                "installation": "example-installation-id",
-                "repositories": ["homelab-apps"],
-                "permissions": {"contents": "write"},
-            },
-            "inject": {"kind": "basic", "username": "x-access-token"},
-        }
-        enrollment.update(overrides)
-        return {
-            "listen": "127.0.0.1:8080",
-            "github_app": {},
-            "logical_hosts": {"example": enrollment},
-        }
-
-    def test_app_enrollment_parses(self) -> None:
-        config = load_config(self.write(self.app_base()), env={})
-        enrollment = config.hosts["example"]
-        self.assertIsNone(enrollment.secret_name or None)
-        self.assertEqual(enrollment.app.installation, "example-installation-id")
-        self.assertEqual(config.github_app.key_secret, "github-app-private-key")
-        self.assertEqual(config.github_app.id_secret, "github-app-id")
-
-    def test_scope_and_secret_are_mutually_exclusive(self) -> None:
-        raw = self.app_base()
-        raw["logical_hosts"]["example"]["secret"] = "example-token"
-        with self.assertRaises(ConfigError):
-            load_config(self.write(raw), env={})
-
-    def test_an_app_enrollment_must_inject_a_credential(self) -> None:
-        with self.assertRaises(ConfigError):
-            load_config(self.write(self.app_base(inject={"kind": "none"})), env={})
-
-    def test_an_app_enrollment_must_be_https(self) -> None:
-        with self.assertRaises(ConfigError):
-            load_config(self.write(self.app_base(scheme="http")), env={})
-
-    def test_bad_ids_repos_and_permissions_are_refused(self) -> None:
-        for scope in (
-            {"installation": 0, "repositories": ["r"], "permissions": {"contents": "write"}},
-            {"installation": 1, "repositories": [], "permissions": {"contents": "write"}},
-            {"installation": 1, "repositories": ["r"], "permissions": {}},
-            {"installation": 1, "repositories": ["r"], "permissions": {"contents": "sudo"}},
-            {"installation": 1, "repositories": ["r"], "permissions": {"contents": "write"}, "extra": 1},
-        ):
-            with self.assertRaises(ConfigError):
-                load_config(self.write(self.app_base(github_app=scope)), env={})
-
-    def test_a_scope_without_a_top_level_app_is_refused(self) -> None:
-        raw = self.app_base()
-        del raw["github_app"]
-        with self.assertRaises(ConfigError):
-            load_config(self.write(raw), env={})
-
-    def test_a_top_level_app_without_a_consumer_is_refused(self) -> None:
-        raw = self.app_base()
-        raw["logical_hosts"]["example"] = {
-            "scheme": "https",
-            "host": "api.example.test",
-            "secret": "example-token",
-            "inject": {"kind": "bearer"},
-        }
-        with self.assertRaises(ConfigError):
-            load_config(self.write(raw), env={})
 
 
 class SecretsTest(unittest.TestCase):

@@ -288,11 +288,9 @@ now ship inside the bootc image, whose pins the server-image workflow checks.
 
 ## 10. Create the broker credential Secret
 
-The broker is platform-owned (`clusters/homelab/broker/`); this step supplies
-eight files, none of which enters git. Static enrollments name five of them
-(`keys` in `clusters/homelab/broker/sops-contract.yaml`); the GitHub App
-enrollments add the app id, the private key and one installation id per
-installation (`app_keys`). **Step 1 must be finished first.**
+The broker is platform-owned; this step supplies the five credential files its
+enrollment names (`apps/broker/config/broker.json`), none of which enters git.
+**Step 1 must be finished first.**
 
 `notify-token` is optional: the enrollment declares `optional_secret`, so a
 missing file is a 503 for that host instead of a startup abort. Create it when
@@ -312,9 +310,6 @@ NW=$(cat /run/secrets/neuralwatt-api-key)
 TF=$(cat /run/secrets/tinyfish-api-key)
 LOKI=$(sudo cluster-kubectl -n observability get secret loki-gateway-token \
   -o jsonpath='{.data.password}' | base64 -d)
-read -rp 'App ID (digits): ' APP_ID
-read -rp 'installation ID: ' INSTALL
-read -rsp 'private key path: ' KEY_PATH; echo
 NOTIFY=$(openssl rand -hex 32)  # optional until step 24
 
 # No value reaches the command line or a transcript.
@@ -324,24 +319,21 @@ printf '%s\n' "$NW" > "$tmp/neuralwatt-api-key"
 printf '%s\n' "$TF" > "$tmp/tinyfish-api-key"
 printf '%s\n' "$LOKI" > "$tmp/loki-gateway-token"
 printf '%s\n' "$NOTIFY" > "$tmp/notify-token"
-printf '%s\n' "$APP_ID" > "$tmp/github-app-id"
-printf '%s\n' "$INSTALL" > "$tmp/github-installation-id"
-install -m 0600 "$KEY_PATH" "$tmp/github-app-private-key"
-unset NW TF LOKI NOTIFY APP_ID INSTALL
+unset NW TF LOKI NOTIFY
 
 sudo cluster-kubectl -n broker create secret generic broker-credentials \
   --from-file="$tmp"
 sudo cluster-kubectl -n broker rollout restart deployment/broker
 ```
 
-The broker aborts at start if a static file is missing, and answers 503 for a
-GitHub host whose token cannot be minted; it never forwards without a
-credential. Verify the three credential classes:
+The broker aborts at start if a static file is missing, and answers 503 for an
+optional host whose file has not arrived yet; it never forwards without a
+credential. Verify both:
 
 ```sh
 sudo cluster-kubectl -n broker exec deploy/broker -- python -c '
 import http.client
-for path in ("healthz", "loki/loki/api/v1/labels", "github-platform/rate_limit"):
+for path in ("healthz", "loki/loki/api/v1/labels"):
     c = http.client.HTTPConnection("127.0.0.1", 8080, timeout=20)
     c.putrequest("GET", "/" + path, skip_host=True)
     c.putheader("Host", "broker.broker.svc.cluster.local")
@@ -355,15 +347,13 @@ for path in ("healthz", "loki/loki/api/v1/labels", "github-platform/rate_limit")
 The explicit `Host` matters: a plain `urllib` call to `127.0.0.1` sends an
 IP-literal Host, which the broker refuses with `400 ip_literal_host`.
 
-Expected: `200`; `200` with the Loki gateway's `{"status":"success"...}`; and
-`200` with the installation's rate limit. A `503` (`credential_unavailable`) on
-`rate_limit` means the app id, private key or installation id is wrong: the
-broker refuses rather than forwarding without a credential, so a 401 never
-comes from here.
+Expected: `200` and `200` with the Loki gateway's `{"status":"success"...}`. A
+`503` (`credential_unavailable`) on `loki` means its token file is missing or
+empty: the broker refuses rather than forwarding without a credential, so a 401
+never comes from here.
 
-Rotation: generate a new key in the app settings, delete the Secret, repeat this
-step (credentials are read once at start). `github-installation-id` is shared by
-all three GitHub enrollments; their difference is the minted scope.
+Rotation: delete the Secret, repeat this step (credentials are read once at
+start).
 
 ## 11. Rotate the Loki gateway token
 

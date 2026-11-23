@@ -1,8 +1,8 @@
-"""Credential resolution for the two enrollment kinds.
+"""Credential resolution for a static enrollment.
 
-Static enrollments read a file from the projected Secret; GitHub App
-enrollments mint a short-lived, scoped installation token. The broker's
-redaction set includes every static value and every token currently minted.
+Every enrollment reads one file from the projected Secret; a host may declare
+its secret optional, in which case the lookup raises rather than serving the
+request uncredentialed. The broker's redaction set is every value it read.
 """
 
 from __future__ import annotations
@@ -10,7 +10,10 @@ from __future__ import annotations
 from typing import Mapping, Protocol
 
 from .config import Enrollment
-from .github_app import CredentialUnavailable, GithubAppTokens
+
+
+class CredentialUnavailable(Exception):
+    """The enrollment's credential is not provisioned for this request."""
 
 
 class Credentials(Protocol):
@@ -30,33 +33,3 @@ class StaticCredentials:
 
     def values(self) -> dict[str, str]:
         return dict(self._secrets)
-
-
-class AppCredentials:
-    """Static files plus app-minted tokens, behind one lookup."""
-
-    def __init__(
-        self,
-        secrets: Mapping[str, str],
-        tokens: GithubAppTokens,
-        installations: Mapping[str, int],
-    ) -> None:
-        self._static = StaticCredentials(secrets)
-        self._tokens = tokens
-        self._installations = dict(installations)
-
-    def value(self, enrollment: Enrollment) -> str:
-        scope = enrollment.app
-        if scope is None:
-            return self._static.value(enrollment)
-        installation = self._installations.get(scope.installation)
-        if installation is None:
-            raise CredentialUnavailable(f"github-app: no id for {scope.installation}")
-        return self._tokens.token(installation, scope.repositories, dict(scope.permissions))
-
-    def values(self) -> dict[str, str]:
-        merged = self._static.values()
-        for index, token in enumerate(self._tokens.active_tokens()):
-            # Names never leave the process; only the values matter for redaction.
-            merged[f"minted-token-{index}"] = token
-        return merged

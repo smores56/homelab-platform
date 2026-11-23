@@ -1,10 +1,8 @@
 """Entrypoint: `python -m broker <enrollment.json>`.
 
-Static secrets are files under `BROKER_SECRETS_DIR` (default `/run/secrets`, the
-projected Secret mount); a missing file aborts startup. GitHub App enrollments
-need only the app's private key at start — installation tokens are minted on
-demand. A failure to mint is a 503 for that request, never a forwarded request
-without its credential.
+Credentials are files under `BROKER_SECRETS_DIR` (default `/run/secrets`, the
+projected Secret mount); a missing file aborts startup unless its host declares
+`optional_secret`, in which case that host answers 503 until the file appears.
 """
 
 from __future__ import annotations
@@ -13,9 +11,8 @@ import logging
 import os
 import sys
 
-from .config import ConfigError, load_app_signing, load_config, load_secrets
-from .credentials import AppCredentials, StaticCredentials
-from .github_app import GithubAppTokens
+from .config import ConfigError, load_config, load_secrets
+from .credentials import StaticCredentials
 from .server import main
 
 
@@ -29,19 +26,7 @@ def run(argv: list[str] | None = None) -> int:
     try:
         config = load_config(argv[0])
         secrets = load_secrets(config.hosts, directory)
-        signing = load_app_signing(config, directory)
-        if signing is not None:
-            tokens = GithubAppTokens(signing.app_id, signing.private_key)
-            # Sign once now: a bad PEM or a missing `cryptography` must fail the
-            # pod, not every later request with a 503 behind a green /healthz.
-            try:
-                tokens.jwt()
-            except Exception as exc:
-                print(f"broker: github-app key cannot sign ({type(exc).__name__})", file=sys.stderr)
-                return 2
-            credentials = AppCredentials(secrets, tokens, signing.installations)
-        else:
-            credentials = StaticCredentials(secrets)
+        credentials = StaticCredentials(secrets)
     except ConfigError as exc:
         print(f"broker: {exc}", file=sys.stderr)
         return 2

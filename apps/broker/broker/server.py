@@ -18,8 +18,7 @@ from typing import Callable
 from urllib.parse import quote
 
 from .config import HEADER_NAME, MAX_REQUEST_BYTES, METHODS, Config, Enrollment
-from .credentials import Credentials, StaticCredentials
-from .github_app import CredentialUnavailable
+from .credentials import CredentialUnavailable, Credentials, StaticCredentials
 from .policy import (
     Denied,
     PinnedAddress,
@@ -189,7 +188,7 @@ class Broker:
             outcome = "denied"
             reason = denial.reason
         except CredentialUnavailable as exc:
-            # Never forward without the credential: a minting failure is a 503.
+            # Never forward without the credential: a missing one is a 503.
             LOG.warning("broker credential unavailable logical=%s class=%s", logical, type(exc).__name__)
             status = self._deny(handler, Denied("credential_unavailable", status=503), logical)
             outcome = "denied"

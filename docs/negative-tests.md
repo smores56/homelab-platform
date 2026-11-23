@@ -237,11 +237,11 @@ waits for `apps-schema`, and deletes the branch. It never touches `.github/**`.
 | `apps-schema` | required, success | `COMPLETED / SUCCESS` |
 | auto-merge | enabled and merged by agent | `enabledBy=smores56-agent`, squash, merged `2026-11-22T18:38:17Z` |
 | repeatable probe | exits 0 | read-only mode 5/5 checks; `--merge` opened and merged PR [#5](https://github.com/smores56/homelab-apps/pull/5) at `18:40:13Z` |
-| broker installation | separate credential | enrollment requests `contents: write` only; live permissions unreadable with a PAT (`403`) |
+| broker App identity | retired | `github_app` block, `github-apps` enrollment and the minting code removed 2026-11-22; the broker holds no GitHub credential |
 
-The broker-side `pull_requests: write` gap is real for `github-apps` but does
-not affect the shell path. Closing it needs the App owner in the browser, not a
-credential held by the agent.
+The broker-side `pull_requests: write` gap that the App-era enrollment had is
+moot: there is no App and no broker-minted token left, and the shell path above
+is the only GitHub write.
 
 ## The platform policy stack fails closed
 

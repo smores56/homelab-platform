@@ -5,39 +5,9 @@ from __future__ import annotations
 import io
 import unittest
 
-from broker.config import AppScope, Config, Enrollment, Injection
-from broker.credentials import AppCredentials, StaticCredentials
-from broker.github_app import CredentialUnavailable
+from broker.config import Config, Enrollment, Injection
+from broker.credentials import StaticCredentials
 from broker.server import Broker
-
-
-class FakeTokens:
-    def __init__(self) -> None:
-        self.calls: list[tuple] = []
-
-    def token(self, installation, repositories, permissions):
-        self.calls.append((installation, repositories, permissions))
-        return "ghs_minted"
-
-    def active_tokens(self):
-        return ["ghs_minted"]
-
-
-def app_enrollment(installation="github-installation-id"):
-    return Enrollment(
-        name="gh",
-        scheme="https",
-        host="github.com",
-        port=443,
-        allow_private=False,
-        secret_name="",
-        injection=Injection(kind="basic", username="x-access-token"),
-        app=AppScope(
-            installation=installation,
-            repositories=("homelab-platform",),
-            permissions=(("contents", "write"),),
-        ),
-    )
 
 
 class StaticTests(unittest.TestCase):
@@ -55,43 +25,22 @@ class StaticTests(unittest.TestCase):
         self.assertEqual(credentials.value(enrollment), "sk-test")
         self.assertEqual(credentials.values(), {"neuralwatt-api-key": "sk-test"})
 
-
-class AppTests(unittest.TestCase):
-    def test_the_installation_file_name_resolves_to_the_id(self):
-        tokens = FakeTokens()
-        credentials = AppCredentials(
-            {},
-            tokens,
-            {"github-installation-id": 181438296},
+    def test_an_enrollment_with_no_credential_resolves_to_nothing(self):
+        enrollment = Enrollment(
+            name="self",
+            scheme="http",
+            host="agent-control.tenant-apps.svc.cluster.local",
+            port=8081,
+            allow_private=True,
+            secret_name="",
+            injection=Injection(kind="none"),
         )
-        self.assertEqual(credentials.value(app_enrollment()), "ghs_minted")
-        self.assertEqual(
-            tokens.calls,
-            [(181438296, ("homelab-platform",), {"contents": "write"})],
-        )
-
-    def test_minted_tokens_join_the_redaction_set(self):
-        credentials = AppCredentials({}, FakeTokens(), {"github-installation-id": 1})
-        credentials.value(app_enrollment())
-        self.assertIn("ghs_minted", credentials.values().values())
-
-    def test_an_unknown_installation_is_a_credential_failure(self):
-        credentials = AppCredentials({}, FakeTokens(), {})
-        with self.assertRaises(CredentialUnavailable):
-            credentials.value(app_enrollment())
-
-
-class RaisingCredentials:
-    def value(self, enrollment):
-        raise CredentialUnavailable("github-app: installation 1 token request failed (422)")
-
-    def values(self):
-        return {}
+        self.assertEqual(StaticCredentials({}).value(enrollment), "")
 
 
 class Handler:
     command = "GET"
-    path = "/gh/repos/smores56/homelab-platform/pulls"
+    path = "/notify/v1/notify"
     headers = {"Host": "broker"}
 
     def __init__(self):
@@ -110,33 +59,9 @@ class Handler:
 
 
 class FailClosedTests(unittest.TestCase):
-    def test_a_minting_failure_is_a_503_and_never_a_forward(self):
-        config = Config(
-            listen_host="127.0.0.1",
-            listen_port=8080,
-            deny_addresses=(),
-            hosts={"gh": app_enrollment()},
-        )
-        resolver = lambda *args, **kwargs: [  # noqa: E731
-            (2, 1, 6, "", ("93.184.216.34", 443))
-        ]
-        broker = Broker(config=config, credentials=RaisingCredentials(), resolver=resolver)
-        handler = Handler()
-
-        broker.handle(handler)
-
-        self.assertEqual(handler.status, 503)
-        self.assertIn(b"credential_unavailable", handler.wfile.getvalue())
-
-
-if __name__ == "__main__":
-    unittest.main()
-
-
-class OptionalSecretTests(unittest.TestCase):
     def test_an_unprovisioned_optional_secret_is_a_503_and_never_a_forward(self):
-        # SDLC #640: the notify provider is undecided, so the enrollment ships
-        # with optional_secret and must not take the broker down at startup.
+        # SDLC #640: a host enrolled before its credential exists must not take
+        # the broker down at startup, and must never be forwarded without it.
         config = Config(
             listen_host="127.0.0.1",
             listen_port=8080,
@@ -161,10 +86,13 @@ class OptionalSecretTests(unittest.TestCase):
         )
         handler = Handler()
         handler.command = "POST"
-        handler.path = "/notify/v1/notify"
         handler.headers = {"Host": "broker", "Content-Length": "0"}
 
         broker.handle(handler)
 
         self.assertEqual(handler.status, 503)
         self.assertIn(b"credential_unavailable", handler.wfile.getvalue())
+
+
+if __name__ == "__main__":
+    unittest.main()

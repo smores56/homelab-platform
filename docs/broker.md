@@ -71,10 +71,8 @@ TINYFISH_BASE_URL=http://broker.broker.svc.cluster.local:8080/tinyfish
 ## Logical-host enrollment
 
 `apps/broker/config/broker.json` is the reviewed, non-secret
-enrollment. Static credentials are files in the `broker-credentials` Secret;
-GitHub App enrollments name the app id, private key and installation id files
-instead, and the broker mints a short-lived, scoped installation token for
-each request's logical host (see "GitHub App identity" below).
+enrollment. Credentials are files in the `broker-credentials` Secret; the broker
+reads each one once at start and injects exactly one per request.
 
 | Logical host | Real endpoint | Injection | Credential | Private allowed |
 | --- | --- | --- | --- | --- |
@@ -92,9 +90,9 @@ strips the logical host: the caller addresses `BROKER_URL/self/status`, and
 the service sees `/self/status`; `BROKER_URL/cluster/pods` becomes
 `/cluster/pods`. Without it the upstream would only see the trailing path.
 
-GitHub is **not** a broker logical host. The broker mints installation tokens
-for an App that was retired on 2026-11-22, together with every enrollment that
-used it: one identity serves GitHub now, a classic `repo` PAT held by the
+GitHub is **not** a broker logical host, and there is nothing left to mint
+for: the App, its minting code and every enrollment that used it were removed
+on 2026-11-22. One identity serves GitHub now, a classic `repo` PAT held by the
 machine user `smores56-agent`, and it never passes through this gateway. The
 replacement model, including why the App lost, is `docs/agent-identity.md`.
 
@@ -381,11 +379,12 @@ not the agent's identity and not a broker logical host: it is scoped to
 ### GitHub identity (retired from the broker)
 
 `smores56-homelab-agent` and its per-request installation tokens are gone as a
-deployed capability: `apps/broker/config/broker.json` carries no `github_app`
-block and no `github-*` enrollment, and a test asserts that
-(`apps/broker/tests/test_config.py`). The minting code is still present and
-tested so the retirement is reversible by config alone, but nothing reaches it.
-The live identity is the machine user's PAT; see `docs/agent-identity.md`.
+deployed capability, and so is the code behind them: `apps/broker/config/broker.json`
+carries no `github_app` block, no `github-*` enrollment exists, `test_config.py`
+asserts neither returns, and the minting module, its parser and its tests were
+deleted rather than left dormant. `docs/agent-identity.md` records the measured
+app-only auto-merge that made the App unnecessary. The live GitHub identity is
+the machine user's PAT; no broker path holds it.
 
 ## Inbound webhooks: `agent-hooks.sammohr.dev`
 

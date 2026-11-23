@@ -82,14 +82,10 @@ the diff touched only `apps/smoke/app.toml`. A direct push of the same commit to
 token identity, the Write role, the ruleset and the direct-push refusal, and
 `--merge` opens and auto-merges the app-only PR.
 
-The broker is a different credential. Its `github-apps` enrollment requests
-`contents: write` only (`docs/broker.md`), so a broker-minted installation token
-cannot open the PR that path would merge. The installation's live permission
-set is not readable with a PAT (`403 Resource not accessible by personal access
-token`), so that statement rests on the reviewed enrollment. Closing it is an
-App owner action in the browser — App settings → Permissions & events →
-Repository permissions → Pull requests: Read and write, then re-approve the
-installation — not a `gh` call. The shell path above does not need it.
+The App is gone as a credential too: the `github-apps` enrollment, its
+`contents: write` scope and the minting code were retired on 2026-11-22
+(`docs/broker.md`, `docs/agent-identity.md`). Every GitHub write in the tenant
+path is the machine user's PAT through the shell, measured above.
 
 ## Bounds
 
