@@ -1059,39 +1059,51 @@ the only approval contract is the write broker's `libs/data_plane/approval.py`.
 
 A facade does not run an entry point itself: it holds a socket served by
 `smortress-agent-shell-bridge.service`, and that socket is the only path to a
-general job (`docs/agent-jobs.md#transport`). Its group is the facade container's
-gid, so the general class is provable from the host as uid 1000, and a uid outside
-the group is refused by the filesystem rather than by a check:
+general job (`docs/agent-jobs.md#transport`). `/run/smortress` is root 0700 and the
+socket's directory is 0710 root:1000, so no host uid can traverse to it; the only
+client is the container that mounts the directory as `/run/agent-shell`:
 
 ```sh
 systemctl status smortress-agent-shell-bridge
-ls -l /run/smortress/agent-shell/general.sock      # srw-rw---- root 1000
-printf '%s\n' '{"command": "id -u; ls /var/srv/git | head -3"}' |
-  sudo -u '#1000' python3 -c '
-import socket, sys
+sudo stat -c '%U:%G %a %n' /run/smortress/agent-shell /run/smortress/agent-shell/general.sock
+# root:1000 710 /run/smortress/agent-shell
+# root:1000 660 /run/smortress/agent-shell/general.sock
+sudo podman exec smortress-agent-facade-general python3 -c '
+import socket
 sock = socket.socket(socket.AF_UNIX)
-sock.connect("/run/smortress/agent-shell/general.sock")
-sock.sendall(sys.stdin.buffer.read())
+sock.connect("/run/agent-shell/general.sock")
+sock.sendall(b"{\"command\": \"id -u; ls /var/srv/git | head -3\"}\n")
 print(sock.makefile().readline())'
-sudo -u nobody python3 -c '
+```
+
+The answer names uid 1000 and the general tree, so the job is a container and not
+the host. Any other uid is refused by the socket's group, and the host path is
+refused before that by the root-only parent -- no gateway, model server or web UI
+has a mount to try with:
+
+```sh
+sudo runuser -u nobody -- python3 -c '
 import socket
 socket.socket(socket.AF_UNIX).connect("/run/smortress/agent-shell/general.sock")'    # Permission denied
 ```
 
-The first answer names uid 1000 and the general tree, so the job is a container and
-not the host. The second is the reachability control itself: no group bit, no
-connection, and no gateway, model server or web UI has a mount to try with.
 `tools/list` on the general facade names `shell.run` and the personal facade does
-not, which is the same fact from the client's side:
+not, which is the same fact from the client's side (the token is the deployment's
+own, read from its mounted file):
 
 ```sh
 sudo podman exec smortress-agent-facade-general python3 -c '
 import json, urllib.request
+token = open("/run/secrets/agent-facade-general-token").read().strip()
 body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).encode()
 request = urllib.request.Request(
-    "http://127.0.0.1:18005/mcp", data=body, headers={"Content-Type": "application/json"})
+    "http://127.0.0.1:18005/mcp", data=body,
+    headers={"Content-Type": "application/json", "X-Deployment-Token": token})
 print([tool["name"] for tool in json.load(urllib.request.urlopen(request))["result"]["tools"]])'
 ```
+
+The same call with the personal deployment's token answers `401`: one token is one
+deployment, so a token that names the personal facade cannot reach the general one.
 
 ### Run the agent runtime drill
 
