@@ -61,7 +61,8 @@ backrest|npm ci --prefix backrest && npm --prefix backrest run typecheck && npm 
 tofu-check|tests/tofu/check.sh|tests/tofu/*,tofu/*
 tofu-fmt|tofu fmt -check -recursive tofu|tofu/*
 provision|tests/provision/check.sh|tests/provision/*,provision/*
-server-image|scripts/check-server-image.sh && scripts/render-ignition.sh --synthetic --check && tests/core/ignition-boundary.sh && scripts/render-ignition.sh --synthetic --stock --check|image/*,ignition/*,units/*,secrets/*,images/*,tests/fixtures/*,docs/core/server-image.md,scripts/check-server-image.sh
+secrets|tests/secrets/policy.sh && python3 scripts/sops-policy.py check --repo .|secrets/*,.sops.yaml,scripts/sops-policy.py,tests/secrets/*
+server-image|scripts/check-server-image.sh && scripts/render-ignition.sh --synthetic --check && tests/core/ignition-boundary.sh && scripts/render-ignition.sh --synthetic --stock --check|image/*,ignition/*,units/*,images/*,tests/fixtures/*,docs/core/server-image.md,scripts/check-server-image.sh
 edge|tests/edge/check.sh|tests/edge/*,scripts/verify-public-edge.sh
 core|tests/core/check.sh && tests/core/storage-layout.sh && tests/core/restic-drill.sh && tests/core/tailscale-serve.sh && tests/core/apps-egress.sh && tests/core/apps-user.sh && tests/core/agent-drill.sh|tests/core/*,scripts/core/*,scripts/access-*
 apps|tests/apps/check.sh && tests/apps/render.sh && tests/apps/quota.sh && tests/apps/ingress.sh|tests/apps/*,scripts/apps-*

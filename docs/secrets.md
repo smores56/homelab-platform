@@ -6,10 +6,10 @@ decrypt it".
 
 | Consumer | Store | Encrypted to | Applied by |
 | --- | --- | --- | --- |
-| Operator tooling in this repository (`tofu`, scripts) | `secrets/*.yaml` | the admin identity only | the operator, via `sops -d` |
+| Operator tooling in this repository (`tofu`, scripts) | `secrets/*.yaml` | all five recipients | the operator, via `sops -d` |
 | A workload this cluster runs | `clusters/**/*.sops.yaml` | the `flux-system` `sops-age` identity | Flux, with `spec.decryption` on the owning Kustomization |
 | A host unit in `smores56/nix-config` | `nix-config/secrets/smortress.yaml` | the admin and host identities | sops-nix at boot |
-| A host unit on the bootc plane | `secrets/server/*.yaml` on the host at `/var/lib/smortress/secrets` | the host and admin identities | `sops-decrypt.service` at boot, into `/run/smortress/secrets` |
+| A host unit on the bootc plane | `secrets/server/*.yaml` on the host at `/var/lib/smortress/secrets` | all five recipients (the machine identity is the unattended reader) | `sops-decrypt.service` at boot, into `/run/smortress/secrets` |
 | A host unit on the Nix-free plane | `/etc/homelab/secrets` | the operator bundle only, never in git | the `secrets` role from a decrypted directory |
 
 The admin identity is the operator's passphrase-wrapped age key. Trusting it in
@@ -23,8 +23,9 @@ this repository instead of only in the recovery kit. `.sops.yaml` encrypts that
 path to five recipients: the shared machine identity that is the unattended root
 reader, staged root-only at `/var/lib/homelab/age/keys.txt` from the kit, and the
 admin identity plus the three YubiKeys, so the operator can edit a value without
-touching the host. No host or cluster identity can read `secrets/*.yaml`, and
-none of the five can read `clusters/**`.
+touching the host. Every reader in the rule can decrypt every file the rule
+matches; that is deliberate, and the machine identity is the unattended
+reader that boots the host.
 `sops-decrypt.service` reads the ciphertext from `/var/lib/smortress/secrets`
 (root-only, `0700`/`0600`) and writes each file into `/run/smortress/secrets` with
 the owner, mode and `format` named in
@@ -66,7 +67,7 @@ The seed and the baked copy go away in the release after this one, at which poin
 a fresh install stages the ciphertext from the checkout next to the age identity.
 
 The table below is a reference for the two consumers whose file shape or ordering
-is load-bearing, not an inventory: the directory holds 18 ciphertext files, and
+is load-bearing, not an inventory: the directory holds 25 ciphertext files, and
 the rest are one value each, named by the unit or script that reads them (the
 manifest is the set).
 

@@ -45,10 +45,12 @@ expect "an image change selects the server-image group" "server-image" \
   "$(selected image/Containerfile)"
 expect "a unit change selects the server-image group" "server-image" \
   "$(selected units/quadlet/pattern.container)"
-expect "a secret change selects the server-image group" "server-image" \
+expect "a secret change selects the secrets group" "secrets" \
   "$(selected secrets/server/canary.yaml)"
 expect "a recovery-page change selects its group" "recovery-page" \
   "$(selected apps/recovery-page/src/main.ts)"
+expect "a config change selects secrets and lint" $'secrets\nlint' \
+  "$(selected .sops.yaml)"
 expect "every tracked file is claimed" "0" \
   "$(scripts/check-all.sh --check-claims >/dev/null; echo $?)"
 expect "an unclaimed path selects every group" "$groups" \

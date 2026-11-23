@@ -157,6 +157,17 @@ jobs:
       - name: lint
         run: scripts/check-all.sh --only lint
 
+  secrets:
+    name: SOPS policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      - name: policy and index checks
+        run: scripts/check-all.sh --only secrets
+
   gates:
     name: core, apps, deploy, provision
     runs-on: ubuntu-latest
