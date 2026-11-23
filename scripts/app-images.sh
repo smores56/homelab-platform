@@ -75,7 +75,7 @@ app_images=(
   # so the module is the difference between a certificate and a crash loop. The
   # digest is the publish-caddy run for that Containerfile; a rebuild prints a new
   # row, and the Quadlet's `Image=` is the other half and moves with it.
-  'caddy|built:images/caddy/Containerfile|sha256:4762c8756be74bf5633ea7c12ebb0f7c3f75886c9858d41ff6cc59b284051dc3'
+  'caddy|built:images/caddy/Containerfile|sha256:77d85e665ca9e966d8db933e56fd646968dedfcb487f0dd7e5ab9d136e1830ca'
 )
 
 # app_image_ref NAME -> the only reference a Quadlet may contain.
