@@ -41,6 +41,16 @@ expect "a workflow change selects lint" "lint" \
   "$(selected .github/workflows/ci.yml)"
 expect "a docs change selects nothing" "" \
   "$(selected README.md docs/broker.md)"
+expect "an image change selects the server-image group" "server-image" \
+  "$(selected image/Containerfile)"
+expect "a unit change selects the server-image group" "server-image" \
+  "$(selected units/quadlet/pattern.container)"
+expect "a secret change selects the server-image group" "server-image" \
+  "$(selected secrets/server/canary.yaml)"
+expect "a recovery-page change selects its group" "recovery-page" \
+  "$(selected apps/recovery-page/src/main.ts)"
+expect "every tracked file is claimed" "0" \
+  "$(scripts/check-all.sh --check-claims >/dev/null; echo $?)"
 expect "an unclaimed path selects every group" "$groups" \
   "$(selected brand/new-thing | wc -l | tr -d ' ')"
 expect "--list names each group once" "$groups" \
