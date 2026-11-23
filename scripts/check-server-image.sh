@@ -726,7 +726,7 @@ check "the boot decrypt still reads the /etc copy" \
 for name in agent-github-token.yaml sdlc-github-token.yaml; do
   if [[ -e secrets/server/$name ]]; then
     check "$name is a root-only manifest value" \
-      grep -qE "^${name//./\\.}[[:space:]]+root[[:space:]]+root[[:space:]]+0400[[:space:]]+value$" \
+      grep -qE "^${name//./\\.}[[:space:]]+[^[:space:]]+[[:space:]]+[^[:space:]]+[[:space:]]+root[[:space:]]+root[[:space:]]+0400[[:space:]]+value$" \
       image/rootfs/usr/share/smortress/secrets.manifest
   else
     ok "$name is not staged yet (no agent GitHub identity before T5)"
@@ -741,7 +741,7 @@ done
 # operator file must be gone from every reader: a leftover requirement would make
 # a reinstall fail where the design says it must not.
 check "the account hash is a manifest value" \
-  grep -qE '^smores-password-hash\.yaml[[:space:]]+root[[:space:]]+root[[:space:]]+0400[[:space:]]+value$' \
+  grep -qE '^smores-password-hash\.yaml[[:space:]]+[^[:space:]]+[[:space:]]+[^[:space:]]+[[:space:]]+root[[:space:]]+root[[:space:]]+0400[[:space:]]+value$' \
   image/rootfs/usr/share/smortress/secrets.manifest
 check "the renderer reads the hash from ciphertext" \
   has 'secrets/server/smores-password-hash.yaml' scripts/render-ignition.sh
@@ -1034,7 +1034,7 @@ check "the tmpfiles entry creates the queue" \
 # writes the scalar alone, so a `yaml` entry would compare a document.
 for name in webhook-secret webhook-secret-next deploy-ping-url; do
   check "$name is a manifest value" \
-    grep -qE "^${name//./\\.}\.yaml[[:space:]]+root[[:space:]]+root[[:space:]]+0400[[:space:]]+value$" \
+    grep -qE "^${name//./\\.}\.yaml[[:space:]]+[^[:space:]]+[[:space:]]+[^[:space:]]+[[:space:]]+root[[:space:]]+root[[:space:]]+0400[[:space:]]+value$" \
     image/rootfs/usr/share/smortress/secrets.manifest
 done
 

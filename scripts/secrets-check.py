@@ -48,15 +48,17 @@ def bundle_path(name: str) -> Path | None:
     return None
 
 
-def manifest_rows() -> list[tuple[str, str, str, str, str]]:
+def manifest_rows() -> list[tuple[str, str, str, str, str, str, str]]:
     rows = []
     for line in MANIFEST.read_text(encoding="utf-8").splitlines():
         if not line.strip() or line.lstrip().startswith("#"):
             continue
         parts = line.split()
-        if len(parts) < 4:
-            continue
-        rows.append((parts[0], parts[1], parts[2], parts[3], parts[4] if len(parts) > 4 else "yaml"))
+        if len(parts) >= 7:
+            rows.append(tuple(parts[:7]))
+        elif len(parts) >= 4:
+            fmt = parts[4] if len(parts) > 4 else "yaml"
+            rows.append((parts[0], parts[0], "*", parts[1], parts[2], parts[3], fmt))
     return rows
 
 
@@ -102,11 +104,12 @@ def main() -> int:
             continue
         keys = top_keys(bundle)
         key = output.get("key", "")
+        first = key.split(".", 1)[0]
         if fmt == "value":
-            if key == "*" or key not in keys:
-                bad(f"{name}: value output needs one top-level key, got {key!r} in {keys}")
-        elif key != "*":
-            bad(f"{name}: yaml output must use key '*', got {key!r}")
+            if key == "*" or first not in keys:
+                bad(f"{name}: value output needs a key under {keys}, got {key!r}")
+        elif not key:
+            bad(f"{name}: yaml output has no key")
 
         consumer = output.get("consumer", "")
         if output.get("staged"):
@@ -135,7 +138,8 @@ def main() -> int:
             bad(f"operator bundle {name} has no SOPS metadata")
 
     expected = sorted(
-        (o["name"], o["uid"], o["gid"], o["mode"], o.get("format", "yaml")) for o in outputs
+        (o["name"], o["bundle"], o["key"], o["uid"], o["gid"], o["mode"], o.get("format", "yaml"))
+        for o in outputs
     )
     actual = sorted(manifest_rows())
     if args.shadow:

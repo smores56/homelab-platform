@@ -55,7 +55,7 @@ expect_file "$dst/b.yaml" "b-image" "a missing ciphertext is seeded from the ima
 if [[ -e "$dst/old.yaml" ]]; then no "an unlisted ciphertext is retired"; else ok "an unlisted ciphertext is retired"; fi
 if find "$retired" -name old.yaml -print -quit | grep -q .; then ok "the retired file is kept, not deleted"; else no "the retired file is kept, not deleted"; fi
 
-if [[ $(wc -l <"$manifest") -eq 2 ]] && grep -qx 'a.yaml root root 0400 yaml' "$manifest" && grep -qx 'b.yaml root root 0400 yaml' "$manifest"; then
+if [[ $(wc -l <"$manifest") -eq 2 ]] && grep -qxF 'a.yaml a.yaml * root root 0400 yaml' "$manifest" && grep -qxF 'b.yaml b.yaml * root root 0400 yaml' "$manifest"; then
     ok "the manifest is rendered from the index"
 else
     no "the manifest is rendered from the index"

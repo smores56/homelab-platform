@@ -59,6 +59,8 @@ def main() -> int:
             " ".join(
                 [
                     output["name"],
+                    output["bundle"],
+                    output["key"],
                     output["uid"],
                     output["gid"],
                     output["mode"],

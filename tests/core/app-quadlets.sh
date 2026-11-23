@@ -1523,7 +1523,7 @@ for module in apps/brave_ingest/*.py; do
     bad "the runtime image installs ${module#apps/brave_ingest/}"
   fi
 done
-if grep -qE '^brave-sync-seed\.yaml[[:space:]]+root[[:space:]]+root[[:space:]]+0400[[:space:]]+value' \
+if grep -qE '^brave-sync-seed\.yaml[[:space:]]+[^[:space:]]+[[:space:]]+[^[:space:]]+[[:space:]]+root[[:space:]]+root[[:space:]]+0400[[:space:]]+value' \
   image/rootfs/usr/share/smortress/secrets.manifest; then
   ok "brave-sync-seed has a decrypt manifest entry"
 else
