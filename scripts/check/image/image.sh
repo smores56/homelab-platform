@@ -206,7 +206,7 @@ check "the state directory keeps its traversal mode" \
   has 'd /var/lib/homelab 0711 root root -' image/rootfs/etc/tmpfiles.d/smortress.conf
 check "the enrollment unit creates the state directory at the same mode" \
   has 'install -d -m 0711 /var/lib/homelab' units/systemd/smortress-tailscale-up.service
-# git grep reads the index, so the exclusion is only the check's own pattern and
+# git grep searches tracked files in the working tree, so the exclusion is only the check's own pattern and
 # the sudo key file: the sudo credentials' public halves are committed there by
 # design, and the sk-only rule above is what keeps them touch-required.
 # git grep exits 1 for "no match" and >1 for "could not search", and only the

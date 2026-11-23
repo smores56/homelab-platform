@@ -284,3 +284,6 @@ if ((fail)); then
   exit 1
 fi
 echo "server image static checks passed"
+
+check "the image installs the deploy-apps modules" \
+  has 'COPY scripts/deploy/apps/ /usr/libexec/deploy/apps/' image/Containerfile
