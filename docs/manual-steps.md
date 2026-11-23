@@ -5641,7 +5641,10 @@ tailnet.
    mint the key with `--advertise-tags=tag:smortress`, or run the next apply to
    put it back. Tagging devices needs the CI client's `devices:core` scope
    (manual-steps section 46 step 2); a `policy_file`-only client can rewrite the
-   policy but not the tag.
+   policy but not the tag. The tailnet Service (#834) needs the same client's
+   `services` scope (write includes read); without it `tailscale_service` fails
+   at apply while the policy and tag still work. The scope lives on the client,
+   so both CI environments pick it up without re-encrypting either secret.
 
 ## 47. Agent shell jobs (T5 of #702): runner uids, prepull, and the two probes
 
