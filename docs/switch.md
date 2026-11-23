@@ -115,7 +115,7 @@ Then, in the session:
 | Fingerprint | `fprintd-enroll` then lock and unlock |
 | sudo gate | `sudo -k; sudo true` opens on a touch alone; with the key unplugged it asks for the account password instead |
 | Suspend/resume | close the lid, reopen |
-| External display | plug in a monitor |
+| External display | boot with the dock plugged in: the monitor comes up at its own mode, not 640x480; a mid-session plug is ordinary hotplug, not this boot probe |
 | Flatpak | launch a flatpak app (Brave and Dolphin are image packages, not flatpaks); check its file chooser |
 | Screen share | start a call or `xdg-desktop-portal` test flow |
 | Polkit | a privileged app shows Noctalia's auth prompt |
@@ -135,6 +135,12 @@ printf '' | gnome-keyring-daemon --unlock --components=secrets
 ## 4. If the session does not come up
 
 - `Ctrl+Alt+F2` reaches a TTY (logind's autovt) even when VT1 is black.
+- A session on 640x480 means the dock's EDID did not read at boot;
+  `systemctl status dp-edid-reprobe` and `journalctl -u dp-edid-reprobe -b` say
+  whether the re-probe gave up. Writing `detect` into the connector's status
+  refreshes the kernel's mode list but sends no hotplug event, so a running niri
+  stays on 640x480: restart the session (`sudo systemctl restart greetd`, which
+  pulls the probe again) or re-plug the hub.
 - `systemctl status greetd` and `journalctl -u greetd -b` name the cause; the
   usual ones are a missing `smores` user, a missing `greeter` user, or a PAM
   failure. Images before the greeter sysusers entry hit

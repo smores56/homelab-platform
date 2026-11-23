@@ -162,6 +162,7 @@ RUN set -eux; \
 RUN set -eux; \
     systemctl enable \
       greetd.service \
+      dp-edid-reprobe.service \
       firewalld.service \
       power-profiles-daemon.service \
       thermald.service \

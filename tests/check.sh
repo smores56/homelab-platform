@@ -238,6 +238,39 @@ else
   bad "greetd autologins through initial_session"
 fi
 
+# --- display (DP EDID re-probe) ---------------------------------------------
+
+# The dock's DP link can be up before its EDID reads, which leaves niri on
+# 640x480 until the hub is re-plugged. The unit has to finish before greetd
+# starts niri, and has to be a oneshot or that ordering is empty.
+unit=image/rootfs/usr/lib/systemd/system/dp-edid-reprobe.service
+dropin=image/rootfs/usr/lib/systemd/system/greetd.service.d/10-dp-edid-reprobe.conf
+if grep -qx 'ExecStart=/usr/libexec/smorespro/dp-edid-reprobe' "$unit" 2>/dev/null \
+    && grep -qx 'Type=oneshot' "$unit" \
+    && grep -qx 'Before=greetd.service' "$unit" \
+    && grep -qx 'WantedBy=graphical.target' "$unit" \
+    && ! grep -qE '^[A-Za-z]+=.*systemd-udev-settle' "$unit" \
+    && grep -qx 'Wants=dp-edid-reprobe.service' "$dropin" \
+    && grep -qx 'After=dp-edid-reprobe.service' "$dropin" \
+    && grep -qE '^ +dp-edid-reprobe\.service \\$' image/Containerfile; then
+  ok "the DP EDID re-probe is a boot oneshot that greetd always waits for"
+else
+  bad "the DP EDID re-probe is a boot oneshot that greetd always waits for"
+fi
+
+# The script is the whole recovery: only a connector without a valid EDID is
+# probed, and a probe that never works must fail the unit, not exit 0.
+script=image/rootfs/usr/libexec/smorespro/dp-edid-reprobe
+# shellcheck disable=SC2016 # the literal $connector must appear in the script
+if [[ -x $script ]] \
+    && grep -qF 'echo detect >"$connector/status"' "$script" \
+    && grep -qx 'readonly edid_header=00ffffffffffff00' "$script" \
+    && grep -qx 'exit 1' "$script"; then
+  ok "the re-probe writes detect only without a valid EDID and fails loudly"
+else
+  bad "the re-probe writes detect only without a valid EDID and fails loudly"
+fi
+
 # --- NymVPN -----------------------------------------------------------------
 
 if nympins=$(bash -c 'set -euo pipefail; source "$1"; printf "%s %s %s\n" "$NYM_VERSION" "$NYM_SHA256_AMD64" "$NYM_SHA256_ARM64"' _ image/pins.env 2>/dev/null); then
@@ -700,7 +733,7 @@ fi
 # --- shell ------------------------------------------------------------------
 
 if command -v shellcheck >/dev/null 2>&1 && shellcheck --version >/dev/null 2>&1; then
-  if shellcheck -x scripts/*.sh tests/*.sh; then
+  if shellcheck -x scripts/*.sh tests/*.sh image/rootfs/usr/libexec/smorespro/*; then
     ok "shellcheck"
   else
     bad "shellcheck"
