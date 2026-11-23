@@ -115,7 +115,7 @@ check "the build fetches no tunnel connector" lacks 'cloudflared' image/Containe
 check "the build script passes no tunnel connector pin" lacks 'CLOUDFLARED' scripts/build-image.sh
 check "no tunnel ciphertext ships" test ! -e secrets/server/cloudflared-tunnel.yaml
 check "the decrypt manifest lists no tunnel ciphertext" \
-  test -z "$(grep -E '^cloudflared-tunnel\.yaml[[:space:]]' image/rootfs/etc/smortress/secrets.manifest)"
+  test -z "$(grep -E '^cloudflared-tunnel\.yaml[[:space:]]' image/rootfs/usr/share/smortress/secrets.manifest)"
 check "no tofu object plans an ssh tunnel" lacks 'ssh_tunnel' tofu
 check "no tofu object routes an ssh hostname" \
   test -z "$(grep -rE 'uri[[:space:]]*=[[:space:]]*"ssh\.\$\{var\.domain\}"' tofu)"
@@ -680,14 +680,14 @@ for cipher in secrets/server/*.yaml; do
   check "$name is SOPS-encrypted" grep -q '^sops:' "$cipher"
   check "$name is ciphertext" grep -q 'ENC\[' "$cipher"
   if grep -q 'sops-decrypt-ok' "$cipher"; then bad "$name leaks plaintext"; else ok "$name has no plaintext canary"; fi
-  check "$name is in the decrypt manifest" grep -qE "^${name//./\\.}[[:space:]]" image/rootfs/etc/smortress/secrets.manifest
+  check "$name is in the decrypt manifest" grep -qE "^${name//./\\.}[[:space:]]" image/rootfs/usr/share/smortress/secrets.manifest
 done
 # The reverse direction matters just as much: the boot decrypt fails closed on
 # the first manifest entry without its ciphertext, and every unit that requires
 # sops-decrypt goes down with it.
 while read -r name; do
   check "$name has committed ciphertext" test -s "secrets/server/$name"
-done < <(awk '!/^[[:space:]]*(#|$)/ { print $1 }' image/rootfs/etc/smortress/secrets.manifest)
+done < <(awk '!/^[[:space:]]*(#|$)/ { print $1 }' image/rootfs/usr/share/smortress/secrets.manifest)
 
 # The ciphertext moved from the image to /var: a rotation is an operator write and
 # a restart of the decrypt unit, not an OS image and a reboot. The baked set is
@@ -696,6 +696,27 @@ check "the boot decrypt reads the host ciphertext" \
   has 'SMORTRESS_SECRETS_SRC:-/var/lib/smortress/secrets' scripts/sops-decrypt.sh
 check "the boot decrypt seeds the host copy first" \
   has 'ExecStartPre=/usr/libexec/smortress-secrets-seed' units/systemd/sops-decrypt.service
+
+# The manifest is metadata, not a secret, so the image owns it and the seed
+# refreshes the /etc copy on every run. It must NOT ship under /etc: bootc merges
+# /etc once per deployment and keeps what the host already had, which is how the
+# 2026-11-22 incident stranded a host manifest behind the ciphertext set. The
+# seed reads the bootc-owned path, and the /etc path stays the decrypt's default
+# so a rollback to an image that only read /etc still finds a manifest.
+check "the manifest ships at the bootc-owned path" \
+  test -s image/rootfs/usr/share/smortress/secrets.manifest
+check "no manifest ships under /etc" no_file_exists image/rootfs/etc/smortress/secrets.manifest
+check "the build makes the manifest world-readable" \
+  has 'chmod 0644 /etc/pki/containers/smortress.pub /usr/share/smortress/secrets.manifest' \
+  image/Containerfile
+check "the seed reads the bootc-owned manifest" \
+  has 'SMORTRESS_SECRETS_IMAGE_MANIFEST:-/usr/share/smortress/secrets.manifest' \
+  scripts/smortress-secrets-seed.sh
+check "the seed refreshes the manifest the decrypt reads" \
+  has 'SMORTRESS_SECRETS_MANIFEST:-/etc/smortress/secrets.manifest' \
+  scripts/smortress-secrets-seed.sh
+check "the boot decrypt still reads the /etc copy" \
+  has 'SMORTRESS_SECRETS_MANIFEST:-/etc/smortress/secrets.manifest' scripts/sops-decrypt.sh
 
 # The two machine credentials are agent-only (docs/agent-identity.md): a bare
 # value, root-only, because the dispatcher hands the file's bytes to one general
@@ -706,7 +727,7 @@ for name in agent-github-token.yaml sdlc-github-token.yaml; do
   if [[ -e secrets/server/$name ]]; then
     check "$name is a root-only manifest value" \
       grep -qE "^${name//./\\.}[[:space:]]+root[[:space:]]+root[[:space:]]+0400[[:space:]]+value$" \
-      image/rootfs/etc/smortress/secrets.manifest
+      image/rootfs/usr/share/smortress/secrets.manifest
   else
     ok "$name is not staged yet (no agent GitHub identity before T5)"
   fi
@@ -721,7 +742,7 @@ done
 # a reinstall fail where the design says it must not.
 check "the account hash is a manifest value" \
   grep -qE '^smores-password-hash\.yaml[[:space:]]+root[[:space:]]+root[[:space:]]+0400[[:space:]]+value$' \
-  image/rootfs/etc/smortress/secrets.manifest
+  image/rootfs/usr/share/smortress/secrets.manifest
 check "the renderer reads the hash from ciphertext" \
   has 'secrets/server/smores-password-hash.yaml' scripts/render-ignition.sh
 if grep -rIl --exclude=check-server-image.sh 'ignition/operator/smores-password-hash' \
@@ -1014,7 +1035,7 @@ check "the tmpfiles entry creates the queue" \
 for name in webhook-secret webhook-secret-next deploy-ping-url; do
   check "$name is a manifest value" \
     grep -qE "^${name//./\\.}\.yaml[[:space:]]+root[[:space:]]+root[[:space:]]+0400[[:space:]]+value$" \
-    image/rootfs/etc/smortress/secrets.manifest
+    image/rootfs/usr/share/smortress/secrets.manifest
 done
 
 # The gate's list is only meaningful if every line is active on a healthy host:

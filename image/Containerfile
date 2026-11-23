@@ -158,7 +158,7 @@ RUN set -eux; \
     rm -rf /usr/libexec/smortress-src; \
     ln -sf /usr/libexec/smortress-deploy /usr/bin/smortress-deploy; \
     chmod 0755 /usr/libexec/apps-schema; \
-    chmod 0644 /etc/pki/containers/smortress.pub /etc/smortress/secrets.manifest; \
+    chmod 0644 /etc/pki/containers/smortress.pub /usr/share/smortress/secrets.manifest; \
     chmod 0600 /etc/smortress/secrets/*.yaml; \
     chmod 0644 /etc/pam.d/sudo; \
     chmod 0600 /etc/ssh/sudo_authorized_keys; \

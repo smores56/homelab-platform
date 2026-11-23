@@ -698,6 +698,7 @@ export STUB_SOPS_PLAINTEXT=$'first: one\nsecond: two\n'
 export STUB_SOPS_PLAINTEXT
 run scripts/sops-decrypt.sh
 if ((rc != 0)); then ok "a multi-key secret cannot be written as value"; else bad "a multi-key secret cannot be written as value"; fi
+unset STUB_SOPS_PLAINTEXT
 
 printf 'extra.yaml\n' >"$dec/src/extra.yaml"
 run scripts/sops-decrypt.sh
@@ -708,6 +709,11 @@ rm -f "$dec/src/extra.yaml"
 # The decrypt reads /var now, and the image's baked set is only the seed for a
 # host that has none. Nothing may overwrite a host copy: that is where a rotation
 # lands, and reinstating the baked value would silently undo it.
+#
+# Both manifest paths are pointed into the work dir: the seed rewrites the host
+# manifest, and a harness run must never touch the machine's /etc.
+export SMORTRESS_SECRETS_IMAGE_MANIFEST=$work/seed/image.manifest
+export SMORTRESS_SECRETS_MANIFEST=$work/seed/host.manifest
 seed=$work/seed
 install -d -m 0700 "$seed/baked"
 printf 'canary: baked\n' >"$seed/baked/canary.yaml"
@@ -743,6 +749,92 @@ eq "$rc" 0 "nothing baked is not an error"
 if [[ -e $seed/host/canary.yaml ]]; then bad "nothing baked copies nothing"; else
   ok "nothing baked copies nothing"
 fi
+
+# --- 7c. the manifest the image owns --------------------------------------
+# The manifest is metadata (name, owner, group, mode, format), never a secret, so
+# the image is authoritative for it. bootc merges /etc once per deployment and
+# keeps whatever the host already had, so on 2026-11-22 the image added two lines
+# and an existing host never saw them: the seed copied both ciphertexts, /etc
+# still listed the old set, and every consumer died on "ciphertext set and
+# manifest disagree" until an operator appended the lines by hand. The seed now
+# replaces the host copy from the image on every run, so the case below is a boot
+# and nothing else.
+refresh=$work/refresh
+install -d -m 0700 "$refresh/host"
+install -d -m 0755 "$refresh/image" "$refresh/image/secrets"
+printf 'canary: baked\n' >"$refresh/image/secrets/canary.yaml"
+printf 'token: baked\n' >"$refresh/image/secrets/new-token.yaml"
+cat >"$refresh/image/secrets.manifest" <<EOF
+canary.yaml      $me $mg 0600
+new-token.yaml   $me $mg 0600 value
+EOF
+# A host that predates the new image: the manifest it booted with, and one of the
+# two ciphertexts already rotated in place under it.
+printf 'canary.yaml  %s %s 0600\n' "$me" "$mg" >"$refresh/host/secrets.manifest"
+printf 'canary: rotated\n' >"$refresh/host/canary.yaml"
+run env SMORTRESS_SECRETS_BAKED="$refresh/image/secrets" \
+  SMORTRESS_SECRETS_SRC="$refresh/host" \
+  SMORTRESS_SECRETS_IMAGE_MANIFEST="$refresh/image/secrets.manifest" \
+  SMORTRESS_SECRETS_MANIFEST="$refresh/host/secrets.manifest" \
+  scripts/smortress-secrets-seed.sh
+eq "$rc" 0 "the seed applies the image manifest over the host's stale copy"
+if cmp -s "$refresh/image/secrets.manifest" "$refresh/host/secrets.manifest"; then
+  ok "the host manifest becomes the image's, not the one bootc preserved"
+else
+  bad "the host manifest becomes the image's, not the one bootc preserved" \
+    "$(cat "$refresh/host/secrets.manifest")"
+fi
+eq "$(stat -c %a "$refresh/host/secrets.manifest" 2>/dev/null)" 644 \
+  "the replaced manifest stays readable metadata, not a secret"
+# The mixed rotation the incident hit: one entry the host already rotated and one
+# the image added. The manifest refresh must not touch the first, must seed the
+# second, and the set has to match afterwards or every consumer fails.
+eq "$(cat "$refresh/host/canary.yaml")" "canary: rotated" \
+  "a rotated ciphertext survives the manifest refresh"
+eq "$(cat "$refresh/host/new-token.yaml" 2>/dev/null)" "token: baked" \
+  "the ciphertext the new manifest line names is seeded"
+
+run env SMORTRESS_SECRETS_SRC="$refresh/host" SMORTRESS_SECRETS_DST="$refresh/run" \
+  SMORTRESS_SECRETS_MANIFEST="$refresh/host/secrets.manifest" \
+  SMORTRESS_AGE_KEY="$dec/age" scripts/sops-decrypt.sh
+if ((rc != 0)); then
+  bad "the decrypt succeeds on a host that only ran the seed" "$out"
+else
+  ok "the decrypt succeeds on a host that only ran the seed"
+fi
+eq "$(cat "$refresh/run/new-token.yaml" 2>/dev/null)" "sops-decrypt-ok" \
+  "the newly seeded secret decrypts as the manifest's value"
+if [[ -s $refresh/run/canary.yaml ]]; then
+  ok "the rotated ciphertext decrypts too"
+else
+  bad "the rotated ciphertext decrypts too"
+fi
+
+# A second boot of the same image is a no-op, not a rewrite: the inode survives.
+manifest_inode=$(stat -c %i "$refresh/host/secrets.manifest")
+run env SMORTRESS_SECRETS_BAKED="$refresh/image/secrets" \
+  SMORTRESS_SECRETS_SRC="$refresh/host" \
+  SMORTRESS_SECRETS_IMAGE_MANIFEST="$refresh/image/secrets.manifest" \
+  SMORTRESS_SECRETS_MANIFEST="$refresh/host/secrets.manifest" \
+  scripts/smortress-secrets-seed.sh
+eq "$rc" 0 "a second seed run is not an error"
+eq "$(stat -c %i "$refresh/host/secrets.manifest")" "$manifest_inode" \
+  "an unchanged manifest is not rewritten"
+
+# An image that carries no manifest -- the release that drops the baked set, or a
+# rollback to one that only ever had /etc -- must leave the host copy alone: the
+# seed is not allowed to delete the only manifest a booting host has.
+mv "$refresh/image/secrets.manifest" "$refresh/image/secrets.manifest.off"
+printf 'canary.yaml  %s %s 0600\n' "$me" "$mg" >"$refresh/host/secrets.manifest"
+run env SMORTRESS_SECRETS_BAKED="$refresh/image/secrets" \
+  SMORTRESS_SECRETS_SRC="$refresh/host" \
+  SMORTRESS_SECRETS_IMAGE_MANIFEST="$refresh/image/secrets.manifest" \
+  SMORTRESS_SECRETS_MANIFEST="$refresh/host/secrets.manifest" \
+  scripts/smortress-secrets-seed.sh
+eq "$rc" 0 "an image without a manifest is not an error"
+eq "$(cat "$refresh/host/secrets.manifest")" "canary.yaml  $me $mg 0600" \
+  "an image without a manifest leaves the host copy alone"
+mv "$refresh/image/secrets.manifest.off" "$refresh/image/secrets.manifest"
 
 # --- 8. units cannot start before the dataset is ready ------------------
 svc=units/systemd/smortress-restic-backup@.service

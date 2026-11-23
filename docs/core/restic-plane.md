@@ -305,7 +305,7 @@ host sends notifications, and no ntfy or observability stack is involved.
 | `/run/smortress/secrets/healthchecks.yaml` | `restic-ping-url` | verifier ping URL |
 
 `restic-password.yaml` is decrypted with `format=value` in
-`image/rootfs/etc/smortress/secrets.manifest`, so the file contains only the
+`image/rootfs/usr/share/smortress/secrets.manifest`, so the file contains only the
 password; restic cannot read a YAML document with a key. Credentials reach
 restic through the environment, never argv, and are never printed.
 `r2-credentials.yaml` is committed ciphertext and is listed in the manifest.

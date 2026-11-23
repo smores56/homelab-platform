@@ -3098,8 +3098,8 @@ repositories are brought up alone.
    committed ciphertext with exactly two keys, `r2_access_key_id` and
    `r2_secret_access_key` — the Object Read & Write pair for the backup jobs.
    (The read-only pair is T4's.) The file is already listed in
-   `image/rootfs/etc/smortress/secrets.manifest` as `root root 0400`; there is
-   nothing to add unless the pair is rotated.
+   `image/rootfs/usr/share/smortress/secrets.manifest` as `root root 0400`; there
+   is nothing to add unless the pair is rotated.
 
    To rotate, create a new Object Read & Write token scoped to `homelab-restic`
    and edit the ciphertext in place; sops applies the `secrets/server/*.yaml`
@@ -3141,14 +3141,21 @@ repositories are brought up alone.
    )
    ```
 
-   Add this line to `image/rootfs/etc/smortress/secrets.manifest`:
+   Add this line to `image/rootfs/usr/share/smortress/secrets.manifest`:
 
    ```text
    healthchecks.yaml       root  root  0400
    ```
 
-   A *new* secret also needs its host copy, because the seed copies only the set
-   the image was built with:
+   That is a commit and nothing else: the manifest is image-owned, and the boot
+   seed copies it over `/etc/smortress/secrets.manifest` (which is what
+   `sops-decrypt.service` reads) on every run, so it reaches every host at its
+   next boot. Never edit `/etc/smortress/secrets.manifest` on the host — a later
+   boot overwrites it.
+
+   The ciphertext is the half that still needs a host copy before the image
+   carrying it is deployed; the seed fills it in at the first boot after the
+   deploy, and this stages it now:
 
    ```sh
    sudo install -m 0600 -o root -g root secrets/server/healthchecks.yaml \
@@ -3940,7 +3947,7 @@ deploy cycle followed by a restart of the one UI).
 git commit -am 'chore(core): set the agent provider key'
 ```
 
-Each file must stay a single scalar, because `image/rootfs/etc/smortress/secrets.manifest`
+Each file must stay a single scalar, because `image/rootfs/usr/share/smortress/secrets.manifest`
 declares it `value`: a second key or an empty value fails `sops-decrypt.service` at
 boot rather than publishing half a secret. The seven manifest rows are exactly
 
