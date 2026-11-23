@@ -59,8 +59,8 @@ scripts/render-recovery-groups.py --check # the recovery manifest matches its so
 ```
 
 `scripts/check-all.sh` is the source of truth for what runs; CI
-(`.github/workflows/ci.yml`) runs the same commands, sharded into jobs.
-`.github/workflows/tofu-plan.yml` and `tofu-apply.yml` own the `cloudflare`
+(`.github/workflows/ci.yml`) calls it once per shard with `--only <group>`.
+`.github/workflows/tofu-plan-pr.yml` and `tofu-apply.yml` own the `cloudflare`
 environment: `tofu-plan` is a read-only drift check on `main`, and `tofu-apply`
 is `workflow_dispatch` only and applies a reviewed plan (SDLC #622).
 

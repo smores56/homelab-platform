@@ -1,0 +1,1 @@
+# Accepted stale references. Shrink-only: remove a line when fixed.

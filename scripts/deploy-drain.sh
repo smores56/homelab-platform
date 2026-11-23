@@ -37,6 +37,11 @@
 #
 # shellcheck disable=SC2154  # deploy-state.sh assigns these at source time
 set -euo pipefail
+# shellcheck source=/dev/null
+_smolib=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/lib/log.sh
+[[ -r $_smolib ]] || _smolib=/usr/libexec/lib/log.sh
+# shellcheck source=/dev/null
+source "$_smolib"
 
 self_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 # The image installs the library beside this script as /usr/libexec/deploy-state
@@ -95,8 +100,6 @@ gate_timeout=${DEPLOY_GATE_DEADLINE:-4200}
 apps_bin=$(deploy_resolve "${DEPLOY_APPS_BIN:-}" deploy-apps "$self_dir/deploy-apps.sh")
 apps_timeout=${DEPLOY_APPS_DEADLINE:-6000}
 
-say() { printf 'deploy-drain: %s\n' "$*"; }
-warn() { printf 'deploy-drain: %s\n' "$*" >&2; }
 
 # The queued shape the verification action acts on. An entry that cannot be read
 # must never wedge the queue: it is dropped with a record, which is also what a

@@ -52,17 +52,7 @@ jobs:
           echo "${BUTANE_SHA256}  $RUNNER_TEMP/bin/butane" | sha256sum -c -
           chmod 0755 "$RUNNER_TEMP/bin/butane"
           echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
-      - name: repository and image static checks
-        run: scripts/check-server-image.sh
-      - name: shellcheck new scripts
-        run: shellcheck scripts/*.sh
-      - name: render Ignition from fixtures
-        run: scripts/render-ignition.sh --synthetic --check
-      - name: Ignition carries no secret
-        # The template, the renderer and the rendered config: a passphrase that
-        # reappears in any of them is invisible to every other check.
-        run: tests/core/ignition-boundary.sh
-      - name: render the uCore-media variant
-        # --stock drops the autorebase units; it must stay renderable and must
-        # not be reachable from a plain render.
-        run: scripts/render-ignition.sh --synthetic --stock --check
+      - name: server-image group
+        # The group runs the static checks, both Ignition renders, and the
+        # boundary test. The command lives in scripts/check-all.sh.
+        run: scripts/check-all.sh --only server-image

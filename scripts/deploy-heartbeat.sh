@@ -22,6 +22,11 @@
 #
 # shellcheck disable=SC2154  # deploy-state.sh assigns these at source time
 set -euo pipefail
+# shellcheck source=/dev/null
+_smolib=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/lib/log.sh
+[[ -r $_smolib ]] || _smolib=/usr/libexec/lib/log.sh
+# shellcheck source=/dev/null
+source "$_smolib"
 
 if (($#)); then
   printf 'usage: deploy-heartbeat\n' >&2
@@ -59,8 +64,6 @@ health_timeout=${DEPLOY_HEALTH_TIMEOUT:-5}
 # slowest honest deploy, or a healthy host pages on its own slow rollout.
 queue_max_age=${DEPLOY_QUEUE_MAX_AGE:-7200}
 
-say() { printf 'deploy-heartbeat: %s\n' "$*"; }
-warn() { printf 'deploy-heartbeat: %s\n' "$*" >&2; }
 
 fail_and_exit() { # <reason>
   # The reason carries the program name already: it is the line Pushover shows, and

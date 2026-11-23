@@ -27,6 +27,11 @@
 #
 # shellcheck disable=SC2154  # deploy-state.sh assigns these at source time
 set -euo pipefail
+# shellcheck source=/dev/null
+_smolib=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/lib/log.sh
+[[ -r $_smolib ]] || _smolib=/usr/libexec/lib/log.sh
+# shellcheck source=/dev/null
+source "$_smolib"
 
 if (($#)); then
   printf 'usage: deploy-poll\n' >&2
@@ -75,8 +80,6 @@ poll_cache_ttl=${DEPLOY_POLL_CACHE_TTL:-120}
 # 33rd request and the poll must not be the thing that grows the queue past it.
 poll_queue_cap=${DEPLOY_QUEUE_CAP:-32}
 
-say() { printf 'deploy-poll: %s\n' "$*"; }
-warn() { printf 'deploy-poll: %s\n' "$*" >&2; }
 
 # -- the 120 s cache --------------------------------------------------------
 

@@ -1,16 +1,14 @@
 # Secrets: who consumes a credential decides where it lives
 
-Three stores exist, and a secret belongs to exactly one of them. The question is
+Two stores exist, and a secret belongs to exactly one of them. The question is
 never "which repo is convenient" but "what reads this value, and what may
 decrypt it".
 
 | Consumer | Store | Encrypted to | Applied by |
 | --- | --- | --- | --- |
-| Operator tooling in this repository (`tofu`, scripts) | `secrets/*.yaml` | the admin identity only | the operator, via `sops -d` |
-| A workload this cluster runs | `clusters/**/*.sops.yaml` | the `flux-system` `sops-age` identity | Flux, with `spec.decryption` on the owning Kustomization |
-| A host unit in `smores56/nix-config` | `nix-config/secrets/smortress.yaml` | the admin and host identities | sops-nix at boot |
-| A host unit on the bootc plane | `secrets/server/*.yaml` on the host at `/var/lib/smortress/secrets` | the host and admin identities | `sops-decrypt.service` at boot, into `/run/smortress/secrets` |
-| A host unit on the Nix-free plane | `/etc/homelab/secrets` | the operator bundle only, never in git | the `secrets` role from a decrypted directory |
+| Operator tooling in this repository (`tofu`, scripts) | `secrets/*.yaml` | all five recipients | the operator, via `sops -d` |
+| Ciphertext the host reads | `secrets/boot.json`, `secrets/apps.json`, `secrets/agents.json` | the machine identity, the admin identity and the three YubiKeys | `sops-decrypt.service` at every boot (`docs/manual-steps.md`) |
+| A host unit's copy of that ciphertext | `/var/lib/smortress/secrets` | all five recipients (the machine identity is the unattended reader) | `sops-decrypt.service` at boot, into `/run/smortress/secrets` |
 
 The admin identity is the operator's passphrase-wrapped age key. Trusting it in
 both repository stores is deliberate: everything here is maintained by one
@@ -18,29 +16,30 @@ person, and the alternative — a ciphertext file nobody can edit — is worse.
 
 ## Image ciphertext on the server
 
-`secrets/server/*.yaml` holds values a host unit needs at boot, carried inside
-this repository instead of only in the recovery kit. `.sops.yaml` encrypts that
-path to five recipients: the shared machine identity that is the unattended root
+`secrets/*.json` holds values a host unit needs at boot, carried inside this
+repository instead of only in the recovery kit. `.sops.yaml` encrypts that path
+to five recipients: the shared machine identity that is the unattended root
 reader, staged root-only at `/var/lib/homelab/age/keys.txt` from the kit, and the
 admin identity plus the three YubiKeys, so the operator can edit a value without
-touching the host. No host or cluster identity can read `secrets/*.yaml`, and
-none of the five can read `clusters/**`.
+touching the host. Every reader in the rule can decrypt every file the rule
+matches; that is deliberate, and the machine identity is the unattended
+reader that boots the host.
 `sops-decrypt.service` reads the ciphertext from `/var/lib/smortress/secrets`
-(root-only, `0700`/`0600`) and writes each file into `/run/smortress/secrets` with
-the owner, mode and `format` named in
-`image/rootfs/usr/share/smortress/secrets.manifest`.
+(root-only, `0700`/`0600`) and writes each output into `/run/smortress/secrets` by
+extracting the dotted `key` from the `bundle` its line names, with the owner, mode
+and `format` from `image/rootfs/usr/share/smortress/secrets.manifest`.
 
-That manifest is metadata — a name, an owner, a mode — never a secret, so the
-image owns it. It does **not** ship under `/etc`: bootc merges `/etc` once per
-deployment and keeps whatever the host already had, so a line a later image adds
-never reaches an existing host. It ships at
+That manifest is metadata — a name, a bundle, a key, an owner, a mode, a format —
+never a secret, so the image owns it. It does **not** ship under `/etc`: bootc
+merges `/etc` once per deployment and keeps whatever the host already had, so a
+line a later image adds never reaches an existing host. It ships at
 `/usr/share/smortress/secrets.manifest`, a path bootc does update, and the seed
 copies it over `/etc/smortress/secrets.manifest` — which is what
 `sops-decrypt.service` reads — on every run. The copy is skipped when the content
 is unchanged and renamed into place when it changes, so a new manifest line is
 one boot and a crash cannot leave half a manifest. Adding a secret is therefore a
-commit; a hand edit of `/etc/smortress/secrets.manifest` is neither needed nor
-kept.
+commit — an index entry, its key in a bundle, and the consumer that reads it;
+a hand edit of `/etc/smortress/secrets.manifest` is neither needed nor kept.
 
 `/etc` stays the path the decrypt reads on purpose: a rollback to a deployment
 whose seed predates this copy must still find a manifest where its own
@@ -48,32 +47,59 @@ whose seed predates this copy must still find a manifest where its own
 a rebase.
 
 The image also carries the same set under `/etc/smortress/secrets`, and that copy
-is *only* a seed. `sops-decrypt.service`'s `ExecStartPre` copies each ciphertext
-the host does not have yet and never overwrites one that is there, so a *new*
-secret reaches `/var` on the next boot by itself, while a rotation stays a host
-write. A rotation is an operator write plus a restart of the unit — no image, no
-reboot:
+is *only* a seed. `sops-decrypt.service`'s `ExecStartPre` copies each bundle the
+host does not have yet and never overwrites one that is there, so a *new* bundle
+reaches `/var` on the next boot by itself, while a rotation stays a host write.
+
+The seed retires a bundle the index no longer names on the first boot after the
+swap, so a rollback still finds the old ciphertext.
+
+### Bundling the ciphertext
+
+Three bundles hold every host value, each a SOPS-encrypted JSON object with one
+dotted key per output. Two operator YAML files hold what no host unit reads, and
+`secrets/index.json` is the index over all of them:
+
+| Ciphertext | Holds |
+| --- | --- |
+| `secrets/boot.json` | the boot plane: `canary`, `restic.password`, `r2`, `healthchecks`, `tailscale`, `smores.password_hash`, `webhook.secret`, `webhook.next`, `deploy.ping_url` |
+| `secrets/apps.json` | the application plane: `immich.db_password`, `opdshelf.admin_password` |
+| `secrets/agents.json` | the agent plane: `agent.*`, `facade.*`, `ui.*`, `simplefin.access_url`, `tmail.bridge_password`, `brave.sync_seed` |
+| `secrets/660-host.yaml`, `secrets/cloudflare.yaml` | operator files: `tofu` and `scripts/unpack-host-secrets.py` only, one key per run |
+
+An index entry names, for one output, its `bundle`, its dotted `key`, the
+owner/group/mode it lands with, its `format`, and its consumer. The manifest line
+is that entry rendered, so the decrypt extracts one output from one bundle and
+writes it under its own name; `format` `value` writes the bare scalar and `yaml`
+writes the extracted document verbatim. Nothing is decrypted as a whole bundle at
+boot.
+
+One procedure covers every value:
 
 ```sh
-sops secrets/server/<name>.yaml                     # edit the committed ciphertext
-sudo install -m 0600 -o root -g root secrets/server/<name>.yaml \
-  /var/lib/smortress/secrets/<name>.yaml
-sudo systemctl restart sops-decrypt.service
-# then the consumers, or reboot; /run is tmpfs and is rebuilt at every boot
+scripts/secret.sh edit <output>     # opens the bundle that holds the output;
+                                    # the index names the key to edit
+scripts/secret.sh stage <output>    # installs that bundle, restarts the decrypt
+                                    # unit, and names the consumers to restart
+scripts/secret.sh verify            # keyless policy, index and bundle checks
 ```
 
-The seed and the baked copy go away in the release after this one, at which point
-a fresh install stages the ciphertext from the checkout next to the age identity.
+`scripts/secret.sh rotate <output>` also generates a new data key first. A value
+that must not touch the host decrypts directly, in JSON path form:
+
+```sh
+sops --decrypt --extract '["restic"]["password"]' secrets/boot.json
+```
 
 The table below is a reference for the two consumers whose file shape or ordering
-is load-bearing, not an inventory: the directory holds 18 ciphertext files, and
-the rest are one value each, named by the unit or script that reads them (the
-manifest is the set).
+is load-bearing, not an inventory: the index holds 23 outputs across three
+bundles, and the rest are one value each, named by the unit or script that reads
+them (the manifest is the set).
 
-| File | Read by | Rule |
-| --- | --- | --- |
-| `smores-password-hash.yaml` | `scripts/render-ignition.sh` (install) and `smortress-password.service` (every boot, `chpasswd -e`) | the `smores` account password, sha512crypt. Not in git as plaintext: only this ciphertext is, and the password itself is a recovery-kit item. `value` format, because `chpasswd -e` takes the bare hash. Rotate with `docs/manual-steps.md` section 37. |
-| `tailscale.yaml` | `smortress-tailscale-up.service` | the pre-signed, single-use Tailscale auth key under `authkey:`, `yaml` format (the unit greps the field). It must land with its manifest line: ciphertext without the line is never decrypted into `/run`, and a line without ciphertext fails the decrypt unit's set comparison and takes every consumer down with it. |
+| Output | Ciphertext and key | Read by | Rule |
+| --- | --- | --- | --- |
+| `smores-password-hash.yaml` | `secrets/boot.json` `["smores"]["password_hash"]` | `scripts/render-ignition.sh` (install) and `smortress-password.service` (every boot, `chpasswd -e`) | the `smores` account password, sha512crypt. Not in git as plaintext: only this ciphertext is, and the password itself is a recovery-kit item. `value` format, because `chpasswd -e` takes the bare hash. Rotate with `docs/manual-steps.md` section 37. |
+| `tailscale.yaml` | `secrets/boot.json` `["tailscale"]` | `smortress-tailscale-up.service` | the pre-signed, single-use Tailscale auth key under `authkey:`, `yaml` format (the unit greps the field). The index line and the key must land together: an output the manifest does not name is never extracted into `/run`, and a bundle the index does not name fails the decrypt unit's set comparison and takes every consumer down with it. |
 
 The account hash is the reason the path exists: bootc never reconciles `/var`, so
 a password written only by Ignition at install time would be whatever the last
@@ -105,58 +131,6 @@ Create or edit it interactively, which keeps values out of shell history:
 ```sh
 sops secrets/cloudflare.yaml
 ```
-
-## Cluster ciphertext
-
-Nothing is sealed this way yet; the mechanism is wired for the first workload
-secret to move out of the operator's hands. The rules:
-
-- the file lives beside the object it becomes and ends in `.sops.yaml`;
-- the owning Kustomization carries the contract from
-  `clusters/homelab/platform/secrets/sops-contract.yaml`, because the controller
-  runs with `--no-cross-namespace-refs` and the `sops-age` Secret lives in
-  `flux-system`;
-- `.sops.yaml` gains the `flux-system` recipient when the first file lands, so a
-  mistyped path fails to encrypt instead of landing in the wrong key group.
-
-## What stays in `nix-config`, and what retires it
-
-A credential whose daily reader is a host unit stays host-side until that unit is
-gone. These are the holdovers, each with the task that ends it:
-
-| nix-config key | Host reader | Retired by |
-| --- | --- | --- |
-| `cloudflare-api-token` | `kanbei-access.nix` DNS-01, the `cloudflare-*` flake apps | flake apps: the step-14 state move; Kanbei: a DNS-scoped token of its own |
-| `cloudflared-credentials` | the host tunnel (`web-proxy.nix`) | #615, when the last host-owned route moves; the derived image ships no connector, so nothing here replaces it |
-| `restic-password`, `r2-access-key-id`, `r2-secret-access-key` | `restic-backup.nix` | #660: one repository per recovery group, then the restore drill (`docs/manual-steps.md` step 35) |
-| `memory-mcp-token` | the maki memory shim | #617's cluster route with an Access service token |
-
-### The #660 data plane
-
-| Credential | Lives at | Read by | Rule |
-| --- | --- | --- | --- |
-| One restic password | generated in `secrets/660-host.yaml`, installed to `/etc/homelab/secrets/restic/data-plane.password` | every `homelab-backup` run and the recovery entrypoint | one password covers every group and tier; never per-group keys |
-| Read-only R2 key pair | `/etc/homelab/secrets/restic/r2.env` (`AWS_*`), root-only | `restic copy` to R2, the page blob source | cannot read, delete or change bucket policy; the write credential is not on the host |
-| Page blob keys | `secrets/recovery.yaml` in this repository, SOPS to the admin identity | `deno task blob` only | `restic-password` and the `r2-*-readonly` pair; the blob itself is public and encrypted |
-| Event append/read tokens | `/etc/homelab/secrets/event-service/` on the host, cluster Secret `event-service-secrets` in the cluster | `event` only | must differ; the service refuses equal values, and a relay holds neither |
-| Broker identity and approval key | `/etc/homelab/secrets/write-broker/` on the host, Secret `write-broker-secrets` in the cluster | `broker` only | the broker mounts both; no other workload receives either |
-| Relay tokens | one Secret per source (`relay-brave`, …) | that collector only | never shared between sources; the host runs no relay |
-
-Host secret files are installed by the `secrets` play (`--tags secrets`, one
-decrypted directory) from the single `host_secret_files` policy. An entry a unit
-mounts installs on the data-plane host at `0640 root:65532` and is mounted
-read-only; an entry without a unit installs on the storage host at `0600 root`.
-The parent chain stays `0700`, so the numeric gid is not a host group. The copy
-owns the final owner and mode, so a drift is corrected on the next run, and a
-rotation restarts only a running unit whose content changed
-(`systemctl try-restart`); a stopped or fenced unit stays stopped. The host
-backup units read `/etc/homelab/secrets/restic` directly. There is no cluster
-Secret to create: the data-plane base that mounted one was retired with the
-k3s/Flux tree, so the host files above are the only copy of each value.
-
-Until each row moves, the same value may exist in two stores. The host copy stays
-authoritative for the host reader; the platform copy is written with the host
-reader in mind, not copied blindly.
 
 ## Not secrets
 

@@ -42,8 +42,8 @@ repairing Helm drift and pushing image-automation commits, while the
 applications keep running and the nightly restic jobs keep running.
 
 ```
-sudo scripts/core/freeze-legacy.sh --check     # record what is suspended today
-sudo scripts/core/freeze-legacy.sh --apply     # writes /var/lib/freeze-legacy/<ts>.state
+sudo scripts/legacy/freeze-legacy.sh --check     # record what is suspended today
+sudo scripts/legacy/freeze-legacy.sh --apply     # writes /var/lib/freeze-legacy/<ts>.state
 ```
 
 `--apply` records every object's previous `spec.suspend` before patch and then
@@ -109,7 +109,7 @@ sudo systemctl start restic-backups-r2.service
 
 # prove: metadata, sampled pack reads, presence of every retained tree,
 # a restore of the small trees and the live Immich dump
-sudo scripts/core/verify-legacy-backups.sh --keep
+sudo scripts/legacy/verify-legacy-backups.sh --keep
 ```
 
 The verifier changes nothing that matters: no snapshot is added, no retention

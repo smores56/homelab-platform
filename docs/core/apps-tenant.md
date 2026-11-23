@@ -76,7 +76,7 @@ bypass actor is the repository admin role. The shell path was measured on
 2026-11-22: `smores56-agent` (classic `repo` PAT, Write collaborator) pushed
 `smores/agent-pr-proof`, opened PR #4, enabled squash auto-merge, and GitHub
 merged it at 18:38:17Z with `apps-schema` green and no human approval because
-the diff touched only `apps/smoke/app.toml`. A direct push of the same commit to
+the diff touched only one app definition in the tenant repository. A direct push of the same commit to
 `main` was refused with `push declined due to repository rule violations`.
 `scripts/agent-tenant-pr-probe.sh` repeats this: its read-only mode checks the
 token identity, the Write role, the ruleset and the direct-push refusal, and

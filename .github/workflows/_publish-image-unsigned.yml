@@ -1,0 +1,54 @@
+# Builds and pushes one unsigned image. The broker and webhook hold no signing
+# environment: their packages are consumed only inside the host's own Quadlets.
+# The caller owns the trigger, the concurrency group, and the build context.
+name: _publish-image-unsigned
+
+on:
+  workflow_call:
+    inputs:
+      name:
+        description: image name
+        required: true
+        type: string
+      dockerfile:
+        description: path to the Dockerfile
+        required: true
+        type: string
+      context:
+        description: docker build context
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      - name: build, push, and print the digest
+        env:
+          IMAGE: ghcr.io/smores56/homelab-platform/${{ inputs.name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="sha-${GITHUB_SHA::12}"
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker build \
+            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            -t "$IMAGE:$tag" -f "${{ inputs.dockerfile }}" "${{ inputs.context }}"
+          docker push "$IMAGE:$tag"
+          digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE:$tag" | cut -d@ -f2)
+          [[ $digest =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "no digest in RepoDigests"; exit 1; }
+          {
+            echo "### ${{ inputs.name }} image"
+            echo
+            echo "- \`$IMAGE:$tag\`"
+            echo "- \`$IMAGE@$digest\`"
+          } >>"$GITHUB_STEP_SUMMARY"
+          echo "pin: $IMAGE@$digest"

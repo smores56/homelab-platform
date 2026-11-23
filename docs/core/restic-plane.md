@@ -3,7 +3,7 @@
 Three independent repositories, one shared password, one job per restore unit
 per destination. This document is the host contract: layout, schedule, tags,
 retention, what a failed run means, how to restore by hand, and what is still
-unproven. Operator actions are in `docs/manual-steps.md` section 38; the disks,
+unproven. Operator actions are in `docs/manual-steps.md#bringing-the-plane-up`; the disks,
 ZFS pool and readiness units are described in `docs/core/server-image.md`.
 
 Everything here runs on the host: bash, systemd, `restic` 0.19.1, `zfs`, `jq`,
@@ -38,9 +38,9 @@ prove the plane on their own. Nothing in the plane skips or mutes a destination
 that is not there.
 
 The R2 bucket and repository path already exist. The write key pair is read from
-SOPS (`r2_access_key_id`, `r2_secret_access_key`); when either is absent or
-empty the `r2` jobs record failures and the verifier stays red rather than
-skipping the destination. The legacy migration repository is a different bucket
+`secrets/boot.json` (`["r2"]["r2_access_key_id"]`, `["r2"]["r2_secret_access_key"]`);
+when either is absent or empty the `r2` jobs record failures and the verifier stays
+red rather than skipping the destination. The legacy migration repository is a different bucket
 and is never referenced by this plane.
 
 ## Restore units and snapshot paths
@@ -56,7 +56,7 @@ file regenerates.
 
 `state/agent-model` is the one dataset in **no** unit, and the table says so
 (`dataset_unrestored`): it holds the 4.7 GiB GGUF blob the personal model server
-loads, which `docs/manual-steps.md` section 40.8 re-downloads and verifies by
+loads, which `docs/manual-steps.md#fetch-the-pinned-model` re-downloads and verifies by
 checksum. Backing it up would put a fully reconstructable artefact in every
 snapshot and in R2 for no restore value, so a cold restore fetches it instead.
 The gateway cannot start without it, which is a loud failure rather than a silent
@@ -300,19 +300,19 @@ host sends notifications, and no ntfy or observability stack is involved.
 
 | File (decrypted at boot) | Key | Use |
 | --- | --- | --- |
-| `/run/smortress/secrets/restic-password.yaml` | single value | `RESTIC_PASSWORD_FILE` for all three repositories |
-| `/run/smortress/secrets/r2-credentials.yaml` | `r2_access_key_id`, `r2_secret_access_key` | exported as `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` for `r2` only |
-| `/run/smortress/secrets/healthchecks.yaml` | `restic-ping-url` | verifier ping URL |
+| `/run/smortress/secrets/restic-password.yaml` | `["restic"]["password"]` | `RESTIC_PASSWORD_FILE` for all three repositories |
+| `/run/smortress/secrets/r2-credentials.yaml` | `["r2"]["r2_access_key_id"]`, `["r2"]["r2_secret_access_key"]` | exported as `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` for `r2` only |
+| `/run/smortress/secrets/healthchecks.yaml` | `["healthchecks"]["restic-ping-url"]` | verifier ping URL |
 
+All three outputs are extracted from one ciphertext, `secrets/boot.json`.
 `restic-password.yaml` is decrypted with `format=value` in
 `image/rootfs/usr/share/smortress/secrets.manifest`, so the file contains only the
 password; restic cannot read a YAML document with a key. Credentials reach
 restic through the environment, never argv, and are never printed.
 `r2-credentials.yaml` is committed ciphertext and is listed in the manifest.
-`healthchecks.yaml` is absent until the operator creates the check (section 38
-step 3): listing a ciphertext before it exists fails `sops-decrypt.service`
-and every dependent unit, so the file and its manifest line are added in the
-same image build.
+`healthchecks.yaml` carries the ping URL the operator creates in section 38 step 3,
+and the verifier treats an empty URL as a failed check rather than pinging a
+placeholder.
 
 ## Restore by hand
 
@@ -430,7 +430,7 @@ These need the physical host and are not claimed by the repository tests:
 - A cold restore of every group from each destination (the T6 gate), including
   ownership and database recovery.
 
-`scripts/retirement-gate.sh` is the matrix runner for #709's gate: run it on the
+`scripts/legacy/retirement-gate.sh` is the matrix runner for #709's gate: run it on the
 host as root and it restores every unit from every destination with the drill
 helper, checks one sample file per restored dataset against the live tree, and
 prints the evidence table. It cannot prove database recovery or application
@@ -463,3 +463,48 @@ writing to the general group, a unit mounting agent state without naming its sid
 a writable model mount, a dropped destination timer, missing readiness ordering, a
 retention skip and a drill root inside a live dataset — and requires the finding
 each one names before the unbroken tree is allowed to pass.
+
+## Bringing the plane up
+
+Prerequisites: the age identity is staged and `secrets/boot.json` decrypts
+(`scripts/secret.sh verify` is keyless and proves the policy, the index and the
+bundles agree). The 5 TB HDD is already formatted `LABEL=restic-hdd`; the 970 carries
+`LABEL=restic-ssd` once fitted. Destinations, retention and readiness are
+`docs/core/restic-plane.md`.
+
+```sh
+sudo blkid -L restic-ssd
+sudo systemctl start var-lib-restic-ssd.mount var-lib-restic-hdd.mount
+sudo systemctl list-timers 'smortress-restic-*'    # ssd, hdd, r2, verify at :40
+sudo systemctl restart sops-decrypt.service
+sudo /usr/libexec/smortress-restic-init            # refuses to re-initialise
+sudo /usr/libexec/smortress-restic-backup ssd
+sudo /usr/libexec/smortress-restic-backup hdd
+sudo /usr/libexec/smortress-restic-backup r2
+sudo /usr/libexec/smortress-restic-verify
+sudo /usr/libexec/smortress-restic-restore-drill ssd photos --list
+sudo /usr/libexec/smortress-restic-restore-drill ssd photos
+sudo /usr/libexec/smortress-restic-restore-drill hdd books
+sudo /usr/libexec/smortress-restic-restore-drill r2 notes
+```
+
+`restic-init` never re-initialises an existing repository and refuses one under an
+unmounted mountpoint; a second run prints "already initialised" for each backend.
+Every snapshot must carry `unit:<name>`, `host:smortress` and `verified`. Open a
+file from each restored tree under
+`<target>/<mountpoint>/.zfs/snapshot/<backend>/`, compare it against the live path,
+then remove the target — a drill is evidence only once a restored file was opened
+and matched, and a bare `restic check` proves nothing about restorability.
+
+```sh
+sudo rm -rf /etc/systemd/system/smortress-restic-backup@.service.d
+sudo systemctl daemon-reload
+```
+
+Prove the failure boundaries: with the HDD unmounted the job prints `failure
+repo-not-mounted`, the verifier exits non-zero, and the SSD jobs still succeed. The
+Healthchecks.io check `smortress restic freshness` (1 hour, 30 minute grace,
+Pushover) pages on that, and its ping URL is `restic-ping-url` in
+`secrets/boot.json` (`["healthchecks"]["restic-ping-url"]`). Record the three
+repository URIs, the shared password, the R2 write token and the check name in the
+kit.

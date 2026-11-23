@@ -14,8 +14,8 @@ Kanbei-critical (`docs/kanbei-critical.md`): the token can repoint a route.
 
 SSH is not on either tunnel. It is tailnet-only (design #767): sshd answers the
 tailnet and the firewall is the filter, so there is no connector, no `ssh` DNS
-record and no `ssh` Access application to own (`docs/manual-steps.md` sections
-41-43).
+record and no `ssh` Access application to own (`docs/manual-steps.md#retire-the-cloudflare-ssh-route`,
+`docs/manual-steps.md#the-tailnet-policy-sshd-and-sudo`).
 
 `tofu/` owns DNS, Access, notifications and the ingress of the **cluster**
 tunnel; it creates no connector. The cluster tunnel's DNS comes from
@@ -129,9 +129,9 @@ write R2 pair and allows `main` only; `cloudflare-plan` holds the read-only pair
 and allows `main` and `smores/*`, because the pre-merge plan runs on a PR
 branch. A branch therefore cannot reach the write token even if its workflow
 declares `environment: cloudflare`: the policy refuses it before any secret is
-injected. `docs/manual-steps.md` steps 3a and 4 provision both.
+injected. `docs/manual-steps.md#environments-and-their-branch-policies` provisions both.
 
-The one-time move from the local file to R2 is `docs/manual-steps.md` step 14:
+The state lives in R2 (`tofu/backend.tf`), and the operator secrets are staged with `docs/manual-steps.md#environments-and-their-branch-policies`:
 back up the file, `init -migrate-state`, compare `tofu state list` before and
 after, then delete the local copy. Do not run `init` with an empty or partial
 state against this config: the first plan would propose creating every object
@@ -152,7 +152,7 @@ cluster host set is not a variable either — it follows `local.cluster_ingress`
 in `tofu/cluster.tf`.
 
 Two credentials are environment inputs, and the script is the one place that
-fetches them: SOPS decrypts `secrets/smortress.yaml` from the nix-config
+fetches them: SOPS decrypts the operator store in this repository
 checkout (override the path with `CLOUDFLARE_SECRETS_FILE`) for the zone token
 and the R2 state pair, and preset variables skip SOPS entirely.
 
@@ -300,7 +300,7 @@ tofu -chdir=tofu state rm cloudflare_zero_trust_access_application.chat
 tofu -chdir=tofu state rm cloudflare_zero_trust_access_application.nanobot
 ```
 
-`docs/manual-steps.md` steps 17 and 20 have the surrounding steps (dashboard
+`docs/manual-steps.md#kanbei-behind-access` has the surrounding steps (dashboard
 deletion, the nix-config ingress removal and the agent cutover).
 
 ## The reader's gate is gone, on purpose

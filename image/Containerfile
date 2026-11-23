@@ -93,6 +93,7 @@ COPY units/systemd/ /usr/lib/systemd/system/
 COPY units/quadlet/pattern.container /usr/share/smortress/quadlet/pattern.container
 # /usr/local is a symlink to /var on bootc, so helpers go under /usr/libexec
 # and lose the .sh suffix that the units would otherwise have to know about.
+COPY scripts/lib/ /usr/libexec/lib/
 COPY scripts/storage-layout.sh scripts/zfs-ready.sh scripts/sops-decrypt.sh \
      scripts/smortress-secrets-seed.sh scripts/init-zpool.sh \
      scripts/init-data-luks.sh \
@@ -134,7 +135,8 @@ COPY units/quadlet/immich.network units/quadlet/immich-postgres.container \
      units/quadlet/agent-egress-proxy.container \
      units/quadlet/agent-egress-dns.container \
      /usr/share/containers/systemd/
-COPY secrets/server/ /etc/smortress/secrets/
+COPY secrets/boot.json secrets/apps.json secrets/agents.json /etc/smortress/secrets/
+COPY secrets/index.json /usr/share/smortress/secrets.index.json
 COPY image/cosign.pub /etc/pki/containers/smortress.pub
 
 # The hosted-model proxy is a python program, not a shell helper, so it keeps its
@@ -145,6 +147,7 @@ COPY image/cosign.pub /etc/pki/containers/smortress.pub
 # images/agent-runtime/Containerfile and pinned by scripts/app-images.sh, so a
 # change to them rebuilds that container image instead of this one.
 COPY scripts/apps-schema.py /usr/libexec/apps-schema
+COPY scripts/secrets-index.py /usr/libexec/secrets-index
 # The base ships %sudo ALL=(ALL) NOPASSWD: ALL in /etc/sudoers.d/coreos-sudo-group.
 # A NOPASSWD line reaches authsucc without consulting pam_authenticate, so the
 # touch, the password fallback and the faillock tally all stop applying: the
@@ -157,9 +160,10 @@ RUN set -eux; \
     for f in /usr/libexec/smortress-src/*.sh; do install -m 0755 "$f" "/usr/libexec/$(basename "${f%.sh}")"; done; \
     rm -rf /usr/libexec/smortress-src; \
     ln -sf /usr/libexec/smortress-deploy /usr/bin/smortress-deploy; \
-    chmod 0755 /usr/libexec/apps-schema; \
+    chmod 0755 /usr/libexec/apps-schema /usr/libexec/secrets-index; \
+    chmod 0644 /usr/share/smortress/secrets.index.json; \
     chmod 0644 /etc/pki/containers/smortress.pub /usr/share/smortress/secrets.manifest; \
-    chmod 0600 /etc/smortress/secrets/*.yaml; \
+    chmod 0600 /etc/smortress/secrets/*.yaml /etc/smortress/secrets/*.json; \
     chmod 0644 /etc/pam.d/sudo; \
     chmod 0600 /etc/ssh/sudo_authorized_keys; \
     chmod 0440 /etc/sudoers.d/10-human-gate /etc/sudoers.d/20-sops-env; \

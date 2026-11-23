@@ -18,7 +18,7 @@ and starts Backrest on loopback, so a host cannot expose an unguarded reader.
 browser -- Backrest password -- Caddy (LE cert) -- guard -- Backrest (loopback) -- R2 (read-only token)
 ```
 
-`provision/edge/backrest-watchdog.timer` restarts the reader when it stops
+`provision/edge/backrest-watchdog.sh` restarts the reader when it stops
 answering and pings Healthchecks if a ping URL is written to
 `/etc/backrest/healthcheck-url`.
 
@@ -234,4 +234,55 @@ only:
   with the same absence of an Access gate and the same edge rate limit;
 - the same `gate.sh` matrix runs against the same hostname.
 
-Exact commands are in `docs/manual-steps.md` §39.8.
+Exact commands are in `docs/manual-steps.md#hosted-backrest`.
+
+## Operator order
+
+The gate repository is a separate path under the bucket, so a failed matrix run
+cannot touch production snapshots. The read-only boundary, the readiness rules and
+the failure modes are `docs/core/backrest.md`.
+
+```sh
+export GATE=/var/tmp/backrest-gate
+export RESTIC_REPOSITORY="s3:https://385f7d47e2e8438fbda5d6f76d760434.r2.cloudflarestorage.com/homelab-restic/gate"
+export AWS_DEFAULT_REGION=auto
+export AWS_ACCESS_KEY_ID=$(mise x -- sops -d --extract '["r2"]["r2_access_key_id"]' secrets/boot.json)
+export AWS_SECRET_ACCESS_KEY=$(mise x -- sops -d --extract '["r2"]["r2_secret_access_key"]' secrets/boot.json)
+read -rsp 'gate restic password: ' RESTIC_PASSWORD && export RESTIC_PASSWORD
+restic init
+truncate -s 100G "$GATE/big.bin"; head -c 1M /dev/urandom >"$GATE/small.bin"
+mkdir -p "$GATE/small-tree"; head -c 256K /dev/urandom >"$GATE/small-tree/a.bin"
+restic backup --host backrest-gate --tag verified "$GATE"
+export REPO_GUID=$(restic cat config --json | jq -r .id)
+export BIG_SHA256=$(sha256sum "$GATE/big.bin" | cut -d' ' -f1)
+```
+
+The small checks use `small.bin` and `small-tree` and are capped at 64 MiB. Create a
+read-only R2 token (Object Read only, scoped to `homelab-restic`) — Backrest's only
+credential — then the Worker secrets and the deploy, hashing the operator password
+so only the bcrypt reaches Cloudflare:
+
+```sh
+put_secret() { (cd backrest && mise x node@22 -- npx wrangler secret put "$1"); }
+(cd backrest && mise x node@22 -- npm ci)
+systemctl --user start podman.socket
+printf '%s' "$RESTIC_PASSWORD" | put_secret RESTIC_PASSWORD
+printf '%s' "$R2_READ_ACCESS_KEY_ID" | put_secret R2_ACCESS_KEY_ID
+printf '%s' "$R2_READ_SECRET_ACCESS_KEY" | put_secret R2_SECRET_ACCESS_KEY
+read -rsp 'backrest operator password: ' pw
+printf '%s' "$pw" | backrest/scripts/hash-password.sh | put_secret BACKREST_OPERATOR_BCRYPT
+unset pw
+BACKREST_REPO_ID=r2 BACKREST_REPO_URI="$RESTIC_REPOSITORY" BACKREST_REPO_GUID="$REPO_GUID" \
+  mise x node@22 -- backrest/scripts/deploy.sh
+export BACKREST_URL=https://recovery.sammohr.dev BACKREST_BOOTSTRAP_USER=bootstrap
+read -rsp 'bootstrap password: ' BACKREST_BOOTSTRAP_PASSWORD && export BACKREST_BOOTSTRAP_PASSWORD
+export BACKREST_REPO_ID=r2 RESTIC_REPOSITORY RESTIC_PASSWORD
+export BACKREST_GATE_SMALL_FILE=$GATE/small.bin BACKREST_GATE_SMALL_DIR=$GATE/small-tree
+backrest/scripts/gate.sh matrix
+backrest/scripts/gate.sh stream "$GATE/big.bin" sha "$BIG_SHA256"
+```
+
+The first request after a deploy is the cold start; watch it with
+`npx wrangler tail`, where a restic write attempt is a gate failure. On a pass,
+redeploy with the production repository URI and GUID and delete the `/gate` path.
+The preauthorized VPS fallback is `docs/core/backrest.md`, "VPS fallback".

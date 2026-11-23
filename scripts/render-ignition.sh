@@ -8,7 +8,7 @@
 # Every value the template needs comes from a file under ignition/operator/
 # (gitignored) except the public cosign key, the Tang URL default and the smores
 # account password hash. The hash is image ciphertext
-# (secrets/server/smores-password-hash.yaml): the same value is re-applied at boot
+# (secrets/boot.json, key smores.password_hash): the same value is re-applied at boot
 # by units/systemd/smortress-password.service, so a reinstall must not need an
 # operator file. Nothing here reads a private key and nothing here reads a
 # recovery passphrase: no secret enters Ignition or the installer media (design
@@ -60,7 +60,7 @@ if ! command -v "$butane" >/dev/null 2>&1; then
   exit 1
 fi
 sops_bin=${SOPS_BIN:-sops}
-hash_ciphertext=$repo/secrets/server/smores-password-hash.yaml
+hash_ciphertext=$repo/secrets/boot.json
 
 die() { echo "render-ignition: $*" >&2; exit 1; }
 escape() {
@@ -84,7 +84,7 @@ fixture_hash="\$6\$synthetic\$aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 # in docs/manual-steps.md section 37 writes; the manifest's `value` format is
 # what hands the bare hash to the boot unit.
 read_password_hash() {
-  "$sops_bin" --decrypt --extract '["hash"]' "$hash_ciphertext" 2>"$tmp/sops.err"
+  "$sops_bin" --decrypt --extract '["smores"]["password_hash"]' "$hash_ciphertext" 2>"$tmp/sops.err"
 }
 
 tmp=$(mktemp -d)

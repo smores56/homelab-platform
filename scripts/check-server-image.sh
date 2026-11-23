@@ -113,7 +113,7 @@ check "the image enables no tunnel connector" lacks 'smortress-cloudflared' imag
 check "no release pin installs a tunnel connector" lacks 'CLOUDFLARED' image/pins.env
 check "the build fetches no tunnel connector" lacks 'cloudflared' image/Containerfile
 check "the build script passes no tunnel connector pin" lacks 'CLOUDFLARED' scripts/build-image.sh
-check "no tunnel ciphertext ships" test ! -e secrets/server/cloudflared-tunnel.yaml
+check "no tunnel ciphertext ships" test ! -e secrets/cloudflared-tunnel.yaml
 check "the decrypt manifest lists no tunnel ciphertext" \
   test -z "$(grep -E '^cloudflared-tunnel\.yaml[[:space:]]' image/rootfs/usr/share/smortress/secrets.manifest)"
 check "no tofu object plans an ssh tunnel" lacks 'ssh_tunnel' tofu
@@ -674,20 +674,27 @@ check "stage 1 runs only before the marker" has 'ConditionPathExists=!/etc/ucore
 check "stage 2 runs only after stage 1" has 'ConditionPathExists=/etc/ucore-autorebase/unverified' ignition/smortress.bu
 check "ignition has no git pull" lacks 'git pull' ignition/smortress.bu
 
-for cipher in secrets/server/*.yaml; do
+for cipher in secrets/*.yaml secrets/*.json; do
   [[ -f $cipher ]] || continue
   name=$(basename "$cipher")
-  check "$name is SOPS-encrypted" grep -q '^sops:' "$cipher"
+  case $name in index.json | index.bundles.json) continue ;; esac
+  if [[ $name == *.json ]]; then
+    check "$name is SOPS-encrypted" grep -q '"sops"' "$cipher"
+  else
+    check "$name is SOPS-encrypted" grep -q '^sops:' "$cipher"
+  fi
   check "$name is ciphertext" grep -q 'ENC\[' "$cipher"
   if grep -q 'sops-decrypt-ok' "$cipher"; then bad "$name leaks plaintext"; else ok "$name has no plaintext canary"; fi
-  check "$name is in the decrypt manifest" grep -qE "^${name//./\\.}[[:space:]]" image/rootfs/usr/share/smortress/secrets.manifest
+  if [[ $name == *.json ]]; then
+    check "$name is a declared bundle" grep -qE "[[:space:]]${name//./\\.}[[:space:]]" image/rootfs/usr/share/smortress/secrets.manifest
+  fi
 done
 # The reverse direction matters just as much: the boot decrypt fails closed on
 # the first manifest entry without its ciphertext, and every unit that requires
 # sops-decrypt goes down with it.
-while read -r name; do
-  check "$name has committed ciphertext" test -s "secrets/server/$name"
-done < <(awk '!/^[[:space:]]*(#|$)/ { print $1 }' image/rootfs/usr/share/smortress/secrets.manifest)
+while read -r name bundle; do
+  check "$name has committed ciphertext" test -s "secrets/$bundle"
+done < <(awk '!/^[[:space:]]*(#|$)/ && NF >= 7 { print $1, $2 }' image/rootfs/usr/share/smortress/secrets.manifest)
 
 # The ciphertext moved from the image to /var: a rotation is an operator write and
 # a restart of the decrypt unit, not an OS image and a reboot. The baked set is
@@ -724,13 +731,9 @@ check "the boot decrypt still reads the /etc copy" \
 # general agent has no GitHub identity -- and the ciphertext/manifest set check
 # above keeps a staged file and its line together either way.
 for name in agent-github-token.yaml sdlc-github-token.yaml; do
-  if [[ -e secrets/server/$name ]]; then
-    check "$name is a root-only manifest value" \
-      grep -qE "^${name//./\\.}[[:space:]]+root[[:space:]]+root[[:space:]]+0400[[:space:]]+value$" \
-      image/rootfs/usr/share/smortress/secrets.manifest
-  else
-    ok "$name is not staged yet (no agent GitHub identity before T5)"
-  fi
+  check "$name is a root-only manifest value" \
+    grep -qE "^${name//./\\.}[[:space:]]+[^[:space:]]+[[:space:]]+[^[:space:]]+[[:space:]]+root[[:space:]]+root[[:space:]]+0400[[:space:]]+value$" \
+    image/rootfs/usr/share/smortress/secrets.manifest
 done
 
 # The smores account password (design #767, T3). It was an operator file Ignition
@@ -741,10 +744,10 @@ done
 # operator file must be gone from every reader: a leftover requirement would make
 # a reinstall fail where the design says it must not.
 check "the account hash is a manifest value" \
-  grep -qE '^smores-password-hash\.yaml[[:space:]]+root[[:space:]]+root[[:space:]]+0400[[:space:]]+value$' \
+  grep -qE '^smores-password-hash\.yaml[[:space:]]+[^[:space:]]+[[:space:]]+[^[:space:]]+[[:space:]]+root[[:space:]]+root[[:space:]]+0400[[:space:]]+value$' \
   image/rootfs/usr/share/smortress/secrets.manifest
 check "the renderer reads the hash from ciphertext" \
-  has 'secrets/server/smores-password-hash.yaml' scripts/render-ignition.sh
+  has 'secrets/boot.json' scripts/render-ignition.sh
 if grep -rIl --exclude=check-server-image.sh 'ignition/operator/smores-password-hash' \
     scripts units image docs ignition >/dev/null 2>&1; then
   bad "the operator hash file is required nowhere"
@@ -1034,7 +1037,7 @@ check "the tmpfiles entry creates the queue" \
 # writes the scalar alone, so a `yaml` entry would compare a document.
 for name in webhook-secret webhook-secret-next deploy-ping-url; do
   check "$name is a manifest value" \
-    grep -qE "^${name//./\\.}\.yaml[[:space:]]+root[[:space:]]+root[[:space:]]+0400[[:space:]]+value$" \
+    grep -qE "^${name//./\\.}\.yaml[[:space:]]+[^[:space:]]+[[:space:]]+[^[:space:]]+[[:space:]]+root[[:space:]]+root[[:space:]]+0400[[:space:]]+value$" \
     image/rootfs/usr/share/smortress/secrets.manifest
 done
 
@@ -1149,8 +1152,7 @@ while IFS= read -r file; do deploy_files+=("$file"); done < <(
     image/rootfs/usr/share/smortress/deploy-units.txt \
     image/rootfs/usr/lib/bootupd/grub2-static/configs.d/10-smortress-count.cfg \
     units/systemd/smortress-deploy* units/systemd/smortress-boot-gate.service \
-    secrets/server/webhook-secret.yaml secrets/server/webhook-secret-next.yaml \
-    secrets/server/deploy-ping-url.yaml
+    secrets/boot.json
 )
 unpublished=
 for file in "${deploy_files[@]}"; do

@@ -52,6 +52,11 @@
 #
 # shellcheck disable=SC2154  # deploy-state.sh assigns these at source time
 set -euo pipefail
+# shellcheck source=/dev/null
+_smolib=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/lib/log.sh
+[[ -r $_smolib ]] || _smolib=/usr/libexec/lib/log.sh
+# shellcheck source=/dev/null
+source "$_smolib"
 
 self_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 # The image installs the library as /usr/libexec/deploy-state (the smortress-src
@@ -165,8 +170,6 @@ new_apps=()
 changed_apps=()
 departed_apps=()
 
-say() { printf 'deploy-apps: %s\n' "$*"; }
-warn() { printf 'deploy-apps: %s\n' "$*" >&2; }
 
 usage() {
   cat >&2 <<'EOF'

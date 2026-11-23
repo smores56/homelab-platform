@@ -5,7 +5,7 @@ internet. It exists so those two names can leave Cloudflare's data path: the
 atoms of the design are a tagged tailnet node, Caddy on 443 with a Let's
 Encrypt certificate, and a tailnet ACL that admits two ports and nothing else.
 
-Operator commands live in `docs/manual-steps.md` section 50; this document is
+Operator commands live in `docs/manual-steps.md#public-edge-vps`; this document is
 the shape, the failure modes and the rebuild.
 
 ## Host
@@ -98,7 +98,7 @@ Before any of it, prove the host copy is the authoritative library:
 ```sh
 CLUSTER_URL=https://photos.sammohr.dev CLUSTER_API_KEY=… \
 HOST_URL=https://smortress.<tailnet>.ts.net HOST_API_KEY=… \
-  scripts/compare-photos-origin.sh
+  scripts/legacy/compare-photos-origin.sh
 ```
 
 It compares `/api/server/statistics` on both copies; a difference means the
@@ -158,12 +158,12 @@ the rebuild, run once and timed before the cutover:
 1. Confirm the kit has the ctrl login with its 2FA recovery codes, the Tailscale
    admin login with its 2FA recovery codes, the SSH host key and Caddy's data
    directory. The reinstall destroys the node identity, so a new preauthorized
-   `tag:vps` key has to be minted in the Tailscale console (`§50.2`); without
+   `tag:vps` key has to be minted in the Tailscale console (`docs/manual-steps.md#public-edge-vps`); without
    that login the box never rejoins.
 2. In the ctrl panel, reinstall the Ubuntu 24.04 template. Note whether the IPv4
    changed.
 3. From the HTML5 console, re-run `provision/edge/bootstrap.sh` with a fresh
-   `tag:vps` key (`docs/manual-steps.md` §50.2). It sets the hostname, appends
+   `tag:vps` key (`docs/manual-steps.md#public-edge-vps`). It sets the hostname, appends
    the repository login key, and realigns the tailnet name.
 4. Reconnect over the tailnet and run `provision/edge/verify.sh` with
    `EXPECT_UPSTREAM=1`.
@@ -207,3 +207,94 @@ Both halves are outside the repository:
   application — Immich's HTML shell, OPDShelf's 401 challenge — never as the
   agent gateway, a text/plain 404, or the wallpaper listing. A status code alone
   cannot prove that: Immich answers 200 and OPDShelf 401 for any path.
+
+## The operator order
+
+The edge is a RackNerd 4 GB KVM VPS with one IPv4 and no IPv6. It runs Caddy for
+`photos.sammohr.dev` and `opds.sammohr.dev`, joins the tailnet as `tag:vps`, and
+proxies to Serve ports 8446 and 8447. Shape and failure modes:
+`docs/core/public-edge.md`. Nothing here can be done by repo code, and the cutover
+waits for the retirement gate and the origin-parity comparison, not for the box.
+
+1. **Apply the tailnet policy first** — a key can only carry a tag its owner may
+   apply, and the tag must exist in `tagOwners`: `tofu -chdir=tofu apply -no-color`
+   from the checkout on `main`.
+2. **Mint a preauthorized `tag:vps` key** — admin console → Settings → Keys, tag
+   `tag:vps`, preauthorized, 1-day expiry, reusable off. Do not store it; a
+   reinstall mints a new one, which is why the admin login and its 2FA recovery
+   codes are recovery-kit rows.
+3. **Panel firewall.** Decision 2026-11-22: the ctrl network firewall stays off.
+   `provision/edge/nftables.conf`, applied by the bootstrap, is the only layer; the
+   accepted residual is that a host firewall failing at boot leaves the kernel
+   default-allow. If that changes, the rule set is `tcp/443`, `udp/41641` and ICMP
+   (all types — PMTU needs destination-unreachable), added **before** enabling it.
+4. **Deploy and join from the console.** Use the Ubuntu 24.04 template (jammy's
+   Caddy cannot parse `provision/edge/Caddyfile`) and install Tailscale from its
+   signed repository, not `curl | sh`:
+
+   ```sh
+   . /etc/os-release
+   curl -fsSL "https://pkgs.tailscale.com/stable/ubuntu/$VERSION_CODENAME.noarmor.gpg" \
+     -o /usr/share/keyrings/tailscale-archive-keyring.gpg
+   curl -fsSL "https://pkgs.tailscale.com/stable/ubuntu/$VERSION_CODENAME.tailscale-keyring.list" \
+     -o /etc/apt/sources.list.d/tailscale.list
+   apt-get update -qq && apt-get install -y tailscale
+   tailscale up --auth-key 'tskey-auth-…' --advertise-tags=tag:vps \
+     --hostname=smoresnet --accept-routes=false
+   ```
+
+   Port 22 is closed at the panel, so this console session is the only way in until
+   the tailnet link is up, and a root key must exist in `/root/.ssh/authorized_keys`
+   before the bootstrap closes password auth.
+5. **Copy the bootstrap over the tailnet and run it:**
+
+   ```sh
+   tar -C provision -cf - edge | ssh root@smoresnet 'tar -C /root -xf -'
+   ssh root@smoresnet
+   SMORTRESS_FQDN=smortress.stonecat-jazz.ts.net EDGE_ACME_EMAIL=… \
+   EDGE_HOST_KEY=/root/edge-host-key   /root/edge/bootstrap.sh
+   ```
+
+   `EDGE_HOST_KEY` is the key from the recovery kit; omit it to let the box
+   generate one. `verify.sh` runs at the end and every line must read `ok`.
+6. **Declare the Serve routes on smortress**, then prove the pair:
+
+   ```sh
+   sudo firewall-cmd --reload
+   sudo systemctl restart smortress-tailscale-serve.service
+   ssh root@smoresnet EXPECT_UPSTREAM=1 /root/edge/verify.sh
+   ```
+
+   Expect the previous routes unchanged plus 8446 → `http://127.0.0.1:2283` and 8447
+   → `http://127.0.0.1:8083`, and a green upstream run: the firewall shape, both
+   Serve ports answering, the upstream certificate verifying, and this box unable to
+   reach smortress on 443.
+7. **The cutover.** Prove the host copy is the authoritative library first, with
+   `CLUSTER_URL=… CLUSTER_API_KEY=… HOST_URL=… HOST_API_KEY=…
+   scripts/legacy/compare-photos-origin.sh`: both counts must match, and usage within
+   `EDGE_USAGE_DELTA` if you allow one. Then record 30 days of `photos` + `opds`
+   transfer from Cloudflare's analytics; if it is a meaningful fraction of 10 TB,
+   stop and size the plan instead.
+
+   Cloudflare refuses two records at one name and OpenTofu cannot order a destroy
+   before a create, so the cutover is two commits, each applied by CI:
+
+   ```sh
+   $EDITOR tofu/terraform.tfvars   # cluster_hosts = [<every host but photos and opds>]
+   git commit -qm 'chore(tofu): take photos and opds off the cluster tunnel'
+   git push
+   $EDITOR tofu/terraform.tfvars   # edge_ipv4 = "<vps-ipv4>"
+   git commit -qm 'feat(tofu): point the edge names at the VPS'
+   git push
+   scripts/verify-public-edge.sh   # all ten green, certificates included
+   ```
+
+   The probe checks each name answers *as its application*: Immich's own HTML shell
+   for any path, OPDShelf's 401 challenge for any path. Rollback is the same two
+   commits in reverse.
+8. **The rebuild drill, timed.** Reinstall the template from the panel on the real
+   box, then repeat steps 2 through 6 (the reinstall destroyed the node identity, so
+   the key is new too). The kit rows must already hold the ctrl login with its 2FA
+   recovery codes, the edge SSH host key and Caddy's data directory. Record the
+   elapsed time and the panel bandwidth graph; if the rebuild is not minutes,
+   Backrest does not move here.

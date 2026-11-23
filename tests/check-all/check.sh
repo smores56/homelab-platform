@@ -37,10 +37,22 @@ expect "a data-plane library change selects the data-plane tests" \
   "data-plane" "$(selected libs/data_plane/collectors/raw/mail.py)"
 expect "a schema renderer change selects the data-plane tests and lint" \
   $'data-plane\nlint' "$(selected scripts/render-source-schemas.py)"
-expect "a workflow change selects lint" "lint" \
+expect "a workflow change selects lint and actionlint" $'lint\nactionlint' \
   "$(selected .github/workflows/ci.yml)"
-expect "a docs change selects nothing" "" \
+expect "a docs change selects the docs group" "docs" \
   "$(selected README.md docs/broker.md)"
+expect "an image change selects the server-image group" "server-image" \
+  "$(selected image/Containerfile)"
+expect "a unit change selects the server-image group" "server-image" \
+  "$(selected units/quadlet/pattern.container)"
+expect "a secret change selects the secrets group" "secrets" \
+  "$(selected secrets/boot.json)"
+expect "a recovery-page change selects its group" "recovery-page" \
+  "$(selected apps/recovery-page/src/main.ts)"
+expect "a config change selects secrets and lint" $'secrets\nlint' \
+  "$(selected .sops.yaml)"
+expect "every tracked file is claimed" "0" \
+  "$(scripts/check-all.sh --check-claims >/dev/null; echo $?)"
 expect "an unclaimed path selects every group" "$groups" \
   "$(selected brand/new-thing | wc -l | tr -d ' ')"
 expect "--list names each group once" "$groups" \

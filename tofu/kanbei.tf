@@ -14,7 +14,8 @@
 # name: a second process joined to the same tunnel with an older ingress answers
 # kanbei requests with its own 404 and never reaches this route. If the hostname
 # returns a post-login 404, compare the tunnel's live connectors before changing
-# anything here (nix-config `docs/kanbei-access.md`, "Stray connector").
+# anything here (a "Stray connector" — the access design that described it is
+# gone with nix-config).
 
 # `allow_authenticate_via_warp` costs nothing here: a device that already runs
 # the Cloudflare One client skips the browser login, and every other device gets

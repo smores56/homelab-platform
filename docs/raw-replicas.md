@@ -251,7 +251,7 @@ exists and is published.
   another place.
 - **Accounts.** The mapping is `state/agent-local/index/hledger/accounts.json`,
   `{"<simplefin account id>": "<hledger account name>"}`, seeded as `{}` with
-  `cp -n` and edited by the operator (`docs/manual-steps.md` section 40.14). A
+  `cp -n` and edited by the operator (`docs/manual-steps.md#collector-sign-ins`). A
   name is trimmed and refused if it is empty or would start a directive, a
   comment or a second line; a file that is not a JSON object of string to string
   is a refusal. An account the file does not name still renders, as
@@ -325,8 +325,8 @@ writes the same three preferences Brave's join UI writes -- `brave_sync_v2.seed`
 nothing -- into `Default/Preferences` before the browser starts, and the browser
 runs with `--password-store=basic` so the fixed key that decrypts the blob is the
 one it uses. The seed lives in one ciphertext
-(`secrets/server/brave-sync-seed.yaml`) and reaches exactly one unit, as a Podman
-secret; `docs/manual-steps.md` section 40.17 is the operator's half, including
+(`["brave"]["sync_seed"]` in `secrets/agents.json`) and reaches exactly one unit,
+as a Podman secret; `docs/manual-steps.md#collector-sign-ins` is the operator's half, including
 rotation and removal.
 
 The browser's only egress is the allowlist proxy on `agent-brave.network`, which

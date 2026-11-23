@@ -76,7 +76,7 @@ for stale in root-recovery-passphrase data-recovery-passphrase \
 done
 
 sops_calls=$(grep -c '"\$sops_bin" --decrypt' "$renderer")
-if [[ $sops_calls -eq 1 ]] && grep -qF 'secrets/server/smores-password-hash.yaml' "$renderer"; then
+if [[ $sops_calls -eq 1 ]] && grep -qF 'secrets/boot.json' "$renderer"; then
   ok 'the renderer decrypts only the account hash'
 else
   bad 'the renderer decrypts only the account hash' "sops invocations: $sops_calls"

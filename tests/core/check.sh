@@ -22,7 +22,7 @@ fail() {
 
 pass() { printf 'ok   %s\n' "$*"; }
 
-scripts=(scripts/core/legacy-audit.sh scripts/core/verify-legacy-backups.sh scripts/core/freeze-legacy.sh)
+scripts=(scripts/legacy/legacy-audit.sh scripts/legacy/verify-legacy-backups.sh scripts/legacy/freeze-legacy.sh)
 
 for s in "${scripts[@]}"; do
   checks=$((checks + 1))
@@ -46,8 +46,8 @@ done
 # Freeze defaults to the read-only mode: an accidental plain invocation must not
 # suspend anything.
 checks=$((checks + 1))
-if grep -q '^mode=check$' scripts/core/freeze-legacy.sh &&
-  ! grep -q -- '--apply) mode=apply' scripts/core/freeze-legacy.sh; then
+if grep -q '^mode=check$' scripts/legacy/freeze-legacy.sh &&
+  ! grep -q -- '--apply) mode=apply' scripts/legacy/freeze-legacy.sh; then
   pass 'freeze defaults to --check'
 else
   fail 'freeze does not default to --check'
@@ -55,8 +55,8 @@ fi
 
 # Resume must restore recorded state, not a hard-coded false.
 checks=$((checks + 1))
-if grep -q 'recorded=' scripts/core/freeze-legacy.sh &&
-  grep -q 'state_file' scripts/core/freeze-legacy.sh; then
+if grep -q 'recorded=' scripts/legacy/freeze-legacy.sh &&
+  grep -q 'state_file' scripts/legacy/freeze-legacy.sh; then
   pass 'freeze records and restores prior suspend state'
 else
   fail 'freeze resume ignores recorded state'
@@ -66,7 +66,7 @@ fi
 checks=$((checks + 1))
 # shellcheck disable=SC2016  # the pattern matches a literal "$restic_bin" in the verifier
 if grep -nE 'restic .*(forget|prune|init|unlock)|"\$restic_bin" (forget|prune|init|unlock)' \
-  scripts/core/verify-legacy-backups.sh >/dev/null; then
+  scripts/legacy/verify-legacy-backups.sh >/dev/null; then
   fail 'verifier invokes a mutating restic command'
 else
   pass 'verifier has no forget/prune/init/unlock'
@@ -74,8 +74,8 @@ fi
 
 # The verifier deletes only a scratch directory it created itself.
 checks=$((checks + 1))
-if [[ $(grep -c 'rm -rf' scripts/core/verify-legacy-backups.sh) -eq 1 ]] &&
-  grep -q 'scratch_owned == 1' scripts/core/verify-legacy-backups.sh; then
+if [[ $(grep -c 'rm -rf' scripts/legacy/verify-legacy-backups.sh) -eq 1 ]] &&
+  grep -q 'scratch_owned == 1' scripts/legacy/verify-legacy-backups.sh; then
   pass 'verifier deletes only its own scratch tree'
 else
   fail 'verifier deletes a path it may not own'
@@ -83,8 +83,8 @@ fi
 
 # Scratch must be rooted under /var/tmp and never reused when non-empty.
 checks=$((checks + 1))
-if grep -q 'SCRATCH_ROOT=/var/tmp' scripts/core/verify-legacy-backups.sh &&
-  grep -q 'refusing to reuse it' scripts/core/verify-legacy-backups.sh; then
+if grep -q 'SCRATCH_ROOT=/var/tmp' scripts/legacy/verify-legacy-backups.sh &&
+  grep -q 'refusing to reuse it' scripts/legacy/verify-legacy-backups.sh; then
   pass 'scratch is confined and non-empty targets are refused'
 else
   fail 'scratch confinement is missing'
@@ -94,9 +94,9 @@ fi
 # pre-migration /var/lib/data made every presence check fail the moment the data
 # moved, which reads as a backup problem while being a stale path.
 checks=$((checks + 1))
-if ! grep -q '/var/lib/data' scripts/core/verify-legacy-backups.sh &&
-  grep -q '/var/srv/files/vault' scripts/core/verify-legacy-backups.sh &&
-  grep -q '/var/lib/immich/dumps/immich.dump' scripts/core/verify-legacy-backups.sh; then
+if ! grep -q '/var/lib/data' scripts/legacy/verify-legacy-backups.sh &&
+  grep -q '/var/srv/files/vault' scripts/legacy/verify-legacy-backups.sh &&
+  grep -q '/var/lib/immich/dumps/immich.dump' scripts/legacy/verify-legacy-backups.sh; then
   pass 'the verifier checks the trees the live layout keeps'
 else
   fail 'the verifier still points at the pre-migration layout'
@@ -114,7 +114,7 @@ fi
 # The audit must not start or unlock anything.
 checks=$((checks + 1))
 if grep -nE 'systemctl (start|stop|restart)|cryptsetup|restic (backup|forget|prune)' \
-  scripts/core/legacy-audit.sh >/dev/null; then
+  scripts/legacy/legacy-audit.sh >/dev/null; then
   fail 'audit mutates state'
 else
   pass 'audit is read-only'

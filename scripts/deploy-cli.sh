@@ -44,6 +44,11 @@
 #
 # shellcheck disable=SC2154  # deploy-state.sh assigns these at source time
 set -euo pipefail
+# shellcheck source=/dev/null
+_smolib=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/lib/log.sh
+[[ -r $_smolib ]] || _smolib=/usr/libexec/lib/log.sh
+# shellcheck source=/dev/null
+source "$_smolib"
 
 self_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 state_lib=${DEPLOY_STATE_LIB:-}
@@ -69,8 +74,6 @@ source "$state_lib"
 
 bootc_bin=${BOOTC_BIN:-bootc}
 
-say() { printf 'smortress-deploy: %s\n' "$*"; }
-warn() { printf 'smortress-deploy: %s\n' "$*" >&2; }
 
 usage() {
   cat >&2 <<'EOF'

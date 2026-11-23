@@ -235,7 +235,7 @@ Then, in order:
 1. `sudo install -d -o 1000 -g 1000` on the group roots if `init-zpool` did not
    own them; application trees are uid 1000 and Podman may only mount labelled
    content, so `sudo chcon -R -t container_file_t` the restored trees as
-   `docs/manual-steps.md` section 40.18 does for a drill.
+   `docs/manual-steps.md#run-the-agent-runtime-drill` does for a drill.
 2. `sudo /usr/libexec/zfs-ready raw-files` (and `state-immich-postgres`) before
    any unit that `Requires=` them starts.
 3. Start the applications, then the timers.
@@ -253,7 +253,7 @@ not passed: under the old `dump` method it wrote 39 GiB of 520 expanded GB in 24
 minutes, which could not finish inside the helper's four-hour deadline. What
 stands in its place:
 
-- `scripts/retirement-gate.sh` cold-restores every unit from each destination
+- `scripts/legacy/retirement-gate.sh` cold-restores every unit from each destination
   and matches one sample file per dataset against the live tree. That matrix is
   the retirement evidence.
 - 400 files spread across the first 383,794 restored files of `agent-local`

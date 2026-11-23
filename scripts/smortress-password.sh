@@ -6,7 +6,7 @@
 # it at install (scripts/render-ignition.sh), this unit re-applies it at every
 # boot, and the operator changes it by minting a new ciphertext
 # (docs/manual-steps.md section 37). The ciphertext is
-# secrets/server/smores-password-hash.yaml, decrypted into /run by
+# secrets/boot.json (smores.password_hash), decrypted into /run by
 # sops-decrypt.service; `value` in the manifest is what makes the file the bare
 # hash.
 #
