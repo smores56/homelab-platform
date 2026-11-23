@@ -92,7 +92,7 @@ sops --decrypt --extract '["restic"]["password"]' secrets/boot.json
 ```
 
 The table below is a reference for the two consumers whose file shape or ordering
-is load-bearing, not an inventory: the index holds 23 outputs across three
+is load-bearing, not an inventory: the index holds 24 outputs across three
 bundles, and the rest are one value each, named by the unit or script that reads
 them (the manifest is the set).
 
@@ -120,8 +120,9 @@ must not be able to rewrite it.
 GitHub environments, the host and the edge are sinks, never sources. The
 `cloudflare` and `cloudflare-plan` environment secrets are set from this file.
 The boot R2 pair is derived from `restic-backup-rw-*` into `secrets/boot.json`
-key `r2` by `scripts/cloudflare-derive.sh`; never hand-edit that object. The
-backup write pair reaches the data-plane host through
+key `r2`, and the name service's DNS-01 token from `tailnet-dns-api-token` into
+key `acme.token`, both by `scripts/cloudflare-derive.sh`; never hand-edit either
+object. The backup write pair reaches the data-plane host through
 `unpack-host-secrets.py --cloudflare`, and the backup read pair is installed in
 `/etc/backrest/env` on the edge.
 

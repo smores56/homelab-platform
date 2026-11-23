@@ -1,0 +1,37 @@
+# The tailnet name service's terminator (design #834, task #845).
+#
+# This is image data, not host data: it ships under /usr/share, which bootc swaps
+# with the deployment, so a site or a provider setting added by a later image
+# reaches an existing host. The /etc copy of a file is merged once and keeps
+# whatever the host already had, which is why the Quadlet mounts this path.
+#
+# DNS-01 only. The names are answered on a tailnet Service VIP, which no public CA
+# can reach over HTTP, and the edge's own 443 already belongs to Immich and
+# OPDShelf, so the challenge has to be answered in the zone that holds the name --
+# which is why the image carries the Cloudflare provider module at all. The token
+# is the operator store's `tailnet-dns-api-token`, derived into the boot bundle
+# and handed in as an environment variable by the Quadlet's Podman secret.
+#
+# `admin off` is what keeps a read-only root filesystem honest: with no admin
+# endpoint Caddy never writes an autosave, so the only host write is the account
+# and certificate state under /data. `auto_https disable_redirects` keeps Caddy
+# off port 80, which is never opened on this host.
+{
+	admin off
+	auto_https disable_redirects
+}
+
+# 9443, not 443: Serve's `--tcp` forward copies bytes to loopback and terminates
+# nothing, so the client's TLS handshake is with this process directly and its SNI
+# is what selects the certificate. The bind is loopback because Serve is the only
+# peer that may reach the port, and the port is above 1024, so the container needs
+# no capability to hold it.
+assistant.sammohr.dev:9443 {
+	bind 127.0.0.1
+
+	tls {
+		dns cloudflare {env.CF_API_TOKEN}
+	}
+
+	reverse_proxy http://127.0.0.1:18006
+}

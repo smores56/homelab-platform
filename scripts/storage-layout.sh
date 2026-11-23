@@ -32,6 +32,10 @@ declare -A dataset_mount=(
   [state/immich-dumps]=/var/lib/immich/dumps
   [state/syncthing-config]=/var/lib/syncthing/config
   [state/opdshelf]=/var/lib/opdshelf
+  # The name service's ACME account and certificates (design #834): a rebuild
+  # keeps the account id, so the next order resumes instead of registering a
+  # second account for a zone that is already validated.
+  [state/caddy]=/var/lib/caddy
   # Agent deployments (SDLC #711): one state dataset per gateway, and one for the
   # 4.7 GiB model file the personal gateway's server loads.
   [state/agent-local]=/var/lib/agent/local
@@ -57,7 +61,7 @@ dataset_parents=(raw state)
 #: init-zpool plan is what --print-plan and its test compare.
 dataset_order=(raw/files raw/photos raw/books raw/music raw/wallpapers raw/git
   raw/apps raw/repo-archive state/immich-postgres state/immich-dumps
-  state/syncthing-config state/opdshelf
+  state/syncthing-config state/opdshelf state/caddy
   state/agent-local state/agent-general state/agent-model)
 
 #: Dataset quotas. Until the core datasets carry a refreservation, the tenant is
@@ -123,7 +127,11 @@ units=(files photos books music wallpapers git apps repo-archive agent-local age
 #: checksum: backing it up would put a reconstructable artefact in every Restic
 #: snapshot and in R2, for no restore value at all. A restore that needs it runs
 #: the fetch; the gateway cannot start without it, which is loud and correct.
-dataset_unrestored=(state/agent-model)
+#: state/caddy holds the ACME account and the certificate private keys of the
+#: name service: a restore would reinstate an expired certificate and put private
+#: keys in every snapshot for a re-issue that costs seconds, and no CAA record
+#: pins the account, so a fresh one is valid immediately.
+dataset_unrestored=(state/agent-model state/caddy)
 
 #: Directories that must exist for the state datasets to mount. They are not
 #: datasets themselves: a cache or a version history is rebuilt, not restored.

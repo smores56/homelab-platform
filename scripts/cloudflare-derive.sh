@@ -1,14 +1,20 @@
 #!/usr/bin/env bash
-# Derive the boot R2 pair from the single Cloudflare credential bundle.
+# Derive the boot outputs that come from the single Cloudflare credential bundle.
 #
 #   scripts/cloudflare-derive.sh
 #
-# secrets/cloudflare.yaml is the only place a Cloudflare token is authored. The
-# host's restic reader still takes `r2.r2_access_key_id` / `r2_secret_access_key`
-# from secrets/boot.json, so this rewrites that one object from
-# `restic-backup-rw-*` and preserves every other key in the bundle. Needs the
-# operator identity; writes no plaintext outside the temporary directory it
-# removes on exit.
+# secrets/cloudflare.yaml is the only place a Cloudflare token is authored, and
+# two outputs of secrets/boot.json are copies of it:
+#   * `r2`, from `restic-backup-rw-*`, for the host's restic reader
+#     (`r2.r2_access_key_id` / `r2_secret_access_key`);
+#   * `acme.token`, from `tailnet-dns-api-token`, for the name service's Caddy,
+#     which answers a DNS-01 challenge with it (manifest output
+#     `cloudflare-acme-token.yaml`, format `value`).
+# This rewrites those two objects and preserves every other key in the bundle.
+# They move together because they land in one file: a run that refreshed one and
+# not the other would leave a consumer holding a token the store no longer has.
+# Needs the operator identity; writes no plaintext outside the temporary directory
+# it removes on exit.
 # shellcheck disable=SC2016  # the jq expression is single-quoted on purpose
 set -euo pipefail
 
@@ -33,13 +39,23 @@ key_secret=$("$sops_bin" -d --extract '["restic-backup-rw-secret-access-key"]' "
   || die "restic-backup-rw-access-key-id is not 32 hex characters"
 [[ $key_secret =~ ^[0-9a-f]{64}$ ]] \
   || die "restic-backup-rw-secret-access-key is not 64 hex characters"
+# A Cloudflare API token is opaque URL-safe base64. The length is not fixed:
+# the long-lived format is 40 characters and the current one is 53, so the check
+# only rejects what no token can be -- whitespace, quoting, a truncated paste --
+# rather than pinning today's length. It is the only guard between a truncated
+# read and an ACME order that fails on the host hours later, so it runs before
+# anything is written.
+acme_token=$("$sops_bin" -d --extract '["tailnet-dns-api-token"]' "$src")
+[[ $acme_token =~ ^[A-Za-z0-9_-]{40,128}$ ]] \
+  || die "tailnet-dns-api-token does not look like a Cloudflare API token"
 
 tmp=$(mktemp -d)
 trap 'rm -rf -- "$tmp"' EXIT
 
 "$sops_bin" -d --input-type json --output-type json "$boot" >"$tmp/boot.json"
-"$jq_bin" --arg id "$key_id" --arg secret "$key_secret" \
-  '.r2 = {"r2_access_key_id": $id, "r2_secret_access_key": $secret}' \
+"$jq_bin" --arg id "$key_id" --arg secret "$key_secret" --arg acme "$acme_token" \
+  '.r2 = {"r2_access_key_id": $id, "r2_secret_access_key": $secret}
+   | .acme = {"token": $acme}' \
   "$tmp/boot.json" >"$tmp/next.json"
 "$sops_bin" --config "$config" --encrypt --input-type json --output-type json \
   --filename-override "$boot" "$tmp/next.json" >"$tmp/next.enc"
@@ -48,6 +64,10 @@ chmod 0644 "$tmp/next.enc"
 got=$("$sops_bin" -d --input-type json --output-type json \
   --extract '["r2"]["r2_access_key_id"]' "$tmp/next.enc")
 [[ $got == "$key_id" ]] || die "the derived bundle did not round-trip"
+got=$("$sops_bin" -d --input-type json --output-type json \
+  --extract '["acme"]["token"]' "$tmp/next.enc")
+[[ $got == "$acme_token" ]] || die "the derived ACME token did not round-trip"
 mv -- "$tmp/next.enc" "$boot"
 say "derived $boot .r2 from $src"
-say "next: scripts/secret.sh stage r2-credentials.yaml"
+say "derived $boot .acme.token from $src"
+say "next: scripts/secret.sh stage boot.json"

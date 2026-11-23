@@ -69,6 +69,13 @@ app_images=(
   # that Containerfile; a rebuild prints a new row, and the Quadlet's `Image=` is
   # the other half and moves with it.
   'brave|built:images/brave/Containerfile|sha256:9b505ba383925597812ffb1d52876b3b5f8f00b2bf999418936521cbb13d707e'
+  # The name service's terminator (design #834): stock Caddy with the Cloudflare
+  # DNS-01 provider compiled in. Built and signed here because upstream ships no
+  # image that can answer a challenge for a name no public CA can reach over HTTP,
+  # so the module is the difference between a certificate and a crash loop. The
+  # digest is the publish-caddy run for that Containerfile; a rebuild prints a new
+  # row, and the Quadlet's `Image=` is the other half and moves with it.
+  'caddy|built:images/caddy/Containerfile|sha256:4762c8756be74bf5633ea7c12ebb0f7c3f75886c9858d41ff6cc59b284051dc3'
 )
 
 # app_image_ref NAME -> the only reference a Quadlet may contain.

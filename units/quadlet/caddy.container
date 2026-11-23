@@ -1,0 +1,60 @@
+# The tailnet name service's terminator (design #834, task #845).
+#
+# Serve forwards the agent UI Service's tcp/443 to 127.0.0.1:9443, so this is the
+# process that answers the TLS handshake for `assistant.sammohr.dev` and proxies
+# the request to the personal web UI. The certificate is publicly trusted and
+# issued over DNS-01, because nothing public may reach a tailnet VIP and the
+# edge's 443 already belongs to Immich and OPDShelf.
+#
+# Network=host is the loopback contract, not a convenience: Serve's forward
+# targets 127.0.0.1 on the host, and a published container port binds some other
+# loopback path -- netavark's DNAT and firewalld's zone both sit in between, and
+# the forward would answer on a port nothing listens on. Nothing is published and
+# nothing binds a wildcard (`bind 127.0.0.1` in the Caddyfile), so the tailscale0
+# zone stays the only ingress and Firewalld needs no port here.
+#
+# The data directory is a dataset because Caddy keeps the ACME account in it, and
+# the account id is what a later order resumes with. A /var/lib path with no
+# dataset would be shadowed the moment the dataset mounts, and Caddy would
+# register a second account for a zone that is already validated.
+#
+# The Caddyfile is mounted read-only from /usr/share/smortress, the path bootc
+# updates with the deployment; /etc is merged once, so a site added by a later
+# image would never reach an existing host. (The egress containers mount theirs
+# from /etc because that policy predates this rule.)
+#
+# Deliberately absent from deploy-units.txt: a certificate that cannot be issued
+# is a token or a zone fault, and rolling the OS image back fixes neither, while
+# a listed unit that is down rolls back every healthy deployment.
+[Unit]
+Description=TLS terminator for the tailnet name service
+Requires=zfs-ready@state-caddy.service sops-decrypt.service smortress-app-secrets.service
+After=network-online.target zfs-ready@state-caddy.service sops-decrypt.service smortress-app-secrets.service
+Wants=network-online.target
+
+[Container]
+Image=ghcr.io/smores56/homelab-platform/caddy@sha256:4762c8756be74bf5633ea7c12ebb0f7c3f75886c9858d41ff6cc59b284051dc3
+ContainerName=smortress-caddy
+Network=host
+# uid 1000 is the image's `caddy` account and what a state dataset root belongs
+# to, so the account and certificate files land owned by the process that rewrites
+# them. Nothing here needs a privileged uid: the listener is above 1024.
+User=1000:1000
+# The image's entrypoint runs `caddy run --config /etc/caddy/Caddyfile`, so the
+# target is the path upstream already reads and no Exec override is needed.
+Volume=/usr/share/smortress/Caddyfile:/etc/caddy/Caddyfile:ro
+# XDG_DATA_HOME in this image: the ACME account, the certificates, the locks.
+Volume=/var/lib/caddy:/data:z
+Secret=cloudflare-acme-token,type=env,target=CF_API_TOKEN
+ReadOnly=true
+NoNewPrivileges=true
+DropCapability=ALL
+
+[Service]
+Restart=on-failure
+# 143 is SIGTERM, which a deliberate stop sends: not a failure.
+SuccessExitStatus=143
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target
