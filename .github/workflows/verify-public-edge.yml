@@ -1,0 +1,75 @@
+# The public edge's scheduled proof (design #842, task #890).
+#
+# `photos`, `opds` and `recovery` answer only from the VPS, so no repository
+# check can see them: the names, the certificates and each application's own
+# signature are asserted here, daily, against the real edge
+# (`scripts/verify-public-edge.sh` says what each probe means). The CAA
+# invariant rides along in the same run: the issuer of the certificate the edge
+# serves must be a CA the zone's `CAA` policy admits
+# (`scripts/verify-caa.sh`), because a record that forbids the issuing CA stops
+# renewal quietly.
+#
+# The scripts are called directly, not through `check-all.sh`'s `edge` group:
+# that group is local-only in `tests/check-all/ci-parity.sh` and drives the same
+# code through stubs, while these steps need the network the runner has.
+#
+# The Healthchecks ping is `EDGE_PING_URL` from the `deploy-notify`
+# environment: a capability URL, so a secret, and the same shape the host's own
+# monitors and `verify-tailnet-names.yml` use (docs/manual-steps.md).
+name: verify-public-edge
+
+on:
+  schedule:
+    # Daily. A lapsed certificate, a name that stopped proxying and a CAA record
+    # that forbids the served CA are all noticed the next morning rather than the
+    # next month, and the run is a handful of TLS handshakes.
+    - cron: "23 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-public-edge
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    name: probe the names and the CA
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: deploy-notify
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      - name: probe the three names as their applications
+        id: probe
+        run: scripts/verify-public-edge.sh
+      - name: assert the served CA is admitted by the zone's CAA
+        id: caa
+        run: scripts/verify-caa.sh
+      # `always()` because the ping is the report, not a gate: a red probe must
+      # still page, and a run whose checkout failed is red too. Either step
+      # failing takes the check down at once instead of waiting out the period,
+      # so both outcomes decide the URL. The URL carries the capability, so it is
+      # never echoed.
+      - name: page through Healthchecks
+        if: always()
+        env:
+          EDGE_PING_URL: ${{ secrets.EDGE_PING_URL }}
+          PROBE_OUTCOME: ${{ steps.probe.outcome }}
+          CAA_OUTCOME: ${{ steps.caa.outcome }}
+        run: |
+          set -euo pipefail
+          if [[ -z ${EDGE_PING_URL:-} ]]; then
+            echo "::warning::EDGE_PING_URL is unset in deploy-notify; no page is sent (docs/manual-steps.md)"
+            exit 0
+          fi
+          if [[ $PROBE_OUTCOME == success && $CAA_OUTCOME == success ]]; then
+            url=$EDGE_PING_URL
+          else
+            url="${EDGE_PING_URL%/}/fail"
+          fi
+          curl --fail-with-body --silent --show-error --max-time 30 "$url"
+          echo "pinged Healthchecks: probe=$PROBE_OUTCOME caa=$CAA_OUTCOME"

@@ -688,6 +688,53 @@ Unlike the host's own monitors this one is deliberately not a key in
 and this probe never runs there, so a bundle copy would be dead weight and the
 capability URL belongs in the `deploy-notify` Environment alone.
 
+### Create the public edge check
+
+`verify-public-edge.yml` runs daily and proves the three public names still
+answer as their applications, and that the CA behind the edge's certificate is
+one the zone's `CAA` records admit (`docs/core/public-edge.md`, "Validation").
+It is the only check that sees the VPS, so it pages through a Healthchecks
+check of its own: a daily period with a six-hour grace, because the probe answers
+once a day and one late run should not page.
+
+Create the check in the project with a `1 day` period and a `6 hour` grace, then
+copy its ping URL into the environment:
+
+```sh
+OWNER=$(cat ~/.config/smores56-agent/owner-token)
+printf '%s' '<ping url>' | GH_TOKEN="$OWNER" \
+  gh secret set EDGE_PING_URL --env deploy-notify --repo smores56/homelab-platform
+```
+
+Then run it once so the check has an answer, and read the job's own output: it
+prints one `ok`/`FAIL`/`note` line per probe.
+
+```sh
+GH_TOKEN="$OWNER" gh workflow run verify-public-edge.yml --repo smores56/homelab-platform
+GH_TOKEN="$OWNER" gh run watch --repo smores56/homelab-platform
+```
+
+The probe needs only DNS and TLS, so the same scripts are the operator's tool
+during an outage; run them from any host with `curl`, `openssl` and `dig`:
+
+```sh
+scripts/verify-public-edge.sh
+scripts/verify-caa.sh
+EDGE_CERT_MIN_DAYS=100000 scripts/verify-public-edge.sh   # the expiry leg, red
+CAA_ZONE=example.com scripts/verify-caa.sh                # a zone with no CAA, a notice
+```
+
+`verify-caa.sh` is deliberately quiet until the zone's `CAA` records exist: an
+empty set prints a `note` and exits 0, because a red check over a missing record
+teaches the operator to ignore it. Once the records are there the assertion is
+live, and a certificate from a CA the records do not admit turns the daily run
+red — the failure prints the `issue`/`issuewild` values it read and the CA
+domain it expected.
+
+Like the names check this one is deliberately not a key in `secrets/boot.json`'s
+`healthchecks` object: the probe never runs on the host, so the capability URL
+belongs in the `deploy-notify` Environment alone.
+
 ### The operator's view of the receiver
 
 `/usr/libexec/smortress-deploy` is the whole operator surface, and `/usr/libexec`

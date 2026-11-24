@@ -19,8 +19,9 @@
 #     Serve's wallpaper tree is a bare <pre> listing and the agent gateway is a
 #     text/plain 404, so neither can satisfy those.
 #
-# Exit 0 only when every probe passes. No repository check can see the VPS, so
-# this script and `provision/edge/verify.sh` are the gate.
+# Exit 0 only when every probe passes. No repository check can see the VPS: this
+# script, `.github/workflows/verify-public-edge.yml` on its daily schedule and
+# `provision/edge/verify.sh` are the gate.
 #
 #   scripts/verify-public-edge.sh
 #

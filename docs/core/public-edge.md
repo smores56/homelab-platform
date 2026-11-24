@@ -129,6 +129,11 @@ ssh root@smoresnet EXPECT_UPSTREAM=1 /root/edge/verify.sh   # before the zone mo
 scripts/verify-public-edge.sh                               # after it moves
 ```
 
+Afterwards the same two scripts run daily in
+`.github/workflows/verify-public-edge.yml`: `scripts/verify-public-edge.sh` for
+the names and `scripts/verify-caa.sh` for the CA the zone's `CAA` records admit
+(setup: `docs/manual-steps.md`, "Create the public edge check").
+
 ## Metering
 
 10 TB/month at 1 Gbps. RackNerd does not degrade over the allowance: it
@@ -197,16 +202,24 @@ what the repository *cannot* reproduce, with what is done about each item.
 
 ## Validation
 
-Both halves are outside the repository:
+Both halves are outside the repository's own checks, and
+`.github/workflows/verify-public-edge.yml` runs them daily:
 
 - `provision/edge/verify.sh` on the box: firewall shape, sshd, no port 80,
   Caddy listening, tailnet up with `tag:vps`; and with `EXPECT_UPSTREAM=1`, the
   upstream certificate, both Serve ports and the 443 refusal.
-- `scripts/verify-public-edge.sh` from anywhere, after the cutover: both names
-  over valid TLS with life above 14 days, and each path answering as its own
-  application — Immich's HTML shell, OPDShelf's 401 challenge — never as the
-  agent gateway, a text/plain 404, or the wallpaper listing. A status code alone
-  cannot prove that: Immich answers 200 and OPDShelf 401 for any path.
+- `scripts/verify-public-edge.sh` from anywhere, after the cutover: all three
+  names over valid TLS with life above 14 days, and each path answering as its own
+  application — Immich's HTML shell, OPDShelf's 401 challenge, Backrest's own
+  page behind its guard — never as the agent gateway, a text/plain 404, or the
+  wallpaper listing. A status code alone cannot prove that: Immich answers 200
+  and OPDShelf 401 for any path.
+- `scripts/verify-caa.sh`: reads the zone's `CAA` records and the issuer of the
+  certificate `kanbei.sammohr.dev` serves, and requires the issuer's CA domain in
+  an `issue`/`issuewild` value — Google Trust Services to `pki.goog`, Let's
+  Encrypt to `letsencrypt.org`, DigiCert to `digicert.com`, Sectigo to
+  `sectigo.com`, ZeroSSL to `zerossl.com`. An empty CAA set is a notice and
+  passes: there is nothing to assert until the records land.
 
 ## The operator order
 
@@ -286,7 +299,7 @@ waits for the retirement gate and the origin-parity comparison, not for the box.
    $EDITOR tofu/terraform.tfvars   # edge_ipv4 = "<vps-ipv4>"
    git commit -qm 'feat(tofu): point the edge names at the VPS'
    git push
-   scripts/verify-public-edge.sh   # all ten green, certificates included
+   scripts/verify-public-edge.sh   # all thirteen green, certificates included
    ```
 
    The probe checks each name answers *as its application*: Immich's own HTML shell
