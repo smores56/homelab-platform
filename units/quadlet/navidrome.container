@@ -6,8 +6,9 @@
 # ND_ENFORCENONROOTUSER=true is deliberate: a dropped User= must fail loudly
 # instead of writing root-owned files into a uid-1000 dataset.
 #
-# The watcher is off for the same reason as OPDShelf: inotify over a
-# bind-mounted dataset is unreliable, and an hourly scan is cheap for this tree.
+# The watcher is on by default and 0.64.2 has no switch for it. inotify over a
+# bind-mounted dataset is unreliable (the OPDShelf lesson), so the debounce is
+# long and the hourly scheduled scan is the reliable path.
 # The transcode and artwork caches are tmpfs so every Restic snapshot holds only
 # the database and its plugins.
 #
@@ -31,7 +32,7 @@ Environment=ND_PORT=4533
 Environment=ND_ADDRESS=0.0.0.0
 Environment=ND_LOGLEVEL=info
 Environment=ND_SCANSCHEDULE=1h
-Environment=ND_SCANNER_WATCHERWAIT=0
+Environment=ND_SCANNER_WATCHERWAIT=10s
 Environment=ND_ENABLEINSIGHTSCOLLECTOR=false
 Environment=ND_ENFORCENONROOTUSER=true
 Environment=TZ=UTC
@@ -48,8 +49,8 @@ DropCapability=ALL
 # 143 is SIGTERM, which a deliberate stop sends: not a failure.
 SuccessExitStatus=143
 Restart=on-failure
-# The first start relabels the whole 78 GiB library tree (see the `:z` on the
-# music volume).
+# Every start relabels the whole 78 GiB library tree through the `:z` on its
+# volume; the timeout is sized for that walk.
 TimeoutStartSec=1800
 
 [Install]

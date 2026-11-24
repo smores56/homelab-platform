@@ -129,7 +129,8 @@ one Restic snapshot names every dataset the unit restores.
 `photos` is therefore one snapshot over `/srv/photos`,
 `/var/lib/immich/postgres` and `/var/lib/immich/dumps`: media, cluster files and
 the logical dump at one point in time. `books` pairs its catalog with the
-`.opdshelf` state, and `files` pairs the vault with the Syncthing identity.
+`.opdshelf` state, `files` pairs the vault with the Syncthing identity, and
+`music` pairs the library with Navidrome's database.
 
 Three directories are deliberately outside every dataset and every backup,
 because rebuilding them costs time and nothing else: `/var/lib/immich/ml-cache`
