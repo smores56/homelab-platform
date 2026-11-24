@@ -247,6 +247,7 @@ RUN set -eux; \
       zfs-ready@state-immich-dumps.service \
       zfs-ready@state-syncthing-config.service \
       zfs-ready@state-opdshelf.service \
+      zfs-ready@state-navidrome.service \
       zfs-ready@state-caddy.service \
       zfs-ready@state-agent-local.service \
       zfs-ready@state-agent-general.service \

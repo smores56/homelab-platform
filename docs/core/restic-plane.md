@@ -50,11 +50,17 @@ and is never referenced by this plane.
 A unit is the application, and it names the datasets restored together: `files`
 (`raw/files` + `state/syncthing-config`), `photos` (`raw/photos` +
 `state/immich-postgres` + `state/immich-dumps`), `books` (`raw/books` +
-`state/opdshelf`), `agent-local` (`state/agent-local`) and `agent-general`
-(`state/agent-general`) for the two agent deployments, and the raw-only `music`,
-`wallpapers`, `git`, `apps` and `repo-archive`. The table in `scripts/storage-layout.sh`
-is the single source; `/srv` holds raw data and `/var/lib` holds the state no raw
-file regenerates.
+`state/opdshelf`), `music` (`raw/music` + `state/navidrome`), `agent-local`
+(`state/agent-local`) and `agent-general` (`state/agent-general`) for the two
+agent deployments, and the raw-only `wallpapers`, `git`, `apps` and
+`repo-archive`. The table in `scripts/storage-layout.sh` is the single source;
+`/srv` holds raw data and `/var/lib` holds the state no raw file regenerates.
+
+Navidrome's database joined `music` after the unit had already run with
+`raw/music` alone, so its first backup reads the whole library again (already
+stored chunks dedupe) and starts a new `host,paths` parent family. The old family
+keeps its 14/8/12 retention until the one-time `restic forget` in
+`docs/manual-steps.md` retires it after the first new-family snapshot verifies.
 
 `state/agent-model` is the one dataset in **no** unit, and the table says so
 (`dataset_unrestored`): it holds the 4.7 GiB GGUF blob the personal model server
