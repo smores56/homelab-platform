@@ -162,9 +162,9 @@ finish_attempt() {
 
   if [[ $result == success ]]; then
     # The state records the set this run actually archived. A unit's dataset set
-    # can change (a state dataset joins it), and the verifier compares snapshots
-    # against this file, so leaving the old set here would make the unit look
-    # stale forever after the previous family ages out.
+    # can change (a state dataset joins it), and the deploy gate's local query
+    # prefers this file while it matches the storage table; leaving the old set
+    # here would keep the gate on the previous family.
     state_write "$state" \
       '.last_success = {end: $end, snapshot: $snap} | .final = {end: $end, snapshot: $snap} | .paths = $paths' \
       --arg end "$end" --arg snap "$snapshot" --argjson paths "$paths_json" || return 1
@@ -223,6 +223,10 @@ attempt_locked() {
     return 1
   }
   local key dataset mountpoint snapshot path
+  # The expected set, so a failure before the staging loop (readiness, mount)
+  # journals this unit's paths rather than whatever the previous unit left in
+  # the variable.
+  paths_json=$(unit_paths_json "$unit" "$backend")
   staging_paths=()
   staging_snapshots=()
   staging_created=()

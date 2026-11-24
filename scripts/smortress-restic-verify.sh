@@ -232,20 +232,25 @@ check_unit() {
 #
 # One restic listing per unit, no writing, no lock. A unit's path set comes from
 # the state file the backup driver wrote (that is the set it actually archived),
-# and falls back to the storage table for a unit that has never run, so the
-# answer is about the data a restore would need rather than about a naming
-# convention.
+# but only while it still matches the storage table: a dataset that joined the
+# unit after the last run makes the recorded set stale, and accepting it would
+# call a pre-change snapshot fresh while the new dataset has never been backed
+# up. A mismatch falls back to the table, which matches no snapshot until the
+# next successful run, so the gate fails closed and its own retry backs the unit
+# up. A unit that has never run also answers from the table.
 local_paths() { # <backend> <unit>
-  local file paths
+  local file paths expected
   file=$(state_file_for "$1" "$2")
+  expected=$(unit_paths_json "$2" "$1")
   if [[ -s $file ]]; then
     paths=$(jq -c '.paths // empty | select(type == "array" and length > 0)' "$file" 2>/dev/null) || paths=""
-    if [[ -n $paths ]]; then
+    if [[ -n $paths ]] &&
+      [[ $(jq -cn --argjson a "$paths" --argjson b "$expected" '($a | sort) == ($b | sort)') == true ]]; then
       printf '%s\n' "$paths"
       return 0
     fi
   fi
-  unit_paths_json "$2" "$1"
+  printf '%s\n' "$expected"
 }
 
 local_unit_verdict() { # <backend> <unit> <repo> <paths-json> -> one object

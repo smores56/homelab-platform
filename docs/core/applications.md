@@ -1,7 +1,7 @@
-# Core applications: Immich, OPDShelf, Syncthing (T5), agent deployments (T6)
+# Core applications: Immich, OPDShelf, Syncthing, Navidrome, agent deployments (T6)
 
-The three applications that carry real data on smortress run as Podman Quadlets
-from the derived image. A fourth Serve route, `/wallpapers`, publishes a dataset
+The four applications that carry real data on smortress run as Podman Quadlets
+from the derived image. A fifth Serve route, `/wallpapers`, publishes a dataset
 as static files and has no container behind it at all. Six more containers run
 the agent deployments: a pinned local model server, two Hermes gateways, one
 hosted-model proxy and one source facade per deployment, split by authority
@@ -649,6 +649,10 @@ commands; the shape is:
   server cannot log in.
 - **OPDShelf** — restore `books`, serve the scratch tree on an alternate port,
   fetch the catalog and one file. Nothing stateful to rebuild.
+- **Navidrome** — restore `music` (the library and the database together),
+  start the unit against the scratch tree on an alternate publish port and log
+  in; a playlist entry proves the database and the files agree. The queue is
+  rebuilty empty, so play state is what to check.
 - **Syncthing** — restore `syncthing` and `notes`, start with the GUI on an
   alternate port and **all folders paused**, then designate a primary. Peers
   must not be allowed to sync into a tree whose identity was just restored.

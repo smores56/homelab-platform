@@ -890,9 +890,13 @@ curl -fsS https://smortress.<tailnet>.ts.net:8448/ping
 Adding `state/navidrome` to the `music` unit changed its path list, so the first
 backup after this deploy reads the whole library again (Restic dedupes the chunks
 against the old snapshots, so the upload is small) and starts a new `host,paths`
-family. The old family keeps its 14/8/12 retention until it is forgotten. Run
-this once, per backend, after the first `music` snapshot of the new family is
-`verified`, and check the count before forgetting:
+family. The old family keeps its 14/8/12 retention until it is forgotten.
+Until the first new-family snapshot is `verified` in each backend,
+`smortress-restic-verify.service` reports `music` stale and pings the failure
+URL: that is the expected red window, not a fault.
+
+Run this once, per backend, after the first `music` snapshot of the new family
+is `verified`, and check the count before forgetting:
 
 ```sh
 sudo bash -c '
@@ -915,7 +919,8 @@ sudo bash -c '
     load_backend_env "$backend"
     restic -r "$(repo_for "$backend")" forget --host smortress \
       --tag unit:music,verified --group-by host,paths \
-      --path "/var/srv/music/.zfs/snapshot/$backend" --keep-last 0
+      --path "/var/srv/music/.zfs/snapshot/$backend" --keep-last 0 \
+      --unsafe-allow-remove-all
   done'
 ```
 

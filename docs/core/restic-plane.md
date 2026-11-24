@@ -119,10 +119,13 @@ Every snapshot is written with:
 
 After exit 0 the snapshot is tagged `verified` in a separate command. Restic's
 `host,paths` parent selection and retention address the same unit, and the
-driver rewrites the state's `paths` to the set it just archived: a unit that
-gains a dataset starts a new parent family and the verifier follows it instead
-of comparing new snapshots against the old set. An incomplete snapshot (exit 3)
-is never tagged and can never be selected by retention or by the verifier.
+driver rewrites the state's `paths` to the set it just archived. A unit that
+gains a dataset therefore starts a new parent family: the deploy gate's local
+query falls back to the storage table whenever the recorded set no longer
+matches it, so the unit is not called fresh until the new set has a snapshot.
+The aggregate verifier compares against the table throughout, so it stays red
+until that first success. An incomplete snapshot (exit 3) is never tagged and
+can never be selected by retention or by the verifier.
 
 ## A run: states and persistence
 
