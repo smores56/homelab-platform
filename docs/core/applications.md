@@ -1,7 +1,7 @@
-# Core applications: Immich, OPDShelf, Syncthing (T5), agent deployments (T6)
+# Core applications: Immich, OPDShelf, Syncthing, Navidrome, agent deployments (T6)
 
-The three applications that carry real data on smortress run as Podman Quadlets
-from the derived image. A fourth Serve route, `/wallpapers`, publishes a dataset
+The four applications that carry real data on smortress run as Podman Quadlets
+from the derived image. A fifth Serve route, `/wallpapers`, publishes a dataset
 as static files and has no container behind it at all. Six more containers run
 the agent deployments: a pinned local model server, two Hermes gateways, one
 hosted-model proxy and one source facade per deployment, split by authority
@@ -56,6 +56,7 @@ the digest that run produced.
 | `immich-valkey` | `…/immich-valkey@sha256:3add1a33…` | `docker.io/valkey/valkey:9` |
 | `opdshelf` | `…/opdshelf@sha256:b82f94f7…` | `docker.io/koalilla/opds-server@sha256:b82f94f7…` |
 | `syncthing` | `…/syncthing@sha256:2b71da7c…` | `docker.io/syncthing/syncthing:2.1.7` |
+| `navidrome` | `…/navidrome@sha256:38dc2727…` | `docker.io/navidrome/navidrome:0.64.2` |
 | `agent-model` | `…/agent-model@sha256:26f89ebd…` | `ghcr.io/ggml-org/llama.cpp:server-cuda` (b12602) |
 | `agent-runtime` | `…/agent-runtime@sha256:4ea73e6d…` | built from `images/agent-runtime/Containerfile` (base `docker.io/nousresearch/hermes-agent@sha256:276d4468…`) |
 | `agent-webui` | `…/agent-webui@sha256:fb50509e…` | built from `images/agent-webui/Containerfile` |
@@ -123,11 +124,13 @@ one Restic snapshot names every dataset the unit restores.
 | General facade | none | `state/agent-general` — `/var/lib/agent/general/memory`, the `external` profile | `/memory` (writable), and `/run/agent-shell` — the bridge's socket directory, mounted rw because `connect(2)` needs the inode's write bit; the only deployment with one, and so the only one serving `shell.run` |
 | Local model | none | none: `state/agent-model` — `/var/lib/agent/model` is the GGUF file, and it is in no backup | `/models` (read-only) |
 | Syncthing | `raw/files` — `/srv/files`, the vault | `state/syncthing-config` — `/var/lib/syncthing/config`, identity and configuration | `/srv/files`; `/var/syncthing/config` |
+| Navidrome | `raw/music` — `/srv/music`, the library | `state/navidrome` — `/var/lib/navidrome`, playlists, play counts, users and shares | `/music` (read-only); `ND_DATAFOLDER=/data` |
 
 `photos` is therefore one snapshot over `/srv/photos`,
 `/var/lib/immich/postgres` and `/var/lib/immich/dumps`: media, cluster files and
 the logical dump at one point in time. `books` pairs its catalog with the
-`.opdshelf` state, and `files` pairs the vault with the Syncthing identity.
+`.opdshelf` state, `files` pairs the vault with the Syncthing identity, and
+`music` pairs the library with Navidrome's database.
 
 Three directories are deliberately outside every dataset and every backup,
 because rebuilding them costs time and nothing else: `/var/lib/immich/ml-cache`
@@ -219,6 +222,32 @@ the server derives it from the `Host` header, which Tailscale Serve forwards.
 The admin password is required even though the service is tailnet-only: it is the
 one credential that keeps a compromised tailnet device from rewriting the
 library.
+
+## Navidrome
+
+One container, two datasets: the library (`raw/music`, mounted read-only at
+`/music`) and the database (`state/navidrome` at `/data`). The read-only mount is
+Navidrome's own contract — it only reads the music folder — and the database holds
+playlists, play counts, users and shares, so the `music` unit restores both at one
+point in time.
+
+`User=1000:1000` with `ND_ENFORCENONROOTUSER=true`: the upstream image has no
+`USER` and runs as root unless told otherwise, and that flag turns a dropped
+`User=` into a logged failure instead of root-owned files in a uid-1000 dataset.
+The transcode and artwork caches are tmpfs (`/cache`, `/tmp`), so a snapshot never
+carries derived files; the first transcode after a restart is slower.
+
+`ND_SCANSCHEDULE=1h` with `ND_SCANNER_WATCHERWAIT=10s`: 0.64.2 always runs the
+inotify watcher and that setting is only its debounce, so the scheduled scan is
+the reliable path over a bind-mounted dataset. `ND_BASEURL` is unset because Serve
+forwards `Host` and sets `X-Forwarded-Host`/`Proto`, which Navidrome uses for the
+absolute URLs it emits.
+
+The first visit to `https://smortress.<tailnet>.ts.net:8448/` shows "Create
+Admin"; Navidrome has no supported way to pre-create one, so the operator does it
+once (`docs/manual-steps.md`). The restore sequence is the `music` unit's: stop
+`navidrome.service`, restore `raw/music` and `state/navidrome` from the same
+snapshot, `chown`/`chcon` the trees, then start it.
 
 ## Syncthing
 
@@ -524,6 +553,7 @@ mapping file.
 | Immich | `127.0.0.1:2283` | `https://smortress.<tailnet>.ts.net/` and, for the edge only, `https://smortress.<tailnet>.ts.net:8446/` |
 | OPDShelf | `127.0.0.1:8083` | `https://smortress.<tailnet>.ts.net:8443/` and, for the edge only, `https://smortress.<tailnet>.ts.net:8447/` |
 | Syncthing GUI | `127.0.0.1:8384` | `https://smortress.<tailnet>.ts.net:10000/` |
+| Navidrome | `127.0.0.1:4533` | `https://smortress.<tailnet>.ts.net:8448/` |
 | Wallpapers | `/srv/wallpapers` (static files) | `https://smortress.<tailnet>.ts.net/wallpapers/` |
 | Personal agent gateway | `127.0.0.1:18001` | `https://smortress.<tailnet>.ts.net/apps/agent-local/v1` |
 | General agent gateway | `127.0.0.1:18002` | `https://smortress.<tailnet>.ts.net/apps/agent-general/v1` |
@@ -623,6 +653,10 @@ commands; the shape is:
   server cannot log in.
 - **OPDShelf** — restore `books`, serve the scratch tree on an alternate port,
   fetch the catalog and one file. Nothing stateful to rebuild.
+- **Navidrome** — restore `music` (the library and the database together),
+  start the unit against the scratch tree on an alternate publish port and log
+  in; a playlist entry proves the database and the files agree. The queue is
+  rebuilty empty, so play state is what to check.
 - **Syncthing** — restore `syncthing` and `notes`, start with the GUI on an
   alternate port and **all folders paused**, then designate a primary. Peers
   must not be allowed to sync into a tree whose identity was just restored.
@@ -655,6 +689,10 @@ successful start — it is proven by serving representative data from it.
   re-applies both ownership and label (`chown` + `chcon`) before the application
   starts, and the unit timeouts are sized for a first start that has to relabel.
   Snapshots are not touched: ZFS keeps `.zfs` hidden from directory walks.
+- Navidrome trusts `X-Forwarded-Host`, so a process that can reach
+  `127.0.0.1:4533` can poison the absolute URLs it generates. The listener is
+  loopback-only and the tailnet route admits `group:owner`, so there is no wider
+  exposure to close.
 - The proxy, the facades and their libraries are code the *host* image installs and
   the container mounts, so what runs is what the booted deployment carries: that is
   the point, and it is also the one place a container reads a host path. The mounts

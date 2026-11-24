@@ -32,6 +32,9 @@ declare -A dataset_mount=(
   [state/immich-dumps]=/var/lib/immich/dumps
   [state/syncthing-config]=/var/lib/syncthing/config
   [state/opdshelf]=/var/lib/opdshelf
+  # Navidrome's database: playlists, play counts, users and shares, none of
+  # which the library files regenerate.
+  [state/navidrome]=/var/lib/navidrome
   # The name service's ACME account and certificates (design #834): a rebuild
   # keeps the account id, so the next order resumes instead of registering a
   # second account for a zone that is already validated.
@@ -61,7 +64,7 @@ dataset_parents=(raw state)
 #: init-zpool plan is what --print-plan and its test compare.
 dataset_order=(raw/files raw/photos raw/books raw/music raw/wallpapers raw/git
   raw/apps raw/repo-archive state/immich-postgres state/immich-dumps
-  state/syncthing-config state/opdshelf state/caddy
+  state/syncthing-config state/opdshelf state/navidrome state/caddy
   state/agent-local state/agent-general state/agent-model)
 
 #: Dataset quotas. Until the core datasets carry a refreservation, the tenant is
@@ -109,7 +112,7 @@ declare -A unit_datasets=(
   [files]="raw/files state/syncthing-config"
   [photos]="raw/photos state/immich-postgres state/immich-dumps"
   [books]="raw/books state/opdshelf"
-  [music]="raw/music"
+  [music]="raw/music state/navidrome"
   [wallpapers]="raw/wallpapers"
   [git]="raw/git"
   [apps]="raw/apps"

@@ -617,6 +617,47 @@ eq "$rc" 2 "the aggregate mode takes no --json"
 run scripts/smortress-restic-verify.sh --local
 eq "$rc" 2 "the local mode requires --json"
 
+# --- 5b. a unit that gained a dataset reconciles its recorded paths --------
+#
+# The verifier reads .paths from the state the backup driver wrote, because that
+# is the set actually archived. When a dataset joins a unit after it has run,
+# the stored set is stale until the next successful run. Without the rewrite the
+# verifier keeps comparing new snapshots against the old paths and the unit can
+# never be fresh again, which holds every deploy.
+reset_state
+seed_state ssd music
+jq --arg p "$(mountpoint_for raw/music)/.zfs/snapshot/ssd" '.paths = [$p]' \
+  "$state/state/ssd-music.json" >"$state/state/ssd-music.json.tmp"
+mv "$state/state/ssd-music.json.tmp" "$state/state/ssd-music.json"
+export STUB_BACKUP_ID=reconcile1 STUB_BACKUP_TREE=treeR
+run scripts/smortress-restic-backup.sh ssd --unit music --no-maintenance
+eq "$rc" 0 "a unit whose dataset set changed still backs up"
+eq "$(jq -c '.paths | sort' "$state/state/ssd-music.json")" \
+  "$(unit_paths_json music ssd | jq -c 'sort')" \
+  "a successful run records the path set it archived"
+unset STUB_BACKUP_ID STUB_BACKUP_TREE
+
+# --- 5c. a stale recorded path set is not called fresh ---------------------
+#
+# The local query prefers the state's recorded set while it still matches the
+# table. After a dataset joins a unit and before its first new-family backup,
+# the recorded set is stale; using it would report a pre-change snapshot as
+# fresh while the new dataset has never been backed up.
+reset_state
+seed_state ssd music
+jq --arg p "$(mountpoint_for raw/music)/.zfs/snapshot/ssd" '.paths = [$p]' \
+  "$state/state/ssd-music.json" >"$state/state/ssd-music.json.tmp"
+mv "$state/state/ssd-music.json.tmp" "$state/state/ssd-music.json"
+STUB_SNAPSHOTS_JSON=$(jq -cn --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --arg p "$(mountpoint_for raw/music)/.zfs/snapshot/ssd" \
+  '[{id: "oldfam", time: $t, hostname: "smortress", paths: [$p],
+     tags: ["unit:music", "host:smortress", "verified"]}]')
+export STUB_SNAPSHOTS_JSON
+run scripts/smortress-restic-verify.sh --local --json
+eq "$(jq -r '.ssd.units.music.fresh' <<<"$out")" false \
+  "a snapshot from the old path family is not fresh"
+unset STUB_SNAPSHOTS_JSON
+
 # --- 6. repository init --------------------------------------------------
 reset_state
 install -d -m 0755 "$repos/ssd/restic"

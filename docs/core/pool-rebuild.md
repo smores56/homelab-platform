@@ -107,7 +107,7 @@ Only now copy the state trees. `opdshelf` and both gateways keep state of their
 own; they are the reason this is a separate phase, not a footnote:
 
 ```sh
-for d in immich/postgres immich/dumps syncthing/config opdshelf agent/local agent/general agent/model; do
+for d in immich/postgres immich/dumps syncthing/config opdshelf navidrome agent/local agent/general agent/model; do
   sudo install -d -m 0755 "/var/lib/restic/ssd/pool-copy/lib/$d"
   sudo rsync -aHA --numeric-ids --one-file-system "/var/lib/$d/" "/var/lib/restic/ssd/pool-copy/lib/$d/"
 done
@@ -124,7 +124,7 @@ data. `git` is the one tree that legitimately moves while the window is open —
 ```sh
 for t in srv/git srv/files srv/photos srv/books srv/music srv/wallpapers \
   srv/apps srv/repo-archive lib/immich/postgres lib/immich/dumps \
-  lib/syncthing/config lib/opdshelf lib/agent/local lib/agent/general lib/agent/model; do
+  lib/syncthing/config lib/opdshelf lib/navidrome lib/agent/local lib/agent/general lib/agent/model; do
   src=${t#srv/}; src=${src#lib/}
   case $t in srv/*) src=/var/srv/$src ;; *) src=/var/lib/$src ;; esac
   sudo rsync -aHA --numeric-ids --one-file-system --checksum -ni "$src/" "/var/lib/restic/ssd/pool-copy/$t/"
@@ -224,7 +224,7 @@ second proves the kit still opens the volume without it.
 for d in files photos books music wallpapers apps repo-archive; do
   sudo rsync -aHA --numeric-ids "/var/lib/restic/ssd/pool-copy/srv/$d/" "/var/srv/$d/"
 done
-for d in immich/postgres immich/dumps syncthing/config opdshelf agent/local agent/general agent/model; do
+for d in immich/postgres immich/dumps syncthing/config opdshelf navidrome agent/local agent/general agent/model; do
   sudo rsync -aHA --numeric-ids "/var/lib/restic/ssd/pool-copy/lib/$d/" "/var/lib/$d/"
 done
 sudo rsync -aHA --numeric-ids /var/lib/restic/ssd/pool-copy/srv/git/ /var/srv/git/

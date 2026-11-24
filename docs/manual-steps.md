@@ -877,10 +877,11 @@ sudo systemctl start smortress-tailscale-serve.service
 tailscale serve status
 ```
 
-Expect eight routes: 443 to `http://127.0.0.1:2283` (Immich, plus `/wallpapers/`,
+Expect nine routes: 443 to `http://127.0.0.1:2283` (Immich, plus `/wallpapers/`,
 `/apps/agent-local` and `/apps/agent-general`), 8443 to `http://127.0.0.1:8083`
 (OPDShelf), 10000 to `http://127.0.0.1:8384` (Syncthing GUI), 8444 and 8445 to the
-agent web UIs, and 8446/8447 for the public edge. Nothing here is Funnel. The
+agent web UIs, 8446/8447 for the public edge, and 8448 to `http://127.0.0.1:4533`
+(Navidrome). Nothing here is Funnel. The
 wallpaper route shows a `Path` target rather than a `Proxy`:
 
 ```sh
@@ -936,20 +937,75 @@ host"), then read the generator and the containers:
 
 ```sh
 journalctl -b | grep -i quadlet-generator
-systemctl list-units --all 'immich-*' 'opdshelf*' 'syncthing*'
+systemctl list-units --all 'immich-*' 'opdshelf*' 'syncthing*' 'navidrome*'
 sudo podman ps --format '{{.Names}}	{{.Status}}'
 ```
 
 A container whose network file is missing is dropped by the generator with
 `requested Quadlet unit <name>.network was not found` and leaves no unit to start,
 so read the generator's own errors first. `immich-server`, `immich-postgres`,
-`immich-valkey`, `immich-machine-learning`, `opdshelf` and `syncthing` should all
-be `Up`; a failed unit names its reason in `systemctl status <unit>`. The new
+`immich-valkey`, `immich-machine-learning`, `opdshelf`, `syncthing` and
+`navidrome` should all be `Up`; a failed unit names its reason in `systemctl status <unit>`. The new
 `syncthing` recovery group has no Restic status until its first backup:
 
 ```sh
 sudo systemctl start smortress-restic-backup@r2.service smortress-restic-verify.service
 ```
+
+### Navidrome's first boot and the one-time path cleanup
+
+The unit reads `/srv/music` read-only and keeps its database in
+`/var/lib/navidrome`. The pin must be published before the reboot that ships the
+unit, or the first pull fails under the default-reject policy: the publish section
+above must show `navidrome` at its digest in a green run.
+
+The first visit to `https://smortress.<tailnet>.ts.net:8448/` shows Navidrome's
+"Create Admin" screen. There is no supported environment variable for it, so the
+operator creates the one admin user here; the route is tailnet-only and admits
+`group:owner`. `/ping` proves the process is up:
+
+```sh
+curl -fsS https://smortress.<tailnet>.ts.net:8448/ping
+```
+
+Adding `state/navidrome` to the `music` unit changed its path list, so the first
+backup after this deploy reads the whole library again (Restic dedupes the chunks
+against the old snapshots, so the upload is small) and starts a new `host,paths`
+family. The old family keeps its 14/8/12 retention until it is forgotten.
+Until the first new-family snapshot is `verified` in each backend,
+`smortress-restic-verify.service` reports `music` stale and pings the failure
+URL: that is the expected red window, not a fault.
+
+Run this once, per backend, after the first `music` snapshot of the new family
+is `verified`, and check the count before forgetting:
+
+```sh
+sudo bash -c '
+  source /usr/libexec/restic-plane-common
+  for backend in ssd hdd r2; do
+    load_backend_env "$backend"
+    restic -r "$(repo_for "$backend")" snapshots --json \
+      --path "/var/srv/music/.zfs/snapshot/$backend" | jq length
+  done'
+```
+
+The count is the old family only: the new snapshots name both `/var/srv/music`
+and `/var/lib/navidrome`, so the exact `--path` cannot select them. Forget the old
+family:
+
+```sh
+sudo bash -c '
+  source /usr/libexec/restic-plane-common
+  for backend in ssd hdd r2; do
+    load_backend_env "$backend"
+    restic -r "$(repo_for "$backend")" forget --host smortress \
+      --tag unit:music,verified --group-by host,paths \
+      --path "/var/srv/music/.zfs/snapshot/$backend" --keep-last 0 \
+      --unsafe-allow-remove-all
+  done'
+```
+
+The next daily maintenance prunes the freed snapshot metadata.
 
 ### Verify the applications and the closed LAN
 
@@ -1308,7 +1364,7 @@ the mechanical restore and the fencing rules are `docs/core/restic-plane.md`,
 ```sh
 sudo systemctl stop smortress-immich-dump.timer
 sudo systemctl stop immich-server.service immich-machine-learning.service immich-postgres.service \
-  immich-valkey.service opdshelf.service syncthing.service
+  immich-valkey.service opdshelf.service syncthing.service navidrome.service
 drill=/var/lib/restic/ssd/drill
 for unit in files photos books music wallpapers git apps repo-archive; do
   sudo /usr/libexec/smortress-restic-restore-drill ssd "$unit" --target "$drill/$unit"

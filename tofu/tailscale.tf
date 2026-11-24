@@ -32,14 +32,15 @@ locals {
         dst    = ["tag:smortress:22"]
       },
       {
-        # Serve publishes the applications as HTTPS on the host itself: a root
-        # path on 443, 8443 and 10000, and a dedicated port for each agent web
-        # UI (scripts/tailscale-serve.sh). 8444 and 8445 are the personal and
-        # general UIs; they are separate authority domains behind separate
-        # passwords, so the edge and CI stay off them (the deny tests below).
+        # Serve publishes the applications as HTTPS on the host itself, one
+        # root path per port (scripts/tailscale-serve.sh): 443 Immich, 8443
+        # OPDShelf, 8448 Navidrome and 10000 the Syncthing GUI. 8444 and 8445
+        # are the personal and general agent UIs, separate authority domains
+        # behind separate passwords, so the edge and CI stay off them (the deny
+        # tests below).
         action = "accept"
         src    = ["group:owner"]
-        dst    = ["tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:10000"]
+        dst    = ["tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000"]
       },
       {
         # The public edge (design #725). The VPS terminates public TLS and needs
@@ -145,7 +146,7 @@ locals {
     tests = [
       {
         src    = var.tailscale_login
-        accept = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:10000", "tag:smortress:22000", "tag:vps:22", "svc:agent-ui:443"]
+        accept = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:vps:22", "svc:agent-ui:443"]
       },
       {
         # The owner reaches the edge login, never the edge's upstream ports and
@@ -156,7 +157,7 @@ locals {
       },
       {
         src  = "tag:untrusted"
-        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8446", "tag:smortress:8447", "tag:vps:22", "svc:agent-ui:443"]
+        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8446", "tag:smortress:8447", "tag:vps:22", "svc:agent-ui:443"]
       },
       {
         # The edge reaches the two Serve ports and nothing else: no sshd, no
@@ -166,7 +167,7 @@ locals {
       },
       {
         src  = "tag:vps"
-        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8484", "svc:agent-ui:443"]
+        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8484", "svc:agent-ui:443"]
       },
       {
         # The deploy node reaches the receiver and the names probe reaches the UI
@@ -181,7 +182,7 @@ locals {
         # grant admits, so `svc:agent-ui:443` moved out of this list in #848. The
         # remaining entries are every other destination any rule admits.
         src  = "tag:deploy"
-        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8446", "tag:smortress:8447", "tag:vps:22"]
+        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8446", "tag:smortress:8447", "tag:vps:22"]
       },
     ]
   }

@@ -44,6 +44,7 @@ readonly app_quadlets=(
   units/quadlet/immich-machine-learning.container
   units/quadlet/opdshelf.container
   units/quadlet/syncthing.container
+  units/quadlet/navidrome.container
   units/quadlet/agent-model.container
   units/quadlet/agent-local.container
   units/quadlet/agent-general.container

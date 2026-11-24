@@ -7,12 +7,12 @@
 # only that group's job. The unit therefore orders after every readiness
 # instance and the script itself re-checks the exact dataset before touching it.
 Description=Run due Restic backup jobs for the %i repository
-After=zfs-ready@raw-files.service zfs-ready@raw-photos.service zfs-ready@raw-books.service zfs-ready@raw-music.service zfs-ready@raw-wallpapers.service zfs-ready@raw-git.service zfs-ready@raw-apps.service zfs-ready@raw-repo-archive.service zfs-ready@state-immich-postgres.service zfs-ready@state-immich-dumps.service zfs-ready@state-syncthing-config.service zfs-ready@state-opdshelf.service zfs-ready@state-caddy.service \
+After=zfs-ready@raw-files.service zfs-ready@raw-photos.service zfs-ready@raw-books.service zfs-ready@raw-music.service zfs-ready@raw-wallpapers.service zfs-ready@raw-git.service zfs-ready@raw-apps.service zfs-ready@raw-repo-archive.service zfs-ready@state-immich-postgres.service zfs-ready@state-immich-dumps.service zfs-ready@state-syncthing-config.service zfs-ready@state-opdshelf.service zfs-ready@state-navidrome.service zfs-ready@state-caddy.service \
       zfs-ready@state-agent-local.service zfs-ready@state-agent-general.service zfs-ready@state-agent-model.service \
       smortress-restic-init.service \
       var-lib-restic-ssd.mount var-lib-restic-hdd.mount \
       sops-decrypt.service network-online.target
-Wants=zfs-ready@raw-files.service zfs-ready@raw-photos.service zfs-ready@raw-books.service zfs-ready@raw-music.service zfs-ready@raw-wallpapers.service zfs-ready@raw-git.service zfs-ready@raw-apps.service zfs-ready@raw-repo-archive.service zfs-ready@state-immich-postgres.service zfs-ready@state-immich-dumps.service zfs-ready@state-syncthing-config.service zfs-ready@state-opdshelf.service zfs-ready@state-caddy.service \
+Wants=zfs-ready@raw-files.service zfs-ready@raw-photos.service zfs-ready@raw-books.service zfs-ready@raw-music.service zfs-ready@raw-wallpapers.service zfs-ready@raw-git.service zfs-ready@raw-apps.service zfs-ready@raw-repo-archive.service zfs-ready@state-immich-postgres.service zfs-ready@state-immich-dumps.service zfs-ready@state-syncthing-config.service zfs-ready@state-opdshelf.service zfs-ready@state-navidrome.service zfs-ready@state-caddy.service \
       zfs-ready@state-agent-local.service zfs-ready@state-agent-general.service zfs-ready@state-agent-model.service \
       smortress-restic-init.service \
       var-lib-restic-ssd.mount var-lib-restic-hdd.mount network-online.target

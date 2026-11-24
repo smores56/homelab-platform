@@ -124,6 +124,7 @@ COPY units/quadlet/immich.network units/quadlet/immich-postgres.container \
      units/quadlet/immich-machine-learning.container \
      units/quadlet/immich-server.container units/quadlet/opdshelf.container \
      units/quadlet/opdshelf.network units/quadlet/syncthing.container \
+     units/quadlet/navidrome.container units/quadlet/navidrome.network \
      units/quadlet/agent-local.network units/quadlet/agent-general.network \
      units/quadlet/agent-model.container units/quadlet/agent-local.container \
      units/quadlet/agent-general.container units/quadlet/agent-proxy.container \
@@ -247,6 +248,7 @@ RUN set -eux; \
       zfs-ready@state-immich-dumps.service \
       zfs-ready@state-syncthing-config.service \
       zfs-ready@state-opdshelf.service \
+      zfs-ready@state-navidrome.service \
       zfs-ready@state-caddy.service \
       zfs-ready@state-agent-local.service \
       zfs-ready@state-agent-general.service \

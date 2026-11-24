@@ -5,12 +5,12 @@
 #
 # The core applications own a root path on their own HTTPS port, because none of
 # them supports being served under a subpath. The two agent gateways are not
-# applications with a root path to spare: 443, 8443 and 10000 are taken, so they
+# applications with a root path to spare: those ports are taken, so they
 # get one fixed path each on 443. Tenant apps from `homelab-apps`
-# get one `/apps/<name>` path each on 443 instead: Serve exposes root-path HTTPS
-# only on 443, 8443 and 10000, and those are taken. Their loopback ports come
-# from the rendered plan, never from a definition, and every path the plan no
-# longer names is removed, including when the tenant is empty.
+# get one `/apps/<name>` path each on 443 instead: the core applications already
+# own every root-path HTTPS port, and a path on 443 is what is left. Their
+# loopback ports come from the rendered plan, never from a definition, and every
+# path the plan no longer names is removed, including when the tenant is empty.
 #
 # The wallpaper library is a fourth core route and the only one with no
 # application behind it: `/srv/wallpapers` is a directory, so Serve publishes it
@@ -43,12 +43,12 @@ fail() {
 command -v jq >/dev/null 2>&1 || fail "jq is missing"
 
 # https port -> loopback port. 443 Immich, 8443 OPDShelf, 10000 Syncthing GUI,
-# 8444 the personal web UI, 8445 the general one. 8446 and 8447 repeat Immich and
-# OPDShelf for the public edge (design #725): the edge may not use 443, because
-# that port also carries the agent gateways and the wallpaper tree, and a
-# port-scoped tailnet rule cannot express a path. The wallpaper library is
-# absent here: it is a directory published as static files under a path on 443,
-# not a loopback port with a root path.
+# 8444 the personal web UI, 8445 the general one, 8448 Navidrome. 8446 and 8447
+# repeat Immich and OPDShelf for the public edge (design #725): the edge may not
+# use 443, because that port also carries the agent gateways and the wallpaper
+# tree, and a port-scoped tailnet rule cannot express a path. The wallpaper
+# library is absent here: it is a directory published as static files under a
+# path on 443, not a loopback port with a root path.
 declare -A core_routes=(
   [443]=2283
   [8443]=8083
@@ -57,6 +57,7 @@ declare -A core_routes=(
   [8445]=18007
   [8446]=2283
   [8447]=8083
+  [8448]=4533
 )
 
 # https/443 path -> loopback port, for the two agent gateway APIs. A fixed path

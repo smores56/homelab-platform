@@ -1,0 +1,7 @@
+# Navidrome's own network. It talks to no other container and grants nothing to
+# one, so it gets no shared bridge: the only reachable surface is its published
+# loopback port.
+[Unit]
+Description=Smortress Navidrome network
+
+[Network]

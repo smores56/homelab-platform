@@ -59,7 +59,7 @@ rollback path. Operator-only actions are in `docs/manual-steps.md#install-a-host
 
 `units/quadlet/pattern.container` is the canonical copy in the repository; the
 image ships it read-only as the base for a new application. A placeholder
-container must never be started automatically. The six application Quadlets in
+container must never be started automatically. The seven application Quadlets in
 `units/quadlet/*.container` are installed into `/usr/share/containers/systemd`
 and start from their own `[Install]` section; see `docs/core/applications.md`.
 
