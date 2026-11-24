@@ -202,6 +202,19 @@ else
   bad "no package the session never calls"
 fi
 
+# Syncthing is the vault's second copy. It is a user service, so the unit is
+# enabled globally at build time: there is no logged-in user to preset it for,
+# and without the symlink the first login would start nothing. The folder root
+# is a tmpfiles entry so bootc regenerates it with the right owner instead of
+# carrying unpacked /var content in the image.
+if grep -qE '^ +(.* )?syncthing[ ;]' image/Containerfile \
+    && grep -q 'systemctl --global enable syncthing.service' image/Containerfile \
+    && grep -qxF 'd /var/srv/files 0700 smores smores -' image/rootfs/usr/lib/tmpfiles.d/smorespro.conf; then
+  ok "syncthing is installed, enabled globally, and /var/srv/files is declared"
+else
+  bad "syncthing is installed, enabled globally, and /var/srv/files is declared"
+fi
+
 # Chromium and every other PulseAudio client in the session link libpulse. With
 # no server they fall back to pipewire-alsa, which still plays but drops stream
 # restore, pactl and the PA interface; the fallback is a log line, not a

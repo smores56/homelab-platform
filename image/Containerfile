@@ -93,7 +93,8 @@ RUN set -eux; \
       libinput \
       xdg-user-dirs gvfs udisks2 plymouth plymouth-system-theme \
       dolphin ImageMagick jq \
-      git tailscale firewalld; \
+      git tailscale firewalld \
+      syncthing; \
     printf '[brave-browser]\nname=Brave Browser\nenabled=1\ngpgcheck=1\ngpgkey=https://brave-browser-rpm-release.s3.brave.com/brave-core.asc\nbaseurl=https://brave-browser-rpm-release.s3.brave.com/$basearch\n' > /etc/yum.repos.d/brave-browser.repo; \
     dnf5 -y --setopt=install_weak_deps=False install brave-origin; \
     sed -i 's/^enabled=1$/enabled=0/' /etc/yum.repos.d/brave-browser.repo; \
@@ -175,6 +176,14 @@ RUN set -eux; \
       bootc-fetch-apply-updates.timer; \
     systemctl mask rpm-ostreed-automatic.timer; \
     systemctl set-default graphical.target
+
+# Syncthing is a user service, so it is enabled globally rather than through the
+# system-unit list: a bootc build has no logged-in user to preset it for, and a
+# host without the symlink would never start it at login. The package is Fedora's
+# (2.1.7, the version the smortress container runs), so it needs no third-party
+# repository and no pin.
+RUN set -eux; \
+    systemctl --global enable syncthing.service
 
 # Fail the build if the base is not the fedora-bootc release tag or the shipped
 # policy no longer rejects by default. A digest here would pin a manifest quay
