@@ -114,9 +114,12 @@ What the backend means for the workflows:
 - `ci.yml` runs `tofu init -backend=false` + `tofu validate`, so PRs need no
   credential and no bucket;
 - `tofu-plan-pr.yml` runs on every pull request and is the required check: it
-  refuses forks, CI-touching diffs and executable HCL, then plans with the
-  read-only credentials and comments the result on the PR. The merge is the
-  approval, so this is the plan the reviewer reads;
+  refuses forks, CI-touching diffs, executable HCL and JSON config under
+  `tofu/`, and it runs `scripts/check-tofu-providers.py` before `tofu init` so
+  only the providers in `.terraform.lock.hcl` can be fetched and no `module` can
+  name a remote source. Then it plans with the read-only credentials and
+  comments the result on the PR. The merge is the approval, so this is the plan
+  the reviewer reads;
 - `tofu-apply.yml` runs on a merge to `main` (and on an owner dispatch). It inits
   against R2, runs `plan -detailed-exitcode -out=tfplan`, publishes the plan and
   applies that saved plan — never an auto-approve flag, and never from a plan that

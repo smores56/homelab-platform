@@ -688,7 +688,60 @@ if grep -qE '\\?\(\\?\.github|\.github\|scripts' "$pr"; then
 else
   bad "the pre-merge plan refuses a PR that changes CI"
 fi
-if grep -q 'tofu-allow-exec' "$pr"; then ok "the pre-merge plan gates executable HCL on a label"; else bad "the pre-merge plan gates executable HCL on a label"; fi
+if grep -q 'tofu-allow-exec' "$pr"; then
+  bad "the executable-HCL label is gone"
+else
+  ok "the executable-HCL label is gone"
+fi
+# Task #886: a Write collaborator labels their own PR, and on a `synchronize`
+# run the sender is the pusher, so who applied a label is only knowable from the
+# issue timeline. The refusal is therefore unconditional, and the trigger no
+# longer carries the label events that existed to re-run it.
+if grep -qE 'LABELS|github\.event\.pull_request\.labels' "$pr"; then
+  bad "the guard reads no pull request labels"
+else
+  ok "the guard reads no pull request labels"
+fi
+if grep -qE '^[[:space:]]*types: \[opened, synchronize, reopened\]$' "$pr"; then
+  ok "the plan no longer triggers on label events"
+else
+  bad "the plan no longer triggers on label events"
+fi
+if grep -qE '^[[:space:]]*# guard: exec-refused$' "$pr"; then
+  ok "the executable-HCL guard carries its marker"
+else
+  bad "the executable-HCL guard carries its marker"
+fi
+# `data` and its type are two tokens, and HCL may break the line between them,
+# so the scan reads each file whole (`-z`) rather than line by line.
+scan=$(sed -nE "s/.*(grep -rlzE '[^']+' tofu\/).*/\1/p" "$pr")
+if [[ -n $scan ]]; then
+  ok "the executable-HCL scan reads whole files, not lines"
+else
+  bad "the executable-HCL scan reads whole files, not lines"
+fi
+for construct in local-exec remote-exec provisioner 'data[[:space:]]+"external"'; do
+  if [[ $scan == *"$construct"* ]]; then
+    ok "the executable-HCL scan refuses $construct"
+  else
+    bad "the executable-HCL scan refuses $construct"
+  fi
+done
+# The scan is the refusal, not a gate on a condition: it has to catch the
+# line-broken form and end the job.
+mkdir -p "$work/exec/tofu"
+printf 'data\n  "external" "x" {\n  program = ["true"]\n}\n' >"$work/exec/tofu/main.tf"
+if [[ -n $scan ]] && (cd "$work/exec" && bash -c "$scan" | tr '\0' '\n' | grep -qx 'tofu/main.tf'); then
+  ok "a line-broken data \"external\" is refused"
+else
+  bad "a line-broken data \"external\" is refused"
+fi
+exec_body=$(awk '/# guard: exec-refused/ { f = 1 } f { print } f && /echo "run=true"/ { exit }' "$pr")
+if grep -qF 'exit 1' <<<"$exec_body" && ! grep -qE '\[\[ .*(label|allow)' <<<"$exec_body"; then
+  ok "executable HCL fails the guard with no way to allow it"
+else
+  bad "executable HCL fails the guard with no way to allow it"
+fi
 # OpenTofu loads `*.tf.json` beside the HCL, where a provisioner is JSON the
 # keyword grep cannot be trusted to read: the guard refuses the file outright.
 if grep -qF '^tofu/.*\.tf\.json$' "$pr" && grep -qF '# guard: json-config-refused' "$pr"; then
@@ -700,6 +753,25 @@ if grep -qE 'ref: \$\{\{ github.event.pull_request.head.sha \}\}' "$pr"; then
   ok "the pre-merge plan plans the PR head"
 else
   bad "the pre-merge plan plans the PR head"
+fi
+# The fetch set is closed before `tofu init` can act on it (task #886): `init`
+# downloads and runs every provider the config names, with the plan's
+# credentials already in the environment.
+if grep -qE '^[[:space:]]*# guard: provider-allowlist$' "$pr"; then
+  ok "the pre-merge plan carries the provider allowlist step"
+else
+  bad "the pre-merge plan carries the provider allowlist step"
+fi
+if grep -qF 'scripts/check-tofu-providers.py tofu' "$pr"; then
+  ok "the provider allowlist step runs the checker"
+else
+  bad "the provider allowlist step runs the checker"
+fi
+allow_line=$(grep -n '# guard: provider-allowlist' "$pr" | cut -d: -f1)
+if [[ -n $allow_line && -n $init_line ]] && ((allow_line < init_line)); then
+  ok "the provider allowlist runs before tofu init"
+else
+  bad "the provider allowlist runs before tofu init"
 fi
 
 # Drift is read-only and never applies.
@@ -888,6 +960,88 @@ if [[ -f tofu/.terraform.lock.hcl ]]; then
   done
 else
   bad "the provider lock file is committed"
+fi
+
+# The fetch set, asserted statically (task #886). `tofu init` downloads every
+# provider the config names and runs it at plan time with the plan's credentials,
+# so the committed lock file is the allowlist and no `module` may name a remote
+# source. The fixtures are what keep the checker from passing everything.
+echo "== provider and module allowlist"
+providers=scripts/check-tofu-providers.py
+if [[ ! -x $providers ]]; then
+  bad "the provider allowlist checker is executable" "chmod +x $providers"
+fi
+
+# fixture <name>: an empty config directory carrying the committed lock file.
+fixture() {
+  mkdir -p "$work/$1"
+  cp tofu/.terraform.lock.hcl "$work/$1/"
+}
+
+if "$providers" tofu >"$work/providers.log" 2>&1; then
+  ok "the committed config declares only locked providers and local modules"
+else
+  bad "the committed config declares only locked providers and local modules" "$(cat "$work/providers.log")"
+fi
+
+fixture added
+cat >"$work/added/main.tf" <<'EOF'
+terraform {
+  required_providers {
+    cloudflare = { source = "cloudflare/cloudflare" }
+    aws        = { source = "hashicorp/aws" }
+  }
+}
+EOF
+if "$providers" "$work/added" >"$work/added.log" 2>&1; then
+  bad "the checker refuses a provider the lock file does not name"
+else
+  ok "the checker refuses a provider the lock file does not name"
+fi
+if grep -q 'hashicorp/aws' "$work/added.log"; then
+  ok "the refusal names the added provider"
+else
+  bad "the refusal names the added provider" "$(cat "$work/added.log")"
+fi
+
+fixture remote
+cat >"$work/remote/main.tf" <<'EOF'
+module "vpc" {
+  source = "registry.opentofu.org/terraform-aws-modules/vpc/aws"
+}
+EOF
+if "$providers" "$work/remote" >"$work/remote.log" 2>&1; then
+  bad "the checker refuses a remote module source"
+else
+  ok "the checker refuses a remote module source"
+fi
+if grep -q 'terraform-aws-modules/vpc/aws' "$work/remote.log"; then
+  ok "the refusal names the remote module"
+else
+  bad "the refusal names the remote module" "$(cat "$work/remote.log")"
+fi
+
+fixture local
+cat >"$work/local/main.tf" <<'EOF'
+module "x" {
+  source = "./modules/x"
+}
+EOF
+mkdir -p "$work/local/modules/x"
+if "$providers" "$work/local" >"$work/local.log" 2>&1; then
+  ok "the checker allows a local module source"
+else
+  bad "the checker allows a local module source" "$(cat "$work/local.log")"
+fi
+
+# A missing lock file is not an empty allowlist: it fails closed rather than
+# passing every declaration.
+fixture nolock
+rm -f "$work/nolock/.terraform.lock.hcl"
+if "$providers" "$work/nolock" >"$work/nolock.log" 2>&1; then
+  bad "the checker fails closed without a lock file"
+else
+  ok "the checker fails closed without a lock file"
 fi
 
 echo "== provider pin and workflows"

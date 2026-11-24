@@ -78,8 +78,9 @@ if [[ -f $exempt ]]; then
   }
   require "fork-only"
   require "ci-change-refused"
-  require "exec-label"
+  require "exec-refused"
   require "json-config-refused"
+  require "provider-allowlist"
   require "read-only-credentials"
   # The credentials' read-only claim is an observation recorded in the workflow
   # (a write attempt that must answer 403), so its step is required text too:

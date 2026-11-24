@@ -59,7 +59,7 @@ agent-proxy|python3 -m unittest discover -s apps/agent_proxy/tests -t apps/agent
 agent-facade|python3 -m unittest discover -s apps/agent_facade/tests -t apps|apps/agent_facade/*
 agent-shell-bridge|tests/agent-shell-bridge/check.sh|tests/agent-shell-bridge/*,scripts/agent-shell-bridge.py
 backrest|if ! npm --version >/dev/null 2>&1; then d="${XDG_CACHE_HOME:-$HOME/.cache}/check-all/node"; mkdir -p "$d"; for t in node npm npx; do printf '#!/bin/sh\nexec mise x node@22.23.5 -- %s "$@"\n' "$t" > "$d/$t"; chmod +x "$d/$t"; done; PATH="$d:$PATH"; export PATH; fi; npm ci --prefix backrest && npm --prefix backrest run typecheck && npm --prefix backrest test && tests/backrest/check.sh|backrest/*
-tofu-check|tests/tofu/check.sh|tests/tofu/*,tofu/*
+tofu-check|tests/tofu/check.sh|tests/tofu/*,tofu/*,scripts/check-tofu-providers.py
 tofu-fmt|tofu fmt -check -recursive tofu|tofu/*
 provision|tests/provision/check.sh|tests/provision/*,provision/*
 docs|python3 scripts/check-doc-refs.py|*.md,docs/*,scripts/check-doc-refs.py,scripts/doc-refs-baseline.txt

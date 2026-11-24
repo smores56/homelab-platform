@@ -12,7 +12,7 @@
   otherwise (`scripts/check-action-pins.sh`).
 - A workflow triggered by `pull_request` must not reference `secrets.*` other
   than `secrets.GITHUB_TOKEN`. `tofu-plan-pr.yml` is the single, checked
-  exception: read-only plan credentials only, with the four guard markers
+  exception: read-only plan credentials only, with the guard markers
   `scripts/check-pr-secret-boundary.sh` requires. Never use
   `pull_request_target` (blocked by default in public repos from 2026-12-02).
 - `*.tf` and `.github/` are Kanbei-critical (`docs/kanbei-critical.md`). Keep

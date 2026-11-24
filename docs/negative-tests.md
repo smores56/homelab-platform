@@ -25,8 +25,9 @@ Job `fork-pr-secret-boundary` in `.github/workflows/ci.yml`:
     grants it `policy_file:read`, the two `devices` reads and `services:read`,
     and the job proves a write answers 403 before it plans) from the
     `cloudflare-plan` environment, and must carry the guard markers (fork-only,
-    CI-change refusal, executable-HCL label, read-only credentials, read-only
-    probe), so deleting a guard fails CI on the same diff;
+    CI-change refusal, executable-HCL refusal, JSON-config refusal, provider
+    allowlist, read-only credentials, read-only probe), so deleting a guard
+    fails CI on the same diff;
   - no workflow uses `pull_request_target`, which runs with base-repo secrets and
     is blocked by default in public repositories from 2026-12-02 anyway.
 
@@ -36,7 +37,11 @@ The #622 exemption is the one deliberate relaxation: the pre-merge plan is what
 makes the merge an informed approval, and read-only credentials are what make the
 relaxation survivable. The Tailscale OAuth client is the one credential that
 cannot be read-only, and the CI-change and executable-HCL guards, not its scope,
-are what bound it. The exemption depends on the `cloudflare` environment allowing
+are what bound it. A provider or remote module is the other way code reaches the
+runner with that credential in the environment, so the plan job runs
+`scripts/check-tofu-providers.py` before `tofu init`: `required_providers` may
+name only the providers in the committed `.terraform.lock.hcl`, and no `module`
+may name a non-local source. The exemption depends on the `cloudflare` environment allowing
 only `main` and `smores/*` (`docs/manual-steps.md#environments-and-their-branch-policies`), because the workflow
 that holds those credentials on a PR is the PR head's.
 
