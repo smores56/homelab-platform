@@ -11,7 +11,7 @@
 Description=Publish the todo.txt list into the personal replica
 Requires=zfs-ready@state-agent-local.service
 After=zfs-ready@state-agent-local.service
-ConditionPathExists=/srv/files/todo
+ConditionPathExists=/srv/files/notes
 
 [Service]
 Type=oneshot
@@ -20,7 +20,7 @@ ExecStart=/usr/bin/podman run --rm --replace --name smortress-agent-collect-task
   --network none \
   --read-only --cap-drop=all --security-opt no-new-privileges \
   --tmpfs /tmp:rw,size=16m --user 1000:1000 \
-  --volume /srv/files/todo:/entities:ro \
+  --volume /srv/files/notes:/entities:ro \
   --volume /var/lib/agent/local/replica:/replica:z \
   --env PYTHONPATH=/usr/lib/agent-facade/libs:/usr/lib/agent-facade \
   --env PYTHONDONTWRITEBYTECODE=1 \

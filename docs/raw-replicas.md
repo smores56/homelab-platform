@@ -446,7 +446,7 @@ python3 -m data_plane.collectors.raw --root /var/lib/agent/local/replica/finance
 python3 -m data_plane.collectors.raw --root /var/lib/agent/local/replica/notes \
   notes --entities /srv/files/vault
 python3 -m data_plane.collectors.raw --root /var/lib/agent/local/replica/tasks \
-  tasks --entities /srv/files/todo
+  tasks --entities /srv/files/notes
 ```
 
 On the host the same command runs from `smortress-agent-collect-finance.service`,
