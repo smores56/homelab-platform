@@ -1331,9 +1331,9 @@ the list must then hold `wildcard default-deny`, `memory`, `agent`, `backrest`,
 
 ### Remove the reader's Access gate
 
-`tofu/access.tf` declares no `backrest` application: the name is in
-`local.public_apps`, so Access passes it to the Worker and Backrest's password is
-the only login. The application carried `prevent_destroy`, so drop its state entry
+`tofu/access.tf` declares no Access object at all (SDLC #833), so nothing gates
+the name and Backrest's password is the only login. The retired application
+carried `prevent_destroy`, so drop its state entry
 **first** — dropping the block alone fails the apply:
 
 ```sh

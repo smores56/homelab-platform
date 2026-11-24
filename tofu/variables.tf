@@ -18,19 +18,9 @@ variable "domain" {
   }
 }
 
-variable "email" {
-  type        = string
-  description = "Owner identity: the only principal the Access default-deny admits, and the alert recipient."
-
-  validation {
-    condition     = can(regex("^[^@]+@[^@]+$", var.email))
-    error_message = "email is the address the IdP asserts, not a group name."
-  }
-}
-
 variable "tailscale_login" {
   type        = string
-  description = "The tailnet's own login for the owner (e.g. user@github), which is what a Tailscale group member must be. Not the IdP address Cloudflare asserts."
+  description = "The tailnet's own login for the owner (e.g. user@github), which is what a Tailscale group member must be. A GitHub-linked login, not the address of an identity provider."
 
   validation {
     condition     = can(regex("^[^@]+@[^@]+$", var.tailscale_login))
@@ -38,44 +28,9 @@ variable "tailscale_login" {
   }
 }
 
-variable "host_tunnel_id" {
-  type        = string
-  description = "UUID of the human-owned host tunnel (nix-config `webProxy`, cloudflared on smortress). Read it from the tunnel credentials JSON's TunnelID."
-
-  validation {
-    condition     = can(regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", var.host_tunnel_id))
-    error_message = "host_tunnel_id is the tunnel UUID, not the tunnel name."
-  }
-}
-
-variable "cluster_tunnel_id" {
-  type        = string
-  description = "UUID of the cluster tunnel (cloudflared in the ingress namespace, T6). Empty until the tunnel is minted; only required once cluster_hosts is non-empty."
-  default     = ""
-
-  validation {
-    condition     = var.cluster_tunnel_id == "" || can(regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", var.cluster_tunnel_id))
-    error_message = "cluster_tunnel_id is either empty or the tunnel UUID, not the tunnel name."
-  }
-}
-
-variable "cluster_hosts" {
-  type        = set(string)
-  description = "Subdomains routed to the cluster tunnel instead of the host tunnel. Defaults to the keys of `local.cluster_ingress`, so a cutover is one edit in tofu/cluster.tf and DNS cannot drift from the tunnel's ingress. Set it explicitly only to pin a subset, which is the rollback for a single name."
-  default     = null
-  nullable    = true
-
-  validation {
-    condition = var.cluster_hosts == null || alltrue([
-      for host in var.cluster_hosts : can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?$", host))
-    ])
-    error_message = "cluster_hosts holds bare one-label subdomains (no dots, lowercase, no wildcard)."
-  }
-}
-
 variable "edge_ipv4" {
   type        = string
-  description = "Public IPv4 of the edge VPS (design #725). Empty until the cutover, which is why the two edge names stay on the cluster tunnel: setting it retires their proxied CNAMEs and creates the grey-cloud A records in one apply. The edge is not proxied, so this address is what the internet reaches."
+  description = "Public IPv4 of the edge VPS (design #725). Empty until the cutover, which is why it gates the A records: setting it creates them. The edge is not proxied, so this address is what the internet reaches."
   default     = ""
 
   validation {

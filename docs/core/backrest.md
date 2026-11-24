@@ -28,9 +28,9 @@ answering and pings Healthchecks if a ping URL is written to
   `wrangler.json`.
 - `backrest/scripts/gate.sh` runs the acceptance matrix against a deployment.
 - `recovery.sammohr.dev` has **no Cloudflare Access gate** (design #701,
-  re-affirmed 2026-11-20). The name is in `local.public_apps` in `tofu/access.tf`,
-  so Access lets it through to the Worker, and family can use it with nothing
-  set up in advance. The reader's own password is the only login, and
+  re-affirmed 2026-11-20). No Access object in the zone names it (SDLC #833):
+  the name answers from the edge VPS, and family can use it with nothing set up
+  in advance. The reader's own password is the only login, and
   `tofu/rate-limit.tf` rate limits the login endpoint at 10 requests per 10 s per
   IP with a 10 s mitigation window. That rule holds the zone's only rate-limit
   slot, and the media rule it displaced is a recorded residual (below). There is
@@ -121,9 +121,8 @@ and `opds` at 1000 requests per 10 s per IP with the same 10 s mitigation, sized
 for an Immich timeline scroll.
 
 That rule was live, which is why losing it is a residual and not a cleanup: all
-three names are in `local.public_apps` (`tofu/access.tf`) and each resolves
-through a proxied CNAME to the cluster tunnel (`tofu/dns.tf`), with `photos`
-fronting `immich-server.immich.svc.cluster.local` (`tofu/cluster.tf`). Immich is
+three names were served through the zone's cluster tunnel, since retired by SDLC
+#833, with `photos` fronting `immich-server.immich.svc.cluster.local`. Immich is
 not tailnet-only — the name has a public bypass application precisely because
 mobile clients cannot complete an Access login — so the phase saw that traffic
 and the budget applied to it.

@@ -1,36 +1,13 @@
-# Cluster tunnel routes. A specific record wins over *.<domain>, so a name in
-# local.cluster_hosts resolves to the cluster connector while everything else
-# keeps resolving to the host tunnel in main.tf. The set defaults to the
-# tunnel's own ingress keys, so DNS moves with the route rather than beside it.
-resource "cloudflare_dns_record" "cluster" {
-  for_each = toset(local.cluster_hosts)
-
-  zone_id = data.cloudflare_zone.this.zone_id
-  name    = "${each.value}.${var.domain}"
-  type    = "CNAME"
-  content = local.cluster_tunnel_cname
-  proxied = true
-  ttl     = 1
-  comment = "cluster tunnel (k3s ingress/cloudflared)"
-
-  lifecycle {
-    precondition {
-      condition     = var.cluster_tunnel_id != ""
-      error_message = "cluster_hosts is non-empty but cluster_tunnel_id is empty: mint the cluster tunnel first (docs/manual-steps.md)."
-    }
-  }
-}
-
-# The public edge (design #725): two grey-cloud address records, one IPv4
-# each, pointing at the VPS that terminates TLS for them. Grey cloud on purpose:
+# The public edge (design #725): grey-cloud address records, one IPv4 each,
+# pointing at the VPS that terminates TLS for them. Grey cloud on purpose:
 # Cloudflare must not sit in the media path, and TLS-ALPN-01 needs the name to
 # answer directly. An explicit TTL rather than `ttl = 1`, which is the
 # proxied-record value and is rejected on a record Cloudflare does not proxy.
 #
 # The set is empty until `edge_ipv4` is set, so this resource is declared now
-# and applied at the cutover. It is applied in a second step after the cluster
-# records are gone (tofu/cluster.tf, `edge_dns_hosts`): Cloudflare refuses two
-# records at one name, and OpenTofu cannot order a destroy before a create.
+# and applied at the cutover (tofu/cluster.tf, `edge_dns_hosts`). The proxied
+# CNAMEs these names held on the cluster tunnel are retired (SDLC #833), so no
+# name is written by two records and no apply has to order a destroy first.
 #
 # `edge_ipv4` has to stay a plan-known literal: wiring it to a resource or data
 # source makes the for_each unknown at plan time and the plan fails.
@@ -46,19 +23,23 @@ resource "cloudflare_dns_record" "edge" {
   comment = "public edge VPS (design #725)"
 
   lifecycle {
+    # The names with no tunnel route behind them (`edge_only_hosts`) have to be
+    # names the edge serves: a typo there publishes nothing while `edge_hosts`
+    # claims the name is served. The for_each already iterates the served set,
+    # so the assertion left to make is between the two sets.
     precondition {
-      condition     = contains(keys(local.cluster_ingress), each.value) || contains(local.edge_only_hosts, each.value)
-      error_message = "local.edge_hosts names a hostname neither the cluster ingress map nor local.edge_only_hosts knows: the cutover would create a record with no origin at all."
+      condition     = alltrue([for host in local.edge_only_hosts : contains(local.edge_hosts, host)])
+      error_message = "local.edge_only_hosts names a hostname local.edge_hosts does not serve: the edge-only set has to be a subset of the served names."
     }
   }
 }
 
 # The agent UI's Service VIP (design #834) is an address Tailscale computes, so
-# the record is one name rather than a set. A specific record overrides
-# `*.<domain>`, which is the point: this name answers with the VIP while every
-# other name keeps resolving to the host tunnel. Grey cloud and an explicit TTL
-# for the same reason as the edge records: Tailscale answers, not Cloudflare, and
-# a proxied record would look for an origin Cloudflare cannot reach.
+# the record is one name rather than a set. A record here wins over any other
+# name's, which is the point: this name answers with the VIP while the zone's
+# other names are the edge's. Grey cloud and an explicit TTL for the same reason
+# as the edge records: Tailscale answers, not Cloudflare, and a proxied record
+# would look for an origin Cloudflare cannot reach.
 #
 # Gated with the Service itself, so a checkout that only manages the zone plans
 # no record pointing at an address that does not exist yet.
@@ -76,15 +57,12 @@ resource "cloudflare_dns_record" "assistant" {
 
 # The general UI's name (task #847) rides the same Service and VIP: Caddy routes
 # by SNI, so one address answers both names and the record differs only in the
-# label. A record per name rather than a wildcard, for the same reason as above:
-# `*.<domain>` is the host tunnel's deny and a name has to override it to move.
+# label. The zone publishes no wildcard any more (SDLC #833), so every name the
+# tailnet or the edge answers is a record of its own.
 #
-# This create came after the CNAME's destroy for the same reason it could not
-# share a plan with it: Cloudflare refuses two records at one name and OpenTofu
-# cannot order a destroy before a create, so PR #120's apply removed the proxied
-# cluster record first. Until this record exists the name falls through to
-# `*.<domain>`, which is the host tunnel's deny; the rest of that retirement is
-# #833's.
+# PR #120's apply removed the proxied cluster CNAME this name replaced: Cloudflare
+# refuses two records at one name and OpenTofu cannot order a destroy before a
+# create, so the two could not share a plan. The rest of that retirement is #833's.
 resource "cloudflare_dns_record" "agent" {
   count = var.tailnet == "" ? 0 : 1
 

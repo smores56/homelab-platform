@@ -146,7 +146,8 @@ else
 fi
 
 # Kanbei's Access application is deleted (#833 T1), as is the private WARP route
-# it replaced; its only DNS path left is the wildcard, which #833 T2 removes.
+# it replaced. The wildcard it resolved through is gone too (#833 T2), so the
+# name has no DNS path at all.
 echo "== kanbei access application"
 absent cloudflare_zero_trust_access_application.kanbei 'no kanbei Access application is declared'
 if [[ -n $(extract cloudflare_zero_trust_network_hostname_route.kanbei) ]]; then
@@ -194,33 +195,30 @@ has 'acme_account_id is a variable' 'variable "acme_account_id"'
 has 'the CAA pin is conditional on the account id' 'count[[:space:]]*=[[:space:]]*var\.acme_account_id == "" \? 0 : 1'
 has 'an empty acme_account_id is valid' 'var\.acme_account_id == "" || can\(regex'
 
-echo "== tunnels"
-has 'host tunnel CNAME comes from the host tunnel variable' 'host_tunnel_cname[[:space:]]*=[[:space:]]*"\$\{var\.host_tunnel_id\}\.cfargotunnel\.com"'
-wildcard_dns=$(extract cloudflare_dns_record.wildcard)
-if grep -q 'content = local.host_tunnel_cname' <<<"$wildcard_dns"; then ok "wildcard DNS points at the host tunnel"; else bad "wildcard DNS points at the host tunnel"; fi
-if grep -q 'proxied = true' <<<"$wildcard_dns"; then ok "wildcard DNS is proxied"; else bad "wildcard DNS is proxied"; fi
-cluster_dns=$(extract cloudflare_dns_record.cluster)
-if grep -q 'for_each = toset(local.cluster_hosts)' <<<"$cluster_dns"; then ok "cluster DNS follows the derived host set"; else bad "cluster DNS follows the derived host set"; fi
-has 'cluster_hosts defaults to the ingress map' 'var\.cluster_hosts == null \? sort\(keys\(local\.cluster_ingress\)\) : var\.cluster_hosts'
-if grep -q 'content = local.cluster_tunnel_cname' <<<"$cluster_dns"; then ok "cluster DNS points at the cluster tunnel"; else bad "cluster DNS points at the cluster tunnel"; fi
-if grep -q 'condition     = var.cluster_tunnel_id != ""' <<<"$cluster_dns"; then ok "cluster DNS refuses an empty tunnel id"; else bad "cluster DNS refuses an empty tunnel id"; fi
-has 'cluster_tunnel_id is a variable' 'variable "cluster_tunnel_id"'
+# Both tunnels are gone (SDLC #833): the wildcard CNAME that fronted the host
+# tunnel, the cluster tunnel's CNAMEs and its remotely-managed ingress, and the
+# ids and host sets that gated them. Absence, not shape: a re-introduced block,
+# variable or local fails here rather than passing silently.
+echo "== tunnels are gone"
+absent cloudflare_dns_record.wildcard 'no wildcard DNS record is declared'
+absent cloudflare_dns_record.cluster 'no cluster DNS record is declared'
+absent cloudflare_zero_trust_tunnel_cloudflared_config.cluster 'no cluster tunnel ingress is declared'
+hasnt 'host_tunnel_id is not a variable' 'variable "host_tunnel_id"'
+hasnt 'cluster_tunnel_id is not a variable' 'variable "cluster_tunnel_id"'
+hasnt 'cluster_hosts is not a variable' 'variable "cluster_hosts"'
+hasnt 'no tunnel CNAME local is left' 'tunnel_cname'
+hasnt 'the cluster ingress map is gone' 'local\.cluster_ingress'
+hasnt 'no notification policy is declared' 'resource[[:space:]]+"cloudflare_notification_policy"'
 hasnt "no tunnel UUID is authored in the config" '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 
-# The public edge (design #725) is declared now and applied at the cutover: an
-# empty edge_ipv4 keeps both names on the cluster tunnel, and setting it retires
-# their proxied CNAMEs in the same plan that creates the grey-cloud A records.
+# The public edge (design #725): an empty edge_ipv4 plans no record, and setting
+# it creates the grey-cloud A records. The proxied CNAMEs the edge names used to
+# hold are retired (SDLC #833), so no name is written by two records.
 echo "== public edge DNS"
 has 'edge_ipv4 is a variable' 'variable "edge_ipv4"'
 has 'an empty edge_ipv4 is valid' 'var\.edge_ipv4 == "" \|\| can\(regex'
 has 'the edge names are the served names' 'edge_hosts[[:space:]]*=[[:space:]]*\["photos", "opds", "recovery"\]'
 has 'the edge DNS set is empty until the cutover' 'var\.edge_ipv4 == "" \? \[\] : local\.edge_hosts'
-has 'the edge names leave the cluster set in the same plan' 'setsubtract\('
-if grep -qF 'local.edge_dns_hosts,' "$work/code.tf"; then
-  ok 'the cluster set subtracts the edge names'
-else
-  bad 'the cluster set subtracts the edge names'
-fi
 edge_dns=$(extract cloudflare_dns_record.edge)
 if [[ -z $edge_dns ]]; then
   bad "edge DNS record exists"
@@ -236,10 +234,10 @@ else
   else
     ok "edge DNS does not use the proxied-record TTL"
   fi
-  if grep -qF 'condition     = contains(keys(local.cluster_ingress), each.value)' <<<"$edge_dns"; then
-    ok "edge DNS names only hostnames the ingress map knows"
+  if grep -qF 'condition     = alltrue([for host in local.edge_only_hosts : contains(local.edge_hosts, host)])' <<<"$edge_dns"; then
+    ok "edge DNS asserts the edge-only names are among the served names"
   else
-    bad "edge DNS names only hostnames the ingress map knows"
+    bad "edge DNS asserts the edge-only names are among the served names"
   fi
 fi
 
@@ -282,37 +280,6 @@ done
 eq "$(grep -c 'content = tailscale_service.agent_ui\[0\].addrs\[0\]' "$work/code.tf")" "2" \
   "both names answer with the one Service VIP"
 
-# The cluster tunnel's hostname config lives here, not in a dashboard (SDLC #583).
-echo "== cluster tunnel ingress"
-cluster_cfg=$(extract cloudflare_zero_trust_tunnel_cloudflared_config.cluster)
-if [[ -z $cluster_cfg ]]; then
-  bad "cluster tunnel config exists"
-else
-  ok "cluster tunnel config exists"
-  if grep -qF 'tunnel_id  = var.cluster_tunnel_id' <<<"$cluster_cfg"; then ok "cluster config targets the cluster tunnel"; else bad "cluster config targets the cluster tunnel"; fi
-  if grep -qF 'count = var.cluster_tunnel_id == "" ? 0 : 1' <<<"$cluster_cfg"; then ok "cluster config tolerates a missing tunnel"; else bad "cluster config tolerates a missing tunnel"; fi
-fi
-for pair in 'agent=http://nanobot.tenant-apps.svc.cluster.local:80' \
-            'photos=http://immich-server.immich.svc.cluster.local:2283' \
-            'music=http://navidrome.navidrome.svc.cluster.local:4533' \
-            'opds=http://opdshelf.opdshelf.svc.cluster.local:8083' \
-            'memory=http://memory-mcp.graphiti.svc.cluster.local:8182'; do
-  name=${pair%%=*}
-  url=${pair#*=}
-  # `tofu fmt` aligns the `=`, so match the mapping rather than one spacing.
-  if grep -qE "^[[:space:]]*${name}[[:space:]]*=[[:space:]]*\"${url//./\\.}\"" "$work/code.tf"; then
-    ok "$name maps to its in-cluster Service"
-  else
-    bad "$name maps to its in-cluster Service"
-  fi
-done
-if grep -qF 'http_status:404' "$work/code.tf"; then ok "cluster ingress ends with a 404 catch-all"; else bad "cluster ingress ends with a 404 catch-all"; fi
-if grep -qF 'contains(keys(local.cluster_ingress), host)' "$work/code.tf"; then
-  ok "cluster DNS and ingress must agree"
-else
-  bad "cluster DNS and ingress must agree"
-fi
-
 # The SSH tunnel is gone (design #767 T6): no `ssh` DNS record, no tunnel ingress
 # and no `ssh_tunnel_id` to gate them on. An id that came back would plan a route
 # the tailnet already replaced, so each assertion fails on one.
@@ -324,11 +291,20 @@ hasnt 'ssh_tunnel_id is not a variable' 'variable "ssh_tunnel_id"'
 hasnt 'no ingress hands an ssh service to a tunnel' 'service[[:space:]]*=[[:space:]]*"ssh://'
 hasnt 'no cfargotunnel content is built from an ssh id' '\$\{var\.ssh_tunnel_id\}\.cfargotunnel\.com'
 if [[ -f tofu/terraform.tfvars ]]; then ok "committed tfvars exists"; else bad "committed tfvars exists"; fi
-for key in account_id domain email host_tunnel_id cluster_tunnel_id tailnet; do
+for key in account_id domain tailscale_login edge_ipv4 tailnet; do
   if grep -qE "^[[:space:]]*${key}[[:space:]]*=" tofu/terraform.tfvars 2>/dev/null; then
     ok "tfvars sets $key"
   else
     bad "tfvars sets $key"
+  fi
+done
+# The tunnel ids, the cluster host set and the alert recipient went with the
+# tunnels and the notification policies they fed (SDLC #833).
+for key in email host_tunnel_id cluster_tunnel_id cluster_hosts; do
+  if grep -qE "^[[:space:]]*${key}[[:space:]]*=" tofu/terraform.tfvars 2>/dev/null; then
+    bad "tfvars no longer sets $key"
+  else
+    ok "tfvars no longer sets $key"
   fi
 done
 if grep -qiE 'token|secret|password' tofu/terraform.tfvars 2>/dev/null; then
@@ -347,8 +323,8 @@ if grep -qF '/var/lib/cloudflare-tofu' scripts/tofu-cloudflare.sh 2>/dev/null; t
 else
   bad "zone apply wrapper refuses the legacy state directory"
 fi
-# The identifiers live in tofu/terraform.tfvars, and the host set follows the
-# ingress map, so an apply needs no TF_VAR_ exports.
+# The identifiers live in tofu/terraform.tfvars, so an apply needs no TF_VAR_
+# exports.
 if grep -qF 'TF_VAR_cluster_hosts' docs/manual-steps.md; then
   bad "manual steps do not export cluster_hosts"
 else
@@ -357,11 +333,9 @@ fi
 
 echo "== preserved objects"
 for addr in cloudflare_pages_project.recovery cloudflare_r2_bucket_cors.restic \
-  cloudflare_notification_policy.tunnel_health cloudflare_notification_policy.service_token_expiry \
   cloudflare_ruleset.dav_rate_limit; do
   if [[ -n $(extract "$addr") ]]; then ok "preserved: $addr"; else bad "preserved: $addr"; fi
 done
-has 'tunnel health covers both tunnels' 'tunnel_id = compact\(\[var\.host_tunnel_id, var\.cluster_tunnel_id\]\)'
 # The zone plan allows exactly one http_ratelimit rule and the reader's login
 # takes it, so the media rule is gone rather than relocated or kept beside it.
 # The cost of losing it is recorded as a residual in docs/core/backrest.md, and

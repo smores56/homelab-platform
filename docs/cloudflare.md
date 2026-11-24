@@ -47,7 +47,7 @@ that offers to create any of them is a re-introduction, not a migration.
 
 | nix-config | here | Note |
 | --- | --- | --- |
-| `tofu/main.tf` | `tofu/main.tf`, `tofu/dns.tf`, `tofu/access.tf`, `tofu/notifications.tf`, `tofu/rate-limit.tf` | split by object family; resource addresses unchanged |
+| `tofu/main.tf` | `tofu/main.tf`, `tofu/dns.tf`, `tofu/access.tf`, `tofu/rate-limit.tf` | split by object family; resource addresses unchanged |
 | `tofu/pages.tf` | `tofu/pages.tf` | verbatim |
 | `tofu/r2.tf` | `tofu/r2.tf` | verbatim |
 | `tofu/variables.tf` | `tofu/variables.tf` | `tunnel_id` renamed `host_tunnel_id`, new cluster/ACME inputs |
@@ -191,7 +191,8 @@ zone with no application of its own is reachable only by the owner's identity.
   with the deny default.
 - **Bypass is unlogged.** Cloudflare evaluates bypass before allow and does not
   log bypassed requests, so a bypass application *is* the public surface. The
-  set is `local.public_apps` in `tofu/access.tf` and nothing else:
+  zone holds no Access object any more (SDLC #833), so the public surface is
+  what resolves outside the gate -- the names below:
 
   | Hostname | Why public |
   | --- | --- |
