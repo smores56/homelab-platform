@@ -354,6 +354,63 @@ The state backend's R2 pair is two more secrets in the same environment
 (`R2_STATE_ACCESS_KEY_ID`, `R2_STATE_SECRET_ACCESS_KEY`); the plan environment
 holds the read-only pair.
 
+### The plan-only credentials
+
+`cloudflare-plan` is the environment the pre-merge plan and the weekly drift check
+read, so every secret in it is read-only by permission, not by promise. Three
+pairs, and what each may do:
+
+- `CLOUDFLARE_PLAN_API_TOKEN`, a token from Zero Trust → My Profile → API Tokens
+  with exactly three permissions and nothing else: **Zone:Read** (list the zone
+  the records live in), **DNS:Read** (the records themselves) and **Workers R2
+  Storage:Read** on the account (the `homelab-tofu-state` bucket, and therefore
+  the state). No `Edit`, no `Zone Settings`, no token or tunnel permission: a
+  write permission here would be the whole risk of planning on a PR.
+- `R2_STATE_READONLY_ACCESS_KEY_ID` / `R2_STATE_READONLY_SECRET_ACCESS_KEY`, an
+  R2 token scoped to object read on `homelab-tofu-state`. The plan passes
+  `-lock=false`, so it never writes the lock either.
+- `TAILSCALE_PLAN_OAUTH_CLIENT_ID` / `TAILSCALE_PLAN_OAUTH_CLIENT_SECRET`, the
+  plan's own OAuth client (design #841), below.
+
+The plan's Tailscale client is minted in the admin console under Trust
+credentials → OAuth client, with exactly these four scopes -- every one of them
+the read-only half of its pair -- and no tags:
+
+| Scope | What the plan uses it for |
+| --- | --- |
+| `policy_file:read` | reads, validates and previews the policy: every Tailscale call `tofu plan` makes |
+| `devices:core:read` | required by the API beside `policy_file:read`, and resolves `data.tailscale_device.smortress` |
+| `devices:posture_attributes:read` | the other half of that required pair |
+| `services:read` | refreshes `tailscale_service.agent_ui` |
+
+```sh
+read -rsp 'plan OAuth client ID: ' PLAN_CLIENT_ID
+printf '%s' "$PLAN_CLIENT_ID" | gh secret set TAILSCALE_PLAN_OAUTH_CLIENT_ID --env cloudflare-plan --repo smores56/homelab-platform
+read -rsp 'plan OAuth client secret: ' PLAN_CLIENT_SECRET
+printf '%s' "$PLAN_CLIENT_SECRET" | gh secret set TAILSCALE_PLAN_OAUTH_CLIENT_SECRET --env cloudflare-plan --repo smores56/homelab-platform
+gh api repos/smores56/homelab-platform/environments/cloudflare-plan/secrets --jq '.secrets[].name'
+```
+
+`tofu/tailscale.tf` asks its client for exactly those four scopes
+(`local.tailscale_plan_scopes`, gated on `TF_VAR_tailscale_readonly`, which only
+the plan sets), so a client granted less fails the plan at configure time instead
+of quietly widening. That is the second line of defence; the first is the probe:
+`tofu-plan-pr.yml` mints a token from this pair, posts a body that is not a
+policy to `POST /api/v2/tailnet/-/acl` and fails the job unless the answer is
+403, and separately asks the token endpoint for the `policy_file` write scope,
+which a read-only client must refuse. It posts an empty body to
+`POST /client/v4/zones/<id>/dns_records` with the Cloudflare token and fails
+unless that is 403 as well. Neither attempt can mutate anything even if the
+credential is wrong — an empty DNS body creates no record and a body that does
+not parse as a policy saves no policy — so the check is safe to run against a
+credential that is over-granted, which is the only case where it matters.
+Read-only is therefore observed on every plan, not asserted here.
+
+Both the pre-merge plan and the weekly drift check use the plan pair, so
+`cloudflare-plan` no longer needs the apply's write client. Delete
+`TAILSCALE_OAUTH_CLIENT_ID` and `TAILSCALE_OAUTH_CLIENT_SECRET` from that
+environment; the write pair stays in `cloudflare` for the apply.
+
 ### Environments and their branch policies
 
 No repository-level secrets: every workflow secret lives in an Environment, and the

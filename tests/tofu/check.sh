@@ -625,16 +625,63 @@ if grep -qE 'secrets\.(CLOUDFLARE_API_TOKEN|R2_STATE_ACCESS_KEY_ID|R2_STATE_SECR
 else
   ok "the pre-merge plan never holds the write credentials"
 fi
-# The same client the apply holds, because the provider configures before it
-# reads a resource. `policy_file` has no read-only scope, so the guards are what
-# bound it; scripts/check-pr-secret-boundary.sh allowlists the two names.
-for name in TAILSCALE_OAUTH_CLIENT_ID TAILSCALE_OAUTH_CLIENT_SECRET; do
-  if grep -qF "$name: \${{ secrets.$name }}" "$pr"; then
-    ok "the pre-merge plan exports $name"
+# The plan's own client, not the apply's (design #841 T1): the provider still
+# reads TAILSCALE_OAUTH_CLIENT_*, so those two names are the environment keys,
+# but the values behind them are the read-only pair in `cloudflare-plan`.
+# scripts/check-pr-secret-boundary.sh allowlists exactly those two secrets.
+for name in TAILSCALE_PLAN_OAUTH_CLIENT_ID TAILSCALE_PLAN_OAUTH_CLIENT_SECRET; do
+  if grep -qF "secrets.$name }}" "$pr"; then
+    ok "the pre-merge plan holds $name"
   else
-    bad "the pre-merge plan exports $name"
+    bad "the pre-merge plan holds $name"
   fi
 done
+if grep -qE 'secrets\.TAILSCALE_OAUTH_CLIENT_(ID|SECRET)' "$pr"; then
+  bad "the pre-merge plan never holds the write Tailscale client"
+else
+  ok "the pre-merge plan never holds the write Tailscale client"
+fi
+# Narrowing is asked for: the provider takes local.tailscale_plan_scopes only in
+# a read-only checkout, which is what tells this plan's client's four scopes
+# from the apply's write set.
+if grep -qF 'TF_VAR_tailscale_readonly: true' "$pr"; then
+  ok "the pre-merge plan asks the provider for the read-only scope set"
+else
+  bad "the pre-merge plan asks the provider for the read-only scope set"
+fi
+# Read-only is an observation, not a contract: the job probes a write and fails
+# unless it is refused, so a client minted with write scopes cannot pass. The
+# probe runs before `init`, i.e. before provider code sees the credential.
+if grep -qE '^[[:space:]]*# guard: read-only-probe$' "$pr"; then
+  ok "the pre-merge plan carries the read-only probe"
+else
+  bad "the pre-merge plan carries the read-only probe"
+fi
+probe_line=$(grep -n '# guard: read-only-probe' "$pr" | cut -d: -f1)
+init_line=$(grep -n 'tofu -chdir=tofu init' "$pr" | cut -d: -f1)
+if [[ -n $probe_line && -n $init_line ]] && ((probe_line < init_line)); then
+  ok "the probe runs before tofu init"
+else
+  bad "the probe runs before tofu init"
+fi
+for endpoint in 'api.cloudflare.com/client/v4/zones/$zone/dns_records' \
+  'api.tailscale.com/api/v2/tailnet/-/acl'; do
+  if grep -qF -- "$endpoint" "$pr"; then
+    ok "the probe attempts a write to $endpoint"
+  else
+    bad "the probe attempts a write to $endpoint"
+  fi
+done
+if (($(grep -cF '[[ $code == 403 ]]' "$pr") >= 2)); then
+  ok "the probe fails the job unless a write answers 403"
+else
+  bad "the probe fails the job unless a write answers 403"
+fi
+if grep -qF "scope=policy_file'" "$pr"; then
+  ok "the probe refuses a client that can mint the policy_file write scope"
+else
+  bad "the probe refuses a client that can mint the policy_file write scope"
+fi
 if grep -q 'head.repo.full_name' "$pr"; then ok "the pre-merge plan fails closed for forks"; else bad "the pre-merge plan fails closed for forks"; fi
 if grep -qE '\\?\(\\?\.github|\.github\|scripts' "$pr"; then
   ok "the pre-merge plan refuses a PR that changes CI"
@@ -660,19 +707,31 @@ drift=.github/workflows/tofu-drift.yml
 if grep -qE '^[[:space:]]*- cron:' "$drift"; then ok "drift detection is scheduled"; else bad "drift detection is scheduled"; fi
 if grep -qE 'tofu .*apply' "$drift"; then bad "drift detection never applies"; else ok "drift detection never applies"; fi
 if grep -q 'environment: cloudflare-plan' "$drift"; then ok "drift uses the read-only environment"; else bad "drift uses the read-only environment"; fi
+if grep -qE '^    environment: cloudflare-plan$' "$drift"; then
+  ok "drift declares the read-only environment on the job"
+else
+  bad "drift declares the read-only environment on the job"
+fi
 if grep -q 'secrets.CLOUDFLARE_API_TOKEN' "$drift"; then
   bad "drift detection holds no write token"
 else
   ok "drift detection holds no write token"
 fi
 if grep -q 'tofu-drift' "$drift"; then ok "drift detection reports through one issue"; else bad "drift detection reports through one issue"; fi
-for name in TAILSCALE_OAUTH_CLIENT_ID TAILSCALE_OAUTH_CLIENT_SECRET; do
-  if grep -qF "$name: \${{ secrets.$name }}" "$drift"; then
-    ok "drift exports $name"
+for pair in TAILSCALE_OAUTH_CLIENT_ID:TAILSCALE_PLAN_OAUTH_CLIENT_ID TAILSCALE_OAUTH_CLIENT_SECRET:TAILSCALE_PLAN_OAUTH_CLIENT_SECRET; do
+  key=${pair%%:*}
+  secret=${pair#*:}
+  if grep -qF "$key: \${{ secrets.$secret }}" "$drift"; then
+    ok "drift exports $key from the plan client"
   else
-    bad "drift exports $name"
+    bad "drift exports $key from the plan client"
   fi
 done
+if grep -qF 'TF_VAR_tailscale_readonly: true' "$drift"; then
+  ok "drift asks the provider for the read-only scope set"
+else
+  bad "drift asks the provider for the read-only scope set"
+fi
 
 # `|| status=$?` only assigns on failure, so every plan needs the initializer or
 # a successful plan falls into the error branch and reports "exit ".
@@ -784,7 +843,18 @@ fi
 # be a destination no other test keeps out.
 eq "$(grep -cF -- '"svc:agent-ui:443"' "$work/code.tf")" "4" \
   "the Service port is two accepts and two denies in the tests"
-has 'the tailscale provider is declared' 'provider "tailscale" \{\}'
+# The provider is declared with an explicit scope list (design #841 T1): a plan
+# asks its read-only client for exactly the four read scopes, so the token it
+# mints cannot save a policy, delete a device or rewrite a Service, and a client
+# granted less fails the plan at configure time instead of widening it.
+has 'the tailscale provider declares explicit scopes' \
+  'scopes[[:space:]]*=[[:space:]]*var\.tailscale_readonly \? local\.tailscale_plan_scopes : null'
+has 'the read-only switch is a variable' 'variable "tailscale_readonly"'
+for scope in 'policy_file:read' 'devices:core:read' 'devices:posture_attributes:read' 'services:read'; do
+  has "the plan scope set names $scope" "\"$scope\""
+done
+hasnt 'the plan scope set asks for no write scope' \
+  '"(policy_file|services|devices:core|devices:posture_attributes)",'
 has 'the tailscale provider is pinned to the 0.29 line' 'version[[:space:]]*=[[:space:]]*"~> 0\.29'
 if grep -qE 'oauth_client_(id|secret)[[:space:]]*=[[:space:]]*"[^"]' "$work/code.tf"; then
   bad "no OAuth client is authored in the config" "credentials come from the environment"

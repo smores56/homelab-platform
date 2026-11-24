@@ -5,12 +5,14 @@
 # a `secrets.*` reference inside a `pull_request`-triggered workflow is dead
 # code at best and a latent exfiltration path at worst. One file is exempt:
 # `tofu-plan-pr.yml` makes the merge an informed approval by planning on the
-# PR, and it may hold only the read-only pair, plus the Tailscale OAuth client
-# the tailnet policy's provider demands before it configures (`policy_file` has
-# no read-only scope, so that one can write and is bounded by the guards, not by
-# its scope). Every other workflow keeps the blanket ban, and the exemption is
-# checked structurally here rather than trusted: the guards below are what make
-# the exemption safe.
+# PR, and it may hold only the read-only pair plus a Tailscale OAuth client of
+# its own that reads and cannot write (`TAILSCALE_PLAN_OAUTH_CLIENT_*`: design
+# #841 T1 gave it `policy_file:read`, the two `devices` reads and
+# `services:read` instead of the apply's `policy_file`). That is checked, not
+# assumed: the workflow probes the client and fails unless a policy write
+# answers 403, and the probe's marker is required text below. Every other
+# workflow keeps the blanket ban, and the exemption is checked structurally
+# here rather than trusted: the guards below are what make the exemption safe.
 #
 # `pull_request_target` stays forbidden outright. It also stops working by
 # default in public repositories on 2026-12-02 (GitHub changelog), so nothing
@@ -25,7 +27,7 @@ cd "$(git rev-parse --show-toplevel)"
 exempt=.github/workflows/tofu-plan-pr.yml
 readonly -a allowed=(
   CLOUDFLARE_PLAN_API_TOKEN R2_STATE_READONLY_ACCESS_KEY_ID R2_STATE_READONLY_SECRET_ACCESS_KEY
-  TAILSCALE_OAUTH_CLIENT_ID TAILSCALE_OAUTH_CLIENT_SECRET
+  TAILSCALE_PLAN_OAUTH_CLIENT_ID TAILSCALE_PLAN_OAUTH_CLIENT_SECRET
 )
 
 shopt -s nullglob
@@ -79,6 +81,10 @@ if [[ -f $exempt ]]; then
   require "exec-label"
   require "json-config-refused"
   require "read-only-credentials"
+  # The credentials' read-only claim is an observation recorded in the workflow
+  # (a write attempt that must answer 403), so its step is required text too:
+  # deleting the probe has to fail CI on the same diff.
+  require "read-only-probe"
   if grep -qE 'secrets\.(CLOUDFLARE_API_TOKEN|R2_STATE_ACCESS_KEY_ID|R2_STATE_SECRET_ACCESS_KEY)\b' "$exempt"; then
     echo "$exempt: the pre-merge plan may hold only the read-only credentials" >&2
     status=1
@@ -86,8 +92,8 @@ if [[ -f $exempt ]]; then
 fi
 
 if ((status != 0)); then
-  echo "fork PRs must not reach any secret except the read-only GITHUB_TOKEN, the read-only tofu plan pair and the Tailscale OAuth client" >&2
+  echo "fork PRs must not reach any secret except the read-only GITHUB_TOKEN, the read-only tofu plan pair and the plan's read-only Tailscale OAuth client" >&2
   exit 1
 fi
 
-echo "no pull_request workflow references secrets beyond GITHUB_TOKEN, the read-only plan pair and the Tailscale OAuth client"
+echo "no pull_request workflow references secrets beyond GITHUB_TOKEN, the read-only plan pair and the plan's read-only Tailscale OAuth client"

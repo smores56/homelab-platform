@@ -104,6 +104,12 @@ variable "acme_directory" {
   default     = "https://acme-v02.api.letsencrypt.org/directory"
 }
 
+variable "tailscale_readonly" {
+  type        = bool
+  description = "Ask the Tailscale provider for the read-only scope set in local.tailscale_plan_scopes (design #841). The pre-merge plan sets it from TF_VAR_tailscale_readonly; an apply leaves it false so the provider takes the write client's own scopes."
+  default     = false
+}
+
 variable "tailnet" {
   type        = string
   description = "Tailnet name (the label before .ts.net) whose policy tofu/tailscale.tf owns. Empty until the owner supplies it at cutover, and the ACL resource is gated on it so nothing about the tailnet is planned while it is empty."

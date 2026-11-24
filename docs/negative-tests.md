@@ -20,12 +20,13 @@ Job `fork-pr-secret-boundary` in `.github/workflows/ci.yml`:
   - every `pull_request` workflow except `tofu-plan-pr.yml` references no
     `secrets.<NAME>` other than `secrets.GITHUB_TOKEN`;
   - `tofu-plan-pr.yml` may reference only the read-only plan pair
-    (`CLOUDFLARE_PLAN_API_TOKEN`, `R2_STATE_READONLY_*`) and the Tailscale OAuth
-    client (`TAILSCALE_OAUTH_CLIENT_*`, which `policy_file` gives no read-only
-    scope, so a plan holds a client that could write but never saves a policy)
-    from the `cloudflare-plan` environment and must carry the four
-    guard markers (fork-only, CI-change refusal, executable-HCL label,
-    read-only credentials), so deleting a guard fails CI on the same diff;
+    (`CLOUDFLARE_PLAN_API_TOKEN`, `R2_STATE_READONLY_*`) and the plan's own
+    read-only Tailscale client (`TAILSCALE_PLAN_OAUTH_CLIENT_*`: design #841
+    grants it `policy_file:read`, the two `devices` reads and `services:read`,
+    and the job proves a write answers 403 before it plans) from the
+    `cloudflare-plan` environment, and must carry the guard markers (fork-only,
+    CI-change refusal, executable-HCL label, read-only credentials, read-only
+    probe), so deleting a guard fails CI on the same diff;
   - no workflow uses `pull_request_target`, which runs with base-repo secrets and
     is blocked by default in public repositories from 2026-12-02 anyway.
 

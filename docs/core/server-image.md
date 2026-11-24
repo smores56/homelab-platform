@@ -746,8 +746,9 @@ scripts/secret.sh stage tailscale.yaml
 scripts/secret.sh verify
 gh secret set TAILSCALE_OAUTH_CLIENT_ID --env cloudflare --repo smores56/homelab-platform
 gh secret set TAILSCALE_OAUTH_CLIENT_SECRET --env cloudflare --repo smores56/homelab-platform
-gh secret set TAILSCALE_OAUTH_CLIENT_ID --env cloudflare-plan --repo smores56/homelab-platform
-gh secret set TAILSCALE_OAUTH_CLIENT_SECRET --env cloudflare-plan --repo smores56/homelab-platform
+# the pre-merge plan's own read-only client (design #841):
+gh secret set TAILSCALE_PLAN_OAUTH_CLIENT_ID --env cloudflare-plan --repo smores56/homelab-platform
+gh secret set TAILSCALE_PLAN_OAUTH_CLIENT_SECRET --env cloudflare-plan --repo smores56/homelab-platform
 tofu -chdir=tofu plan          # expect: tailscale_acl.this will be created
 ```
 
@@ -756,8 +757,11 @@ approval is on); `smortress-tailscale-up.service` reads `authkey:` and skips
 enrollment when its decrypted file is absent, so the key is minted before the boot
 that enrolls the host. The OAuth client is scope `policy_file` only, encrypted to
 the admin
-identity, and both environments need it because Terraform configures a provider
+identity, and an environment needs one because Terraform configures a provider
 whenever a resource of that provider is in the configuration, `count = 0` included.
+`cloudflare-plan` carries the read-only plan pair for both the pre-merge plan and
+the weekly drift check (design #841; `docs/manual-steps.md`, "The plan-only
+credentials").
 
 ```sh
 tailscale status                          # expect: smortress listed
