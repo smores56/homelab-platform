@@ -9,7 +9,7 @@ ctrl panel offers no cloud-init and no API to declare one.
 | File | Purpose |
 | --- | --- |
 | `bootstrap.sh` | the whole provisioning step: packages, tailnet join, firewall, Caddy, unattended upgrades, then `verify.sh` |
-| `Caddyfile` | the two names, TLS-ALPN-01 only, proxying to Serve ports 8446/8447 |
+| `Caddyfile` | the three names, TLS-ALPN-01 only: two proxy to Serve ports 8446/8447, the third to the box's own Backrest |
 | `nftables.conf` | second firewall layer: 443 and 41641 public, 22 on the tailnet only |
 | `05-edge-hardening.conf` | sshd drop-in; sshd keeps the first value, so `05-` beats cloud-init's `50-` |
 | `verify.sh` | on-box proof of the design's shape; run it after any hand change |
@@ -40,6 +40,27 @@ ctrl panel offers no cloud-init and no API to declare one.
    public store, and `admin off` means a replaced `Caddyfile` takes effect only
    on `systemctl restart caddy`, so a staging run can outlive the file that
    replaced it — that is exactly how the first cutover came up untrusted.
+
+6. **Forced renewal** (owner only, destructive). `admin off` leaves no API to
+   trigger an order, so the renewal is forced by deleting the name's certificate
+   directory and restarting Caddy; it re-orders on the next handshake. List
+   first, copy the path into the delete — `rm -rf` on the wrong path takes every
+   name's certificate with it:
+
+   ```sh
+   ssh root@smoresnet
+   ls -d /var/lib/caddy/.local/share/caddy/certificates/*/photos.sammohr.dev
+   rm -rf /var/lib/caddy/.local/share/caddy/certificates/*/photos.sammohr.dev
+   systemctl restart caddy
+   openssl s_client -connect photos.sammohr.dev:443 -servername photos.sammohr.dev \
+     </dev/null 2>/dev/null | openssl x509 -noout -subject -dates
+   ```
+
+   `subject` must be `photos.sammohr.dev` and `notAfter` the new window; from
+   outside, `scripts/verify-public-edge.sh` and `scripts/verify-caa.sh` confirm
+   the same two things. The re-issue needs the public name to resolve to this
+   box: before the cutover the order fails and Caddy keeps retrying, which is why
+   this step sits on the cutover's side of the line.
 
 The DNS cutover is not part of this: it waits for #709's retirement gate and is
 two commits applied by CI (pin `cluster_hosts`, then set `edge_ipv4`), cluster

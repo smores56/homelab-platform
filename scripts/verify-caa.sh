@@ -13,12 +13,22 @@
 #
 #   scripts/verify-caa.sh
 #
-# Knobs: CAA_ZONE (sammohr.dev), CAA_NAME (kanbei.sammohr.dev), DIG_BIN and
-# OPENSSL_BIN (tests/edge/check.sh drives the same code).
+# `issue` governs ordinary names, `issuewild` wildcard orders only, so the tag
+# the probe requires follows the name it probes: `issue` for the default
+# non-wildcard name, `issuewild` when CAA_WILDCARD=1 says the caller is checking
+# a wildcard. A set carrying only `issuewild` satisfies a wildcard order and
+# leaves every ordinary order refused, which is a renewal outage weeks out.
+#
+# Knobs: CAA_ZONE (sammohr.dev), CAA_NAME (kanbei.sammohr.dev), CAA_WILDCARD (0),
+# DIG_BIN and OPENSSL_BIN (tests/edge/check.sh drives the same code).
 set -uo pipefail
 
 zone=${CAA_ZONE:-sammohr.dev}
 name=${CAA_NAME:-kanbei.sammohr.dev}
+case ${CAA_WILDCARD:-0} in
+  1) need=issuewild ;;
+  *) need=issue ;;
+esac
 dig_bin=${DIG_BIN:-dig}
 openssl_bin=${OPENSSL_BIN:-openssl}
 
@@ -92,15 +102,14 @@ else
     value=${value//\"/}
     value=${value%%;*}
     admitted+="${admitted:+, }$tag=$value"
-    # The first admitting record is the one named; both tags hold the same
-    # meaning for an ordinary certificate, and naming two would read as a pair
-    # of conditions.
-    [[ -z $matched && $value == "$ca" ]] && matched=$tag
+    # Only the tag this name's orders read can admit it; the other one is
+    # printed on failure but never satisfies the probe.
+    [[ -z $matched && $tag == "$need" && $value == "$ca" ]] && matched=$tag
   done <<<"$records"
   if [[ -n $matched ]]; then
     ok "$zone's CAA $matched admits $ca, the CA behind $name's certificate"
   else
-    bad "$zone's CAA records do not admit $ca, the CA behind $name's certificate" \
+    bad "$zone's CAA $need does not admit $ca, the CA behind $name's certificate" \
       "issue/issuewild: ${admitted:-none}"
   fi
 fi

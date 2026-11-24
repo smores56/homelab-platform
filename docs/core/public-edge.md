@@ -1,7 +1,7 @@
 # Public edge (T1 of #725)
 
 The box that serves `photos.sammohr.dev` and `opds.sammohr.dev` to the
-internet. It exists so those two names can leave Cloudflare's data path: the
+internet. It exists so those three names can leave Cloudflare's data path: the
 atoms of the design are a tagged tailnet node, Caddy on 443 with a Let's
 Encrypt certificate, and a tailnet ACL that admits two ports and nothing else.
 
@@ -34,7 +34,7 @@ Tailscale are OS infrastructure on a box whose only application is a TLS proxy.
 
 | Piece | Declared in | Purpose |
 | --- | --- | --- |
-| Caddy | `provision/edge/Caddyfile` | TLS for the two names, proxies to Serve ports 8446 and 8447 |
+| Caddy | `provision/edge/Caddyfile` | TLS for the three names: two proxy to Serve ports 8446 and 8447, the third to the box's own Backrest |
 | nftables | `provision/edge/nftables.conf` | 443 and udp/41641 public, 22 on `tailscale0` only |
 | sshd | `provision/edge/05-edge-hardening.conf` + `authorized_keys` | keys only, no password, no root password login; `05-` so it beats cloud-init's `50-cloud-init.conf` |
 | tailscale | `provision/edge/bootstrap.sh` | joins once as `tag:vps` with hostname `smoresnet` (the panel name, the OS name and the tailnet name are one word), tags set key expiry off; the bootstrap realigns an existing node's name |
@@ -216,12 +216,15 @@ Both halves are outside the repository's own checks, and
   and OPDShelf 401 for any path.
 - `scripts/verify-caa.sh`: reads the zone's `CAA` records and the issuer of the
   certificate `kanbei.sammohr.dev` serves, and requires the issuer's CA domain in
-  an `issue`/`issuewild` value — Google Trust Services to `pki.goog`, Let's
+  an `issue` value — Google Trust Services to `pki.goog`, Let's
   Encrypt to `letsencrypt.org`, DigiCert to `digicert.com`, Sectigo to
-  `sectigo.com`, ZeroSSL to `zerossl.com`. The served issuer is admitted by the
-  union of the two `letsencrypt.org` records this repository declares and the CA
-  set Cloudflare appends for the proxied names; an empty set is a notice, not a
-  failure, which keeps the check meaningful for a zone that has none.
+  `sectigo.com`, ZeroSSL to `zerossl.com`. `issuewild` governs wildcard orders
+  only and admits no ordinary order, so it never satisfies this probe
+  (`CAA_WILDCARD=1` checks it for a wildcard name instead). The served issuer is
+  admitted by the union of the two `letsencrypt.org` records this repository
+  declares and the CA set Cloudflare appends for the proxied names; an empty set
+  is a notice, not a failure, which keeps the check meaningful for a zone that
+  has none.
 
 ## The operator order
 

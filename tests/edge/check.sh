@@ -281,8 +281,8 @@ caa_fixture() {
     } >"$file"
 }
 
-run_caa() { # <fixture> <issuer>
-    STUB_DIG_LOG=$work/dig.log STUB_CAA_FILE=$1 STUB_ISSUER=$2 \
+run_caa() { # <fixture> <issuer> [CAA_WILDCARD]
+    STUB_DIG_LOG=$work/dig.log STUB_CAA_FILE=$1 STUB_ISSUER=$2 CAA_WILDCARD=${3:-0} \
         DIG_BIN=$work/dig OPENSSL_BIN=$work/caa-openssl \
         bash "$caa_script" >"$work/caa.out" 2>"$work/caa.err"
 }
@@ -310,7 +310,7 @@ fi
 caa_fixture "$work/caa-le" '0 issue "letsencrypt.org"'
 run_caa "$work/caa-le" "$gts_issuer"
 eq "$?" 1 'a CAA issue that omits the served CA fails'
-if grep -qF "FAIL sammohr.dev's CAA records do not admit pki.goog" "$work/caa.out"; then
+if grep -qF "FAIL sammohr.dev's CAA issue does not admit pki.goog" "$work/caa.out"; then
     ok 'the failure names the CA it expected and the issuer it saw'
 else
     bad 'the failure names the CA it expected and the issuer it saw' "$(cat "$work/caa.out")"
@@ -323,12 +323,26 @@ fi
 
 caa_fixture "$work/caa-onlywild" '0 issuewild "pki.goog"'
 run_caa "$work/caa-onlywild" "$gts_issuer"
-eq "$?" 0 'issuewild alone admits the served CA'
-if grep -qF "CAA issuewild admits pki.goog" "$work/caa.out"; then
-    ok 'the pass reports which record admitted it'
+eq "$?" 1 'issuewild alone admits no non-wildcard order'
+if grep -qF 'issuewild=pki.goog' "$work/caa.out"; then
+    ok 'the wildcard-only failure prints the record it read'
 else
-    bad 'the pass reports which record admitted it' "$(cat "$work/caa.out")"
+    bad 'the wildcard-only failure prints the record it read' "$(cat "$work/caa.out")"
 fi
+
+# A wildcard order reads `issuewild` and never `issue`; the mode is one more run
+# of the same script, not a second record in the same set.
+run_caa "$work/caa-onlywild" "$gts_issuer" 1
+eq "$?" 0 'CAA_WILDCARD=1: issuewild admits the wildcard name'
+if grep -qF "ok   sammohr.dev's CAA issuewild admits pki.goog" "$work/caa.out"; then
+    ok 'the wildcard pass names issuewild rather than issue'
+else
+    bad 'the wildcard pass names issuewild rather than issue' "$(cat "$work/caa.out")"
+fi
+
+caa_fixture "$work/caa-onlyissue" '0 issue "pki.goog"'
+run_caa "$work/caa-onlyissue" "$gts_issuer" 1
+eq "$?" 1 'CAA_WILDCARD=1: issue alone does not admit the wildcard name'
 
 caa_fixture "$work/caa-params" '0 issue "pki.goog; accounturi=https://acme.example/acct/1"'
 run_caa "$work/caa-params" "$gts_issuer"
