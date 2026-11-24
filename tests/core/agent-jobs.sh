@@ -411,6 +411,31 @@ else
   bad 'the dispatcher reads or issues no approval credential'
 fi
 
+# --- the runner never inherits the caller's directory ---------------------------
+
+# Dropping privileges from a directory the runner cannot read -- an operator's
+# 0700 home, say -- fails inside the privilege drop, before Podman starts, and
+# the dispatcher then blames a missing image that is present. The shim records
+# the directory the runner would have been started in.
+job_class_config general
+# shellcheck disable=SC2034  # read by job_as_runner
+job_runtime_dir=$work/runtime
+mkdir -p "$work/shim" "$work/private"
+chmod 0700 "$work/private"
+cat >"$work/shim/runuser" <<'SHIM'
+#!/usr/bin/env bash
+while [[ ${1:-} != -- ]]; do shift; done
+shift
+printf '%s\n' "$PWD" >>"$SMORTRESS_TEST_RUNUSER_CWD"
+exec "$@"
+SHIM
+chmod +x "$work/shim/runuser"
+export SMORTRESS_TEST_RUNUSER_CWD=$work/runuser-cwd
+: >"$SMORTRESS_TEST_RUNUSER_CWD"
+(cd "$work/private" && PATH=$work/shim:$PATH job_as_runner true) >/dev/null 2>&1
+eq "$(cat "$SMORTRESS_TEST_RUNUSER_CWD")" '/' \
+  "the runner starts in /, not the caller's directory"
+
 # --- image wiring --------------------------------------------------------------
 
 if grep -q 'scripts/agent-job.sh' image/Containerfile; then

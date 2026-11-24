@@ -215,11 +215,17 @@ job_build_systemd_argv() {
 }
 
 job_as_runner() {
-  runuser -u "$job_user" -- env -i \
-    HOME="$job_home" \
-    XDG_RUNTIME_DIR="$job_runtime_dir" \
-    PATH=/usr/bin:/bin \
-    "$@"
+  # Never inherit the caller's directory: an operator running this from a 0700
+  # home makes the privilege drop fail before Podman starts, and the job then
+  # blames an image that is present and prepulled.
+  (
+    cd / || exit 1
+    runuser -u "$job_user" -- env -i \
+      HOME="$job_home" \
+      XDG_RUNTIME_DIR="$job_runtime_dir" \
+      PATH=/usr/bin:/bin \
+      "$@"
+  )
 }
 
 # The caller must never be able to reach this program without root: it switches
