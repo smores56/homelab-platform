@@ -46,50 +46,18 @@ log=$work/log
 pings=$work/pings
 mkdir -p "$bin" "$queue"
 
-# Stand-in for curl: the health URL answers the status in $FAKE_HEALTH_STATUS
-# (`network` is a connect failure, exit 7) and every Healthchecks ping is recorded
-# instead of sent.
-cat >"$bin/curl" <<'EOF'
-#!/usr/bin/env bash
-set -uo pipefail
-printf '%s\n' "$*" >>"${FAKE_LOG:?}"
-fail=0
-out=/dev/stdout
-write_out=
-url=
-while (($#)); do
-  case $1 in
-    --output) out=$2; shift 2 ;;
-    --write-out) write_out=$2; shift 2 ;;
-    --fail | --fail-with-body) fail=1; shift ;;
-    --config) shift 2 ;;
-    -H | --header | --max-time | --data-binary | -d | --retry) shift 2 ;;
-    -*) shift ;;
-    *) url=$1; shift ;;
-  esac
-done
-# deploy_notify hands the ping URL over as a config on stdin, never in argv.
-if [[ -z $url ]]; then
-  url=$(sed -n 's/^url = "\(.*\)"$/\1/p' | head -n 1)
-fi
-status=200
-case $url in
-  *healthz*)
-    status=$(cat "$FAKE_HEALTH_STATUS" 2>/dev/null) || status=200
-    [[ $status == network ]] && exit 7 ;;
-  *) printf '%s\n' "$url" >>"${FAKE_PING_LOG:?}" ;;
-esac
-[[ -n $write_out ]] && printf '%s' "$status"
-if [[ $out == /dev/stdout ]]; then printf '{"status":"ok"}'; else printf '{"status":"ok"}' >"$out"; fi
-if ((fail)) && ((status >= 400)); then exit 22; fi
-exit 0
-EOF
-chmod +x "$bin/curl"
+# The health URL answers the status in $FAKE_HEALTH_STATUS (`network` is a
+# connect failure, exit 7) and every Healthchecks ping is recorded instead of
+# sent.
+install_fake_curl "$bin"
+export FAKE_CURL_LOG=$log
+export FAKE_ENDPOINT_MATCH='*healthz*'
+export FAKE_ENDPOINT_STATUS_FILE=$work/health-status
+export FAKE_ENDPOINT_BODY='{"status":"ok"}'
+export FAKE_PING_LOG=$pings
 
 export PATH="$bin:$PATH"
-export FAKE_LOG=$log
 export FAKE_HEALTH_STATUS=$work/health-status
-export FAKE_PING_LOG=$pings
 export DEPLOY_STATE_DIR=$state
 export DEPLOY_LOCK_FILE=$work/deploy.lock
 export DEPLOY_PING_SECRET=$work/deploy-ping-url.yaml

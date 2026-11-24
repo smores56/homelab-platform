@@ -17,6 +17,15 @@
 pass=0
 fail=0
 
+deploy_lib_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+
+# Put the one fake curl on a suite's PATH. What it needs to do differently is
+# the environment it reads (tests/deploy/fake-curl.sh documents the knobs), not
+# a copy of the script.
+install_fake_curl() { # <bin dir>
+  install -m 0755 "$deploy_lib_dir/fake-curl.sh" "$1/curl"
+}
+
 ok() { # label
   pass=$((pass + 1))
   printf 'ok   %s\n' "$1"

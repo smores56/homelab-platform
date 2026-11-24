@@ -109,25 +109,10 @@ jq --arg b "$backend" --arg u "$unit" \
   "$STUB_VERIFY_DOC" >"$STUB_VERIFY_DOC.tmp" && mv "$STUB_VERIFY_DOC.tmp" "$STUB_VERIFY_DOC"
 EOF
 
-# deploy_notify hands the URL over as a curl config on stdin so it never appears
-# in argv; the stub reads it from there when no argument names one.
-cat >"$bin/curl" <<'EOF'
-#!/usr/bin/env bash
-url=
-while (($#)); do
-  case $1 in
-    --config) shift 2 ;;
-    --max-time | --retry | --connect-timeout) shift 2 ;;
-    -*) shift ;;
-    *) url=$1; shift ;;
-  esac
-done
-if [[ -z $url ]]; then
-  url=$(sed -n 's/^url = "\(.*\)"$/\1/p' | head -n 1)
-fi
-printf '%s\n' "$url" >>"$STUB_LOG/curl-urls"
-exit "${STUB_CURL_EXIT:-0}"
-EOF
+# deploy_notify hands the URL over as a curl config on stdin, never in argv; the
+# fake reads it from there when no argument names one.
+install_fake_curl "$bin"
+export FAKE_PING_LOG=$STUB_LOG/curl-urls
 
 # `bootc status --booted --json` is the only thing a reconcile reads from the
 # host, and a stub is the only way to present a boot the record disagrees with.
@@ -177,7 +162,7 @@ reset_gate() {
   : >"$log/verify-calls"
   : >"$log/backup-calls"
   : >"$log/curl-urls"
-  unset STUB_VERIFY_EXIT STUB_VERIFY_SLEEP STUB_BACKUP_EXIT STUB_BACKUP_SLEEP STUB_CURL_EXIT
+  unset STUB_VERIFY_EXIT STUB_VERIFY_SLEEP STUB_BACKUP_EXIT STUB_BACKUP_SLEEP
   seed_doc true true "$all_fresh"
 }
 

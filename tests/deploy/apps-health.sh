@@ -121,25 +121,9 @@ EOF
 # deploy_notify hands the URL over as a curl config on stdin, never in argv; the
 # tenant ping passes it as an argument. Both are recorded with their body so a
 # case can assert the suffix and the reason the check received.
-cat >"$bin/curl" <<'EOF'
-#!/usr/bin/env bash
-url=
-body=
-while (($#)); do
-  case $1 in
-    --config) shift 2 ;;
-    --data-binary) body=${2-}; shift 2 ;;
-    --max-time | --retry | --connect-timeout | --retry-delay | -o) shift 2 ;;
-    -*) shift ;;
-    *) url=$1; shift ;;
-  esac
-done
-if [[ -z $url ]]; then
-  url=$(sed -n 's/^url = "\(.*\)"$/\1/p' | head -n 1)
-fi
-printf '%s\t%s\n' "${url:-}" "$body" >>"$STUB_LOG/curl-urls"
-exit 0
-EOF
+install_fake_curl "$bin"
+export FAKE_PING_LOG=$STUB_LOG/curl-urls
+export FAKE_PING_BODY=1
 chmod 0755 "$bin"/*
 
 export STUB_SYSTEMCTL_ACTIVE=$work/active-units

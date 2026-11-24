@@ -102,37 +102,9 @@ ping_url=https://hc.invalid/ping/abc
 # --- the fakes ---------------------------------------------------------------
 # `curl` is both the codeload fetch and the deploy ping: an --output names a tar
 # this suite published, anything else is a notification URL.
-cat >"$bin/curl" <<'EOF'
-#!/usr/bin/env bash
-printf '%s\n' "$*" >>"$FAKE_LOG/curl-argv"
-out= url=
-while (($#)); do
-  case $1 in
-    --output) out=$2; shift 2 ;;
-    # The deploy hands the ping URL over as a config on stdin so it never appears
-    # in argv; `-` is that config's file name.
-    --config) shift 2 ;;
-    --connect-timeout | --retry | --max-time) shift 2 ;;
-    -*) shift ;;
-    *) url=$1; shift ;;
-  esac
-done
-if [[ -n $out ]]; then
-  name=$(basename -- "$url")
-  src=$FAKE_FETCH_DIR/$name.tar.gz
-  [[ -f $src ]] || {
-    printf 'fake-curl: no %s\n' "$src" >&2
-    exit 22
-  }
-  cp -- "$src" "$out"
-  exit 0
-fi
-if [[ -z $url ]]; then
-  url=$(sed -n 's/^url = "\(.*\)"$/\1/p' | head -n 1)
-fi
-printf '%s\n' "$url" >>"$FAKE_LOG/notify-urls"
-exit "${FAKE_CURL_EXIT:-0}"
-EOF
+install_fake_curl "$bin"
+export FAKE_CURL_LOG=$FAKE_LOG/curl-argv
+export FAKE_PING_LOG=$FAKE_LOG/notify-urls
 
 cat >"$bin/sops" <<'EOF'
 #!/usr/bin/env bash

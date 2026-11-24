@@ -146,17 +146,11 @@ check_eq "$(grep -cF -- '--data-binary @"$body"' <<<"$step")" 1 "exactly one req
 # means the signed bytes and the sent bytes are the same file.
 bin=$work/bin
 mkdir -p "$bin" "$work/runner"
-cat >"$bin/curl" <<'EOF'
-#!/usr/bin/env bash
-set -uo pipefail
-printf '%s\n' "$*" >>"${FAKE_LOG:?}"
-for arg in "$@"; do printf '%s\n' "$arg" >>"${FAKE_ARGV:?}"; done
-printf '{"status":"queued","id":"00000000-0000-4000-8000-000000000000"}\n'
-EOF
-chmod +x "$bin/curl"
+install_fake_curl "$bin"
 : >"$work/argv"
-export FAKE_LOG=$work/log
-export FAKE_ARGV=$work/argv
+export FAKE_CURL_LOG=$work/log
+export FAKE_ARGV_LOG=$work/argv
+export FAKE_CURL_RESPONSE='{"status":"queued","id":"00000000-0000-4000-8000-000000000000"}'
 export PATH="$bin:$PATH"
 export RUNNER_TEMP=$work/runner
 export REPO_NAME=homelab-platform
