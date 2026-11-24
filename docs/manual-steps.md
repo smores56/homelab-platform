@@ -252,3 +252,36 @@ Before relying on the gate, make sure a way to root exists that is not sudo:
 `su -` on root's password if one is set, or a rescue boot. The password is the
 break-glass everywhere — a missing or broken key costs typing, not access — and
 the console is what covers a forgotten password.
+
+## 4. Join the Syncthing cluster
+
+The image ships the package and enables the user unit globally, so the service
+starts at the first login with nothing to type. It keeps the vault's second
+copy, fed by smortress over the tailnet.
+
+The GUI is loopback only: open `http://127.0.0.1:8384`. Its host check is a
+non-issue here because the browser and the service agree on `localhost`.
+
+Add smortress as a device by the ID its own GUI shows under Actions → Show ID,
+with the address `tcp://smortress:22000`. Tailscale must be up: the ACL admits
+22000 only on the tailnet, and without it the connection falls back to a relay.
+Then accept the laptop on the smortress GUI and share both folders with it as
+Send & Receive.
+
+The two shares belong at the paths the tmpfiles entry created:
+
+| Folder | Path |
+| --- | --- |
+| `vault` | `/srv/files/vault` |
+| `notes` | `/srv/files/notes` |
+
+`/srv` is a symlink to `var/srv`, and `/var/srv/files` is `smores:smores 0700`,
+so Syncthing writes as the login user and needs no elevation. The first sync is
+about 5.1G; subsequent ones are incremental.
+
+Check it without the GUI:
+
+```sh
+systemctl --user status syncthing
+ls -ld /var/srv/files
+```
