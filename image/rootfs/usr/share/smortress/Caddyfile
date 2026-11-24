@@ -12,10 +12,13 @@
 # is the operator store's `tailnet-dns-api-token`, derived into the boot bundle
 # and handed in as an environment variable by the Quadlet's Podman secret.
 #
-# `admin off` is what keeps a read-only root filesystem honest: with no admin
-# endpoint Caddy never writes an autosave, so the only host write is the account
-# and certificate state under /data. `auto_https disable_redirects` keeps Caddy
-# off port 80, which is never opened on this host.
+# `admin off` is there because nothing on this host drives a Caddy API: the
+# routes are this file's, and an open admin endpoint on loopback would be a
+# second way to change them. It does not stop the autosave -- `caddy run` writes
+# what it loaded to /config on every start regardless -- which is why the Quadlet
+# mounts a writable /config beside the read-only root filesystem.
+# `auto_https disable_redirects` keeps Caddy off port 80, which is never opened
+# on this host.
 {
 	admin off
 	auto_https disable_redirects

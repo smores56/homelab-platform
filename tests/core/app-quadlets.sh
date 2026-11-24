@@ -1706,6 +1706,13 @@ if [[ -f $caddy_unit ]]; then
   # would be shadowed at mount time and Caddy would register a second account.
   eq "$(grep -cF -- "Volume=$(mountpoint_for state/caddy):/data:z" "$caddy_unit")" 1 \
     'the ACME account and certificates live on their dataset'
+  # Upstream's image autosaves the loaded config to /config on every start, and
+  # under ReadOnly=true that write fails: the journal carried `unable to
+  # autosave config: /config/caddy/autosave.json: read-only file system` on each
+  # boot. The directory is the image's own writable one, so it gets a mount
+  # instead of a writable root filesystem.
+  eq "$(grep -cF -- "Volume=$(mountpoint_for state/caddy)/config:/config:z" "$caddy_unit")" 1 \
+    'the config autosave directory is writable'
   eq "$(grep -cE '^Network=' "$caddy_unit")" 1 'Caddy joins exactly one network'
   eq "$(grep -cE '^AddCapability=' "$caddy_unit")" 0 \
     'Caddy holds no capability: its listener is above 1024'
