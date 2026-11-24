@@ -1,0 +1,88 @@
+# The tailnet name service's scheduled probe (design #834, task #848).
+#
+# `assistant.sammohr.dev` and `agent.sammohr.dev` answer on a Service VIP through
+# a Caddy on loopback, and every hop of that path breaks on its own: the `A`
+# record, the host's advertisement of the Service, Serve's forward, the
+# certificate's renewal, the UI's own login route. None of it is visible to a
+# repository check, and a broken name is a person locked out of their UI, so the
+# probe runs against the real path on a schedule
+# (`scripts/verify-tailnet-names.sh` says what each probe means).
+#
+# CI is also the only place a genuine non-owner client exists: the runner joins
+# as `tag:deploy`, which the policy grants the one Service port
+# (`tofu/tailscale.tf`) and nothing else, so the probe proves the name works for
+# a node that is not the owner's laptop. The join is the deploy path's, unchanged:
+# the same OAuth client, the same tag, the same pinned action.
+#
+# The Healthchecks ping is `NAMES_PING_URL` from the `deploy-notify`
+# environment: a capability URL, so a secret, and the same shape the host's own
+# monitors use. It is deliberately NOT a key in `secrets/boot.json`'s
+# `healthchecks.yaml`: that bundle is decrypted on the host and copied into
+# `/run/smortress/secrets`, and this probe never runs there -- a bundle copy
+# would be dead weight in every boot, and adding the ciphertext needs the
+# operator's key, not a CI change.
+name: verify-tailnet-names
+
+on:
+  schedule:
+    # Daily. A certificate that stopped renewing and a Service the host stopped
+    # advertising are both noticed the next morning rather than the next month,
+    # and the check is two TLS handshakes: the cost is a runner minute.
+    - cron: "37 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-tailnet-names
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    name: probe both names
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: deploy-notify
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      # OAuth, not an authkey: the action mints a preauthorized key from the
+      # client, so the node it creates is ephemeral and disappears with the job,
+      # and the tag it carries is the one the policy admits to the Service port.
+      # No `ping:` input: the probe below is the reachability check, and its
+      # failure names the name rather than the tailnet.
+      - uses: tailscale/github-action@064b10558093f38325e838ddea35486bdc6b1d5c # v4.4.0
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_CLIENT_SECRET }}
+          tags: tag:deploy
+      - name: probe the two names
+        id: probe
+        run: scripts/verify-tailnet-names.sh
+      # `always()` because the ping is the report, not a gate: a red probe must
+      # still page, and a probe that never ran (a join that failed) is a red run
+      # the operator should hear about. The URL carries the capability, so it is
+      # never echoed.
+      - name: page through Healthchecks
+        if: always()
+        env:
+          NAMES_PING_URL: ${{ secrets.NAMES_PING_URL }}
+          PROBE_OUTCOME: ${{ steps.probe.outcome }}
+        run: |
+          set -euo pipefail
+          if [[ -z ${NAMES_PING_URL:-} ]]; then
+            echo "::warning::NAMES_PING_URL is unset in deploy-notify; no page is sent (docs/manual-steps.md)"
+            exit 0
+          fi
+          # The check's period is what turns silence into a page, so a success is
+          # a ping to the URL and a failure is a ping to `/fail`, which takes the
+          # check down at once instead of waiting out the period.
+          if [[ $PROBE_OUTCOME == success ]]; then
+            url=$NAMES_PING_URL
+          else
+            url="${NAMES_PING_URL%/}/fail"
+          fi
+          curl --fail-with-body --silent --show-error --max-time 30 "$url"
+          echo "pinged Healthchecks: $PROBE_OUTCOME"

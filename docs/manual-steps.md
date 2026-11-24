@@ -645,9 +645,48 @@ done
 
 The OAuth client is the tailnet client carrying `tag:deploy`: scopes `auth_keys`
 write and `devices` write, tags `tag:deploy`, nothing else, and the ACL admits that
-tag on `tag:smortress:8484` and nowhere else. A compromised notify job can therefore
-re-tag the smortress device itself; that write cannot be separated from `auth_keys`,
-and a static auth key in the Environment would never expire.
+tag on `tag:smortress:8484` (the receiver) and `svc:agent-ui:443` (the daily names
+probe, below) and nowhere else. A compromised notify job can therefore re-tag the
+smortress device itself; that write cannot be separated from `auth_keys`, and a
+static auth key in the Environment would never expire.
+
+### Create the tailnet names check
+
+`verify-tailnet-names.yml` runs daily and proves `assistant.sammohr.dev` and
+`agent.sammohr.dev` still work for a node that is not the owner's laptop
+(`docs/core/applications.md`, the tailnet name service). It pages through a
+Healthchecks check of its own: a daily period with a six-hour grace, because the
+probe answers once a day and one late run should not page.
+
+Create the check in the project with a `1 day` period and a `6 hour` grace, then
+copy its ping URL into the environment:
+
+```sh
+OWNER=$(cat ~/.config/smores56-agent/owner-token)
+printf '%s' '<ping url>' | GH_TOKEN="$OWNER" \
+  gh secret set NAMES_PING_URL --env deploy-notify --repo smores56/homelab-platform
+```
+
+Then run it once so the check has an answer, and read the job's own output: it
+prints one `ok`/`FAIL` line per probe.
+
+```sh
+GH_TOKEN="$OWNER" gh workflow run verify-tailnet-names.yml --repo smores56/homelab-platform
+GH_TOKEN="$OWNER" gh run watch --repo smores56/homelab-platform
+```
+
+The probe needs a tailnet node and nothing else, so the same script is the
+operator's tool during an outage; run it from any node on the tailnet:
+
+```sh
+scripts/verify-tailnet-names.sh
+TAILNET_NAMES_MIN_DAYS=100000 scripts/verify-tailnet-names.sh   # the expiry leg, red
+```
+
+Unlike the host's own monitors this one is deliberately not a key in
+`secrets/boot.json`'s `healthchecks` object: that object is decrypted on the host
+and this probe never runs there, so a bundle copy would be dead weight and the
+capability URL belongs in the `deploy-notify` Environment alone.
 
 ### The operator's view of the receiver
 

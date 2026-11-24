@@ -121,6 +121,19 @@ jobs:
       - name: brave
         run: scripts/check-all.sh --only brave
 
+  tailnet-names:
+    name: tailnet names probe contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      # Stubs only: the probe itself needs a tailnet node, and
+      # verify-tailnet-names.yml is the job that has one.
+      - name: tailnet-names
+        run: scripts/check-all.sh --only tailnet-names
+
   tofu:
     name: tofu fmt and validate
     runs-on: ubuntu-latest

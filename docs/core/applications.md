@@ -546,10 +546,28 @@ certificate (design #834): `https://assistant.sammohr.dev/` is the personal one 
 name at that VIP, Serve forwards the Service's `tcp:443` to Caddy on loopback, and
 Caddy routes by SNI with a DNS-01 certificate per name. Nothing new is public: the
 VIP is in `100.64.0.0/10`, so the names resolve anywhere and route only on the
-tailnet, and the ACL's single grant of `svc:agent-ui:443` to `group:owner` covers
-both names because a grant names the service and the port, never the name. The
-`:8444` and `:8445` routes stay as the rollback: they answer whether the names do
-or not.
+tailnet. The ACL grants `svc:agent-ui:443` to two sources — `group:owner` and
+`tag:deploy` — and either grant covers both names, because a grant names the
+service and the port, never the name. The second is the scheduled probe, below.
+
+The `:8444` and `:8445` Serve routes stay declared, and they are two things at
+once. They are the rollback: both answer the same two UIs on the host's own name
+whether the `sammohr.dev` names do or not, so a certificate fault, a withdrawn
+record or a Service the tailnet dropped costs the nicer URL and not the UI. They
+are also the no-cost fallback: nothing is provisioned for them, one line each in
+`scripts/tailscale-serve.sh`, so retiring the names entirely means deleting two
+`dns.tf` records and the Service and leaving Serve alone.
+
+`scripts/verify-tailnet-names.sh` is the probe on that path (task #848), and
+`.github/workflows/verify-tailnet-names.yml` runs it daily from a CI node that
+joins as `tag:deploy` — the one non-owner client there is. It asserts what a user
+would notice rather than a status code: each name resolves into the tailnet, both
+resolve to the same VIP, the chain verifies against the public roots with the name
+in it, the certificate is not within 14 days of expiry, and `GET /` is the UI's
+login redirect (`login?next=/`) rather than a 200 from something else. A stopped
+Caddy answers 502 or refuses, a drained Service times out, and both are red. The
+result pages through Healthchecks via the `NAMES_PING_URL` secret; the operator
+commands are in `docs/manual-steps.md`.
 
 `agent.sammohr.dev` already existed as the dead cluster tunnel's proxied CNAME,
 which #833 retires, and Cloudflare refuses two records at one name, so the two
