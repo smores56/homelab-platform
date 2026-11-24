@@ -1,0 +1,33 @@
+[Unit]
+# One tasks pass: todo.txt and done.txt become one generation.
+#
+# Same shape as the notes pass and for the same reason: two files on disk, no
+# provider, no network, no secret. The directory is mounted read-only and the
+# replica tree is the only writable mount.
+#
+# A refusal exits 3 and publishes nothing. The collector refuses a directory that
+# holds neither file, so a mistyped or unmounted path stops the replica advancing
+# instead of publishing an empty list that carries every task away.
+Description=Publish the todo.txt list into the personal replica
+Requires=zfs-ready@state-agent-local.service
+After=zfs-ready@state-agent-local.service
+ConditionPathExists=/srv/files/todo
+
+[Service]
+Type=oneshot
+UMask=0077
+ExecStart=/usr/bin/podman run --rm --replace --name smortress-agent-collect-tasks \
+  --network none \
+  --read-only --cap-drop=all --security-opt no-new-privileges \
+  --tmpfs /tmp:rw,size=16m --user 1000:1000 \
+  --volume /srv/files/todo:/entities:ro \
+  --volume /var/lib/agent/local/replica:/replica:z \
+  --env PYTHONPATH=/usr/lib/agent-facade/libs:/usr/lib/agent-facade \
+  --env PYTHONDONTWRITEBYTECODE=1 \
+  --entrypoint python3 \
+  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:4ea73e6d91eee0f056bab192c63b898a3a259ec11dc4738a43a6e79e9fbc5ed2 \
+  -m data_plane.collectors.raw --root /replica/tasks \
+  tasks --entities /entities
+Restart=no
+# Two small files; the timeout is the net under a frozen podman, not a budget.
+TimeoutStartSec=120

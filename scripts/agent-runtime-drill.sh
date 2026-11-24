@@ -379,6 +379,8 @@ collector_containers=(
   smortress-agent-collect-calendar
   smortress-agent-brave-snapshot
   smortress-agent-collect-brave
+  smortress-agent-collect-notes
+  smortress-agent-collect-tasks
   smortress-agent-brave-seed
   smortress-agent-tmail
   smortress-agent-brave

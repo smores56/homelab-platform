@@ -368,6 +368,51 @@ profile are indistinguishable, so a vanished table is carried forward as
 declared gap; and nothing here says whether a visit was made on this host or
 arrived over the chain, because Sync delivers rows, not provenance.
 
+## Notes
+
+`collect_notes(entities_dir, generation, *, captured_at=...)`
+
+The input is the Markdown vault itself, mounted read-only. One object per file,
+keyed by the URL-quoted vault-relative path: a path is the only identity that
+survives an editor rewriting every line, and one object per file makes an edit a
+new revision of the same note instead of a delete plus a create.
+
+- The object is the file's text plus its heading (the first ATX heading, else the
+  stem), its mtime and the bytes' sha256. Frontmatter is **not** parsed: `tags`
+  stays empty and the text stays whole, because a parser bug here would mangle
+  the only copy and a derived reader can parse it later.
+- A symlinked note or directory is refused; a symlinked attachment is skipped
+  with the other non-Markdown files.
+- A file that vanished is carried forward with `ABSENCE_NO_TOMBSTONE`, not
+  tombstoned: a partial mount or a sync still landing is not deletion evidence.
+
+`smortress-agent-collect-notes.timer` runs it hourly, with no network and no
+secret; unchanged files are hard-linked from the previous generation, so a run
+that changes one note costs one object.
+
+## Tasks
+
+`collect_tasks(entities_dir, generation, *, captured_at=...)`
+
+The input is a todo.txt directory: `todo.txt` and `done.txt`, each optional. A
+todo.txt line carries no id and the tools that write the file rewrite it in
+place, so the object id is a digest of the line's bytes.
+
+- An edited line is therefore a new task, and the line it replaced is carried
+  forward as absent: a reorder or a rewrite looks exactly like a deletion, so
+  absence alone is not deletion evidence. A task that never returns keeps its
+  last text as proof it once existed.
+- Two identical lines are one task; the collapse is counted in the report rather
+  than hidden.
+- Parsed fields are `done`, `priority`, `projects`, `contexts`, `key:value`
+  tokens and the first bare `YYYY-MM-DD` as `created`; `text` stays the whole
+  line so search sees exactly what the file said.
+- A directory holding neither file is refused, so a mistyped path cannot publish
+  an empty generation that carries every previous task away.
+
+`smortress-agent-collect-tasks.timer` runs it hourly, with no network and no
+secret.
+
 ## Who reads a generation
 
 `apps/agent_facade/replica_sources.py` projects a published generation into the
@@ -398,6 +443,10 @@ python3 -m data_plane.collectors.raw --root /var/lib/agent/local/replica/mail \
 python3 -m data_plane.collectors.raw --root /var/lib/agent/local/replica/finance \
   finance --accountset /run/collector/accountset.json \
   --accountset-url "$(cat /run/secrets/simplefin-url)" --include-pending
+python3 -m data_plane.collectors.raw --root /var/lib/agent/local/replica/notes \
+  notes --entities /srv/files/vault
+python3 -m data_plane.collectors.raw --root /var/lib/agent/local/replica/tasks \
+  tasks --entities /srv/files/todo
 ```
 
 On the host the same command runs from `smortress-agent-collect-finance.service`,
