@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -510,6 +511,31 @@ class QueryValidationTests(unittest.TestCase):
             with self.assertRaises(ValidationError):
                 mail.search("boiler", 0)
             self.assertEqual(len(mail.search("boiler", 10)), 1)
+
+
+class DeploymentBindingTests(unittest.TestCase):
+    """A quadlet may only ask for what the shipped facade can bind.
+
+    The facade in the deployment is the agent-runtime image, not this checkout, so
+    a `--replica` flag for a source whose projector is newer than the pinned image
+    makes the container refuse to start at boot. That is a crash loop found on the
+    host instead of a failing check, which is what this is.
+    """
+
+    def test_every_replica_the_personal_quadlet_asks_for_has_a_projector(self) -> None:
+        quadlet = (
+            Path(__file__).resolve().parents[3]
+            / "units/quadlet/agent-facade-personal.container"
+        )
+        exec_line = next(
+            line for line in quadlet.read_text().splitlines() if line.startswith("Exec=")
+        )
+        asked = re.findall(r"--replica ([a-z]+)=", exec_line)
+        self.assertTrue(asked, "the personal quadlet names no replica at all")
+        # Brave is answered from rows rather than whole records, so both tables
+        # are the set of sources a replica flag can bind.
+        bindable = set(replica_sources._PROJECTORS) | set(replica_sources.ROW_PROJECTORS)
+        self.assertEqual([name for name in asked if name not in bindable], [])
 
 
 if __name__ == "__main__":
