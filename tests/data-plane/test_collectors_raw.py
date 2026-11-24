@@ -24,6 +24,7 @@ from data_plane.collectors.raw import (
     collect_brave_db,
     collect_calendar,
     collect_maildir,
+    collect_notes,
     collect_simplefin,
     previous_replica,
 )
@@ -394,6 +395,137 @@ class CalendarTests(unittest.TestCase):
             self._write(entities, "b.json", {"id": "same", "uid": "u2"})
             with self.assertRaises(PublishError):
                 collect_calendar(entities, _generation(root / "replica"), captured_at=CAPTURED)
+
+
+class NotesTests(unittest.TestCase):
+    def _vault(self, root: Path) -> Path:
+        vault = root / "vault"
+        (vault / "projects").mkdir(parents=True)
+        (vault / "index.md").write_text("# Vault index\n\nBody.\n", encoding="utf-8")
+        (vault / "projects" / "alpha.md").write_text(
+            "No heading here.\n", encoding="utf-8"
+        )
+        return vault
+
+    def test_ids_are_the_quoted_paths_and_headings_fall_back_to_the_stem(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            vault = self._vault(root)
+            generation = _generation(root / "replica")
+            report = collect_notes(vault, generation, captured_at=CAPTURED)
+            _publish(generation)
+
+            self.assertEqual(report.objects, 2)
+            replica = RawReplica(root / "replica")
+            self.assertEqual(
+                replica.object_ids(), ("notes::index.md", "notes::projects%2Falpha.md")
+            )
+            index = json.loads(replica.read("notes::index.md"))
+            self.assertEqual(index["heading"], "Vault index")
+            alpha = json.loads(replica.read("notes::projects%2Falpha.md"))
+            self.assertEqual(alpha["heading"], "alpha")
+            self.assertEqual(alpha["path"], "projects/alpha.md")
+            self.assertEqual(alpha["tags"], [])
+            self.assertEqual(alpha["body"], "No heading here.\n")
+            metadata = replica.metadata("notes::projects%2Falpha.md")
+            self.assertEqual(metadata["source_id"], "notes.markdown")
+            self.assertEqual(metadata["path"], "projects/alpha.md")
+            self.assertEqual(metadata["heading"], "alpha")
+            self.assertEqual(metadata["tags"], [])
+            self.assertEqual(metadata["body_sha256"], alpha["revision"])
+            self.assertTrue(metadata["updated_at"].endswith("+00:00"))
+
+    def test_two_runs_produce_byte_identical_objects(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            vault = self._vault(root)
+            first = _generation(root / "replica", "gen-0001")
+            collect_notes(vault, first, captured_at=CAPTURED)
+            _publish(first)
+            second = _generation(root / "replica", "gen-0002")
+            collect_notes(vault, second, captured_at=CAPTURED)
+            _publish(second)
+
+            earlier = RawReplica(root / "replica", "gen-0001")
+            later = RawReplica(root / "replica", "gen-0002")
+            self.assertEqual(earlier.object_ids(), later.object_ids())
+            for object_id in earlier.object_ids():
+                self.assertEqual(earlier.read(object_id), later.read(object_id))
+
+    def test_a_vanished_file_is_carried_forward(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            vault = self._vault(root)
+            first = _generation(root / "replica", "gen-0001")
+            collect_notes(vault, first, captured_at=CAPTURED)
+            _publish(first)
+
+            (vault / "projects" / "alpha.md").unlink()
+            second = _generation(root / "replica", "gen-0002")
+            report = collect_notes(vault, second, captured_at=CAPTURED)
+            self.assertEqual(report.carried, 1)
+            _publish(second)
+
+            replica = RawReplica(root / "replica", "gen-0002")
+            self.assertEqual(
+                replica.object_ids(), ("notes::index.md", "notes::projects%2Falpha.md")
+            )
+            metadata = replica.metadata("notes::projects%2Falpha.md")
+            self.assertEqual(metadata["absence_reason"], ABSENCE_NO_TOMBSTONE)
+            self.assertEqual(metadata[ABSENT_SINCE], CAPTURED)
+
+    def test_a_symlinked_file_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            vault = self._vault(root)
+            target = root / "outside.md"
+            target.write_text("# Elsewhere\n", encoding="utf-8")
+            (vault / "linked.md").symlink_to(target)
+            with self.assertRaises(PublishError) as caught:
+                collect_notes(vault, _generation(root / "replica"), captured_at=CAPTURED)
+            self.assertIn("symlink", str(caught.exception))
+
+    def test_a_symlinked_non_note_is_skipped(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            vault = self._vault(root)
+            target = root / "outside.png"
+            target.write_bytes(b"\x89PNG")
+            (vault / "linked.png").symlink_to(target)
+            report = collect_notes(vault, _generation(root / "replica"), captured_at=CAPTURED)
+            self.assertEqual(report.objects, 2)
+
+    def test_a_symlinked_directory_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            vault = self._vault(root)
+            elsewhere = root / "elsewhere"
+            elsewhere.mkdir()
+            (elsewhere / "note.md").write_text("# Elsewhere\n", encoding="utf-8")
+            (vault / "linked").symlink_to(elsewhere)
+            with self.assertRaises(PublishError) as caught:
+                collect_notes(vault, _generation(root / "replica"), captured_at=CAPTURED)
+            self.assertIn("symlink", str(caught.exception))
+
+    def test_a_symlinked_vault_root_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            vault = self._vault(root)
+            linked = root / "linked-vault"
+            linked.symlink_to(vault)
+            with self.assertRaises(PublishError) as caught:
+                collect_notes(linked, _generation(root / "replica"), captured_at=CAPTURED)
+            self.assertIn("symlink", str(caught.exception))
+
+    def test_a_file_that_is_not_utf8_is_refused_by_path(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            vault = self._vault(root)
+            broken = vault / "projects" / "broken.md"
+            broken.write_bytes(b"# Broken\n\xff\xfe\n")
+            with self.assertRaises(PublishError) as caught:
+                collect_notes(vault, _generation(root / "replica"), captured_at=CAPTURED)
+            self.assertIn(str(broken), str(caught.exception))
 
 
 class FinanceTests(unittest.TestCase):
