@@ -34,6 +34,9 @@ app_images=(
   'immich-valkey|docker.io/valkey/valkey:9|sha256:3add1a336a920ea54770a001ab6feb3da5fceea96a40373a3a2cd469b815f0b7'
   'opdshelf|docker.io/koalilla/opds-server@sha256:b82f94f72b41686fd9169a2269d65550f411a97dfa341a330df88b0bfab0af35|sha256:b82f94f72b41686fd9169a2269d65550f411a97dfa341a330df88b0bfab0af35'
   'syncthing|docker.io/syncthing/syncthing:2.1.7|sha256:2b71da7c0d0a91a6ae5285ad079226fecc0a365d08b27720e1f7037b018f7546'
+  # The music server (SDLC #835). The library is mounted read-only; the database
+  # is a state dataset in the music restore unit, not a second one.
+  'navidrome|docker.io/navidrome/navidrome:0.64.2|sha256:38dc2727bfcfd5ede290f8ada114fc90368146f265ae4701ddddbcbe2a44ee52'
   # Agent deployments (SDLC #711). agent-model is the pinned local inference
   # server. agent-runtime is Hermes with this repository's facade, collector and
   # proxy code baked in: those programs used to ride the bootc image and be

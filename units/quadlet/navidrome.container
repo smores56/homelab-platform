@@ -1,0 +1,56 @@
+# Navidrome music server. The library dataset is mounted read-only and the
+# database lives in its own state dataset, so a restore of the music unit brings
+# back the files, the playlists and the play counts at one point in time.
+#
+# The image has no USER and runs as root by default. User=1000:1000 plus
+# ND_ENFORCENONROOTUSER=true is deliberate: a dropped User= must fail loudly
+# instead of writing root-owned files into a uid-1000 dataset.
+#
+# The watcher is off for the same reason as OPDShelf: inotify over a
+# bind-mounted dataset is unreliable, and an hourly scan is cheap for this tree.
+# The transcode and artwork caches are tmpfs so every Restic snapshot holds only
+# the database and its plugins.
+#
+# BASE_URL is unset: Serve forwards Host and sets X-Forwarded-Host/Proto, which
+# Navidrome uses to build its absolute URLs.
+[Unit]
+Description=Navidrome music server (music recovery group)
+Requires=zfs-ready@raw-music.service zfs-ready@state-navidrome.service
+After=network-online.target zfs-ready@raw-music.service zfs-ready@state-navidrome.service
+Wants=network-online.target
+
+[Container]
+Image=ghcr.io/smores56/homelab-platform/navidrome@sha256:38dc2727bfcfd5ede290f8ada114fc90368146f265ae4701ddddbcbe2a44ee52
+ContainerName=smortress-navidrome
+Network=navidrome.network
+User=1000:1000
+Environment=ND_MUSICFOLDER=/music
+Environment=ND_DATAFOLDER=/data
+Environment=ND_CACHEFOLDER=/cache
+Environment=ND_PORT=4533
+Environment=ND_ADDRESS=0.0.0.0
+Environment=ND_LOGLEVEL=info
+Environment=ND_SCANSCHEDULE=1h
+Environment=ND_SCANNER_WATCHERWAIT=0
+Environment=ND_ENABLEINSIGHTSCOLLECTOR=false
+Environment=ND_ENFORCENONROOTUSER=true
+Environment=TZ=UTC
+Volume=/srv/music:/music:ro,z
+Volume=/var/lib/navidrome:/data:z
+Tmpfs=/tmp:rw,size=64m
+Tmpfs=/cache:rw,size=512m
+PublishPort=127.0.0.1:4533:4533
+ReadOnly=true
+NoNewPrivileges=true
+DropCapability=ALL
+
+[Service]
+# 143 is SIGTERM, which a deliberate stop sends: not a failure.
+SuccessExitStatus=143
+Restart=on-failure
+# The first start relabels the whole 78 GiB library tree (see the `:z` on the
+# music volume).
+TimeoutStartSec=1800
+
+[Install]
+WantedBy=multi-user.target

@@ -56,6 +56,7 @@ the digest that run produced.
 | `immich-valkey` | `…/immich-valkey@sha256:3add1a33…` | `docker.io/valkey/valkey:9` |
 | `opdshelf` | `…/opdshelf@sha256:b82f94f7…` | `docker.io/koalilla/opds-server@sha256:b82f94f7…` |
 | `syncthing` | `…/syncthing@sha256:2b71da7c…` | `docker.io/syncthing/syncthing:2.1.7` |
+| `navidrome` | `…/navidrome@sha256:38dc2727…` | `docker.io/navidrome/navidrome:0.64.2` |
 | `agent-model` | `…/agent-model@sha256:26f89ebd…` | `ghcr.io/ggml-org/llama.cpp:server-cuda` (b12602) |
 | `agent-runtime` | `…/agent-runtime@sha256:4ea73e6d…` | built from `images/agent-runtime/Containerfile` (base `docker.io/nousresearch/hermes-agent@sha256:276d4468…`) |
 | `agent-webui` | `…/agent-webui@sha256:fb50509e…` | built from `images/agent-webui/Containerfile` |
@@ -123,6 +124,7 @@ one Restic snapshot names every dataset the unit restores.
 | General facade | none | `state/agent-general` — `/var/lib/agent/general/memory`, the `external` profile | `/memory` (writable), and `/run/agent-shell` — the bridge's socket directory, mounted rw because `connect(2)` needs the inode's write bit; the only deployment with one, and so the only one serving `shell.run` |
 | Local model | none | none: `state/agent-model` — `/var/lib/agent/model` is the GGUF file, and it is in no backup | `/models` (read-only) |
 | Syncthing | `raw/files` — `/srv/files`, the vault | `state/syncthing-config` — `/var/lib/syncthing/config`, identity and configuration | `/srv/files`; `/var/syncthing/config` |
+| Navidrome | `raw/music` — `/srv/music`, the library | `state/navidrome` — `/var/lib/navidrome`, playlists, play counts, users and shares | `/music` (read-only); `ND_DATAFOLDER=/data` |
 
 `photos` is therefore one snapshot over `/srv/photos`,
 `/var/lib/immich/postgres` and `/var/lib/immich/dumps`: media, cluster files and
@@ -522,6 +524,7 @@ mapping file.
 | Immich | `127.0.0.1:2283` | `https://smortress.<tailnet>.ts.net/` and, for the edge only, `https://smortress.<tailnet>.ts.net:8446/` |
 | OPDShelf | `127.0.0.1:8083` | `https://smortress.<tailnet>.ts.net:8443/` and, for the edge only, `https://smortress.<tailnet>.ts.net:8447/` |
 | Syncthing GUI | `127.0.0.1:8384` | `https://smortress.<tailnet>.ts.net:10000/` |
+| Navidrome | `127.0.0.1:4533` | `https://smortress.<tailnet>.ts.net:8448/` |
 | Wallpapers | `/srv/wallpapers` (static files) | `https://smortress.<tailnet>.ts.net/wallpapers/` |
 | Personal agent gateway | `127.0.0.1:18001` | `https://smortress.<tailnet>.ts.net/apps/agent-local/v1` |
 | General agent gateway | `127.0.0.1:18002` | `https://smortress.<tailnet>.ts.net/apps/agent-general/v1` |

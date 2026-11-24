@@ -713,7 +713,7 @@ has 'an empty tailnet is valid' 'var\.tailnet == "" \|\| can\(regex'
 has 'the ACL is the jsonencode of one local' 'acl[[:space:]]*=[[:space:]]*jsonencode\(local\.tailnet_policy\)'
 has 'the ACL replaces the whole policy' 'overwrite_existing_content[[:space:]]*=[[:space:]]*true'
 has 'the policy names the host by tag' '"tag:smortress:22"'
-has 'the policy admits Serve traffic' '"tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:10000"'
+has 'the policy admits Serve traffic' '"tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000"'
 has 'the policy admits Syncthing' '"tag:smortress:22000"'
 has 'the device is resolved by hostname' 'hostname[[:space:]]*=[[:space:]]*"smortress"'
 has 'the device carries the tag declaratively' 'resource "tailscale_device_tags" "smortress"'
@@ -731,16 +731,16 @@ has 'the deploy tag is owned by the owner group' '"tag:deploy"[[:space:]]*=[[:sp
 has 'a test proves the deploy node reaches the receiver and the names probe its port' \
   'accept[[:space:]]*=[[:space:]]*\["tag:smortress:8484", "svc:agent-ui:443"\]'
 has 'a test proves the deploy node reaches no other host port' \
-  'deny[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8446", "tag:smortress:8447", "tag:vps:22"\]'
+  'deny[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8446", "tag:smortress:8447", "tag:vps:22"\]'
 has 'the policy carries tests' 'tests[[:space:]]*=[[:space:]]*\['
 has 'a test proves every admitted port reaches the owner' \
-  'accept[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:10000", "tag:smortress:22000", "tag:vps:22", "svc:agent-ui:443"\]'
+  'accept[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:vps:22", "svc:agent-ui:443"\]'
 has 'a test proves the owner does not reach the edge ports' \
   'deny[[:space:]]*=[[:space:]]*\["tag:smortress:8446", "tag:smortress:8447", "tag:smortress:8484"\]'
 has 'a test proves the edge reaches only the two Serve ports' \
   'accept[[:space:]]*=[[:space:]]*\["tag:smortress:8446", "tag:smortress:8447"\]'
 has 'a test proves a tagged device reaches none of them' \
-  'deny[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8446", "tag:smortress:8447", "tag:vps:22", "svc:agent-ui:443"\]'
+  'deny[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8446", "tag:smortress:8447", "tag:vps:22", "svc:agent-ui:443"\]'
 
 # The agent UI's Service VIP (design #834). Tailscale owns the address, so it is
 # a grant destination and a test destination, never an `acl`: a grant names the
