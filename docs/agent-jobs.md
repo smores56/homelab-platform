@@ -88,7 +88,9 @@ Every command gets:
   `/etc/smortress/agent/job-image`, so a tag cannot move what runs and a missing
   prepull fails instead of reaching a registry;
 - read-only root filesystem, `--cap-drop=all`,
-  `--security-opt=no-new-privileges`, default seccomp, private IPC/PID/UTS/cgroup
+  `--security-opt=no-new-privileges`, podman's built-in seccomp profile (no
+  `seccomp=` flag: podman 6 reads `seccomp=default` as a file path), private
+  IPC/PID/UTS/cgroup
   namespaces, no devices and no host namespace;
 - `--tmpfs /tmp` and `--tmpfs /work` with size and `nosuid`/`nodev` bounds; the
   general class adds the single live bind mount;

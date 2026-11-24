@@ -149,7 +149,9 @@ job_build_podman_argv() {
     --read-only
     --cap-drop=all
     --security-opt=no-new-privileges
-    --security-opt=seccomp=default
+    # No seccomp= flag: podman 6 reads `seccomp=default` as a profile *path* and
+    # refuses the run ("open default: no such file or directory", rc 125). The
+    # built-in default profile applies without a flag, so the confinement stays.
     --ipc=private
     --pid=private
     --uts=private
@@ -166,8 +168,12 @@ job_build_podman_argv() {
     --env=HOME=/tmp
     --env=TZ=UTC
     --env=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    # The pinned image is the Hermes runtime, whose ENTRYPOINT is s6-overlay: the
+    # command would be s6's argv, and s6 needs a full container (group setup,
+    # /opt/data) that a job must not have. Override it with the shell.
+    --entrypoint=/bin/sh
     "$job_image"
-    /bin/sh -lc "$command"
+    -lc "$command"
   )
 }
 
@@ -281,30 +287,33 @@ job_main() {
   ((EUID == 0)) || job_die "must run as root; the gateway calls its class entry point"
   (( $# == 1 )) || job_die "expected exactly one shell command argument"
   job_class_config "$class"
-  local name command status out size
-  name=$(job_new_name "$class")
+  local status size
+  # The EXIT trap runs after this function returns, when its locals are gone, so
+  # the names it uses are globals (and `set -u` would otherwise kill the exit).
+  job_name=$(job_new_name "$class")
+  job_out=
   command=$1
-  job_build_systemd_argv "$class" "$name" "$command"
+  job_build_systemd_argv "$class" "$job_name" "$command"
   job_prepare_runtime
   job_ensure_egress
   job_check_workspace
   job_check_image
 
-  out=$(mktemp "$(job_run_root)/${name}.out.XXXXXX")
-  trap 'job_cleanup "$name"; rm -f "$out"' EXIT
+  job_out=$(mktemp "$(job_run_root)/${job_name}.out.XXXXXX")
+  trap 'job_cleanup "$job_name"; rm -f "$job_out"' EXIT
 
   set +e
   # One byte past the cap tells the dispatcher the output was truncated; the
   # closed pipe also stops a job that prints forever.
-  "${job_systemd_argv[@]}" 2>&1 | head -c "$((JOB_OUTPUT_CAP + 1))" >"$out"
+  "${job_systemd_argv[@]}" 2>&1 | head -c "$((JOB_OUTPUT_CAP + 1))" >"$job_out"
   status=${PIPESTATUS[0]}
   set -e
-  size=$(wc -c <"$out")
+  size=$(wc -c <"$job_out")
   if ((size > JOB_OUTPUT_CAP)); then
-    truncate -s "$JOB_OUTPUT_CAP" "$out"
+    truncate -s "$JOB_OUTPUT_CAP" "$job_out"
     printf 'agent-job: output truncated at %s bytes\n' "$JOB_OUTPUT_CAP" >&2
   fi
-  cat "$out"
+  cat "$job_out"
   return "$status"
 }
 

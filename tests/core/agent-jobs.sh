@@ -150,9 +150,22 @@ else
   bad 'provisioning enables linger and the dispatcher derives /run/user from it'
 fi
 
-# The containment every command gets, on both classes.
+# The pinned image is the Hermes runtime, whose ENTRYPOINT is s6-overlay; a job
+# must reach a shell instead, or it runs s6's init and never its command.
+if has --entrypoint=/bin/sh "${general_argv[@]}" &&
+  has --entrypoint=/bin/sh "${personal_argv[@]}" &&
+  [[ ${general_argv[${#general_argv[@]} - 2]} == -lc &&
+    ${general_argv[${#general_argv[@]} - 1]} == 'echo hello' ]]; then
+  ok 'both classes run the command through a shell, not the image entrypoint'
+else
+  bad 'both classes run the command through a shell, not the image entrypoint'
+fi
+
+# The containment every command gets, on both classes. No seccomp= flag: podman 6
+# treats `seccomp=default` as a path and refuses the run, and the built-in profile
+# applies without one.
 for flag in --read-only --cap-drop=all --security-opt=no-new-privileges \
-  --security-opt=seccomp=default --ipc=private --pid=private --uts=private \
+  --ipc=private --pid=private --uts=private \
   --cgroupns=private --pull=never; do
   if has "$flag" "${general_argv[@]}" && has "$flag" "${personal_argv[@]}"; then
     ok "both classes carry $flag"
@@ -160,6 +173,12 @@ for flag in --read-only --cap-drop=all --security-opt=no-new-privileges \
     bad "both classes carry $flag"
   fi
 done
+if has --security-opt=seccomp=default "${general_argv[@]}" ||
+  has --security-opt=seccomp=default "${personal_argv[@]}"; then
+  bad 'no class passes seccomp=default, which podman 6 reads as a profile path'
+else
+  ok 'no class passes seccomp=default, which podman 6 reads as a profile path'
+fi
 if has_prefix --tmpfs=/tmp: "${general_argv[@]}" && has_prefix --tmpfs=/tmp: "${personal_argv[@]}"; then
   ok 'both classes get a bounded /tmp'
 else
