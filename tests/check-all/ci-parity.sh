@@ -8,7 +8,7 @@ set -euo pipefail
 root=$(git rev-parse --show-toplevel)
 cd "$root" || exit 1
 
-local_only="edge recovery-page actionlint"
+local_only="edge actionlint"
 fail=0
 
 groups=$(scripts/check-all.sh --list | awk '{print $1}' | sort)

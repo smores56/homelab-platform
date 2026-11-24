@@ -2,8 +2,9 @@
 
 Backrest is the browser recovery path for the R2 repository. It is a *reader*:
 one repository, a read-only credential, no plans, and no scheduling. It replaced
-the static recovery letter on `recovery.sammohr.dev`; the old Pages project is
-kept but serves nothing.
+the static recovery letter on `recovery.sammohr.dev`. That letter, its Pages
+project and the R2 browser policy it needed are deleted (SDLC #833), so the
+repository is read server-side only.
 
 **The reader runs on the edge VPS now (#725 T2), not on Cloudflare.** The Worker
 and its container were deleted; `recovery.sammohr.dev` is a grey A record and

@@ -132,11 +132,6 @@ if grep -qE '^[[:space:]]*"recovery",$' "$work/code.tf"; then
 else
   ok "recovery is no longer a public bypass hostname"
 fi
-if grep -qE '^resource "cloudflare_(pages_domain|dns_record)" "recovery"' tofu/pages.tf; then
-  bad "the Pages domain and DNS record are retired"
-else
-  ok "the Pages domain and DNS record are retired"
-fi
 
 # nanobot.sammohr.dev is retired in favour of agent.sammohr.dev (SDLC #583).
 if [[ -n $(extract cloudflare_zero_trust_access_application.nanobot) ]]; then
@@ -332,10 +327,11 @@ else
 fi
 
 echo "== preserved objects"
-for addr in cloudflare_pages_project.recovery cloudflare_r2_bucket_cors.restic \
-  cloudflare_ruleset.dav_rate_limit; do
-  if [[ -n $(extract "$addr") ]]; then ok "preserved: $addr"; else bad "preserved: $addr"; fi
-done
+if [[ -n $(extract cloudflare_ruleset.dav_rate_limit) ]]; then
+  ok "preserved: cloudflare_ruleset.dav_rate_limit"
+else
+  bad "preserved: cloudflare_ruleset.dav_rate_limit"
+fi
 # The zone plan allows exactly one http_ratelimit rule and the reader's login
 # takes it, so the media rule is gone rather than relocated or kept beside it.
 # The cost of losing it is recorded as a residual in docs/core/backrest.md, and

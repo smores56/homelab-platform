@@ -26,7 +26,6 @@ changes by pull request from a fork, so no PR workflow can read a secret.
 | `apps/webhook/` | Webhook receiver source and unit tests (Python stdlib, no dependencies) (`docs/webhook.md`) |
 | `apps/agent_facade/` | MCP source facades and portable memory for the two agent deployments (`docs/agent-facade.md`) |
 | `apps/data_plane/` | CLI entry points for the data-plane library |
-| `apps/recovery-page/` | The static recovery page, built against the rendered manifest (`docs/core/recovery-kit.md`) |
 | `backrest/` | The Backrest reader Worker: source, TypeScript typecheck and static tests (`docs/core/backrest.md`) |
 | `images/` | Container image sources: agent egress, agent mail, agent WebUI, data-plane, brave, tuta-calendar |
 | `tofu/` | Cloudflare OpenTofu (provider v5), Access default-deny, CAA (`docs/cloudflare.md`), tailnet policy |

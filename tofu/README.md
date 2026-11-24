@@ -1,8 +1,7 @@
 # Cloudflare zone and tailnet policy, as code
 
 This directory is the whole Cloudflare account's edge config: DNS records, the
-cluster tunnel's ingress rules, Access applications and policies, and the
-recovery pages project. `docs/cloudflare.md` explains the shape; this file only
+cluster tunnel's ingress rules, and Access applications and policies. `docs/cloudflare.md` explains the shape; this file only
 says how a change travels. SSH is deliberately absent: it is tailnet-only
 (design #767), so no record, no tunnel ingress, no Access application and no
 service token names it.

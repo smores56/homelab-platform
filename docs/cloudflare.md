@@ -48,8 +48,7 @@ that offers to create any of them is a re-introduction, not a migration.
 | nix-config | here | Note |
 | --- | --- | --- |
 | `tofu/main.tf` | `tofu/main.tf`, `tofu/dns.tf`, `tofu/access.tf`, `tofu/rate-limit.tf` | split by object family; resource addresses unchanged |
-| `tofu/pages.tf` | `tofu/pages.tf` | verbatim |
-| `tofu/r2.tf` | `tofu/r2.tf` | verbatim |
+| `tofu/r2.tf` | `tofu/r2.tf` | verbatim; the bucket's browser CORS policy is retired (SDLC #833) |
 | `tofu/variables.tf` | `tofu/variables.tf` | `tunnel_id` renamed `host_tunnel_id`, new cluster/ACME inputs |
 | `tofu/versions.tf` | `tofu/versions.tf` | provider and zone lookup only |
 | `tofu/.terraform.lock.hcl` | `tofu/.terraform.lock.hcl` | re-resolved to 5.28.1 on bootstrap |

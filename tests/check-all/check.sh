@@ -47,8 +47,6 @@ expect "a unit change selects the server-image group" "server-image" \
   "$(selected units/quadlet/pattern.container)"
 expect "a secret change selects the secrets group" "secrets" \
   "$(selected secrets/boot.json)"
-expect "a recovery-page change selects its group" "recovery-page" \
-  "$(selected apps/recovery-page/src/main.ts)"
 expect "a config change selects secrets and lint" $'secrets\nlint' \
   "$(selected .sops.yaml)"
 expect "every tracked file is claimed" "0" \
