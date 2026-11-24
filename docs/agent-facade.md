@@ -103,9 +103,10 @@ same rule as the memory index: query words are quoted and AND-joined by
 `contracts.search_expression` and travel as a bound parameter, so FTS5 syntax in a
 query stays literal.
 
-The personal Quadlet passes `--replica` for `mail`, `calendar`, `finance` and
-`brave` and mounts the replica tree read-only. The other sources and the general
-deployment still serve fixtures until their collectors/adapters land.
+The personal Quadlet passes `--replica` for `mail`, `calendar`, `finance`, `brave`,
+`notes` and `tasks` and mounts the replica tree read-only. The other personal
+sources and the general deployment still serve fixtures until their
+collectors/adapters land.
 
 ## Tool contract
 

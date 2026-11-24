@@ -45,7 +45,7 @@ ExecStart=/usr/bin/podman run --rm --replace --name smortress-agent-collect-cale
   --env PYTHONPATH=/usr/lib/agent-facade/libs:/usr/lib/agent-facade \
   --env PYTHONDONTWRITEBYTECODE=1 \
   --entrypoint python3 \
-  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:4ea73e6d91eee0f056bab192c63b898a3a259ec11dc4738a43a6e79e9fbc5ed2 \
+  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:ad09b16bcd897a585acfc04fa8ade4938ff4cdafb93030f5e575d3fc9716db74 \
   -m data_plane.collectors.raw --root /replica/calendar \
   calendar --entities /entities
 # A refusal exits 3 and publishes nothing. That is a failed unit on purpose, as

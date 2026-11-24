@@ -32,12 +32,12 @@ After=network-online.target zfs-ready@state-agent-local.service sops-decrypt.ser
 Wants=network-online.target
 
 [Container]
-Image=ghcr.io/smores56/homelab-platform/agent-runtime@sha256:4ea73e6d91eee0f056bab192c63b898a3a259ec11dc4738a43a6e79e9fbc5ed2
+Image=ghcr.io/smores56/homelab-platform/agent-runtime@sha256:ad09b16bcd897a585acfc04fa8ade4938ff4cdafb93030f5e575d3fc9716db74
 ContainerName=smortress-agent-facade-personal
 Network=agent-local.network
 User=1000:1000
 Entrypoint=python3
-Exec=-m apps.agent_facade --transport http --deployment personal --token-file /run/secrets/agent-facade-personal-token --memory-root /memory --index-root /index --replica mail=/replica/mail --replica calendar=/replica/calendar --replica finance=/replica/finance --replica brave=/replica/brave --host 0.0.0.0 --port 18004
+Exec=-m apps.agent_facade --transport http --deployment personal --token-file /run/secrets/agent-facade-personal-token --memory-root /memory --index-root /index --replica mail=/replica/mail --replica calendar=/replica/calendar --replica finance=/replica/finance --replica brave=/replica/brave --replica notes=/replica/notes --replica tasks=/replica/tasks --host 0.0.0.0 --port 18004
 Secret=agent-facade-personal-token,type=mount,target=/run/secrets/agent-facade-personal-token,uid=1000,gid=1000,mode=0400
 Environment=PYTHONPATH=/usr/lib/agent-facade/libs:/usr/lib/agent-facade
 # The image layer carrying the code is read-only, so a bytecode cache write can only fail.

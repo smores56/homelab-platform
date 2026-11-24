@@ -7,7 +7,9 @@ for words, and describe what the record can cite as provenance.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -15,7 +17,9 @@ from agent_facade import replica_sources, sources
 from data_plane.collectors.raw import (
     collect_calendar,
     collect_maildir,
+    collect_notes,
     collect_simplefin,
+    collect_tasks,
 )
 from data_plane.collectors.staging import StagingGeneration
 from data_plane.errors import ContractError, ValidationError
@@ -104,6 +108,50 @@ def _finance_generation(root: Path) -> None:
     generation.commit_next(complete=True)
 
 
+def _notes_generation(root: Path, junk: bytes | None = None) -> None:
+    vault = root / "vault"
+    (vault / "projects").mkdir(parents=True)
+    (vault / "index.md").write_text(
+        "# Vault index\n\nBuy espresso beans before the roast.\n", encoding="utf-8"
+    )
+    (vault / "projects" / "alpha.md").write_text("No heading here.\n", encoding="utf-8")
+    generation = StagingGeneration(
+        root / "replica-notes", "gen-0001", source_id="notes.markdown"
+    )
+    collect_notes(vault, generation, captured_at=CAPTURED)
+    if junk is not None:
+        generation.put(
+            "notes::junk.md",
+            junk,
+            {"source_id": "notes.markdown", "captured_at": CAPTURED},
+        )
+    generation.commit_next(complete=True)
+
+
+def _tasks_generation(root: Path, junk: bytes | None = None) -> None:
+    directory = root / "todo"
+    directory.mkdir()
+    (directory / "todo.txt").write_text(
+        "(A) renew the boat licence +admin\n", encoding="utf-8"
+    )
+    (directory / "done.txt").write_text("x 2026-11-01 call the clinic\n", encoding="utf-8")
+    generation = StagingGeneration(
+        root / "replica-tasks", "gen-0001", source_id="tasks.todo"
+    )
+    collect_tasks(directory, generation, captured_at=CAPTURED)
+    if junk is not None:
+        generation.put(
+            "tasks::junk", junk, {"source_id": "tasks.todo", "captured_at": CAPTURED}
+        )
+    generation.commit_next(complete=True)
+
+
+def _task_id(line: str) -> str:
+    """The id the task collector derives, so a case can name the object it published."""
+
+    return f"tasks::{hashlib.sha256(line.encode('utf-8')).hexdigest()[:16]}"
+
+
 class MailReplicaTests(unittest.TestCase):
     def test_reads_and_searches_the_projection(self) -> None:
         with tempfile.TemporaryDirectory() as work:
@@ -145,6 +193,86 @@ class MailReplicaTests(unittest.TestCase):
             )["mail"]
             table = sources.SOURCES_BY_DEPLOYMENT[sources.Visibility.PERSONAL]["mail"]
             self.assertEqual(adapter.contract, table.contract)
+
+
+class NotesAndTasksReplicaTests(unittest.TestCase):
+    def test_notes_projects_the_markdown_and_its_heading(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            _notes_generation(root)
+            notes = replica_sources.adapters_for(
+                sources.Visibility.PERSONAL, {"notes": root / "replica-notes"}
+            )["notes"]
+
+            record = notes.read("notes::index.md")
+            self.assertEqual(record.title, "Vault index")
+            self.assertIn("Buy espresso beans", record.body)
+            self.assertEqual(record.provenance["source_id"], "notes/notes::index.md")
+            self.assertEqual(record.provenance["captured_at"], CAPTURED)
+
+            self.assertEqual(
+                [hit.id for hit in notes.search("espresso", 5)], ["notes::index.md"]
+            )
+            self.assertEqual(notes.search("kettle", 5), ())
+
+    def test_tasks_projects_the_line_and_keeps_a_completed_one_findable(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            _tasks_generation(root)
+            tasks = replica_sources.adapters_for(
+                sources.Visibility.PERSONAL, {"tasks": root / "replica-tasks"}
+            )["tasks"]
+            finished = _task_id("x 2026-11-01 call the clinic")
+
+            record = tasks.read(finished)
+            self.assertEqual(record.title, "x 2026-11-01 call the clinic")
+            self.assertIn("call the clinic", record.body)
+            self.assertIn("[done]", record.body)
+
+            self.assertEqual([hit.id for hit in tasks.search("clinic", 5)], [finished])
+            self.assertEqual(
+                [hit.id for hit in tasks.search("licence", 5)],
+                [_task_id("(A) renew the boat licence +admin")],
+            )
+
+    def test_a_junk_object_is_not_a_record_and_does_not_raise(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            _notes_generation(root, junk=b"this is not json\n")
+            _tasks_generation(root, junk=b'{"text": 5}')
+            notes_and_tasks = replica_sources.adapters_for(
+                sources.Visibility.PERSONAL,
+                {"notes": root / "replica-notes", "tasks": root / "replica-tasks"},
+            )
+
+            with self.assertRaises(sources.SourceNotFound):
+                notes_and_tasks["notes"].read("notes::junk.md")
+            with self.assertRaises(sources.SourceNotFound):
+                notes_and_tasks["tasks"].read("tasks::junk")
+            self.assertEqual(
+                [hit.id for hit in notes_and_tasks["notes"].search("espresso", 5)],
+                ["notes::index.md"],
+            )
+
+    def test_both_sources_bind_to_the_personal_table(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            _notes_generation(root)
+            _tasks_generation(root)
+            adapters = replica_sources.adapters_for(
+                sources.Visibility.PERSONAL,
+                {"notes": root / "replica-notes", "tasks": root / "replica-tasks"},
+            )
+
+            self.assertEqual(sorted(adapters), ["notes", "tasks"])
+            self.assertEqual(
+                [hit.id for hit in adapters["notes"].search("espresso", 5)],
+                ["notes::index.md"],
+            )
+            self.assertEqual(
+                [hit.id for hit in adapters["tasks"].search("clinic", 5)],
+                [_task_id("x 2026-11-01 call the clinic")],
+            )
 
 
 class CalendarAndFinanceTests(unittest.TestCase):
@@ -383,6 +511,31 @@ class QueryValidationTests(unittest.TestCase):
             with self.assertRaises(ValidationError):
                 mail.search("boiler", 0)
             self.assertEqual(len(mail.search("boiler", 10)), 1)
+
+
+class DeploymentBindingTests(unittest.TestCase):
+    """A quadlet may only ask for what the shipped facade can bind.
+
+    The facade in the deployment is the agent-runtime image, not this checkout, so
+    a `--replica` flag for a source whose projector is newer than the pinned image
+    makes the container refuse to start at boot. That is a crash loop found on the
+    host instead of a failing check, which is what this is.
+    """
+
+    def test_every_replica_the_personal_quadlet_asks_for_has_a_projector(self) -> None:
+        quadlet = (
+            Path(__file__).resolve().parents[3]
+            / "units/quadlet/agent-facade-personal.container"
+        )
+        exec_line = next(
+            line for line in quadlet.read_text().splitlines() if line.startswith("Exec=")
+        )
+        asked = re.findall(r"--replica ([a-z]+)=", exec_line)
+        self.assertTrue(asked, "the personal quadlet names no replica at all")
+        # Brave is answered from rows rather than whole records, so both tables
+        # are the set of sources a replica flag can bind.
+        bindable = set(replica_sources._PROJECTORS) | set(replica_sources.ROW_PROJECTORS)
+        self.assertEqual([name for name in asked if name not in bindable], [])
 
 
 if __name__ == "__main__":

@@ -154,12 +154,69 @@ def _brave_rows(metadata: Mapping[str, Any], data: bytes) -> list[tuple[str, str
     return rows
 
 
+def _json_object(data: bytes) -> dict[str, Any] | None:
+    """The object as a JSON mapping, or None for anything else.
+
+    A replica holds whatever a collector published, including an object this
+    projector was not written for: one unreadable object must cost the reader
+    that object, not every other record in the generation.
+    """
+
+    try:
+        parsed = json.loads(data.decode("utf-8"))
+    except ValueError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _project_notes(metadata: Mapping[str, Any], data: bytes) -> Projection | None:
+    """The note's heading as the title, its whole Markdown file as the body.
+
+    A word that occurs only inside the Markdown still has to be findable, so the
+    body is the file rather than a paraphrase of its frontmatter.
+    """
+
+    note = _json_object(data)
+    if note is None:
+        return None
+    heading = note.get("heading")
+    body = note.get("body")
+    if not isinstance(heading, str) or not isinstance(body, str):
+        return None
+    return Projection(title=heading, body=_clip(body))
+
+
+def _project_tasks(metadata: Mapping[str, Any], data: bytes) -> Projection | None:
+    """The todo.txt line as both title and body.
+
+    ``text`` is the line verbatim, so a search finds the words the file held.
+    The done state is metadata about the line rather than words it contains, so
+    it is marked on the body the way the finance projection marks a pending
+    transaction; the title stays the line, unaltered.
+    """
+
+    task = _json_object(data)
+    if task is None:
+        return None
+    text = task.get("text")
+    if not isinstance(text, str):
+        return None
+    body = f"[done] {text}" if task.get("done") is True else text
+    return Projection(title=text, body=_clip(body))
+
+
+#: Keyed by the contract's source id, which for a facade source is its name in
+#: the deployment table (``mail``, ``notes``) -- not the collector's own
+#: ``SOURCE_ID`` (``tuta.mail``, ``notes.markdown``), which only travels in the
+#: object metadata once the bytes are published.
 _PROJECTORS: Mapping[str, Callable[[Mapping[str, Any], bytes], Projection | None]] = (
     MappingProxyType(
         {
             "mail": _project_mail,
             "calendar": _project_calendar,
             "finance": _project_finance,
+            "notes": _project_notes,
+            "tasks": _project_tasks,
         }
     )
 )

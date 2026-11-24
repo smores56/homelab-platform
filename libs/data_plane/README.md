@@ -20,7 +20,7 @@ provider SDK. The same code runs in the local and external planes.
 | `backup.runner` | One recursive ZFS snapshot, staged backup, copies, prune, freshness, check |
 | `collectors.relay` | Authenticated, schema-validated, rate-limited, idempotent ingest |
 | `collectors.staging` | Staging generation, atomic publish, cursors, tombstones, fidelity limits |
-| `collectors.raw` | Raw mail, calendar, finance and Brave replicas; the absence ledger (`docs/raw-replicas.md`) |
+| `collectors.raw` | Raw mail, calendar, finance, Brave, notes and tasks replicas; the absence ledger (`docs/raw-replicas.md`) |
 | `derived.hledger` | The finance replica as one hledger journal: the operator's mapping, the provider's own sign, an atomic no-churn write (`docs/raw-replicas.md`) |
 | `memory.file_memory` | Portable per-profile file memory with provenance and tombstones |
 | `migration` | Ordered migration phases and the plan-driven backup gate |

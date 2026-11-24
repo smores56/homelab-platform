@@ -11,6 +11,7 @@ from .brave import collect_brave_db
 from .calendar import collect_calendar
 from .finance import collect_simplefin
 from .mail import collect_maildir
+from .notes import collect_notes
 from .replica import (
     ABSENCE_REASON,
     ABSENCE_NO_TOMBSTONE,
@@ -24,6 +25,7 @@ from .replica import (
     carry_forward,
     previous_replica,
 )
+from .tasks import collect_tasks
 
 __all__ = [
     "ABSENCE_NO_TOMBSTONE",
@@ -39,6 +41,8 @@ __all__ = [
     "collect_brave_db",
     "collect_calendar",
     "collect_maildir",
+    "collect_notes",
     "collect_simplefin",
+    "collect_tasks",
     "previous_replica",
 ]

@@ -33,8 +33,12 @@ from .finance import SOURCE_ID as FINANCE_SOURCE
 from .finance import collect_simplefin
 from .mail import SOURCE_ID as MAIL_SOURCE
 from .mail import collect_maildir
+from .notes import SOURCE_ID as NOTES_SOURCE
+from .notes import collect_notes
 from .replica import CollectReport, RawReplica
 from .simplefin import AccessUrl, fetch_accountset
+from .tasks import SOURCE_ID as TASKS_SOURCE
+from .tasks import collect_tasks
 
 EXIT_REFUSED = 3
 #: Days of overlap on the provider request, so a boundary transaction is not lost.
@@ -50,6 +54,8 @@ _SOURCE_IDS = {
     "calendar": CALENDAR_SOURCE,
     "finance": FINANCE_SOURCE,
     "brave": BRAVE_SOURCE,
+    "notes": NOTES_SOURCE,
+    "tasks": TASKS_SOURCE,
 }
 
 
@@ -163,6 +169,12 @@ def _parser() -> argparse.ArgumentParser:
     brave.add_argument("--database", required=True)
     brave.add_argument("--device", required=True)
     brave.add_argument("--profile", required=True)
+
+    notes = subparsers.add_parser("notes", help="a Markdown notes vault")
+    notes.add_argument("--entities", required=True, help="the vault root")
+
+    tasks = subparsers.add_parser("tasks", help="a todo.txt directory")
+    tasks.add_argument("--entities", required=True, help="the todo.txt directory")
     return parser
 
 
@@ -268,6 +280,10 @@ def _collect(
             profile=args.profile,
             captured_at=captured_at,
         )
+    elif args.source == "notes":
+        report = collect_notes(args.entities, generation, captured_at=captured_at)
+    elif args.source == "tasks":
+        report = collect_tasks(args.entities, generation, captured_at=captured_at)
     else:  # pragma: no cover - argparse rejects an unknown subcommand first
         raise ValidationError(f"unknown source {args.source!r}")
 

@@ -1,0 +1,41 @@
+[Unit]
+# One notes pass: the vault as it is on disk right now becomes a generation.
+#
+# One stage, no network and no secret. Unlike the provider collectors there is
+# nothing to dump or snapshot first: a vault is a directory of files, so the
+# collector is the only process, the vault is mounted read-only, and the replica
+# tree is the one writable mount. Being on no network is what makes the pass
+# harmless to repeat hourly.
+#
+# The pass is cheap: unchanged files are hard-linked from the previous generation
+# instead of rewritten, so a run that changes one note costs one object.
+#
+# A refusal exits 3 and publishes nothing. That is a failed unit on purpose, as
+# for the other collectors: a vault that vanished or turned into something the
+# collector will not read needs a human, and the timer is the only signal that
+# the replica stopped advancing.
+Description=Publish the Markdown vault into the personal replica
+Requires=zfs-ready@state-agent-local.service
+After=zfs-ready@state-agent-local.service
+# Nothing to publish before the vault is present; until then the timed run is
+# skipped rather than reported as broken.
+ConditionPathExists=/srv/files/vault
+
+[Service]
+Type=oneshot
+UMask=0077
+ExecStart=/usr/bin/podman run --rm --replace --name smortress-agent-collect-notes \
+  --network none \
+  --read-only --cap-drop=all --security-opt no-new-privileges \
+  --tmpfs /tmp:rw,size=16m --user 1000:1000 \
+  --volume /srv/files/vault:/entities:ro \
+  --volume /var/lib/agent/local/replica:/replica:z \
+  --env PYTHONPATH=/usr/lib/agent-facade/libs:/usr/lib/agent-facade \
+  --env PYTHONDONTWRITEBYTECODE=1 \
+  --entrypoint python3 \
+  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:ad09b16bcd897a585acfc04fa8ade4938ff4cdafb93030f5e575d3fc9716db74 \
+  -m data_plane.collectors.raw --root /replica/notes \
+  notes --entities /entities
+Restart=no
+# A vault of a few thousand files, each read once and hashed.
+TimeoutStartSec=300

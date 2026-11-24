@@ -279,6 +279,8 @@ RUN set -eux; \
       smortress-agent-brave-seed.service \
       smortress-agent-collect-brave.path \
       smortress-agent-collect-brave.timer \
+      smortress-agent-collect-notes.timer \
+      smortress-agent-collect-tasks.timer \
       var-lib-restic-ssd.mount \
       var-lib-restic-hdd.mount \
       smortress-restic-init.service \

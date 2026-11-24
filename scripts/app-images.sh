@@ -45,7 +45,10 @@ app_images=(
   # (llama.cpp PR #32694, merged 2026-11-20): the previous pin, b12464 of
   # 2026-11-17, cannot load an `inkling2_loop` GGUF at all.
   'agent-model|ghcr.io/ggml-org/llama.cpp:server-cuda|sha256:26f89ebd3bf17a5ecf6caee62bdabfa55abea3058150879f6f07b1fc786baa2d'
-  'agent-runtime|built:images/agent-runtime/Containerfile|sha256:4ea73e6d91eee0f056bab192c63b898a3a259ec11dc4738a43a6e79e9fbc5ed2'
+  # d773 is the first build whose facade can bind the `notes` and `tasks`
+  # replicas: the previous pin has their contracts and no projector, so the
+  # personal quadlet's flags made the facade refuse to start.
+  'agent-runtime|built:images/agent-runtime/Containerfile|sha256:ad09b16bcd897a585acfc04fa8ade4938ff4cdafb93030f5e575d3fc9716db74'
   # Built by this repository (SDLC #775), not mirrored: upstream's entrypoint
   # installs its Python dependencies from PyPI at container start, which a sealed
   # deployment can never do. The digest is the publish-agent-webui run for the
