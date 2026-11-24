@@ -86,44 +86,18 @@ else
   printf 'skip tofu fmt/validate (tofu not on PATH; CI runs both)\n'
 fi
 
-echo "== default-deny"
-wildcard_count=$(grep -Ec '^[[:space:]]*uri[[:space:]]*=[[:space:]]*"\*\.' "$work/code.tf")
-eq "$wildcard_count" "1" "exactly one Access destination is a wildcard"
-
-wildcard_app=$(extract cloudflare_zero_trust_access_application.wildcard)
-if [[ -n $wildcard_app ]]; then ok "the wildcard destination belongs to cloudflare_zero_trust_access_application.wildcard"; else bad "wildcard Access application exists"; fi
-if grep -qF 'uri  = "*.${var.domain}"' <<<"$wildcard_app"; then ok "wildcard application covers *.<zone>"; else bad "wildcard application covers *.<zone>"; fi
-if grep -q 'cloudflare_zero_trust_access_policy.email.id' <<<"$wildcard_app"; then ok "wildcard application allows the owner email"; else bad "wildcard application allows the owner email"; fi
-if grep -q 'cloudflare_zero_trust_access_policy.bypass.id' <<<"$wildcard_app"; then bad "wildcard application has no bypass policy"; else ok "wildcard application has no bypass policy"; fi
-if grep -q 'cloudflare_zero_trust_access_policy.service_auth.id' <<<"$wildcard_app"; then bad "wildcard application grants no service-token access"; else ok "wildcard application grants no service-token access"; fi
-
-if grep -q 'decision   = "bypass"' "$work/code.tf"; then ok "a bypass policy exists"; else bad "a bypass policy exists"; fi
-bypass_uses=$(grep -c 'cloudflare_zero_trust_access_policy.bypass.id' "$work/code.tf")
-eq "$bypass_uses" "1" "the bypass policy is attached to exactly one resource (the public set)"
-
-public_app=$(extract cloudflare_zero_trust_access_application.public)
-if grep -q 'for_each = local.public_apps' <<<"$public_app"; then ok "public applications iterate local.public_apps"; else bad "public applications iterate local.public_apps"; fi
-for host in photos music opds ntfy; do
-  if grep -qE "^[[:space:]]*\"${host}\",$" "$work/code.tf"; then ok "public application: $host"; else bad "public application: $host"; fi
-done
-
-echo "== protected applications"
-for app in memory agent; do
-  block=$(extract "cloudflare_zero_trust_access_application.${app}")
-  if [[ -z $block ]]; then
-    bad "application ${app} exists"
-    continue
-  fi
-  ok "application ${app} exists"
-  if grep -q 'cloudflare_zero_trust_access_policy.email.id' <<<"$block"; then ok "${app} allows the owner email"; else bad "${app} allows the owner email"; fi
-done
-for app in memory agent; do
-  if grep -q 'cloudflare_zero_trust_access_policy.service_auth.id' <<<"$(extract "cloudflare_zero_trust_access_application.${app}")"; then
-    ok "${app} accepts any valid service token"
-  else
-    bad "${app} accepts any valid service token"
-  fi
-done
+# Access is gone (SDLC #833 T1): nothing in the zone is behind the gate any
+# more, so the applications and policies must not come back. Absence, not shape:
+# a re-introduced block fails here rather than passing silently.
+echo "== no Access objects"
+hasnt "no Access application is declared" 'resource[[:space:]]+"cloudflare_zero_trust_access_application"'
+hasnt "no Access policy is declared" 'resource[[:space:]]+"cloudflare_zero_trust_access_policy"'
+absent cloudflare_zero_trust_access_application.wildcard 'the wildcard default-deny application is gone'
+absent cloudflare_zero_trust_access_application.public 'the public bypass application set is gone'
+absent cloudflare_zero_trust_access_policy.email 'the owner email policy is gone'
+absent cloudflare_zero_trust_access_policy.service_auth 'the service-auth policy is gone'
+absent cloudflare_zero_trust_access_policy.bypass 'the bypass policy is gone'
+hasnt "local.public_apps is gone with the public set" 'local\.public_apps'
 
 # No Cloudflare SSH route (design #767 T6). SSH is tailnet-only, so the edge
 # objects that carried it are gone and must stay gone: an `ssh` application, a
@@ -143,8 +117,9 @@ fi
 # and its Pages domain are retired.
 #
 # The name has NO identity gate (design #701, re-affirmed 2026-11-20): family
-# has to reach the reader with nothing set up in advance, so it carries a
-# public bypass application and the reader's own password is the only login.
+# has to reach the reader with nothing set up in advance, and since #833 T1 no
+# Access object is left to carry one, so the reader's own password is the only
+# login.
 # What makes that acceptable is the write denial at the Backrest and R2 layers,
 # which the exposed surface is: `docs/core/backrest.md`.
 absent cloudflare_zero_trust_access_application.backrest 'no Access application gates recovery.<zone>'
@@ -170,35 +145,14 @@ else
   ok "no nanobot application remains"
 fi
 
-# Kanbei is a public hostname behind Access (SDLC #586). The private WARP route
-# is retired: it never got a client past the edge certificate, and a public
-# hostname needs no client component.
+# Kanbei's Access application is deleted (#833 T1), as is the private WARP route
+# it replaced; its only DNS path left is the wildcard, which #833 T2 removes.
 echo "== kanbei access application"
+absent cloudflare_zero_trust_access_application.kanbei 'no kanbei Access application is declared'
 if [[ -n $(extract cloudflare_zero_trust_network_hostname_route.kanbei) ]]; then
   bad "the private kanbei hostname route is gone"
 else
   ok "the private kanbei hostname route is gone"
-fi
-kanbei_app=$(extract cloudflare_zero_trust_access_application.kanbei)
-if [[ -z $kanbei_app ]]; then
-  bad "kanbei Access application exists"
-else
-  ok "kanbei Access application exists"
-  if grep -qF 'uri  = "kanbei.${var.domain}"' <<<"$kanbei_app"; then ok "kanbei publishes kanbei.<zone>"; else bad "kanbei publishes kanbei.<zone>"; fi
-  if grep -qF 'type = "public"' <<<"$kanbei_app"; then ok "kanbei destination is public"; else bad "kanbei destination is public"; fi
-  if grep -q 'cloudflare_zero_trust_access_policy.email.id' <<<"$kanbei_app"; then ok "kanbei allows the owner email"; else bad "kanbei allows the owner email"; fi
-  # The account service-auth decision accepts any valid token in the account
-  # (the agent's included), so the app must attach exactly the owner policy.
-  eq "$(grep -c 'cloudflare_zero_trust_access_policy\.' <<<"$kanbei_app")" "1" \
-    "kanbei attaches exactly one Access policy"
-  if grep -q 'cloudflare_zero_trust_access_policy.service_auth.id' <<<"$kanbei_app"; then
-    bad "kanbei has no service-token policy"
-  else
-    ok "kanbei has no service-token policy"
-  fi
-  if grep -q 'cloudflare_zero_trust_access_policy.bypass.id' <<<"$kanbei_app"; then bad "kanbei has no bypass policy"; else ok "kanbei has no bypass policy"; fi
-  if grep -qF 'prevent_destroy = true' <<<"$kanbei_app"; then ok "kanbei application is protected from destroy"; else bad "kanbei application is protected from destroy"; fi
-  if grep -qF 'allow_authenticate_via_warp = true' <<<"$kanbei_app"; then ok "kanbei lets a WARP client skip the login"; else bad "kanbei lets a WARP client skip the login"; fi
 fi
 hasnt "kanbei has no public DNS record" '^[[:space:]]*name[[:space:]]*=[[:space:]]*"kanbei\.'
 hasnt "kanbei has no tunnel ingress rule" 'kanbei[[:space:]]*=[[:space:]]*"http'
@@ -404,8 +358,7 @@ fi
 echo "== preserved objects"
 for addr in cloudflare_pages_project.recovery cloudflare_r2_bucket_cors.restic \
   cloudflare_notification_policy.tunnel_health cloudflare_notification_policy.service_token_expiry \
-  cloudflare_ruleset.dav_rate_limit cloudflare_zero_trust_access_policy.email \
-  cloudflare_zero_trust_access_policy.service_auth; do
+  cloudflare_ruleset.dav_rate_limit; do
   if [[ -n $(extract "$addr") ]]; then ok "preserved: $addr"; else bad "preserved: $addr"; fi
 done
 has 'tunnel health covers both tunnels' 'tunnel_id = compact\(\[var\.host_tunnel_id, var\.cluster_tunnel_id\]\)'
