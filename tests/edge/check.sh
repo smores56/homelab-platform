@@ -4,8 +4,9 @@
 # The probe cannot reach the VPS from CI, so the script's own contract is what
 # is tested here: it fails when a name is down, when Immich's paths answer as
 # anything but the app (a wallpaper listing, the agent gateway's 404), when
-# OPDShelf's paths lose their auth challenge, and when a certificate does not
-# verify or is close to expiry.
+# OPDShelf's paths lose their auth challenge, when the recovery page is not
+# Backrest's behind its guard, and when a certificate does not verify or is
+# close to expiry.
 #
 #   tests/edge/check.sh
 set -uo pipefail
@@ -59,6 +60,7 @@ printf 'HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n' >"$hdr"
 case $STUB_MODE in
     down)
         [[ $url == https://photos.sammohr.dev/ ]] && code=502
+        [[ $url == https://recovery.sammohr.dev/ ]] && code=502
         ;;
     leak)
         if [[ $url == https://photos.sammohr.dev/wallpapers/ ]]; then
@@ -77,6 +79,18 @@ case $url in
             code=401
             : >"$body"
             printf 'HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm="opdshelf"\r\n\r\n' >"$hdr"
+        fi
+        ;;
+    https://recovery.sammohr.dev/*)
+        if [[ ${STUB_MODE:-} == wrongbody ]]; then
+            printf '%s' '<!doctype html><pre><a href="Backrest/">x</a></pre>' >"$body"
+            printf 'HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nServer: Caddy\r\nServer: backrest-guard\r\n\r\n' >"$hdr"
+        elif [[ ${STUB_MODE:-} == noguard ]]; then
+            printf '%s' '<!doctype html><html><head><title>Backrest</title></head></html>' >"$body"
+            printf 'HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nServer: Caddy\r\n\r\n' >"$hdr"
+        else
+            printf '%s' '<!doctype html><html><head><title>Backrest</title></head></html>' >"$body"
+            printf 'HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nServer: Caddy\r\nServer: backrest-guard\r\n\r\n' >"$hdr"
         fi
         ;;
 esac
@@ -105,8 +119,13 @@ run() {
 
 run
 eq "$?" 0 'a healthy edge exits 0'
-eq "$(grep -c '^ok' "$work/out")" 10 'two names, two certificates and three paths each'
+eq "$(grep -c '^ok' "$work/out")" 13 'three names, three certificates, three paths each and Backrest'
 eq "$(grep -c '^FAIL' "$work/out")" 0 'nothing fails on a healthy edge'
+if grep -qF 'ok   recovery.sammohr.dev answers as Backrest' "$work/out"; then
+    ok 'the recovery page answers as Backrest'
+else
+    bad 'the recovery page answers as Backrest' "$(cat "$work/out")"
+fi
 if grep -qF -- '-verify_hostname opds.sammohr.dev' "$work/ossl.log"; then
     ok 'the certificate is verified for the name, not just for any name'
 else
@@ -164,6 +183,40 @@ if grep -qF "FAIL /apps/agent-local/v1 answers as OPDShelf's auth" "$work/out"; 
     ok 'the failure names the path and the name'
 else
     bad 'the failure names the path and the name' "$(cat "$work/out")"
+fi
+
+STUB_MODE=down
+run
+eq "$?" 1 'a recovery origin answering 502 fails the run'
+if grep -qF 'FAIL recovery.sammohr.dev answers over TLS' "$work/out"; then
+    ok 'the recovery failure names the name that did not answer'
+else
+    bad 'the recovery failure names the name that did not answer' "$(cat "$work/out")"
+fi
+
+STUB_MODE=wrongbody
+run
+eq "$?" 1 'a page that is not Backrest fails the run'
+# The stub answers 200 text/html, so only the signature can tell: the status
+# probe stays green while the signature probe does not.
+if grep -qF 'ok   recovery.sammohr.dev answers over TLS (200)' "$work/out"; then
+    ok 'the wrong page still looks healthy by status alone'
+else
+    bad 'the wrong page still looks healthy by status alone' "$(cat "$work/out")"
+fi
+if grep -qF 'FAIL recovery.sammohr.dev answers as Backrest' "$work/out"; then
+    ok 'the signature failure names the page that was not Backrest'
+else
+    bad 'the signature failure names the page that was not Backrest' "$(cat "$work/out")"
+fi
+
+STUB_MODE=noguard
+run
+eq "$?" 1 'a page without the backrest-guard server fails the run'
+if grep -qF 'FAIL recovery.sammohr.dev answers as Backrest' "$work/out"; then
+    ok 'Backrest without its guard is not accepted as the recovery page'
+else
+    bad 'Backrest without its guard is not accepted as the recovery page' "$(cat "$work/out")"
 fi
 
 STUB_MODE=
