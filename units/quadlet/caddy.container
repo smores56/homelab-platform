@@ -18,6 +18,14 @@
 # dataset would be shadowed the moment the dataset mounts, and Caddy would
 # register a second account for a zone that is already validated.
 #
+# /config is a writable mount for the read-only root filesystem's sake: upstream's
+# image keeps its config there and autosaves what it loaded, so ReadOnly=true
+# logged `unable to autosave config: /config/caddy/autosave.json: read-only file
+# system` on every start. The directory is the one the image expects to write,
+# inside the same dataset, so dropping the read-only root filesystem is not the
+# fix; a mount is. `admin off` in the Caddyfile is unrelated: that removes the
+# API, and the autosave happens whatever it says.
+#
 # The Caddyfile is mounted read-only from /usr/share/smortress, the path bootc
 # updates with the deployment; /etc is merged once, so a site added by a later
 # image would never reach an existing host. (The egress containers mount theirs
@@ -49,6 +57,7 @@ User=1000:1000
 # trailing newline, which is the whole difference.
 Volume=/usr/share/smortress/Caddyfile:/etc/caddy/Caddyfile:ro
 Volume=/var/lib/caddy:/data:z
+Volume=/var/lib/caddy/config:/config:z
 Secret=cloudflare-acme-token
 Exec=/bin/sh -c 'exec env CF_API_TOKEN="$(cat /run/secrets/cloudflare-acme-token)" caddy run --config /etc/caddy/Caddyfile'
 ReadOnly=true

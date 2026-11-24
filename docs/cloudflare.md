@@ -346,7 +346,7 @@ Static half — no credentials, what CI runs:
 tests/tofu/check.sh
 ```
 
-Expected: `tofu: 253 passed, 0 failed` with `tofu` on `PATH`; 251 without it, because the fmt/validate pair skips (CI runs both). The count grows with the config.
+Expected: `tofu: 258 passed, 0 failed` with `tofu` on `PATH`; 256 without it, because the fmt/validate pair skips (CI runs both). The count grows with the config.
 
 Runtime half — needs a token that can read Access:
 

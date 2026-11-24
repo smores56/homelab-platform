@@ -728,7 +728,10 @@ has 'the policy admits the edge to the two Serve ports' '"tag:smortress:8446", "
 has 'the policy admits the owner to the edge' '"tag:vps:22"'
 has 'the policy admits the deploy receiver' '"tag:smortress:8484"'
 has 'the deploy tag is owned by the owner group' '"tag:deploy"[[:space:]]*=[[:space:]]*\["group:owner"\]'
-has 'a test proves the deploy node reaches only the receiver' 'accept[[:space:]]*=[[:space:]]*\["tag:smortress:8484"\]'
+has 'a test proves the deploy node reaches the receiver and the names probe its port' \
+  'accept[[:space:]]*=[[:space:]]*\["tag:smortress:8484", "svc:agent-ui:443"\]'
+has 'a test proves the deploy node reaches no other host port' \
+  'deny[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8446", "tag:smortress:8447", "tag:vps:22"\]'
 has 'the policy carries tests' 'tests[[:space:]]*=[[:space:]]*\['
 has 'a test proves every admitted port reaches the owner' \
   'accept[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:10000", "tag:smortress:22000", "tag:vps:22", "svc:agent-ui:443"\]'
@@ -762,15 +765,25 @@ has 'the grant names the one service port' 'ip[[:space:]]*=[[:space:]]*\["443"\]
 has 'the grant source is the owner group' 'grants[[:space:]]*=[[:space:]]*\['
 has 'the host auto-approves the Service' '"svc:agent-ui"[[:space:]]*=[[:space:]]*\["tag:smortress"\]'
 has 'the auto-approver is declared under services' 'autoApprovers[[:space:]]*=[[:space:]]*\{'
-# Both UI names ride this one Service, so the grant and the deny tests below
-# cover both: the destination is the service and the port, never the name, and a
-# second grant would be the only thing a second address could add.
-eq "$(grep -cE 'dst[[:space:]]*=[[:space:]]*\["svc:agent-ui"\]' "$work/code.tf")" "1" \
-  "one grant covers both names"
-# One accept and three denies: a fourth deny would be a tag that no longer exists,
-# and a fifth entry would widen the admitted set without a test to catch it.
+# Both UI names ride this one Service, so one grant per admitted source covers
+# them: the destination is the service and the port, never the name. Two grants
+# are the whole admitted set -- the owner's (#834) and the CI names probe's
+# (#848) -- so a third, or a second port on either, is a widening nobody decided.
+grants=$(awk '/^    grants = \[/ { f = 1 } f { print } f && /^    \]/ { exit }' "$work/code.tf")
+if [[ -z $grants ]]; then
+  bad "the grants list is declared"
+else
+  ok "the grants list is declared"
+  eq "$(grep -cE '^        src = ' <<<"$grants")" "2" 'the Service is granted to exactly two sources'
+  if grep -qF 'src = ["group:owner"]' <<<"$grants"; then ok 'the owner is one of them'; else bad 'the owner is one of them'; fi
+  if grep -qF 'src = ["tag:deploy"]' <<<"$grants"; then ok 'the names probe is the other'; else bad 'the names probe is the other'; fi
+  eq "$(grep -cF 'ip  = ["443"]' <<<"$grants")" "2" 'both grants name the one Service port'
+fi
+# Two accepts and two denies: the owner and the probe reach the port, the edge
+# (tag:vps) and a device in no group (tag:untrusted) do not. A fifth entry would
+# be a destination no other test keeps out.
 eq "$(grep -cF -- '"svc:agent-ui:443"' "$work/code.tf")" "4" \
-  "the Service port is one accept and three denies in the tests"
+  "the Service port is two accepts and two denies in the tests"
 has 'the tailscale provider is declared' 'provider "tailscale" \{\}'
 has 'the tailscale provider is pinned to the 0.29 line' 'version[[:space:]]*=[[:space:]]*"~> 0\.29'
 if grep -qE 'oauth_client_(id|secret)[[:space:]]*=[[:space:]]*"[^"]' "$work/code.tf"; then

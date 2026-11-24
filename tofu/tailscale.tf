@@ -60,10 +60,11 @@ locals {
         dst    = ["tag:vps:22"]
       },
       {
-        # The deploy receiver (design #798). A CI job carries tag:deploy for the
-        # length of one run and may reach exactly one port: the receiver's
-        # tailnet-served TCP forward on loopback. Every other port on the host
-        # stays owner-only, and the deny test below keeps it that way.
+        # The deploy receiver (design #798) and the names probe (#848). A CI job
+        # carries tag:deploy for the length of one run and may reach exactly two
+        # destinations: the receiver's tailnet-served TCP forward on loopback and,
+        # through the grant below, the UI Service's one port. Every other port on
+        # the host stays owner-only, and the deny test below keeps it that way.
         action = "accept"
         src    = ["tag:deploy"]
         dst    = ["tag:smortress:8484"]
@@ -79,11 +80,23 @@ locals {
 
     # A Service VIP is an address the tailnet owns rather than one a device
     # holds, so it cannot be named as an `acl` destination: that form is a host's
-    # port, and the VIP is no host. A grant names the service instead, and only
-    # the owner may reach its one port (design #834).
+    # port, and the VIP is no host. A grant names the service instead, and exactly
+    # two sources reach its one port (design #834): the owner, and the CI probe
+    # (#848), which is worth nothing unless it is not the owner.
     grants = [
       {
         src = ["group:owner"]
+        dst = ["svc:agent-ui"]
+        ip  = ["443"]
+      },
+      {
+        # The names probe, from `.github/workflows/verify-tailnet-names.yml`: a
+        # node carrying tag:deploy for the length of one run resolves both names,
+        # verifies the certificate and follows the UI's login redirect. It is the
+        # one non-owner client, so it is also the only way the names are proven to
+        # work for anyone but the owner. Nothing else grows with it: the deny test
+        # for tag:deploy minus this destination is what keeps it a probe.
+        src = ["tag:deploy"]
         dst = ["svc:agent-ui"]
         ip  = ["443"]
       },
@@ -156,13 +169,19 @@ locals {
         deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8484", "svc:agent-ui:443"]
       },
       {
-        # The deploy node reaches the receiver and nothing else.
+        # The deploy node reaches the receiver and the names probe reaches the UI
+        # Service; those two are the whole admitted set for the tag. A third
+        # destination has to be added here or this list fails the policy save.
         src    = "tag:deploy"
-        accept = ["tag:smortress:8484"]
+        accept = ["tag:smortress:8484", "svc:agent-ui:443"]
       },
       {
+        # Everything else stays closed to tag:deploy, the Service port included
+        # only through the grant above: a deny test may not name a destination a
+        # grant admits, so `svc:agent-ui:443` moved out of this list in #848. The
+        # remaining entries are every other destination any rule admits.
         src  = "tag:deploy"
-        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8446", "tag:smortress:8447", "tag:vps:22", "svc:agent-ui:443"]
+        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8446", "tag:smortress:8447", "tag:vps:22"]
       },
     ]
   }
