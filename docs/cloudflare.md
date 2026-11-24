@@ -114,7 +114,7 @@ plan that offers to create any of them is a re-introduction, not a migration.
 | --- | --- | --- |
 | `tofu/main.tf` | `tofu/main.tf`, `tofu/dns.tf`, `tofu/rate-limit.tf` | split by object family; resource addresses unchanged |
 | `tofu/access.tf` | `tofu/access.tf` | a note since SDLC #833: the file declares nothing |
-| `tofu/r2.tf` | `tofu/r2.tf` | verbatim; the bucket's browser CORS policy is retired (SDLC #833) |
+| `tofu/r2.tf` | `tofu/r2.tf` | note only since SDLC #833: the restic bucket predates tofu and the browser CORS policy that was the file's one resource is retired |
 | `tofu/variables.tf` | `tofu/variables.tf` | `tunnel_id` and the tunnel/cluster inputs are gone with the tunnels |
 | `tofu/versions.tf` | `tofu/versions.tf` | provider and zone lookup only |
 | `tofu/.terraform.lock.hcl` | `tofu/.terraform.lock.hcl` | re-resolved to 5.28.1 on bootstrap |

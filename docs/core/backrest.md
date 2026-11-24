@@ -127,25 +127,29 @@ the only slot the ruleset has. The rule it displaced covered `photos`, `music`
 and `opds` at 1000 requests per 10 s per IP with the same 10 s mitigation, sized
 for an Immich timeline scroll.
 
-That rule was live, which is why losing it is a residual and not a cleanup: all
-three names were served through the zone's cluster tunnel, since retired by SDLC
-#833, with `photos` fronting `immich-server.immich.svc.cluster.local`. Immich is
-not tailnet-only — the name has a public bypass application precisely because
-mobile clients cannot complete an Access login — so the phase saw that traffic
-and the budget applied to it.
+That rule was live, which is why losing it is a residual and not a cleanup. In
+the tunnel era all three names were served by the zone's cluster tunnel, since
+retired by SDLC #833, with `photos` fronting
+`immich-server.immich.svc.cluster.local`. Immich was not tailnet-only: the name
+carried a public Access bypass application, because mobile clients cannot
+complete an Access login. That application and that tunnel are both gone with
+the rest of the zone's Access objects and tunnels (SDLC #833), and the names are
+grey `A` records at the edge VPS, so nothing in Cloudflare sits in their path to
+rate-limit at all.
 
-The cost is bandwidth: one IP in one colo can now burst past 1000 requests per
-10 s against those hosts without the edge blocking it, and each media app's own
-login is the only thing behind that burst. The bandwidth itself is already paid
-for — the zone's request allowance and the tunnel carry the same traffic either
-way, and the rule never gated access, only rate. For `opds` the loss is sharpest,
-because the per-IP budget was its only request-rate control.
+The surviving residual is the VPS: it has no per-IP request budget in front of
+`photos` or `opds` beyond Caddy's own limits, so one IP in one colo can burst
+past 1000 requests per 10 s against the box and each media app's own login is
+the only thing behind that burst. The bandwidth is already paid for — the ctrl
+panel's transfer allowance in `docs/core/public-edge.md` carries that traffic
+whichever layer meters it, and the displaced rule never gated access, only rate.
+`opds` had no other request-rate control before, and has none now.
 
 Revisit the choice on observed abuse: a sustained burst from one IP or one colo in
-the `photos`, `music` or `opds` logs, or egress past what the tunnel already
-carries, is the evidence that the media budget is worth more than the login one.
-Until then the slot stays with the reader, because it is the only public surface
-in the zone with no Access gate in front of it.
+the `photos` or `opds` logs, or transfer past the VPS plan's allowance, is the
+evidence that the media budget is worth more than the login one. Until then the
+slot stays with the reader, which has no identity gate at all — Backrest's own
+password is the only login.
 
 Backrest has no read-only role, and its admin API is one request away from
 `auth.disabled: true`. The Worker is therefore the boundary, not a pass-through:

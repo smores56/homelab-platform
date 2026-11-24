@@ -1286,8 +1286,9 @@ than by a deny policy. The live proof of what the zone serves is the public
 probe, which resolves the names and checks each answers as its own application:
 
 ```sh
-curl -sS -o /dev/null -D - https://nothing-here.sammohr.dev/ | head -3
-# expect: NXDOMAIN, never an application page
+dig +short nothing-here.sammohr.dev
+# expect: no output. Empty answer means the name has no record in the zone, so
+# the resolver returns NXDOMAIN — an answer here is a name that was re-created
 scripts/verify-public-edge.sh     # photos and opds, over valid TLS
 ```
 
@@ -1327,17 +1328,32 @@ checkout.
 
 ```sh
 ./scripts/tofu-cloudflare.sh plan -no-color     # expect: 5 to destroy, 0 to add, 0 to change
-gh workflow run tofu-apply.yml                  # refuses a destructive plan unattended
+gh workflow run tofu-apply.yml                  # dispatch applies the destroys (it IS the approval)
 ./scripts/tofu-cloudflare.sh state list | grep ssh || echo "no ssh objects in state"
 ```
 
 A replace or a destroy anywhere else means the state and the config disagree: stop
-and compare. The tunnel object itself was created in the dashboard and this
-repository never owned it, so with the ingress gone it has no rules and no
-connector: it is deleted in Zero Trust → Networks → Tunnels, and SDLC #833 took
-the surviving host tunnel with it. Both lists are now empty — Access →
-Applications and Networks → Tunnels hold nothing for this zone — so an entry that
-reappears there is drift to delete, not a step in this order.
+and compare. The two tunnel objects are not in `tofu/` state and never were —
+one was created in the dashboard and the other went with the cluster tree — so
+the apply cannot delete them and the account is the only place to prove they are
+gone. List them, and delete any that come back:
+
+```sh
+account=$(awk -F'"' '/^account_id/ { print $2 }' tofu/terraform.tfvars)
+export CLOUDFLARE_API_TOKEN=$(sops -d --extract '["platform-zone-rw-api-token"]' secrets/cloudflare.yaml)
+curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+  "https://api.cloudflare.com/client/v4/accounts/$account/cfd_tunnel?is_deleted=false" |
+  jq -r '.result[] | "\(.id)  \(.name)  \(.status)"'
+# expect: no output — the account holds no live tunnel, so nothing is left to join
+curl -sS -X DELETE -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+  "https://api.cloudflare.com/client/v4/accounts/$account/cfd_tunnel/<tunnel-id>"  # only for an id listed above
+```
+
+An empty listing, an empty Access → Applications list and a `tofu` plan with no
+destroy left are the three proofs; the dashboard equivalent of the listing is
+Zero Trust → Networks → Tunnels. An entry that reappears in either list is drift
+to delete, not a step in this order: nothing in `tofu/` creates a tunnel any
+more, so an apply cannot have made it.
 
 ### Remove the reader's Access gate
 
@@ -1349,7 +1365,7 @@ dashboard deletion before the apply.
 
 ```sh
 ./scripts/tofu-cloudflare.sh plan -no-color     # expect: destroys only, or no changes once applied
-gh workflow run tofu-apply.yml                  # refuses a destructive plan unattended
+gh workflow run tofu-apply.yml                  # dispatch applies the destroys (it IS the approval)
 curl -sS -o /dev/null -D - https://recovery.sammohr.dev/ | head -3
 ```
 

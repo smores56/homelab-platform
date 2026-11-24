@@ -133,6 +133,12 @@ if grep -qE '^[[:space:]]*"recovery",$' "$work/code.tf"; then
 else
   ok "recovery is no longer a public bypass hostname"
 fi
+# The static page's own objects went with it (#833 T3): the Pages project and
+# the R2 browser CORS policy existed only so a browser could fetch the
+# repository directly, which the reader replaced with server-side reads. Absence,
+# not shape: a re-added block fails here.
+hasnt "no Pages project is declared" 'resource[[:space:]]+"cloudflare_pages_project"'
+hasnt "no R2 bucket CORS policy is declared" 'resource[[:space:]]+"cloudflare_r2_bucket_cors"'
 
 # nanobot.sammohr.dev is retired in favour of agent.sammohr.dev (SDLC #583).
 if [[ -n $(extract cloudflare_zero_trust_access_application.nanobot) ]]; then
