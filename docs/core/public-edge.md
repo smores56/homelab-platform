@@ -62,9 +62,9 @@ tests for every other port.
 
 Let's Encrypt, TLS-ALPN-01 only: the Caddyfile disables the HTTP challenge and
 `auto_https disable_redirects` keeps Caddy off port 80, which is never opened.
-No CAA record names the edge account — the zone's policy names the CA, not an
-ACME account (`docs/cloudflare.md`, "CAA"), so a rebuild's freshly registered
-account is authorized as soon as it orders.
+The zone's `CAA` records name the CA, not the edge's ACME account
+(`docs/cloudflare.md`, "CAA"), so a rebuild's freshly registered account is
+authorized as soon as it orders.
 
 **Issuance needs the public name, so it happens after the cutover.** ACME
 validates `photos.sammohr.dev` and `opds.sammohr.dev` by resolving them: while
@@ -218,8 +218,10 @@ Both halves are outside the repository's own checks, and
   certificate `kanbei.sammohr.dev` serves, and requires the issuer's CA domain in
   an `issue`/`issuewild` value — Google Trust Services to `pki.goog`, Let's
   Encrypt to `letsencrypt.org`, DigiCert to `digicert.com`, Sectigo to
-  `sectigo.com`, ZeroSSL to `zerossl.com`. An empty CAA set is a notice and
-  passes: there is nothing to assert until the records land.
+  `sectigo.com`, ZeroSSL to `zerossl.com`. The served issuer is admitted by the
+  union of the two `letsencrypt.org` records this repository declares and the CA
+  set Cloudflare appends for the proxied names; an empty set is a notice, not a
+  failure, which keeps the check meaningful for a zone that has none.
 
 ## The operator order
 

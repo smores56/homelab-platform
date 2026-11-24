@@ -96,3 +96,49 @@ resource "cloudflare_dns_record" "agent" {
   ttl     = 300
   comment = "general agent UI Service VIP (design #834, task #847)"
 }
+
+# The zone's CAA policy (design #842 T4) names a CA, never an ACME account. A
+# value may carry `accounturi=`, but that string is compared literally against
+# the account in the CSR, so it authorizes exactly one account on one directory:
+# the edge's Caddy account is re-registered by a rebuild and the account it
+# replaces is gone, so an account pin would turn a routine rebuild into an
+# outage that first surfaces weeks later at renewal. Naming the CA alone is what
+# survives a rebuild: the new account orders from the same directory and the
+# same issuer, and this policy already admits it.
+#
+# These two records authorize the unproxied names Caddy orders for
+# (`photos`/`opds`/`recovery` here, `assistant`/`agent` on smortress): grey-cloud
+# records reach the origin directly, so Let's Encrypt reads this set. A wildcard
+# order is not authorized by `issue`, hence the second tag.
+#
+# The proxied names answer from Cloudflare's edge, where the certificate is
+# Cloudflare's to order. With Universal SSL the zone's answer also carries the
+# CA set Cloudflare appends to any zone with a CAA record, and CAA admits
+# issuance if *any* matching set permits it, so the served issuer is admitted by
+# the union (docs/cloudflare.md, "CAA"). `scripts/verify-caa.sh` asserts that
+# union against the certificate actually served.
+resource "cloudflare_dns_record" "caa_issue" {
+  zone_id = data.cloudflare_zone.this.zone_id
+  name    = var.domain
+  type    = "CAA"
+  data = {
+    flags = 0
+    tag   = "issue"
+    value = "letsencrypt.org"
+  }
+  ttl     = 3600
+  comment = "unpinned CA policy for the public edge (design #842)"
+}
+
+resource "cloudflare_dns_record" "caa_issuewild" {
+  zone_id = data.cloudflare_zone.this.zone_id
+  name    = var.domain
+  type    = "CAA"
+  data = {
+    flags = 0
+    tag   = "issuewild"
+    value = "letsencrypt.org"
+  }
+  ttl     = 3600
+  comment = "wildcard orders need their own tag (design #842)"
+}

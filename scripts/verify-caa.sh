@@ -6,9 +6,9 @@
 # weeks before anyone notices. The issuer organization is what maps to a CA
 # domain, not the CN, because the CA rotates WE1/WE2/E1 between certificates.
 #
-# An empty CAA set is a notice, not a failure: until the records land there is
-# nothing to assert, and a check that is red because of a missing record teaches
-# the operator to ignore it. `dig` ships with the runner image; a host without it
+# An empty CAA set is a notice, not a failure: with no record there is nothing to
+# assert, and a check that is red because of a missing record teaches the
+# operator to ignore it. `dig` ships with the runner image; a host without it
 # fails loudly here rather than skipping the assertion.
 #
 #   scripts/verify-caa.sh
