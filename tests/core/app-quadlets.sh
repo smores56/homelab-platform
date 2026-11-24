@@ -829,7 +829,7 @@ for spec in personal:local:18004 general:general:18005; do
   # The derived source index is personal: every raw collector is, so the general
   # deployment has no replica to index and takes neither the flag nor the mount.
   if [[ $deployment == personal ]]; then
-    for source in mail calendar finance brave; do
+    for source in mail calendar finance brave notes tasks; do
       if [[ " $exec_line " == *" --replica $source=/replica/$source "* ]]; then
         ok "$q serves $source from its published generation"
       else
@@ -1125,6 +1125,78 @@ for collector_case in "${collector_cases[@]}"; do
     fi
   else
     bad "$collector_timer exists"
+  fi
+done
+
+# 8.0. The two local-file collectors: a vault and a todo directory need no
+#      provider, no network and no secret, so none of the shared case above
+#      applies. What they must never grow is exactly that -- an address, a
+#      credential, or a writable source -- and what they must carry is the
+#      read-only source mount and the writable replica tree.
+local_collectors=(
+  "notes|units/systemd/smortress-agent-collect-notes.service|units/systemd/smortress-agent-collect-notes.timer|/srv/files/vault"
+  "tasks|units/systemd/smortress-agent-collect-tasks.service|units/systemd/smortress-agent-collect-tasks.timer|/srv/files/todo"
+)
+for local_case in "${local_collectors[@]}"; do
+  IFS='|' read -r name local_unit local_timer source_dir <<<"$local_case"
+  if [[ -f $local_unit ]]; then
+    ok "$local_unit exists"
+  else
+    bad "$local_unit exists"
+    continue
+  fi
+  eq "$(grep -cE '^ExecStart=' "$local_unit")" 1 "$name collector is one stage"
+  if grep -qE -- '--network none([[:space:]\\]|$)' "$local_unit"; then
+    ok "$name collector has no address at all"
+  else
+    bad "$name collector has no address at all"
+  fi
+  if grep -qE -- '--network (systemd-agent-collect|agent-(local|general))\b' "$local_unit"; then
+    bad "$name collector names no network"
+  else
+    ok "$name collector names no network"
+  fi
+  if grep -qF -- "--volume $source_dir:/entities:ro" "$local_unit"; then
+    ok "$name collector mounts its source read-only"
+  else
+    bad "$name collector mounts its source read-only"
+  fi
+  if grep -qF -- '--volume /var/lib/agent/local/replica:/replica:z' "$local_unit"; then
+    ok "$name collector writes one replica tree"
+  else
+    bad "$name collector writes one replica tree"
+  fi
+  for flag in '--read-only' '--cap-drop=all' '--security-opt no-new-privileges' '--user 1000:1000'; do
+    if grep -qF -- "$flag" "$local_unit"; then
+      ok "$name collector runs with $flag"
+    else
+      bad "$name collector runs with $flag"
+    fi
+  done
+  if grep -qE -- '--secret|/run/secrets|-e [A-Z_]+=' "$local_unit"; then
+    bad "$name collector holds no secret"
+  else
+    ok "$name collector holds no secret"
+  fi
+  if grep -qE -- '--entrypoint python3' "$local_unit" &&
+    grep -qF -- "$name --entities /entities" "$local_unit"; then
+    ok "$name collector runs the collector subcommand"
+  else
+    bad "$name collector runs the collector subcommand"
+  fi
+  while IFS= read -r image; do
+    if app_image_matches "$image"; then
+      ok "$name collector runs a pinned image from the table"
+    else
+      bad "$name collector runs a pinned image from the table" "$image"
+    fi
+  done < <(grep -oE 'ghcr\.io/smores56/homelab-platform/[a-z-]+@sha256:[0-9a-f]{64}' "$local_unit")
+  if [[ -f $local_timer ]] &&
+    [[ $(sed -n 's/^Unit=//p' "$local_timer") == "$(basename "$local_unit")" ]] &&
+    grep -qxF 'Persistent=true' "$local_timer"; then
+    ok "$local_timer runs the collector and closes a missed run"
+  else
+    bad "$local_timer runs the collector and closes a missed run"
   fi
 done
 

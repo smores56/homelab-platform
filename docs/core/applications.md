@@ -295,6 +295,8 @@ has no route off the host.
 | `smortress-agent-collect-calendar.timer` → `.service` | `agent-collect.network` | `state/agent-local/quarantine/calendar` (the dump) and `state/agent-local/replica/calendar` (the collection) | none: the exporter authenticates with the sealed session on `state/agent-local/quarantine/tuta-calendar`, mounted only into the dump stage |
 | `agent-tmail` (Quadlet; it serves, no timer) | `agent-collect.network` | `state/agent-local/quarantine/tmail`, its own session volume | none: its credential is the session on that volume |
 | `smortress-agent-collect-brave.path` → `.service`, plus a six-hourly `.timer` reconcile | `agent-brave.network` for the browser (`agent-brave`); neither collection stage has a network | `state/agent-local/quarantine/brave` (the snapshot) and `state/agent-local/replica/brave` (the collection) | Podman secret `brave-sync-seed`, uid 1000 mode 0400, held by the seed unit only |
+| `smortress-agent-collect-notes.timer` → `.service` | none: it reads `/srv/files/vault` and needs no address | `state/agent-local/replica/notes` | none: the vault is already on this host |
+| `smortress-agent-collect-tasks.timer` → `.service` | none: it reads `/srv/files/todo` | `state/agent-local/replica/tasks` | none |
 
 Tuta serves no IMAP at all, so `agent-tmail` -- TutaBridge, mirrored and pinned
 like every other application image -- is the mail provider half: it holds the
@@ -461,10 +463,10 @@ container: `agent-facade-personal` serves `notes`, `tasks`, `mail`, `calendar`,
 `finance`, `brave`, `photos`, `music` and `workspace`; `agent-facade-general`
 serves `repos` and `books`. A source outside the table is not refused by a policy
 check, it has no adapter in that process at all. The personal deployment serves
-`mail`, `calendar`, `finance` and `brave` from published raw generations today;
-the remaining personal sources and the general `repos`/`books` are still
-in-process fixtures (`apps/agent_facade/README.md`), so the split proves reach for
-those, not feed.
+`mail`, `calendar`, `finance`, `brave`, `notes` and `tasks` from published raw
+generations today; the remaining personal sources and the general `repos`/`books`
+are still in-process fixtures (`apps/agent_facade/README.md`), so the split proves
+reach for those, not feed.
 
 Both run the same `agent-runtime` digest as the gateways, with
 `Entrypoint=python3` replacing the image's gateway dispatcher, exactly as the proxy

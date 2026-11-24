@@ -7,6 +7,7 @@ test writes itself. No network, no provider, no credentials.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import tempfile
@@ -24,7 +25,9 @@ from data_plane.collectors.raw import (
     collect_brave_db,
     collect_calendar,
     collect_maildir,
+    collect_notes,
     collect_simplefin,
+    collect_tasks,
     previous_replica,
 )
 from data_plane.collectors.staging import StagingGeneration
@@ -394,6 +397,281 @@ class CalendarTests(unittest.TestCase):
             self._write(entities, "b.json", {"id": "same", "uid": "u2"})
             with self.assertRaises(PublishError):
                 collect_calendar(entities, _generation(root / "replica"), captured_at=CAPTURED)
+
+
+class NotesTests(unittest.TestCase):
+    def _vault(self, root: Path) -> Path:
+        vault = root / "vault"
+        (vault / "projects").mkdir(parents=True)
+        (vault / "index.md").write_text("# Vault index\n\nBody.\n", encoding="utf-8")
+        (vault / "projects" / "alpha.md").write_text(
+            "No heading here.\n", encoding="utf-8"
+        )
+        return vault
+
+    def test_ids_are_the_quoted_paths_and_headings_fall_back_to_the_stem(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            vault = self._vault(root)
+            generation = _generation(root / "replica")
+            report = collect_notes(vault, generation, captured_at=CAPTURED)
+            _publish(generation)
+
+            self.assertEqual(report.objects, 2)
+            replica = RawReplica(root / "replica")
+            self.assertEqual(
+                replica.object_ids(), ("notes::index.md", "notes::projects%2Falpha.md")
+            )
+            index = json.loads(replica.read("notes::index.md"))
+            self.assertEqual(index["heading"], "Vault index")
+            alpha = json.loads(replica.read("notes::projects%2Falpha.md"))
+            self.assertEqual(alpha["heading"], "alpha")
+            self.assertEqual(alpha["path"], "projects/alpha.md")
+            self.assertEqual(alpha["tags"], [])
+            self.assertEqual(alpha["body"], "No heading here.\n")
+            metadata = replica.metadata("notes::projects%2Falpha.md")
+            self.assertEqual(metadata["source_id"], "notes.markdown")
+            self.assertEqual(metadata["path"], "projects/alpha.md")
+            self.assertEqual(metadata["heading"], "alpha")
+            self.assertEqual(metadata["tags"], [])
+            self.assertEqual(metadata["body_sha256"], alpha["revision"])
+            self.assertTrue(metadata["updated_at"].endswith("+00:00"))
+
+    def test_two_runs_produce_byte_identical_objects(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            vault = self._vault(root)
+            first = _generation(root / "replica", "gen-0001")
+            collect_notes(vault, first, captured_at=CAPTURED)
+            _publish(first)
+            second = _generation(root / "replica", "gen-0002")
+            collect_notes(vault, second, captured_at=CAPTURED)
+            _publish(second)
+
+            earlier = RawReplica(root / "replica", "gen-0001")
+            later = RawReplica(root / "replica", "gen-0002")
+            self.assertEqual(earlier.object_ids(), later.object_ids())
+            for object_id in earlier.object_ids():
+                self.assertEqual(earlier.read(object_id), later.read(object_id))
+
+    def test_a_vanished_file_is_carried_forward(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            vault = self._vault(root)
+            first = _generation(root / "replica", "gen-0001")
+            collect_notes(vault, first, captured_at=CAPTURED)
+            _publish(first)
+
+            (vault / "projects" / "alpha.md").unlink()
+            second = _generation(root / "replica", "gen-0002")
+            report = collect_notes(vault, second, captured_at=CAPTURED)
+            self.assertEqual(report.carried, 1)
+            _publish(second)
+
+            replica = RawReplica(root / "replica", "gen-0002")
+            self.assertEqual(
+                replica.object_ids(), ("notes::index.md", "notes::projects%2Falpha.md")
+            )
+            metadata = replica.metadata("notes::projects%2Falpha.md")
+            self.assertEqual(metadata["absence_reason"], ABSENCE_NO_TOMBSTONE)
+            self.assertEqual(metadata[ABSENT_SINCE], CAPTURED)
+
+    def test_a_symlinked_file_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            vault = self._vault(root)
+            target = root / "outside.md"
+            target.write_text("# Elsewhere\n", encoding="utf-8")
+            (vault / "linked.md").symlink_to(target)
+            with self.assertRaises(PublishError) as caught:
+                collect_notes(vault, _generation(root / "replica"), captured_at=CAPTURED)
+            self.assertIn("symlink", str(caught.exception))
+
+    def test_a_symlinked_non_note_is_skipped(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            vault = self._vault(root)
+            target = root / "outside.png"
+            target.write_bytes(b"\x89PNG")
+            (vault / "linked.png").symlink_to(target)
+            report = collect_notes(vault, _generation(root / "replica"), captured_at=CAPTURED)
+            self.assertEqual(report.objects, 2)
+
+    def test_a_symlinked_directory_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            vault = self._vault(root)
+            elsewhere = root / "elsewhere"
+            elsewhere.mkdir()
+            (elsewhere / "note.md").write_text("# Elsewhere\n", encoding="utf-8")
+            (vault / "linked").symlink_to(elsewhere)
+            with self.assertRaises(PublishError) as caught:
+                collect_notes(vault, _generation(root / "replica"), captured_at=CAPTURED)
+            self.assertIn("symlink", str(caught.exception))
+
+    def test_a_symlinked_vault_root_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            vault = self._vault(root)
+            linked = root / "linked-vault"
+            linked.symlink_to(vault)
+            with self.assertRaises(PublishError) as caught:
+                collect_notes(linked, _generation(root / "replica"), captured_at=CAPTURED)
+            self.assertIn("symlink", str(caught.exception))
+
+    def test_a_file_that_is_not_utf8_is_refused_by_path(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            vault = self._vault(root)
+            broken = vault / "projects" / "broken.md"
+            broken.write_bytes(b"# Broken\n\xff\xfe\n")
+            with self.assertRaises(PublishError) as caught:
+                collect_notes(vault, _generation(root / "replica"), captured_at=CAPTURED)
+            self.assertIn(str(broken), str(caught.exception))
+
+
+class TasksTests(unittest.TestCase):
+    def _directory(self, root: Path) -> Path:
+        directory = root / "todo"
+        directory.mkdir(parents=True)
+        return directory
+
+    def _object_id(self, line: str) -> str:
+        digest = hashlib.sha256(line.encode("utf-8")).hexdigest()[:16]
+        return f"tasks::{digest}"
+
+    def test_line_fields_are_parsed_and_the_text_stays_verbatim(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            directory = self._directory(root)
+            open_line = (
+                "(A) 2026-11-08 Verify #427 on smoreswork after access returns - "
+                "home-manager switch +nix-config @smoreswork due:2026-11-10"
+            )
+            done_line = "x 2026-11-01 call the clinic"
+            (directory / "todo.txt").write_text(open_line + "\n", encoding="utf-8")
+            (directory / "done.txt").write_text(done_line + "\n", encoding="utf-8")
+            generation = _generation(root / "replica")
+            report = collect_tasks(directory, generation, captured_at=CAPTURED)
+            self.assertEqual(report.objects, 2)
+            _publish(generation)
+
+            replica = RawReplica(root / "replica")
+            open_id = self._object_id(open_line)
+            done_id = self._object_id(done_line)
+            self.assertEqual(replica.object_ids(), (open_id, done_id))
+
+            task = json.loads(replica.read(open_id))
+            self.assertEqual(task["task_id"], open_id)
+            self.assertEqual(task["text"], open_line)
+            self.assertFalse(task["done"])
+            self.assertEqual(task["priority"], "A")
+            self.assertEqual(task["projects"], ["nix-config"])
+            self.assertEqual(task["contexts"], ["smoreswork"])
+            self.assertEqual(task["dates"], {"due": "2026-11-10"})
+            self.assertEqual(task["created"], "2026-11-08")
+            self.assertEqual(task["file"], "todo.txt")
+
+            finished = json.loads(replica.read(done_id))
+            self.assertTrue(finished["done"])
+            self.assertEqual(finished["text"], done_line)
+            self.assertEqual(finished["created"], "2026-11-01")
+            self.assertEqual(finished["file"], "done.txt")
+
+            metadata = replica.metadata(open_id)
+            self.assertEqual(metadata["source_id"], "tasks.todo")
+            self.assertEqual(metadata["captured_at"], CAPTURED)
+            self.assertEqual(metadata["file"], "todo.txt")
+            self.assertEqual(metadata["priority"], "A")
+            self.assertEqual(metadata["projects"], ["nix-config"])
+            self.assertEqual(metadata["contexts"], ["smoreswork"])
+            self.assertEqual(metadata["dates"], {"due": "2026-11-10"})
+            self.assertEqual(metadata["created"], "2026-11-08")
+
+    def test_two_runs_produce_byte_identical_objects(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            directory = self._directory(root)
+            (directory / "todo.txt").write_text(
+                "(B) come up with vocal therapy schedule\n"
+                "2026-11-09 book the room +home t:2026-11-09\n",
+                encoding="utf-8",
+            )
+            first = _generation(root / "replica", "gen-0001")
+            collect_tasks(directory, first, captured_at=CAPTURED)
+            _publish(first)
+            second = _generation(root / "replica", "gen-0002")
+            collect_tasks(directory, second, captured_at=CAPTURED)
+            _publish(second)
+
+            earlier = RawReplica(root / "replica", "gen-0001")
+            later = RawReplica(root / "replica", "gen-0002")
+            self.assertEqual(earlier.object_ids(), later.object_ids())
+            for object_id in earlier.object_ids():
+                self.assertEqual(earlier.read(object_id), later.read(object_id))
+
+    def test_an_edited_line_is_a_new_task_and_the_old_one_is_carried(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            directory = self._directory(root)
+            before = "(C) renew the passport due:2026-12-01"
+            after = "(C) renew the passport due:2026-12-08"
+            (directory / "todo.txt").write_text(before + "\n", encoding="utf-8")
+            first = _generation(root / "replica", "gen-0001")
+            collect_tasks(directory, first, captured_at=CAPTURED)
+            _publish(first)
+
+            (directory / "todo.txt").write_text(after + "\n", encoding="utf-8")
+            second = _generation(root / "replica", "gen-0002")
+            report = collect_tasks(directory, second, captured_at=CAPTURED)
+            self.assertEqual(report.objects, 1)
+            self.assertEqual(report.carried, 1)
+            _publish(second)
+
+            replica = RawReplica(root / "replica", "gen-0002")
+            old_id = self._object_id(before)
+            new_id = self._object_id(after)
+            self.assertIn(new_id, replica.object_ids())
+            self.assertIn(old_id, replica.object_ids())
+            metadata = replica.metadata(old_id)
+            self.assertEqual(metadata["absence_reason"], ABSENCE_NO_TOMBSTONE)
+            self.assertEqual(metadata[ABSENT_SINCE], CAPTURED)
+            self.assertEqual(json.loads(replica.read(old_id))["text"], before)
+
+    def test_a_duplicate_line_collapses_and_is_counted(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            directory = self._directory(root)
+            line = "(B) come up with vocal therapy schedule"
+            (directory / "todo.txt").write_text(
+                f"{line}\n(D) water the plants\n{line}\n", encoding="utf-8"
+            )
+            report = collect_tasks(
+                directory, _generation(root / "replica"), captured_at=CAPTURED
+            )
+            self.assertEqual(report.objects, 2)
+            self.assertEqual(report.details["duplicates"], 1)
+
+    def test_no_task_file_at_all_is_refused_by_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            directory = self._directory(root)
+            with self.assertRaises(PublishError) as caught:
+                collect_tasks(
+                    directory, _generation(root / "replica"), captured_at=CAPTURED
+                )
+            self.assertIn(str(directory), str(caught.exception))
+
+    def test_an_empty_todo_file_publishes_nothing_and_does_not_fail(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            directory = self._directory(root)
+            (directory / "todo.txt").write_text("", encoding="utf-8")
+            generation = _generation(root / "replica")
+            report = collect_tasks(directory, generation, captured_at=CAPTURED)
+            self.assertEqual(report.objects, 0)
+            _publish(generation)
+            self.assertEqual(RawReplica(root / "replica").object_ids(), ())
 
 
 class FinanceTests(unittest.TestCase):
