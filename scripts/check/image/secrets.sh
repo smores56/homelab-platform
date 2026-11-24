@@ -336,12 +336,236 @@ while IFS= read -r unit; do
   pattern="(^|[[:space:]])${unit//./\\.}([[:space:]]|;)"
   check "the gate lists only units the image enables: $unit" grep -qE "$pattern" image/Containerfile
   if [[ -f units/systemd/$unit ]] &&
-    grep -qE '^ConditionPathExists=!' "units/systemd/$unit"; then
+    grep -qE '^[[:space:]]*ConditionPathExists[[:space:]]*=[[:space:]]*!' "units/systemd/$unit"; then
     bad "the gate lists no unit that skips itself: $unit"
   else
     ok "the gate lists no unit that skips itself: $unit"
   fi
 done < <(awk '!/^[[:space:]]*#/ { print $1 }' "$units_file")
+# That loop only judges the list one way: every line must be enabled and must not
+# skip itself. Nothing noticed the reverse, so a new long-running daemon could be
+# enabled by the image and assert nothing at all. Derive the candidates from the
+# image's own enable block and make each one a written decision. A name with no
+# file under units/ and no local template is a distro unit: this tree does not
+# declare it, so neither its Type nor its activity is ours to read. A
+# `ConditionPathExists=!` unit (or a bare oneshot) reads `inactive` on a healthy
+# host -- the same reason the list excludes it -- but that exemption is the name
+# set `self_skipping` below, never the directive: a directive is how a unit was
+# written, while a name in that set is a decision about this host.
+#
+# The enable block is shell, so read it the way the shell does: a trailing
+# backslash joins the next line, `#` ends a comment, `;` and `&&` separate
+# commands, and a unit name may be quoted. Matching `systemctl enable \` at end of
+# line instead loses the scrub timer, which is enabled on one line with a quoted
+# instance, and a quoting filter on the name skips it a second time.
+#
+# The command is found wherever the shell would find it: `RUN`, `sudo` and `exec`
+# in front of `systemctl` are skipped, and so are the options systemctl accepts
+# before its subcommand (`--no-reload`, `--now`), because each shape enables a unit
+# as surely as the bare form and each one used to leave this set without it. A `#`
+# or `;` inside a quoted argument is out of scope, not handled quietly: the split
+# above would cut the argument in half, and the Containerfile is linted shell with
+# no enable line that quotes one -- a line that did would have to teach this
+# parser, which is the review this comment exists to force.
+image_enabled_units() { # <Containerfile>
+  local line buffer='' segment word word_i
+  local -a words
+  while IFS= read -r line; do
+    line=${line%%#*}
+    line=${line//&&/;}
+    if [[ $line == *\\ ]]; then
+      buffer+="${line%\\} "
+      continue
+    fi
+    buffer+=$line
+    while [[ -n $buffer ]]; do
+      segment=${buffer%%;*}
+      if [[ $segment == "$buffer" ]]; then buffer=; else buffer=${buffer#*;}; fi
+      read -r -a words <<<"$segment" || continue
+      ((${#words[@]} >= 2)) || continue
+      word_i=0
+      while ((word_i < ${#words[@]})); do
+        case ${words[word_i]} in
+          RUN | sudo | exec) word_i=$((word_i + 1)) ;;
+          *) break ;;
+        esac
+      done
+      [[ ${words[word_i]-} == systemctl ]] || continue
+      word_i=$((word_i + 1))
+      while [[ ${words[word_i]-} == -* ]]; do
+        word_i=$((word_i + 1))
+      done
+      [[ ${words[word_i]-} == enable ]] || continue
+      for word in "${words[@]:word_i+1}"; do
+        word=${word//\"/}
+        word=${word//\'/}
+        [[ -n $word ]] && printf '%s\n' "$word"
+      done
+    done
+  done <"$1"
+}
+declare -A enabled=()
+while IFS= read -r unit; do
+  [[ -n $unit ]] || continue
+  enabled[$unit]=1
+done < <(image_enabled_units image/Containerfile)
+# A parser that finds nothing must not pass the loop below vacuously, and one unit
+# the enable block certainly names anchors the rest: a regression in the parser is
+# a broken check, never a new exemption to write.
+if [[ -n ${enabled[sops-decrypt.service]:-} ]]; then
+  ok "the enable parser finds the units the image enables"
+else
+  bad "the enable parser finds the units the image enables"
+fi
+if ((${#enabled[@]} > 0)); then
+  ok "the enable parser reads a non-empty unit set"
+else
+  bad "the enable parser reads a non-empty unit set"
+fi
+# The units that legitimately read `inactive` on a healthy host, by name. This set
+# is written out rather than derived from the directives the loop used to honour
+# (`ConditionPathExists=!`, a bare `Type=oneshot`): derived, any new unit carried
+# the exemption for free, and a template-level condition exempted every instance at
+# once -- a whole class of units excused by one line in one file. A unit with such
+# a directive that is not named here falls through to the list/allowlist decision,
+# so an unknown name fails instead of disappearing.
+declare -A self_skipping=(
+  [smortress-tailscale-up.service]='enrolls the tailnet once: its negated enrollment marker makes it inactive after the first boot, when the work is done'
+  [smortress-access-bootstrap.service]='holds SSH open on the wired LAN until enrollment: the same marker makes it inactive on every later boot'
+  [smortress-boot-gate.service]='the gate cannot require itself: a bare one-shot reads `inactive` between runs, so listing it would roll back every deployment it judged'
+  [smortress-agent-brave-seed.service]='seeds the browsing profile once: a bare one-shot, and an agent-plane fault must not roll the platform digest back'
+)
+# The same staleness rule as unlisted_why: a name here that the image no longer
+# enables is an exemption that outlived its unit and reads like a decision.
+for unit in "${!self_skipping[@]}"; do
+  if [[ -z ${enabled[$unit]:-} ]]; then
+    bad "the gate's self-skipping names are enabled units: $unit (stale exemption: the enable block does not name it, so drop the entry)"
+  fi
+done
+# An instance has no file of its own -- `zfs-ready@raw-files.service` is enabled by
+# `zfs-ready@.service` -- so classify it from its template rather than skipping the
+# instance, which would exempt every per-dataset instance from the check. The
+# instance is any `%i`, dots included: a dataset or a variant name can carry one
+# (`zfs-ready@raw-git.v2.service`), and refusing it would file the instance as a
+# distro unit and skip it.
+local_unit_file() { # <unit>
+  local unit=$1 template
+  if [[ -f units/systemd/$unit ]]; then
+    printf 'units/systemd/%s\n' "$unit"
+    return 0
+  fi
+  if [[ $unit =~ ^([^@]+)@(.+)\.service$ ]]; then
+    template=units/systemd/${BASH_REMATCH[1]}@.service
+    if [[ -f $template ]]; then
+      printf '%s\n' "$template"
+      return 0
+    fi
+  fi
+  return 1
+}
+# Long-running units the image enables that stay out of the list, each with the
+# reason it is not a serving signal for the gate. Listing one would change what
+# "serving" means for this host, so the decision is recorded here instead of being
+# an omission. None of these reasons promises a page: the gate's only `is-failed`
+# consumer asks about the units in the list above, so an unlisted fault is a
+# journal line and nothing else. Every key names an enabled unit, because a reason
+# nobody reads is how an exemption turns permanent (the loop below fails a stale
+# key), and a pattern would read as a decision while hiding the next instance.
+declare -A unlisted_why=(
+  [smortress-cryptsetup-hdd.service]='best-effort HDD unlock (ExecStart=-) is green with the backup disk unplugged, so it asserts nothing about the disk'
+  [smortress-tailscale-ssh-off.service]='ConditionPathExists on tailscaled.state: a missing state file makes systemd skip it before the first enrollment, and a skip reads inactive'
+  [smortress-agent-config.service]='seeds the agent state datasets: an agent-plane fault must not roll the platform digest back'
+  [smortress-agent-job-provision.service]='provisions the rootless job runners: an agent-plane fault must not roll the platform digest back'
+  [smortress-agent-shell-bridge.service]='serves the agent shell socket: an agent-plane fault must not roll the platform digest back'
+  [smortress-nvidia-cdi.service]='ConditionPathExists on /usr/bin/nvidia-ctk: on a host with no NVIDIA tooling the unit is skipped, not failed'
+  [smortress-selinux-nvidia-map.service]='ConditionPathExists on the model CIL module: without SELinux or that module it is skipped, not failed'
+  [smortress-selinux-agent-shell.service]='ConditionPathExists on the shell CIL module: without SELinux or that module it is skipped, not failed'
+  [smortress-agent-mail-stream.service]='ConditionPathExists on the Tuta bridge cert: without the cert it is skipped, not failed, until the bridge is provisioned'
+  [smortress-restic-init.service]='initialises the Restic repositories: a backup-plane fault must not roll the platform digest back'
+  # The two Restic repository mounts are enabled and long-running, and `nofail` is
+  # what makes them the opposite of a serving signal: an absent or unpowered backup
+  # disk is a red destination, not a failed host. The hourly verifier pings the
+  # backup check red when a destination is not current, so the plane pages on its
+  # own and a missing disk must not roll the platform digest back.
+  [var-lib-restic-ssd.mount]='the SSD Restic repository: nofail by design, and the hourly verifier pages the backup check red when it is not mounted, so a missing backup disk must not roll the platform digest back'
+  [var-lib-restic-hdd.mount]='the HDD Restic repository: nofail by design, and the verifier pages the backup check red, so an unplugged or unpowered backup disk must not roll the platform digest back'
+  # The readiness instances are one mount probe per dataset and only `raw-apps` is
+  # in the list above, because the tenant apply chain is ordered after it. The rest
+  # fail on their own path, and a dataset that is not mounted is a storage-plane
+  # fault no image rollback can fix.
+  [zfs-ready@raw-files.service]='mount probe for raw/files: a storage-plane fault must not roll the platform digest back'
+  [zfs-ready@raw-photos.service]='mount probe for raw/photos: a storage-plane fault must not roll the platform digest back'
+  [zfs-ready@raw-books.service]='mount probe for raw/books: a storage-plane fault must not roll the platform digest back'
+  [zfs-ready@raw-music.service]='mount probe for raw/music: a storage-plane fault must not roll the platform digest back'
+  [zfs-ready@raw-wallpapers.service]='mount probe for raw/wallpapers: a storage-plane fault must not roll the platform digest back'
+  [zfs-ready@raw-git.service]='mount probe for raw/git: a storage-plane fault must not roll the platform digest back'
+  [zfs-ready@raw-repo-archive.service]='mount probe for raw/repo-archive: a storage-plane fault must not roll the platform digest back'
+  [zfs-ready@state-immich-postgres.service]='mount probe for state/immich-postgres: a storage-plane fault must not roll the platform digest back'
+  [zfs-ready@state-immich-dumps.service]='mount probe for state/immich-dumps: a storage-plane fault must not roll the platform digest back'
+  [zfs-ready@state-syncthing-config.service]='mount probe for state/syncthing-config: a storage-plane fault must not roll the platform digest back'
+  [zfs-ready@state-opdshelf.service]='mount probe for state/opdshelf: a storage-plane fault must not roll the platform digest back'
+  [zfs-ready@state-caddy.service]='mount probe for state/caddy: a storage-plane fault must not roll the platform digest back'
+  [zfs-ready@state-agent-local.service]='mount probe for state/agent-local: a storage-plane fault must not roll the platform digest back'
+  [zfs-ready@state-agent-general.service]='mount probe for state/agent-general: a storage-plane fault must not roll the platform digest back'
+  [zfs-ready@state-agent-model.service]='mount probe for state/agent-model: a storage-plane fault must not roll the platform digest back'
+)
+# Judge a candidate whatever kind of unit it is. A `.service` carries a `Type`; a
+# `.mount` or a `.socket` carries none and is long-running by definition, which is
+# exactly the case this check exists for: `var-lib-restic-ssd.mount` was enabled,
+# long-running and in neither the list nor the table, and a `*.socket` would have
+# slipped through the same hole. The directive skips that used to drop a candidate
+# here are now the `self_skipping` name set: this loop no longer reads a unit file
+# to decide whether to judge the unit, only whether this tree declares it.
+declare -A consulted=()
+while IFS= read -r unit; do
+  case $unit in
+    *.service | *.mount | *.socket) ;;
+    *) continue ;;
+  esac
+  local_unit_file "$unit" >/dev/null || continue
+  [[ -n ${self_skipping[$unit]:-} ]] && continue
+  # The deploy units are the third exclusion the list header names: their secrets
+  # are seeded by hand after the first landing, so none of them is a serving signal
+  # and none is judgeable here. The path unit and the three timers are already
+  # outside the suffix filter above; they stay in the case so the decision survives
+  # a wider filter.
+  case $unit in
+    smortress-deploy-listener.service | smortress-deploy.path | \
+      smortress-deploy-poll.timer | smortress-deploy-heartbeat.timer | \
+      smortress-deploy-retry.timer) continue ;;
+  esac
+  # And the plan readers plus the prober: their failures belong to the tenant, so
+  # none may decide the platform digest. The prober's timer is outside the suffix
+  # filter above and its oneshot reads `inactive` between runs, so neither is a
+  # candidate here; this case states that for the service the filter now reaches.
+  case $unit in
+    smortress-tailscale-serve.service | smortress-apps-quota.service | \
+      smortress-apps-health.service) continue ;;
+  esac
+  consulted[$unit]=1
+  if grep -qxF -- "$unit" "$units_file" || [[ -n ${unlisted_why[$unit]:-} ]]; then
+    ok "the gate's list accounts for the enabled unit: $unit"
+  else
+    bad "the gate's list omits a long-running unit the image enables: $unit (list it if it is a serving signal, else add it to unlisted_why with a reason)"
+  fi
+done < <(printf '%s\n' "${!enabled[@]}" | sort)
+# The predicate above matches on a non-empty value, so a bare key cannot excuse a
+# unit; this catches the other half, a key for a unit the image stopped enabling,
+# which is an exemption that outlived its reason and reads like a decision.
+for unit in "${!unlisted_why[@]}"; do
+  if [[ -z ${enabled[$unit]:-} ]]; then
+    bad "the gate's unlisted reasons name a unit the image enables: $unit (stale exemption: the enable block does not name it, so drop the entry)"
+  fi
+done
+# And a key is only a decision if the loop read it: a reason for an enabled unit
+# that the filters above drop before the list/allow decision (a self-skipping
+# name, a deploy unit, the prober) passes the staleness guard while nothing
+# consults it, which is how an exemption turns permanent.
+for unit in "${!unlisted_why[@]}"; do
+  if [[ -z ${consulted[$unit]:-} ]]; then
+    bad "the gate's unlisted reasons are consulted: $unit (never consulted: the loop drops this unit before the list/allow decision, so the reason is read by nothing)"
+  fi
+done
 count_cfg=image/rootfs/usr/lib/bootupd/grub2-static/configs.d/10-smortress-count.cfg
 check "the boot counter snippet ships where bootupd reads it" test -s "$count_cfg"
 check "the snippet clears boot_success on every boot" has 'set boot_success=0' "$count_cfg"
