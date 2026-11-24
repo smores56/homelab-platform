@@ -223,6 +223,32 @@ The admin password is required even though the service is tailnet-only: it is th
 one credential that keeps a compromised tailnet device from rewriting the
 library.
 
+## Navidrome
+
+One container, two datasets: the library (`raw/music`, mounted read-only at
+`/music`) and the database (`state/navidrome` at `/data`). The read-only mount is
+Navidrome's own contract — it only reads the music folder — and the database holds
+playlists, play counts, users and shares, so the `music` unit restores both at one
+point in time.
+
+`User=1000:1000` with `ND_ENFORCENONROOTUSER=true`: the upstream image has no
+`USER` and runs as root unless told otherwise, and that flag turns a dropped
+`User=` into a logged failure instead of root-owned files in a uid-1000 dataset.
+The transcode and artwork caches are tmpfs (`/cache`, `/tmp`), so a snapshot never
+carries derived files; the first transcode after a restart is slower.
+
+`ND_SCANSCHEDULE=1h` with `ND_SCANNER_WATCHERWAIT=10s`: 0.64.2 always runs the
+inotify watcher and that setting is only its debounce, so the scheduled scan is
+the reliable path over a bind-mounted dataset. `ND_BASEURL` is unset because Serve
+forwards `Host` and sets `X-Forwarded-Host`/`Proto`, which Navidrome uses for the
+absolute URLs it emits.
+
+The first visit to `https://smortress.<tailnet>.ts.net:8448/` shows "Create
+Admin"; Navidrome has no supported way to pre-create one, so the operator does it
+once (`docs/manual-steps.md`). The restore sequence is the `music` unit's: stop
+`navidrome.service`, restore `raw/music` and `state/navidrome` from the same
+snapshot, `chown`/`chcon` the trees, then start it.
+
 ## Syncthing
 
 The only container with `Network=host`, because the sync protocol is not HTTP and
@@ -655,6 +681,10 @@ successful start — it is proven by serving representative data from it.
   re-applies both ownership and label (`chown` + `chcon`) before the application
   starts, and the unit timeouts are sized for a first start that has to relabel.
   Snapshots are not touched: ZFS keeps `.zfs` hidden from directory walks.
+- Navidrome trusts `X-Forwarded-Host`, so a process that can reach
+  `127.0.0.1:4533` can poison the absolute URLs it generates. The listener is
+  loopback-only and the tailnet route admits `group:owner`, so there is no wider
+  exposure to close.
 - The proxy, the facades and their libraries are code the *host* image installs and
   the container mounts, so what runs is what the booted deployment carries: that is
   the point, and it is also the one place a container reads a host path. The mounts
