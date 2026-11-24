@@ -39,38 +39,8 @@ for tool in jq timeout; do
   }
 done
 
-pass=0
-fail=0
-ok() {
-  pass=$((pass + 1))
-  printf 'ok   %s\n' "$1"
-}
-bad() {
-  fail=$((fail + 1))
-  printf 'FAIL %s\n' "$1" >&2
-  [[ -n ${2:-} ]] && printf '     %s\n' "${2//$'\n'/$'\n'     }" >&2
-  return 0
-}
-check_eq() { # got want label
-  if [[ $1 == "$2" ]]; then ok "$3"; else bad "$3" "want '$2', got '$1'"; fi
-}
-check_json() { # doc filter want label
-  local got
-  got=$(jq -r "$2" <<<"$1" 2>/dev/null)
-  check_eq "$got" "$3" "$4"
-}
-check_file() { # path label
-  if [[ -s $1 ]]; then ok "$2"; else bad "$2" "missing or empty: $1"; fi
-}
-check_no_file() { # path label
-  if [[ -e $1 ]]; then bad "$2" "$(cat "$1" 2>/dev/null)"; else ok "$2"; fi
-}
-check_grep() { # file pattern label
-  if grep -qF -- "$2" "$1" 2>/dev/null; then ok "$3"; else bad "$3" "no '$2' in $1"; fi
-}
-check_no_grep() { # file pattern label
-  if grep -qF -- "$2" "$1" 2>/dev/null; then bad "$3" "$(grep -F -- "$2" "$1")"; else ok "$3"; fi
-}
+# shellcheck source=tests/deploy/lib.sh
+source "$root/tests/deploy/lib.sh"
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
@@ -317,10 +287,6 @@ serve_healthy() {
   jq -nc --argjson port "$app_port" \
     '{"Web":{":443":{"Handlers":{"/apps/demo":{Proxy:("http://127.0.0.1:" + ($port | tostring))}}}}}' \
     >"$STUB_SERVE_JSON"
-}
-
-journal_field() { # <event> <jq path>
-  jq -r "select(.event==\"$1\") | $2" "$state_dir/journal.jsonl" 2>/dev/null
 }
 
 # The GRUB environment block is a flat key=value file; this reads it the same way
@@ -906,5 +872,4 @@ check_eq "$(grub_flags '.boot_counter')" 0 "the counter is left untouched withou
 check_eq "$(journal_field boot-counting-absent '.reason' | tail -1)" \
   "grub.cfg does not read boot_counter" "the missing counter is journaled"
 
-printf '\n%d passed, %d failed\n' "$pass" "$fail"
-((fail == 0))
+finish

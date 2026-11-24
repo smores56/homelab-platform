@@ -33,26 +33,8 @@ for tool in jq timeout; do
   }
 done
 
-pass=0
-fail=0
-ok() {
-  pass=$((pass + 1))
-  printf 'ok   %s\n' "$1"
-}
-bad() {
-  fail=$((fail + 1))
-  printf 'FAIL %s\n' "$1" >&2
-  [[ -n ${2:-} ]] && printf '     %s\n' "${2//$'\n'/$'\n'     }" >&2
-  return 0
-}
-check_eq() { # got want label
-  if [[ $1 == "$2" ]]; then ok "$3"; else bad "$3" "want '$2', got '$1'"; fi
-}
-check_json() { # doc filter want label
-  local got
-  got=$(jq -r "$2" <<<"$1" 2>/dev/null)
-  check_eq "$got" "$3" "$4"
-}
+# shellcheck source=tests/deploy/lib.sh
+source "$root/tests/deploy/lib.sh"
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
@@ -207,10 +189,6 @@ run_platform() {
 run_cli() {
   out=$(bash "$cli" "$@" 2>&1)
   rc=$?
-}
-
-journal_field() { # <event> <jq path>
-  jq -r "select(.event==\"$1\") | $2" "$state_dir/journal.jsonl" 2>/dev/null
 }
 
 seed_held() { # <digest> <released>
@@ -671,5 +649,4 @@ fi
 check_eq "$(journal_field gate-infra-failure '.reason')" query-failed \
   "the bounded child that timed out is journaled as an infrastructure failure"
 
-printf '\n%d passed, %d failed\n' "$pass" "$fail"
-((fail == 0))
+finish

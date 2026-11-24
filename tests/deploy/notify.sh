@@ -32,27 +32,8 @@ for tool in jq python3 git; do
   }
 done
 
-pass=0
-fail=0
-ok() {
-  pass=$((pass + 1))
-  printf 'ok   %s\n' "$1"
-}
-bad() {
-  fail=$((fail + 1))
-  printf 'FAIL %s\n' "$1" >&2
-  [[ -n ${2:-} ]] && printf '     %s\n' "${2//$'\n'/$'\n'     }" >&2
-  return 0
-}
-check_eq() { # got want label
-  if [[ $1 == "$2" ]]; then ok "$3"; else bad "$3" "want '$2', got '$1'"; fi
-}
-check_grep() { # text pattern label
-  if grep -qE -- "$2" <<<"$1"; then ok "$3"; else bad "$3" "no /$2/ in: $1"; fi
-}
-check_no_grep() { # text pattern label
-  if grep -qE -- "$2" <<<"$1"; then bad "$3" "$(grep -E -- "$2" <<<"$1")"; else ok "$3"; fi
-}
+# shellcheck source=tests/deploy/lib.sh
+source "$root/tests/deploy/lib.sh"
 
 # A job's own lines, from its key to the next job key. Both files keep jobs at
 # two-space indentation, so the block is the text between them.
@@ -88,20 +69,20 @@ job=$(cat "$work/notify.yml")
 
 # --- the job is a notification, not a gate ------------------------------------
 
-check_grep "$job" '^    needs: publish$' "notify runs after the build, not before it"
-check_grep "$job" "^    if: github\.event_name == 'workflow_dispatch' && github\.ref == 'refs/heads/main'$" \
+check_match "$job" '^    needs: publish$' "notify runs after the build, not before it"
+check_match "$job" "^    if: github\.event_name == 'workflow_dispatch' && github\.ref == 'refs/heads/main'$" \
   "notify runs from a main dispatch only"
-check_grep "$job" '^    environment: deploy-notify$' "notify uses its own Environment"
-check_grep "$job" '^    permissions: \{\}$' "notify holds no permission on the repository"
+check_match "$job" '^    environment: deploy-notify$' "notify uses its own Environment"
+check_match "$job" '^    permissions: \{\}$' "notify holds no permission on the repository"
 # The signing key lives in the `server-image` Environment and nowhere else: a job
 # that could read it would make the deploy node part of the same trust domain.
-check_no_grep "$job" 'COSIGN_' "notify never names the signing key"
+check_no_match "$job" 'COSIGN_' "notify never names the signing key"
 if grep -qE '^    environment: server-image$' <<<"$job"; then
   bad "notify never joins the signing Environment"
 else
   ok "notify never joins the signing Environment"
 fi
-check_no_grep "$job" 'actions/checkout' "notify checks nothing out (it needs no repository content)"
+check_no_match "$job" 'actions/checkout' "notify checks nothing out (it needs no repository content)"
 named=$(grep -oE '\$\{\{ *secrets\.[A-Za-z0-9_]+' <<<"$job" | sed 's/.*secrets\.//' | sort -u | tr '\n' ' ')
 check_eq "$named" 'DEPLOY_WEBHOOK_SECRET TS_OAUTH_CLIENT_ID TS_OAUTH_CLIENT_SECRET ' \
   "notify reads only the deploy credentials"
@@ -121,10 +102,10 @@ else
     bad "the Tailscale action is pinned to a full commit SHA" "$ref"
   fi
 fi
-check_grep "$job" 'tags: tag:deploy' "the notify node carries tag:deploy"
-check_grep "$job" 'oauth-client-id: \$\{\{ secrets\.TS_OAUTH_CLIENT_ID \}\}' \
+check_match "$job" 'tags: tag:deploy' "the notify node carries tag:deploy"
+check_match "$job" 'oauth-client-id: \$\{\{ secrets\.TS_OAUTH_CLIENT_ID \}\}' \
   "the node is minted from the deploy OAuth client"
-check_grep "$job" 'oauth-secret: \$\{\{ secrets\.TS_OAUTH_CLIENT_SECRET \}\}' \
+check_match "$job" 'oauth-secret: \$\{\{ secrets\.TS_OAUTH_CLIENT_SECRET \}\}' \
   "the node is minted from the deploy OAuth client secret"
 
 # --- the body, the signature and the send ------------------------------------
@@ -136,24 +117,24 @@ if [[ -s $work/step.sh ]]; then
 else
   bad "the notify step carries a script to run"
 fi
-check_grep "$step" '"repo": os\.environ\["REPO_NAME"\]' "the body names the repository"
-check_grep "$step" '"commit": os\.environ\["COMMIT_SHA"\]' "the body names the commit"
-check_grep "$step" '"ts": now' "the body carries a unix timestamp"
-check_grep "$step" '"nonce": secrets\.token_hex\(16\)' "the body carries a 32-hex nonce"
-check_grep "$step" 'hmac\.new\(' "the signature is HMAC"
-check_grep "$step" 'hashlib\.sha256' "the signature is SHA-256"
-check_grep "$step" 'X-Deploy-Signature: sha256=\$sig' "the signature header is the design's"
+check_match "$step" '"repo": os\.environ\["REPO_NAME"\]' "the body names the repository"
+check_match "$step" '"commit": os\.environ\["COMMIT_SHA"\]' "the body names the commit"
+check_match "$step" '"ts": now' "the body carries a unix timestamp"
+check_match "$step" '"nonce": secrets\.token_hex\(16\)' "the body carries a 32-hex nonce"
+check_match "$step" 'hmac\.new\(' "the signature is HMAC"
+check_match "$step" 'hashlib\.sha256' "the signature is SHA-256"
+check_match "$step" 'X-Deploy-Signature: sha256=\$sig' "the signature header is the design's"
 # The skew is read from the body's `ts`, the one value the HMAC covers. An
 # unsigned timestamp header was a second answer to the same question: the sender
 # and the receiver could disagree and neither could be shown to be right.
-check_no_grep "$step" 'X-Deploy-Timestamp' "no unsigned timestamp header is sent"
-check_grep "$step" '--data-binary @"\$body"' "the body is sent with --data-binary from the file"
-check_grep "$step" '--fail-with-body --max-time 30' "the send is bounded and fails on a bad status"
-check_grep "$step" 'http://smortress:8484/v1/deploy' "the send targets the receiver over the tailnet"
+check_no_match "$step" 'X-Deploy-Timestamp' "no unsigned timestamp header is sent"
+check_match "$step" '--data-binary @"\$body"' "the body is sent with --data-binary from the file"
+check_match "$step" '--fail-with-body --max-time 30' "the send is bounded and fails on a bad status"
+check_match "$step" 'http://smortress:8484/v1/deploy' "the send targets the receiver over the tailnet"
 # A `-d @file` strips newlines and re-encodes the body, so the bytes curl sends
 # are not the bytes that were signed. The regression is silent on the wire and
 # only shows up as a rejected HMAC.
-check_no_grep "$step" '(-d|--data) [`"]?@' "the body is never sent with -d/--data"
+check_no_match "$step" '(-d|--data) [`"]?@' "the body is never sent with -d/--data"
 check_eq "$(grep -cF 'X-Deploy-Signature: sha256=$sig' <<<"$step")" 1 \
   "exactly one signature header is built, from the HMAC"
 check_eq "$(grep -cF -- '--data-binary @"$body"' <<<"$step")" 1 "exactly one request sends the signed file"
@@ -235,7 +216,7 @@ fi
 # --- no PR can reach the job -------------------------------------------------
 
 triggers=$(awk '/^on:/ { inside = 1; next } inside && /^[a-z]/ { exit } inside { print }' "$workflow")
-check_no_grep "$triggers" 'pull_request' "the publish workflow has no pull_request trigger"
+check_no_match "$triggers" 'pull_request' "the publish workflow has no pull_request trigger"
 if scripts/check-pr-secret-boundary.sh >"$work/boundary" 2>&1; then
   ok "no pull_request workflow references a secret"
 else
@@ -255,5 +236,4 @@ else
   bad "CI runs the deploy group (notify, poll, heartbeat included)"
 fi
 
-printf '\n%d passed, %d failed\n' "$pass" "$fail"
-((fail == 0))
+finish

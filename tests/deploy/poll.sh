@@ -35,27 +35,8 @@ for tool in jq curl python3; do
   }
 done
 
-pass=0
-fail=0
-ok() {
-  pass=$((pass + 1))
-  printf 'ok   %s\n' "$1"
-}
-bad() {
-  fail=$((fail + 1))
-  printf 'FAIL %s\n' "$1" >&2
-  [[ -n ${2:-} ]] && printf '     %s\n' "${2//$'\n'/$'\n'     }" >&2
-  return 0
-}
-check_eq() { # got want label
-  if [[ $1 == "$2" ]]; then ok "$3"; else bad "$3" "want '$2', got '$1'"; fi
-}
-check_empty() { # got label
-  if [[ -z $1 ]]; then ok "$2"; else bad "$2" "$1"; fi
-}
-check_file() { # path label
-  if [[ -s $1 ]]; then ok "$2"; else bad "$2" "missing or empty: $1"; fi
-}
+# shellcheck source=tests/deploy/lib.sh
+source "$root/tests/deploy/lib.sh"
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
@@ -138,9 +119,6 @@ seed_state() { # repo commit -- merges, so both repositories can be seeded
   jq --arg repo "$1" --arg commit "$2" \
     '.repos = ((.repos // {}) | .[$repo] = {commit: $commit})' <<<"$current" \
     >"$state/state.json"
-}
-journal_events() { # event -> count
-  grep -c "\"event\":\"$1\"" "$state/journal.jsonl" 2>/dev/null || true
 }
 queue_entries() {
   find "$queue" -maxdepth 1 -type f -name '*.json' | wc -l | tr -d ' '
@@ -402,5 +380,4 @@ else
   bad "the image enables the poll timer"
 fi
 
-printf '\n%d passed, %d failed\n' "$pass" "$fail"
-((fail == 0))
+finish
