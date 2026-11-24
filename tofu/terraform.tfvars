@@ -21,10 +21,6 @@ tailscale_login   = "smores56@github"
 host_tunnel_id    = "583026c2-4efb-453b-8392-3ce6dfcfa0d0"
 cluster_tunnel_id = "16a461e2-b28e-4535-b79d-eca2f6e9b001"
 
-# Empty until the in-VM CSR client has registered; see docs/manual-steps.md
-# step 16. The CAA records are created only once this is set.
-acme_account_id = ""
-
 # `agent` is deliberately absent: k3s is gone, so its CNAME pointed at a tunnel
 # with no connector, and the name has to be free before the A record for the
 # tailnet name service (design #834, task #847) can be created -- Cloudflare

@@ -97,45 +97,48 @@ resource "cloudflare_dns_record" "agent" {
   comment = "general agent UI Service VIP (design #834, task #847)"
 }
 
-# CAA pins issuance for the zone to the ACME account Kanbei's in-VM client uses
-# (docs/cloudflare.md, "CAA"). Two tags because a wildcard order is authorized
-# by issuewild, not issue.
+# The zone's CAA policy (design #842 T4) names a CA, never an ACME account. A
+# value may carry `accounturi=`, but that string is compared literally against
+# the account in the CSR, so it authorizes exactly one account on one directory:
+# the edge's Caddy account is re-registered by a rebuild and the account it
+# replaces is gone, so an account pin would turn a routine rebuild into an
+# outage that first surfaces weeks later at renewal. Naming the CA alone is what
+# survives a rebuild: the new account orders from the same directory and the
+# same issuer, and this policy already admits it.
 #
-# Caveat that makes this a narrowing, not a lockdown: Cloudflare appends its own
-# Universal SSL CAA records (pki.goog, letsencrypt.org, ssl.com, sectigo.com,
-# digicert) to any zone that has a CAA record. Those are invisible in the
-# dashboard and appear in `dig`, so an unpinned `letsencrypt.org` issue always
-# sits beside the pinned one and any Let's Encrypt account stays authorized for
-# the edge certificate. Verify with:
-#   dig +short CAA sammohr.dev
+# These two records authorize the unproxied names Caddy orders for
+# (`photos`/`opds`/`recovery` here, `assistant`/`agent` on smortress): grey-cloud
+# records reach the origin directly, so Let's Encrypt reads this set. A wildcard
+# order is not authorized by `issue`, hence the second tag.
+#
+# The proxied names answer from Cloudflare's edge, where the certificate is
+# Cloudflare's to order. With Universal SSL the zone's answer also carries the
+# CA set Cloudflare appends to any zone with a CAA record, and CAA admits
+# issuance if *any* matching set permits it, so the served issuer is admitted by
+# the union (docs/cloudflare.md, "CAA"). `scripts/verify-caa.sh` asserts that
+# union against the certificate actually served.
 resource "cloudflare_dns_record" "caa_issue" {
-  # No account yet means no pin: an empty account id would encode a bogus
-  # accounturi and stop Let's Encrypt issuing for the zone at all.
-  count   = var.acme_account_id == "" ? 0 : 1
   zone_id = data.cloudflare_zone.this.zone_id
   name    = var.domain
   type    = "CAA"
-  ttl     = 3600
-  comment = "ACME account pin for the in-VM CSR client"
-
   data = {
     flags = 0
     tag   = "issue"
-    value = "letsencrypt.org; accounturi=${local.acme_account_uri}"
+    value = "letsencrypt.org"
   }
+  ttl     = 3600
+  comment = "unpinned CA policy for the public edge (design #842)"
 }
 
 resource "cloudflare_dns_record" "caa_issuewild" {
-  count   = var.acme_account_id == "" ? 0 : 1
   zone_id = data.cloudflare_zone.this.zone_id
   name    = var.domain
   type    = "CAA"
-  ttl     = 3600
-  comment = "ACME account pin for wildcard orders from the in-VM CSR client"
-
   data = {
     flags = 0
     tag   = "issuewild"
-    value = "letsencrypt.org; accounturi=${local.acme_account_uri}"
+    value = "letsencrypt.org"
   }
+  ttl     = 3600
+  comment = "wildcard orders need their own tag (design #842)"
 }

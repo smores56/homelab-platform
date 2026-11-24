@@ -688,6 +688,87 @@ Unlike the host's own monitors this one is deliberately not a key in
 and this probe never runs there, so a bundle copy would be dead weight and the
 capability URL belongs in the `deploy-notify` Environment alone.
 
+### Create the public edge check
+
+`verify-public-edge.yml` runs daily and proves the three public names still
+answer as their applications, and that the CA behind the edge's certificate is
+one the zone's `CAA` records admit (`docs/core/public-edge.md`, "Validation").
+It is the only check that sees the VPS, so it pages through a Healthchecks
+check of its own: a daily period with a six-hour grace, because the probe answers
+once a day and one late run should not page.
+
+Create the check in the project with a `1 day` period and a `6 hour` grace, then
+copy its ping URL into the environment:
+
+```sh
+OWNER=$(cat ~/.config/smores56-agent/owner-token)
+printf '%s' '<ping url>' | GH_TOKEN="$OWNER" \
+  gh secret set EDGE_PING_URL --env deploy-notify --repo smores56/homelab-platform
+```
+
+Then run it once so the check has an answer, and read the job's own output: it
+prints one `ok`/`FAIL`/`note` line per probe.
+
+```sh
+GH_TOKEN="$OWNER" gh workflow run verify-public-edge.yml --repo smores56/homelab-platform
+GH_TOKEN="$OWNER" gh run watch --repo smores56/homelab-platform
+```
+
+The probe needs only DNS and TLS, so the same scripts are the operator's tool
+during an outage; run them from any host with `curl`, `openssl` and `dig`:
+
+```sh
+scripts/verify-public-edge.sh
+scripts/verify-caa.sh
+EDGE_CERT_MIN_DAYS=100000 scripts/verify-public-edge.sh   # the expiry leg, red
+CAA_ZONE=example.com scripts/verify-caa.sh                # a zone with no CAA, a notice
+```
+
+`verify-caa.sh` is deliberately quiet until the zone's `CAA` records exist: an
+empty set prints a `note` and exits 0, because a red check over a missing record
+teaches the operator to ignore it. Once the records are there the assertion is
+live, and a certificate from a CA the records do not admit turns the daily run
+red — the failure prints the `issue`/`issuewild` values it read and the CA
+domain it expected.
+
+Like the names check this one is deliberately not a key in `secrets/boot.json`'s
+`healthchecks` object: the probe never runs on the host, so the capability URL
+belongs in the `deploy-notify` Environment alone.
+
+#### T5: the owner's first run
+
+One sitting, in this order — step 1 can block everything after it.
+
+1. **Apply the CAA records**: `tofu -chdir=tofu apply -no-color` from a clean
+   checkout of `main`. That lands `cloudflare_dns_record.caa_issue` and
+   `.caa_issuewild`, both `0 … "letsencrypt.org"`, unconditional.
+2. **Read the zone back**: `dig +short CAA sammohr.dev` must print **both**
+   `0 issue "letsencrypt.org"` and `0 issuewild "letsencrypt.org"` **plus**
+   Cloudflare's appended set (`pki.goog`, `sectigo.com`, DigiCert, `ssl.com`) —
+   Cloudflare adds its own records to any CAA-bearing zone, and the effective
+   policy is the union. Anything short of the two declared values: `git revert`
+   the commit and re-apply; never edit the zone by hand
+   (`docs/cloudflare.md`, "CAA").
+3. **Force the renewal** on the VPS — owner only, destructive; delete the name's
+   certificate directory and restart because `admin off` exposes no API. The
+   exact commands are `provision/edge/README.md`, "Order" step 6. Then
+   `scripts/verify-caa.sh` exits 0 and `scripts/verify-public-edge.sh` shows a
+   fresh window.
+4. **Kanbei's Universal SSL re-validation**: SSL/TLS → Edge Certificates must
+   show `kanbei.sammohr.dev` (and the zone's wildcard) active, not pending or
+   expired. Cloudflare re-validates on its own against the union of the two
+   records and its appended set; if it fails, the appended set is what stopped
+   being visible (`docs/cloudflare.md`, "CAA").
+5. **Create the Healthchecks check and `EDGE_PING_URL`**: `1 day` period, `6 hour`
+   grace, then the `gh secret set` above.
+6. **One green dispatch**: `gh workflow run verify-public-edge.yml`, then read the
+   `ok`/`note` lines.
+7. **One deliberate failure**: from a scratch branch, point one probe in
+   `scripts/verify-public-edge.sh` at a host that cannot answer, run
+   `gh workflow run verify-public-edge.yml --ref <branch>`, and watch the run go
+   red and the page arrive — the ping takes the `${EDGE_PING_URL%/}/fail` form.
+   Delete the branch; the next green run `/` the same URL.
+
 ### The operator's view of the receiver
 
 `/usr/libexec/smortress-deploy` is the whole operator surface, and `/usr/libexec`

@@ -147,9 +147,8 @@ that already exists.
 ```
 
 The account, apex, alert address and both tunnel ids come from the committed
-`tofu/terraform.tfvars`; `acme_account_id` there stays empty until step 16. The
-cluster host set is not a variable either — it follows `local.cluster_ingress`
-in `tofu/cluster.tf`.
+`tofu/terraform.tfvars`. The cluster host set is not a variable either — it
+follows `local.cluster_ingress` in `tofu/cluster.tf`.
 
 Two credentials are environment inputs, and the script is the one place that
 fetches them: SOPS decrypts the operator store in this repository
@@ -174,8 +173,6 @@ No variable carries a tunnel secret, and none is a credential.
 | `host_tunnel_id` | UUID of the nix-config host tunnel |
 | `cluster_tunnel_id` | UUID of the k3s tunnel; empty until it exists |
 | `cluster_hosts` | subdomains routed to the cluster tunnel; unset by default, derived from `local.cluster_ingress` in `tofu/cluster.tf`. Pin it only to roll a single name back to the host tunnel |
-| `acme_account_id` | numeric Let's Encrypt account pinned in CAA |
-| `acme_directory` | ACME directory of that account (staging pins staging) |
 
 ## Access: default deny
 
@@ -240,46 +237,76 @@ zone with no application of its own is reachable only by the owner's identity.
 
 ## CAA
 
-Two records at the apex pin issuance to the ACME account the in-VM CSR client
-uses:
+The zone declares two `CAA` records at the apex, both naming Let's Encrypt and
+nothing narrower:
 
 ```
-sammohr.dev. 3600 IN CAA 0 issue     "letsencrypt.org; accounturi=https://acme-v02.api.letsencrypt.org/acme/acct/<id>"
-sammohr.dev. 3600 IN CAA 0 issuewild "letsencrypt.org; accounturi=https://acme-v02.api.letsencrypt.org/acme/acct/<id>"
+sammohr.dev. 3600 IN CAA 0 issue "letsencrypt.org"
+sammohr.dev. 3600 IN CAA 0 issuewild "letsencrypt.org"
 ```
 
-`accounturi` is compared literally against the URI in the CSR, so the account
-id and the directory must both be the production pair. `issuewild` is a separate
-tag because a wildcard order is not authorized by `issue`.
+They live in `tofu/dns.tf` (`cloudflare_dns_record.caa_issue` and `.caa_issuewild`)
+and are unconditional: no `count`, no variable gates them. They authorize the
+names Let's Encrypt actually issues for — the unproxied ones, where the order
+runs on the origin and LE reads this set directly: `photos`, `opds` and
+`recovery` on the public edge (`docs/core/public-edge.md`), plus `assistant` and
+`agent` on smortress. `issuewild` is a separate tag because a wildcard order is
+not authorized by `issue`.
 
-**Caveat — this is a narrowing, not a lockdown.** With Universal SSL enabled,
-Cloudflare appends its own CAA records (`pki.goog`, `letsencrypt.org`,
-`ssl.com`, `sectigo.com`, DigiCert) to any zone that has a CAA record. They are
-invisible in the dashboard and appear only in DNS. Because CAA authorizes
-issuance if *any* matching record permits it, the unpinned `letsencrypt.org`
-record keeps any Let's Encrypt account able to issue for the edge certificate;
-the pin binds the account Kanbei's own order uses, and the Cloudflare-managed
-records keep Universal SSL working. Verify with:
+**No account URI is pinned.** A CAA value may carry
+`accounturi=https://acme-v02.api.letsencrypt.org/acme/acct/<id>`, but that string
+is compared literally against the URI in the CSR, so it authorizes one ACME
+account on one directory — a staging URI pins staging, a production URI pins
+production, and the two never mix. The edge's Caddy account is not a stable
+identity: a rebuild re-registers and the account it replaces is gone
+(`docs/core/public-edge.md`, "Certificates"), so a pin would turn a routine
+rebuild into an outage that only surfaces at renewal. Naming the CA is what
+survives the rebuild: the new account orders from the same directory and the
+policy already admits it.
+
+**The proxied names are authorized by Cloudflare, not by these records.** A
+proxied name answers from Cloudflare's edge, so the certificate in front of it is
+Cloudflare's to order. With Universal SSL enabled, Cloudflare appends its own CAA
+set (`pki.goog`, `letsencrypt.org`, `ssl.com`, `sectigo.com`, DigiCert) to any
+zone that has a CAA record. Those records are invisible in the dashboard and
+appear only in DNS. CAA admits issuance if *any* matching record permits it, so
+the effective policy is the union of what this repository declares and what
+Cloudflare manages; the managed half is what keeps Universal SSL able to renew
+for `kanbei`, the wildcard and the rest. Verify the served state with:
 
 ```sh
 dig +short CAA sammohr.dev
 ```
 
-Expected: the two pinned records above **plus** the Cloudflare-added set, e.g.
+Expected: the two `letsencrypt.org` records **plus** the Cloudflare-added set,
+values possibly carrying parameters:
 
 ```
-0 issue "letsencrypt.org; accounturi=https://acme-v02.api.letsencrypt.org/acme/acct/<id>"
-0 issuewild "letsencrypt.org; accounturi=https://acme-v02.api.letsencrypt.org/acme/acct/<id>"
-0 issue "pki.goog; cansignhttpexchanges=yes"
-0 issuewild "pki.goog; cansignhttpexchanges=yes"
 0 issue "letsencrypt.org"
 0 issuewild "letsencrypt.org"
+0 issue "pki.goog; cansignhttpexchanges=yes"
+0 issuewild "pki.goog; cansignhttpexchanges=yes"
+0 issue "sectigo.com"
 ...
 ```
 
-A `dig` that shows only the pinned pair means Universal SSL is off (or the zone
-uses Advanced certificates), which is also acceptable but then the pin is the
-whole policy.
+**The certificate carve-out is Advanced Certificate Manager.** Cloudflare appends
+its set only while it controls the edge certificate. Turn on Advanced Certificate
+Manager (or order a custom certificate, or turn Universal SSL off) and nothing is
+appended: the two records above become the whole policy, which forbids the CA
+Cloudflare would pick for the proxied names and stops their renewal weeks before
+anyone notices. The order of operations for that move is therefore: add the CA
+that will issue to these records first, then move the certificate.
+
+`scripts/verify-caa.sh` asserts the union against reality: it reads the issuer of
+the certificate `kanbei.sammohr.dev` serves, maps it to a CA domain (Google Trust
+Services to `pki.goog`, Let's Encrypt to `letsencrypt.org`, DigiCert to
+`digicert.com`, Sectigo to `sectigo.com`, ZeroSSL to `zerossl.com`) and requires
+that domain in an `issue`/`issuewild` value. It runs daily in
+`.github/workflows/verify-public-edge.yml`, so a carve-out that stops renewal
+fails there before the certificate expires. An empty set is a notice rather than
+a failure: the check reports the served issuer and passes, and the two records
+above are asserted statically by `tests/tofu/check.sh`.
 
 ## Retired hostnames
 

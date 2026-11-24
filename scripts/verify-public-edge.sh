@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Prove the public edge (design #725) answers for the two names and for nothing
-# else. Run it after the DNS cutover; before that the names do not resolve here
-# and no certificate can exist, so the pre-cutover proof is the box's own
-# `provision/edge/verify.sh` with EXPECT_UPSTREAM=1.
+# Prove the public edge (design #725) answers for the three names and for
+# nothing else. Run it after the DNS cutover; before that the names do not
+# resolve here and no certificate can exist, so the pre-cutover proof is the
+# box's own `provision/edge/verify.sh` with EXPECT_UPSTREAM=1.
 #
 # The probes are the design's claims, not a smoke test:
 #
-#   - both names answer over TLS, with a certificate valid for the name;
+#   - all three names answer over TLS, with a certificate valid for the name;
 #   - that certificate is not within EDGE_CERT_MIN_DAYS of expiry;
 #   - each name answers as *its application*, not as anything else that lives
 #     on smortress's 443. That port carries the agent gateway APIs and
@@ -14,12 +14,14 @@
 #     appear here. A status code cannot prove it: Immich's SPA answers 200 for
 #     any path and OPDShelf answers 401 for any path. The signatures are:
 #       Immich  -> 200 and its own HTML shell;
-#       OPDShelf-> 401 with a WWW-Authenticate challenge.
+#       OPDShelf-> 401 with a WWW-Authenticate challenge;
+#       Backrest-> 200, text/html and its <title> behind backrest-guard;
 #     Serve's wallpaper tree is a bare <pre> listing and the agent gateway is a
 #     text/plain 404, so neither can satisfy those.
 #
-# Exit 0 only when every probe passes. No repository check can see the VPS, so
-# this script and `provision/edge/verify.sh` are the gate.
+# Exit 0 only when every probe passes. No repository check can see the VPS: this
+# script, `.github/workflows/verify-public-edge.yml` on its daily schedule and
+# `provision/edge/verify.sh` are the gate.
 #
 #   scripts/verify-public-edge.sh
 #
@@ -29,6 +31,7 @@ set -uo pipefail
 
 photos=photos.sammohr.dev
 opds=opds.sammohr.dev
+recovery=recovery.sammohr.dev
 timeout_s=${EDGE_TIMEOUT:-10}
 min_days=${EDGE_CERT_MIN_DAYS:-14}
 cafile=${EDGE_CAFILE:-/etc/ssl/certs/ca-certificates.crt}
@@ -77,7 +80,7 @@ certificate_ok() { # <name>
   "$openssl_bin" x509 -noout -checkend "$((min_days * 86400))" <<<"$pem" >/dev/null 2>&1
 }
 
-for host in "$photos" "$opds"; do
+for host in "$photos" "$opds" "$recovery"; do
   code=$(fetch "https://$host/" "$work/body" "$work/hdr")
   if [[ $code =~ ^(2|3)[0-9][0-9]$ || $code == 401 ]]; then
     ok "$host answers over TLS ($code)"
@@ -113,6 +116,18 @@ for path in /apps/agent-local/v1 /apps/agent-general/v1 /wallpapers/; do
     bad "$path answers as OPDShelf's auth on $opds" "got '$code'"
   fi
 done
+
+# Backrest: its own title behind the guard. A bare 200 cannot tell it apart
+# from Caddy's own pages, which answer text/html too.
+code=$(fetch "https://$recovery/" "$work/body" "$work/hdr")
+if [[ $code == 200 ]] && grep -qi '^content-type: text/html' "$work/hdr" &&
+  grep -qi '^server: backrest-guard' "$work/hdr" &&
+  grep -q '<title>Backrest</title>' "$work/body"; then
+  ok "$recovery answers as Backrest"
+else
+  bad "$recovery answers as Backrest" \
+    "got '$code' and '$(head -c 60 "$work/body" 2>/dev/null | tr -d '\n')'"
+fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 exit $((fail > 0))

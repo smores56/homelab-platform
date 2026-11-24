@@ -229,16 +229,29 @@ hasnt "no chat destination" 'uri[[:space:]]*=[[:space:]]*"chat\.'
 hasnt "no nanobot destination" 'uri[[:space:]]*=[[:space:]]*"nanobot\.'
 
 echo "== CAA"
-caa=$(grep -cE '^[[:space:]]*type[[:space:]]*=[[:space:]]*"CAA"' "$work/code.tf")
-eq "$caa" "2" "two CAA records (issue and issuewild)"
-has 'CAA issue carries accounturi' 'tag[[:space:]]*=[[:space:]]*"issue"' 
-has 'CAA issuewild carries accounturi' 'tag[[:space:]]*=[[:space:]]*"issuewild"'
-accounturi=$(grep -c 'accounturi=\${local.acme_account_uri}' "$work/code.tf")
-eq "$accounturi" "2" "both CAA records pin the ACME account"
-has 'acme_account_uri derives from the account id variable' 'acme_account_uri = "\$\{trimsuffix\(var\.acme_directory, "/directory"\)\}/acme/acct/\$\{var\.acme_account_id\}"'
-has 'acme_account_id is a variable' 'variable "acme_account_id"'
-has 'the CAA pin is conditional on the account id' 'count[[:space:]]*=[[:space:]]*var\.acme_account_id == "" \? 0 : 1'
-has 'an empty acme_account_id is valid' 'var\.acme_account_id == "" || can\(regex'
+# Two unpinned records (design #842 T4): the policy names the CA and the account
+# is deliberately absent, because the edge's Caddy account is disposable and a
+# pin expires with it. The proxied names' CA set is Cloudflare's and is not this
+# repository's to declare (docs/cloudflare.md, "CAA").
+eq "$(grep -cE '^[[:space:]]*type[[:space:]]*=[[:space:]]*"CAA"' "$work/code.tf")" "2" \
+  "exactly two CAA records (issue and issuewild)"
+for tag in issue issuewild; do
+  caa=$(extract "cloudflare_dns_record.caa_$tag")
+  if [[ -z $caa ]]; then
+    bad "CAA $tag record is declared"
+    continue
+  fi
+  ok "CAA $tag record is declared"
+  if grep -qF "tag   = \"$tag\"" <<<"$caa"; then ok "CAA $tag carries tag = \"$tag\""; else bad "CAA $tag carries tag = \"$tag\"" "$caa"; fi
+  if grep -qF 'value = "letsencrypt.org"' <<<"$caa"; then ok "CAA $tag names letsencrypt.org"; else bad "CAA $tag names letsencrypt.org" "$caa"; fi
+  if grep -qF 'flags = 0' <<<"$caa"; then ok "CAA $tag is a non-critical record"; else bad "CAA $tag is a non-critical record" "$caa"; fi
+  if grep -qE '^[[:space:]]*ttl[[:space:]]*=[[:space:]]*3600' <<<"$caa"; then ok "CAA $tag sets ttl 3600"; else bad "CAA $tag sets ttl 3600" "$caa"; fi
+  if grep -qE '^[[:space:]]*name[[:space:]]*=[[:space:]]*var\.domain' <<<"$caa"; then ok "CAA $tag sits at the zone apex"; else bad "CAA $tag sits at the zone apex" "$caa"; fi
+  if grep -qE '^[[:space:]]*count[[:space:]]*=' <<<"$caa"; then bad "CAA $tag is unconditional" "$caa"; else ok "CAA $tag is unconditional"; fi
+done
+hasnt 'no CAA value pins an ACME account' 'accounturi='
+hasnt 'acme_account_id is not a variable' 'variable "acme_account_id"'
+hasnt 'acme_account_uri is not a local' 'acme_account_uri'
 
 echo "== tunnels"
 has 'host tunnel CNAME comes from the host tunnel variable' 'host_tunnel_cname[[:space:]]*=[[:space:]]*"\$\{var\.host_tunnel_id\}\.cfargotunnel\.com"'
