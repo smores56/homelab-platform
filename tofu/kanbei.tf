@@ -5,4 +5,5 @@
 # nix-config (`webProxy.services.kanbei`) is the only piece left, and it has no
 # connector to answer it.
 #
-# This file stays while docs still reference it; #833 T5 removes both.
+# This file stays as the note `docs/cloudflare.md` and `docs/manual-steps.md`
+# reference; it declares no resource.

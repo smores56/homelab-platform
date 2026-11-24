@@ -29,15 +29,15 @@ answering and pings Healthchecks if a ping URL is written to
   `wrangler.json`.
 - `backrest/scripts/gate.sh` runs the acceptance matrix against a deployment.
 - `recovery.sammohr.dev` has **no Cloudflare Access gate** (design #701,
-  re-affirmed 2026-11-20). No Access object in the zone names it (SDLC #833):
-  the name answers from the edge VPS, and family can use it with nothing set up
-  in advance. The reader's own password is the only login, and
-  `tofu/rate-limit.tf` rate limits the login endpoint at 10 requests per 10 s per
-  IP with a 10 s mitigation window. That rule holds the zone's only rate-limit
-  slot, and the media rule it displaced is a recorded residual (below). There is
-  no `backrest` Access application, no email policy on the name and no service
-  token in the path; a service token header from `gate.sh` is simply an unused
-  header now.
+  re-affirmed 2026-11-20). No Access object exists in the zone at all (SDLC
+  #833): the name answers from the edge VPS, and family can use it with nothing
+  set up in advance. The reader's own password is the only login, and the guard
+  enforces the login budget itself — 10 requests per 10 s per IP with a 10 s
+  mitigation window — because no Cloudflare phase sees this traffic any more;
+  `tofu/rate-limit.tf` keeps its single slot empty, and the media rule that slot
+  displaced is a recorded residual (below). There is no `backrest` Access
+  application, no email policy on the name and no service token in the path; a
+  service token header from `gate.sh` is simply an unused header now.
 - `deploy.sh` builds the image, pushes it with `wrangler containers build -p`,
   asks the registry for the digest it stored, and deploys a config whose image
   reference is that digest. Two podman quirks are why it does not simply call
@@ -54,6 +54,12 @@ Durable Object policy lets the Worker decide when an instance restarts, passes
 the environment in at `start()`, and allows a six-hour inactivity timeout.
 
 ## What the platform actually promises
+
+The limits below are the Cloudflare Containers limits the design was written
+against, kept as the record of why the shape is what it is: the reader left
+Cloudflare in #725 T2 and the Worker-era sections after this point describe code
+that is no longer deployed. The parts that still bind are the read-only boundary,
+the gate matrix and the operator order.
 
 | Limit | Value | Consequence here |
 | --- | --- | --- |
@@ -186,15 +192,16 @@ to the Worker log unless `BACKREST_DEBUG=1`.
 
 ## Gate matrix
 
-Every row must pass on Cloudflare. The VPS fallback is preauthorized and must
-pass the same matrix if Cloudflare fails.
+Every row must pass against the deployed reader, which is the edge VPS. The
+Cloudflare column of this document is history; nothing about the matrix loses a
+row because the hosting changed, and the two hosting-only rows are marked.
 
 | Check | Command / evidence |
 | --- | --- |
 | automated redeploy | `backrest/scripts/deploy.sh` twice; the second run serves without manual steps |
 | cold start without binary egress | image ships `/bin/restic`; `BACKREST_RESTIC_COMMAND` set; no restic download in `wrangler tail` |
 | reindex before readiness | first request after a wake lists snapshots and can mint a download URL |
-| authentication | `gate.sh verify`: an anonymous request is refused by Backrest with its own login form, with no Access redirect in front of it; the login endpoint is rate limited at the edge (`tofu/rate-limit.tf`) |
+| authentication | `gate.sh verify`: an anonymous request is refused by Backrest with its own login form, with no Access redirect in front of it; the login endpoint is bounded by the guard's 10-per-10-s budget |
 | redaction | `gate.sh verify`: no repo password or R2 key in `GetConfig`, JSON and protobuf |
 | verified-only | `gate.sh verify`: `ListSnapshots` returns only `verified` tags |
 | small file and small directory | `gate.sh verify` |
@@ -203,7 +210,7 @@ pass the same matrix if Cloudflare fails.
 | cancellation | `gate.sh cancel <path>`, then a follow-up request must answer |
 | interruption is visible | operator kills the container's main process mid-stream; the client sees a truncated, failed download, never a silent success |
 | write denial | `gate.sh denial`: restic init/backup/forget/prune/unlock all fail with the read-only token and leave the snapshot list unchanged; the proxy also refuses every write RPC with 403 |
-| smortress powered off | the whole matrix runs with the server down; only R2 and Cloudflare are involved |
+| smortress powered off | the whole matrix runs with the server down; only R2 and the edge box are involved |
 
 Record the run, byte counts, durations and failure text on issue #707. An
 interruption during the four-hour stream fails that attempt; the documented
@@ -216,25 +223,29 @@ behaviour is "restart from the beginning", not resume.
   prune.
 - Only `verified`-tagged snapshots count as complete. The proxy enforces it for
   this UI; plain restic still does not, so the runbook rule stands.
-- The restic password lives in the ephemeral container config (mode 0600), in
-  the Worker secret, and in Bitwarden/on paper. Nothing durable on Cloudflare
-  keeps it.
-- Plain restic remains the documented fallback when Backrest or Cloudflare is
+- The restic password lives in the container config on the edge box (rendered
+  from `/etc/backrest/env`, mode 0600) and in Bitwarden/on paper. Nothing on
+  Cloudflare keeps it, and no Cloudflare account can read it.
+- Plain restic remains the documented fallback when Backrest or the edge box is
   unavailable.
 
-## VPS fallback (preauthorized)
+## Where it runs
 
-Same image and same environment contract, so nothing about the repository,
-token, `--no-lock`, or "verified only" changes. The differences are hosting
-only:
+The edge VPS (#725 T2), not Cloudflare. Same image and same environment
+contract, so nothing about the repository, token, `--no-lock`, or "verified
+only" changes. The differences are hosting only:
 
 - `/data` and `/cache` are persistent volumes; the config is still re-rendered
   from `/etc/backrest/env` on every start, so no drift is possible;
-- the hostname reaches it through a Cloudflare Tunnel instead of a Worker route,
-  with the same absence of an Access gate and the same edge rate limit;
-- the same `gate.sh` matrix runs against the same hostname.
+- the name is a grey `A` record to the box (`docs/core/public-edge.md`) and
+  Caddy terminates TLS in front of the guard, so there is no tunnel, no Worker
+  route and no Access gate on the path;
+- `provision/edge/backrest-watchdog.sh` restarts `backrest.service` when it stops
+  answering, and the same `gate.sh` matrix runs against the same hostname.
 
-Exact commands are in `docs/manual-steps.md#hosted-backrest`.
+What the reader deploys from is `backrest/container`; the Worker sources, the
+`wrangler` path and the Cloudflare secrets below are retired. Exact commands are
+in `docs/manual-steps.md#hosted-backrest`.
 
 ## Operator order
 
@@ -259,8 +270,10 @@ export BIG_SHA256=$(sha256sum "$GATE/big.bin" | cut -d' ' -f1)
 
 The small checks use `small.bin` and `small-tree` and are capped at 64 MiB. Create a
 read-only R2 token (Object Read only, scoped to `homelab-restic`) — Backrest's only
-credential — then the Worker secrets and the deploy, hashing the operator password
-so only the bcrypt reaches Cloudflare:
+credential. The block below is the retired Cloudflare deployment: the `put_secret`
+calls write Worker secrets and `deploy.sh` deploys the Worker, and neither exists
+any more (#725 T2). The reader's environment is `/etc/backrest/env` on the edge
+box, and the password hash is what goes into it (`backrest/scripts/hash-password.sh`):
 
 ```sh
 put_secret() { (cd backrest && mise x node@22 -- npx wrangler secret put "$1"); }
@@ -282,7 +295,8 @@ backrest/scripts/gate.sh matrix
 backrest/scripts/gate.sh stream "$GATE/big.bin" sha "$BIG_SHA256"
 ```
 
-The first request after a deploy is the cold start; watch it with
-`npx wrangler tail`, where a restic write attempt is a gate failure. On a pass,
-redeploy with the production repository URI and GUID and delete the `/gate` path.
-The preauthorized VPS fallback is `docs/core/backrest.md`, "VPS fallback".
+The first request after a deploy is the cold start; watch it in the container's
+journal (`journalctl -u backrest` on the edge box), where a restic write attempt is
+a gate failure. On a pass, redeploy with the production repository URI and GUID and
+delete the `/gate` path. Where the reader runs, and the watchdog that keeps it
+answering, is "Where it runs" above.

@@ -2,9 +2,10 @@
 # Static checks for the Cloudflare OpenTofu config (SDLC #581).
 #
 # No credentials, no API calls, no state: it reads `tofu/*.tf` as text and
-# asserts the reviewed shape of the zone. Runtime behaviour (a hostname with no
-# application really being blocked) is tests/access/check.sh, which needs a
-# token.
+# asserts the reviewed shape of the zone. The live half is
+# scripts/verify-public-edge.sh, which resolves the names and checks each answers
+# as its own application; the token-driven Access probe retired with the Access
+# objects (SDLC #833).
 #
 #   tests/tofu/check.sh
 # shellcheck disable=SC2016  # patterns match HCL text: ${...} is literal, not a shell expansion
@@ -158,17 +159,27 @@ else
   ok "kanbei has no cloudflare_dns_record"
 fi
 
-# The operator-facing half of the same contract: the state-rm order for a
-# prevent_destroy object and the service-token mint step.
-if grep -qF 'state rm cloudflare_zero_trust_access_application.kanbei' docs/manual-steps.md; then
-  ok "manual steps remove the kanbei state entry first"
+# The operator-facing half of the same contract. `prevent_destroy` is read from
+# configuration, so a deleted block plans a destroy: the steps must not send the
+# operator through a `state rm` for an Access object, which is what they said
+# while the block was still there and what would now fail on a missing entry.
+if grep -rqE 'state rm cloudflare_zero_trust_access' docs/; then
+  bad "no doc sends the operator through a state rm for an Access object" \
+    "$(grep -rnE 'state rm cloudflare_zero_trust_access' docs/)"
 else
-  bad "manual steps remove the kanbei state entry first"
+  ok "no doc sends the operator through a state rm for an Access object"
 fi
-if grep -qF 'kanbei.sammohr.dev' docs/manual-steps.md && grep -qiF 'service auth' docs/manual-steps.md; then
-  ok "manual steps cover the Kanbei route and service token"
+if grep -qF 'kanbei.sammohr.dev' docs/manual-steps.md; then
+  ok "manual steps still account for the Kanbei route"
 else
-  bad "manual steps cover the Kanbei route and service token"
+  bad "manual steps still account for the Kanbei route"
+fi
+# The connector caches live on operator machines, outside every check here, so
+# the manual step is the only thing that removes them.
+if grep -qF '/.cloudflared' docs/manual-steps.md; then
+  ok "manual steps remove the stale cloudflared connector caches"
+else
+  bad "manual steps remove the stale cloudflared connector caches"
 fi
 
 echo "== retired hostnames"
@@ -426,10 +437,10 @@ if grep -rniE 'access-protected' docs/ | grep -qi backrest; then
 else
   ok "no doc calls the reader Access-protected"
 fi
-if grep -qF 'state rm cloudflare_zero_trust_access_application.backrest' docs/manual-steps.md; then
-  ok "manual steps remove the backrest state entry first"
+if grep -qF '`prevent_destroy` is read from' docs/cloudflare.md; then
+  ok "cloudflare.md states prevent_destroy is read from configuration"
 else
-  bad "manual steps remove the backrest state entry first"
+  bad "cloudflare.md states prevent_destroy is read from configuration"
 fi
 
 echo "== state backend"

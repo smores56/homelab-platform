@@ -98,7 +98,9 @@ replacement model, including why the App lost, is `docs/agent-identity.md`.
 
 `memory` (SDLC #631) is the graphiti memory wrapper
 (`memory-mcp.graphiti.svc.cluster.local:8182`), the same MCP endpoint
-`memory.sammohr.dev` fronts, reached in-cluster instead of through the tunnel.
+`memory.sammohr.dev` used to front, reached in-cluster. That name has no DNS
+record since the cluster tunnel went (SDLC #833); the enrollment is in-cluster
+`http`, so nothing about it depended on the public name.
 It is plain HTTP with `allow_private: true` — the documented private exception —
 and injects `Authorization: Bearer <memory-mcp-token>`. The value is the one the
 wrapper already uses, projected from the graphiti Secret into
@@ -117,9 +119,18 @@ and `tags` ride in the query string — the broker matches `allow_paths` against
 the path only, so the query is forwarded untouched. It admits `POST` on a
 single-segment topic of at most 64 characters, caps the body at 4 KiB and
 injects `Authorization: Bearer <notify-token>`. `allow_private` stays `false`:
-the broker resolves the hostname to Cloudflare edge addresses, so the request
-leaves through the tunnel and comes back, and the broker never becomes a path
-into the cluster network.
+the endpoint is a public TLS name, so the broker never becomes a path into a
+private network.
+
+**The `notify` enrollment is inactive.** The ntfy bus, its cluster manifests and
+the tunnel that published `ntfy.sammohr.dev` are retired with the k3s tree, and
+the name has no DNS record (SDLC #833), so a call to that host fails at
+dial/resolve, not at the broker's predicates. The enrollment stays in
+`apps/broker/config/broker.json` deliberately: it is the reviewed contract for
+what the agent may publish once ntfy is redeployed behind a public name again,
+and `optional_secret` already makes an absent `notify-token` a 503 rather than a
+startup failure. Deleting it would have to be undone by the same diff that
+redeploys the bus.
 
 The token is the ntfy `agent` user's, which is write-only on the `agent` topic.
 That is deliberate: `allow_paths` is a path regex, not a topic allowlist, so a
@@ -288,9 +299,11 @@ Live-gated (need the cluster, the real tokens and the operator):
 - the broker's first real call to each logical host (GitHub push, platform PR,
   the `sdlc` registry push/issues, Neuralwatt, TinyFish, Loki, memory, notify,
   agent-control);
-- the notify bus's first real publish (the enrollment now names
-  `ntfy.sammohr.dev`; the token is the `agent` user's);
+- the notify bus's first real publish, once ntfy is redeployed behind
+  `ntfy.sammohr.dev`; the enrollment and its `agent` user token wait for it
+  (inactive, above);
 - agent-control's Service, RBAC and tenant-side ingress
   (`tenant-apps` -> port 8081);
-- tunnel/Access routing and the `nanobot.sammohr.dev` retirement;
+- the retired tunnel/Access routing and the `nanobot.sammohr.dev`
+  retirement, which SDLC #833 completed;
 - NetworkPolicy and gVisor enforcement (no CNI/kubelet on the test bench).

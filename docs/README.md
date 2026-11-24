@@ -8,7 +8,7 @@ host that is running: the image, its Quadlets, its backups and its edge.
 | `manual-steps.md` | The operator runbook: install, secrets and rotation, deploy, recover, decommission, all with exact commands. |
 | `runbook.md` | The GitHub settings an operator applies by hand: branch protection and repository settings. |
 | `negative-tests.md` | The adversarial properties proven against the live platform, and how each was measured. |
-| `cloudflare.md` | The public edge: DNS, Access, the tunnels that remain, and the OpenTofu state. |
+| `cloudflare.md` | The zone's DNS, the public names behind the edge VPS, the retired gate and tunnels, and the OpenTofu state. |
 | `secrets.md` | Where a secret lives, which identity reads it, and what is not a secret. |
 | `broker.md` | The broker's trust boundary, request contract, and logical-host enrollment. |
 | `webhook.md` | The webhook receiver's trust boundary and request contract. |

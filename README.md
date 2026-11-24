@@ -3,7 +3,7 @@
 Human-owned platform for `smortress`: one immutable uCore bootc server image, the
 Podman Quadlets and systemd units baked into it, ZFS recovery groups backed by the
 host Restic plane, Tailscale Serve for reachability, Cloudflare OpenTofu for the
-public edge, and the offline checks that guard all of it.
+zone's DNS, and the offline checks that guard all of it.
 
 Agents never push here. They work in
 [`homelab-apps`](https://github.com/smores56/homelab-apps) and propose platform
@@ -28,7 +28,7 @@ changes by pull request from a fork, so no PR workflow can read a secret.
 | `apps/data_plane/` | CLI entry points for the data-plane library |
 | `backrest/` | The Backrest reader Worker: source, TypeScript typecheck and static tests (`docs/core/backrest.md`) |
 | `images/` | Container image sources: agent egress, agent mail, agent WebUI, data-plane, brave, tuta-calendar |
-| `tofu/` | Cloudflare OpenTofu (provider v5), Access default-deny, CAA (`docs/cloudflare.md`), tailnet policy |
+| `tofu/` | Cloudflare OpenTofu (provider v5): the zone's DNS, the CAA pin (`docs/cloudflare.md`), tailnet policy |
 | `provision/edge/` | The public edge VPS bootstrap, Caddyfile, firewall and on-box verify (`docs/core/public-edge.md`) |
 | `provision/smortress/` | Autoinstall user-data for the bootc host |
 | `secrets/` | SOPS+age ciphertext, decrypted at boot or by the operator; CI references none |
@@ -64,5 +64,5 @@ is `workflow_dispatch` only and applies a reviewed plan (SDLC #622).
 ## Ownership
 
 Every path is owned by `@smores56`. `*.tf` and `.github/` are Kanbei-critical:
-a change there can repoint `kanbei.sammohr.dev` or expose the Cloudflare token.
+a change there can publish a name in the zone or expose the Cloudflare token.
 See `CODEOWNERS` and `docs/kanbei-critical.md`.

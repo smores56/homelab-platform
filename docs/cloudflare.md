@@ -1,84 +1,144 @@
-# Cloudflare: DNS, tunnels and Access
+# Cloudflare: DNS, the public edge and the zone state
 
 `tofu/` in this repository is the only place the zone `sammohr.dev` is
 described. It moved here from `nix-config/tofu/` (SDLC #581) so that every
 object a diff can change is reviewed next to the manifests it fronts. `*.tf` is
-Kanbei-critical (`docs/kanbei-critical.md`): the token can repoint a route.
+Kanbei-critical (`docs/kanbei-critical.md`): the token decides what the zone
+publishes.
 
-## Ownership: two tunnels, one zone
+## What the zone holds
 
-| Tunnel | Runs where | Serves | Owner |
+SDLC #833 retired the last edge middle layer: **no Access application, no
+Access policy, no tunnel and no wildcard record remains**. `tofu/dns.tf` is the
+whole of the served surface:
+
+| Record | Type | Points at | Cloud |
 | --- | --- | --- | --- |
-| Host tunnel | no connector: nix-config's `cloudflared` is retired, and the tunnel is locally managed and slated for retirement (#615) | nothing | human |
-| Cluster tunnel | `cloudflared` in the `ingress` namespace (`clusters/homelab/ingress/`) | the apps the host no longer serves (`immich`, `music`, `opdshelf`, `memory`, `agent`, `notify`, `webhook`) | this repository |
+| `photos`, `opds`, `recovery` | `A` | `var.edge_ipv4`, the edge VPS (`docs/core/public-edge.md`) | grey, TTL 300 |
+| `agent`, `assistant` | `A` | the agent UI Service's tailnet VIP (`tailscale_service.agent_ui`) | grey, TTL 300 |
+| apex, tags `issue` and `issuewild` | `CAA` | the pinned ACME account (`## CAA`) | n/a |
 
-SSH is not on either tunnel. It is tailnet-only (design #767): sshd answers the
-tailnet and the firewall is the filter, so there is no connector, no `ssh` DNS
-record and no `ssh` Access application to own (`docs/manual-steps.md#retire-the-cloudflare-ssh-route`,
-`docs/manual-steps.md#the-tailnet-policy-sshd-and-sudo`).
+Every name is grey cloud on purpose: Cloudflare must not sit in the media path,
+TLS-ALPN-01 needs the name to resolve to the box that answers it, and a proxied
+record over a tailnet address has no origin Cloudflare could reach. The `A`
+record for `agent` and `assistant` is the same VIP because Caddy on the host
+routes by SNI behind one Service (design #834).
 
-`tofu/` owns DNS, Access, notifications and the ingress of the **cluster**
-tunnel; it creates no connector. The cluster tunnel's DNS comes from
-`var.cluster_hosts` and `var.cluster_tunnel_id` in `tofu/dns.tf`, and its
-ingress from the `cluster` resource in `tofu/cluster.tf`. The host tunnel keeps
-the wildcard record in `tofu/main.tf`; it is the default-deny net now, since the
-names that used to resolve through it moved to the cluster or the tailnet.
+The apex keeps its mail records — `MX`, the `SPF` `TXT`, the domain-verification
+`TXT`s. None of them is declared here and SDLC #833 did not touch them.
 
-`kanbei.sammohr.dev` is a **public hostname behind Access** (SDLC #586):
-`tofu/kanbei.tf` creates the application and the wildcard record resolves the
-name. Its origin was the nix-config `webProxy.services.kanbei` rule into the
-guest relay, and that rule retired with nix-config. The name has no origin until
-a connector publishes it again; the Access application still answers first, so
-it is denied rather than exposed.
+`local.edge_hosts` in `tofu/cluster.tf` is the set the edge serves, and
+`edge_only_hosts` the subset whose origin is the box itself rather than a Serve
+port (`recovery`). `tofu/dns.tf` asserts the second is a subset of the first, so
+a typo publishes nothing while the config claims the name is served.
 
-A private WARP hostname route and its Gateway L4 rewrite were retired on
-2026-11-13. A private hostname needs Gateway to hand the client an
-initial-resolved IP and rewrite the connection into the tunnel, which never
-happened for either owner device; a public hostname needs no client component.
-`tests/tofu/check.sh` asserts there is no private hostname route and no record
-of its own.
+### What is served, and by whom
 
-The Cloudflare SSH route was deleted in #767's T6 and `tests/tofu/check.sh`
-asserts its absence: no `ssh` DNS record, no tunnel ingress, no `ssh` Access
-application, no dedicated service token and no `ssh_tunnel_id` variable. A plan
-that offers to create any of them is a re-introduction, not a migration.
+| Hostname | Answers from | Login |
+| --- | --- | --- |
+| `photos.sammohr.dev` | edge VPS, Caddy → Serve 8446 | Immich's own account |
+| `opds.sammohr.dev` | edge VPS, Caddy → Serve 8447 | OPDShelf's own login |
+| `recovery.sammohr.dev` | edge VPS, Caddy → the Backrest guard on loopback | the reader's own password — the guard's 10-per-10-s budget is the only other control (`docs/core/backrest.md`) |
+| `agent.sammohr.dev`, `assistant.sammohr.dev` | the tailnet only: a VIP no public resolver reaches | the tailnet ACL (`tofu/tailscale.tf`) |
+
+Every name in the table answers its own origin: nothing left in the zone is
+gated, proxied or tunnelled, so there is no edge policy to consult when one of
+them misbehaves — go to the box (`provision/edge/verify.sh`) or the host.
+
+### What is not served
+
+- `kanbei.sammohr.dev` has **no DNS record and no origin**. Its Access
+  application is deleted and the host tunnel's wildcard record that resolved it
+  is retired, so the name does not resolve at all. The one piece left is the
+  `webProxy.services.kanbei` ingress rule in `nix-config`, which has no
+  connector to answer it; `tofu/kanbei.tf` is a note, not a resource.
+- `llm`, `chat`, `nanobot`, `music` and `memory` are retired names: no record,
+  no application (`## Retired hostnames`).
+- `agent-hooks.sammohr.dev` (the webhook receiver) and `ntfy.sammohr.dev` (the
+  notification bus) have **no record** since the cluster tunnel went. Both are
+  inactive until their endpoints are redeployed as something the zone can point
+  at: the receivers, their manifests and the tunnel route went with the k3s
+  tree (`docs/webhook.md`, `docs/broker.md`). The broker's `notify` enrollment
+  still names `ntfy.sammohr.dev` and is marked inactive rather than deleted.
+
+A name with no record is not a default deny: Cloudflare answers NXDOMAIN, and
+anyone who wants the name back has to add a record here. That is the whole of
+the zone's access model now.
+
+## Retired: Access, the tunnels, and the wildcard
+
+This section is history, kept because operator notebooks, scripts and issues
+still quote it.
+
+Until SDLC #833 the zone had a default-deny Access application on
+`*.sammohr.dev` with the owner's email allow policy, a bypass application per
+public name, a `service auth` policy for `memory` and `agent`,
+`allow_authenticate_via_warp` for `kanbei`, two Cloudflare tunnels (one on the
+host, one in the `ingress` namespace) with a wildcard CNAME, the cluster
+tunnel's CNAME set and its remotely-managed ingress, and two notification
+policies. All of it is deleted, and the variables that fed it
+(`cluster_hosts`, `host_tunnel_id`, `cluster_tunnel_id`, `email`) are gone from
+`tofu/variables.tf` and `tofu/terraform.tfvars`.
+
+**The `prevent_destroy` story was wrong here and is worth stating plainly.**
+`prevent_destroy` is read from *configuration*, not from state, so deleting a
+resource block plans a destroy — there is no `tofu state rm` first, and no
+dashboard deletion before an apply. An object whose block is gone is destroyed
+by the apply that removes the block. `tofu/rate-limit.tf` still carries
+`prevent_destroy` on the ruleset because that resource is *kept*; that is the
+only thing the setting does.
+
+So the operator step for this retirement was one merge and one apply
+(`tofu-apply.yml`). What an operator may still see is drift, not a leftover:
+
+- Zero Trust → Access → Applications lists nothing for this zone. An entry that
+  reappears means someone recreated it in the dashboard; delete it there and
+  check `tofu-drift.yml`.
+- Zero Trust → Networks → Tunnels lists no tunnel. The cluster tunnel's
+  connector went with the cluster tree; the host tunnel was created in the
+  dashboard and is deleted there.
+- A host that still has a stale connector config will keep trying. The
+  `~/.cloudflared` caches on operator machines are outside this repository:
+  `docs/manual-steps.md#remove-the-stale-cloudflared-caches` is the step that
+  removes them.
+
+The Cloudflare SSH route went earlier (#767 T6) for the same reason: sshd
+answers the tailnet and the firewall is the filter. `tests/tofu/check.sh`
+asserts the absence of everything above — records, tunnels, applications,
+policies, service-token credentials and the variables that gated them — so a
+plan that offers to create any of them is a re-introduction, not a migration.
 
 ## Moved files
 
 | nix-config | here | Note |
 | --- | --- | --- |
-| `tofu/main.tf` | `tofu/main.tf`, `tofu/dns.tf`, `tofu/access.tf`, `tofu/rate-limit.tf` | split by object family; resource addresses unchanged |
+| `tofu/main.tf` | `tofu/main.tf`, `tofu/dns.tf`, `tofu/rate-limit.tf` | split by object family; resource addresses unchanged |
+| `tofu/access.tf` | `tofu/access.tf` | a note since SDLC #833: the file declares nothing |
 | `tofu/r2.tf` | `tofu/r2.tf` | verbatim; the bucket's browser CORS policy is retired (SDLC #833) |
-| `tofu/variables.tf` | `tofu/variables.tf` | `tunnel_id` renamed `host_tunnel_id`, new cluster/ACME inputs |
+| `tofu/variables.tf` | `tofu/variables.tf` | `tunnel_id` and the tunnel/cluster inputs are gone with the tunnels |
 | `tofu/versions.tf` | `tofu/versions.tf` | provider and zone lookup only |
 | `tofu/.terraform.lock.hcl` | `tofu/.terraform.lock.hcl` | re-resolved to 5.28.1 on bootstrap |
 | `tofu/.terraform/` | not copied | provider cache, never committed |
 
-Resource addresses keep their old names (`cloudflare_dns_record.wildcard`,
-`cloudflare_zero_trust_access_application.memory`, …) so the move is a state-file
-copy rather than a re-import. Renaming one means `tofu state rm` plus `import`
-with the ID format in `docs/manual-steps.md`.
+Resource addresses keep their old names (`cloudflare_dns_record.edge`,
+`cloudflare_ruleset.dav_rate_limit`, …) so the move was a state-file copy rather
+than a re-import. Renaming one means `tofu state rm` plus `import` with the ID
+format in `docs/manual-steps.md`.
 
 ## Provider v5
 
-The config is v5-only (`~> 5.0`). What the naming means:
+The config is v5-only (`~> 5.0`). The renames the state file carries:
 
 | v4 | v5 |
 | --- | --- |
 | `cloudflare_record` | `cloudflare_dns_record` |
-| `cloudflare_access_application` | `cloudflare_zero_trust_access_application` |
-| `cloudflare_access_policy` | `cloudflare_zero_trust_access_policy` |
-| `self_hosted_domains` | `destinations` (a set of `{type, uri}`; `domain` still reads but `destinations` is what new blocks use) |
 | `cloudflare_teams_*` | `cloudflare_zero_trust_*` |
-| `cloudflare_tunnel_route` | `cloudflare_zero_trust_network_hostname_route` |
+| `cloudflare_access_application` | `cloudflare_zero_trust_access_application` (retired, #833) |
+| `cloudflare_tunnel_route` | `cloudflare_zero_trust_network_hostname_route` (retired) |
 | `cloudflare_record` `data` for CAA | `cloudflare_dns_record` `data = { flags, tag, value }` |
 
-The four older applications were written with `domain`; they now use
-`destinations`, which the provider derives from the same API field. The first
-plan after the move may show an in-place update for `domain`/`destinations` and
-nothing else. A plan that says **replace** is wrong for this migration: stop and
-compare, because the resources carry `prevent_destroy` and a replacement means
-the state does not match the config.
+A plan that says **replace** on a record is wrong: stop and compare, because a
+replacement of an edge name is a window where the name publishes nothing.
 
 ## State
 
@@ -145,10 +205,9 @@ that already exists.
 ./scripts/tofu-cloudflare.sh apply -no-color
 ```
 
-The account, apex, alert address and both tunnel ids come from the committed
-`tofu/terraform.tfvars`; `acme_account_id` there stays empty until step 16. The
-cluster host set is not a variable either — it follows `local.cluster_ingress`
-in `tofu/cluster.tf`.
+The account, apex, tailnet login, edge address and ACME account come from the
+committed `tofu/terraform.tfvars`; `acme_account_id` there stays empty until
+step 16, and the CAA pin is created the moment it is set.
 
 Two credentials are environment inputs, and the script is the one place that
 fetches them: SOPS decrypts the operator store in this repository
@@ -163,80 +222,28 @@ whole-zone create that Cloudflare rejects object by object. Remove it, or set
 reason — after the migration it is an orphan copy, so delete it rather than
 letting a later `init` offer to copy it back.
 
-No variable carries a tunnel secret, and none is a credential.
+No variable carries a credential, and none names a secret.
 
 | Variable | Meaning |
 | --- | --- |
 | `account_id` | Cloudflare account tag |
 | `domain` | apex zone |
-| `email` | the only Access principal admitted, and the alert recipient |
-| `host_tunnel_id` | UUID of the nix-config host tunnel |
-| `cluster_tunnel_id` | UUID of the k3s tunnel; empty until it exists |
-| `cluster_hosts` | subdomains routed to the cluster tunnel; unset by default, derived from `local.cluster_ingress` in `tofu/cluster.tf`. Pin it only to roll a single name back to the host tunnel |
-| `acme_account_id` | numeric Let's Encrypt account pinned in CAA |
+| `tailscale_login` | the owner's tailnet login, used as a group member in the ACL |
+| `tailnet` | the tailnet whose policy `tofu/tailscale.tf` owns; empty plans nothing |
+| `edge_ipv4` | the edge VPS address; setting it creates the three grey `A` records, dropping it removes them (rollback) |
+| `acme_account_id` | numeric Let's Encrypt account pinned in CAA; empty writes no CAA record |
 | `acme_directory` | ACME directory of that account (staging pins staging) |
 
-## Access: default deny
+## The rate-limit slot is empty
 
-`cloudflare_zero_trust_access_application.wildcard` covers `*.sammohr.dev` with
-one allow policy (the owner's email). That is the default: a hostname under the
-zone with no application of its own is reachable only by the owner's identity.
-
-- **One label only.** Cloudflare wildcards stop at one label, so neither the
-  wildcard record nor the wildcard application covers `a.b.sammohr.dev`, and
-  the apex is not covered either. Nothing is served at either.
-- **Specific wins.** A more specific application overrides the wildcard for its
-  hostname; that is how the public and protected applications below co-exist
-  with the deny default.
-- **Bypass is unlogged.** Cloudflare evaluates bypass before allow and does not
-  log bypassed requests, so a bypass application *is* the public surface. The
-  zone holds no Access object any more (SDLC #833), so the public surface is
-  what resolves outside the gate -- the names below:
-
-  | Hostname | Why public |
-  | --- | --- |
-  | `photos.sammohr.dev` | mobile clients cannot complete an Access login; no edge rate limit since the slot moved to the reader |
-  | `music.sammohr.dev` | same, for the Navidrome clients; same slot loss |
-  | `opds.sammohr.dev` | OPDS readers and the web reader; the app's own login is the gate. Its per-IP edge budget went with the `http_ratelimit` slot (`docs/core/backrest.md`, "The single rate-limit slot") |
-  | `agent-hooks.sammohr.dev` | GitHub delivers webhooks with no browser and no service token; the capability URL is the credential and the receiver verifies the source's HMAC (`docs/webhook.md`). Not rate limited |
-  | `ntfy.sammohr.dev` | the notification bus (SDLC #649); the Android app cannot complete an Access login, and a service token cannot ride alongside the ntfy bearer the broker injects. ntfy's own auth is the gate — `deny-all` default, no signup, and its per-visitor request limiter |
-  | `recovery.sammohr.dev` | the hosted Backrest reader (#707). Design #701 opens it so family can use it with nothing set up in advance, so the reader's own password is the only login and the login endpoint is rate limited at 10 requests per 10 s per IP (`tofu/rate-limit.tf`). What makes this exposure acceptable is not a gate but write denial: the Worker refuses every write RPC and the R2 token cannot write, so the surface is a read-only browser (`docs/core/backrest.md`). Re-adding an Access application here is the documented fallback if that denial weakens |
-
-  `photos.sammohr.dev` and `opds.sammohr.dev` leave the zone's data path at
-  #725's cutover: their records become grey-cloud `A`s to the edge VPS, which
-  means Access no longer evaluates for them and these two rows become inert.
-  They stay until then, and they are the rollback (`docs/core/public-edge.md`).
-
-  The set carries no `prevent_destroy`, deliberately. Removing a name deletes
-  its bypass application and the name falls back to the wildcard deny on the
-  next request; adding one is a reviewed widening. The wildcard and the
-  protected applications do carry `prevent_destroy`, so removing one of those
-  needs `tofu state rm` first (same pattern as the retired hostnames below).
-
-- **Protected applications** keep the email allow policy and add a
-  `non_identity` decision where an unattended client connects. One decision
-  exists: `service auth`, which accepts `any_valid_service_token` in the account.
-  `memory` (the MCP wrapper's device) and `agent` (a blessed device's proxy)
-  attach it. The reader at `recovery.sammohr.dev` is **not** one of them: it has
-  no application at all (#707 design delta) and reaches the origin through the
-  public bypass above. There is no `ssh` application either: sshd is
-  tailnet-only (design #767), so no edge object names it.
-  `kanbei` keeps the email policy alone and
-  adds `allow_authenticate_via_warp`, so a device that already runs the
-  Cloudflare One client skips the login; a device without it gets the ordinary
-  Access redirect. `nanobot` is retired (SDLC #583): the agent app is served on
-  `agent`, and the old application is gone rather than left email-only.
-  The API rejects `allow_authenticate_via_warp` until the account has a
-  Cloudflare One Client authentication session duration (Zero Trust → Access →
-  Settings); it is an account-wide prerequisite, not something this repository
-  can declare.
-- The `service auth` policy is account-wide: any service token minted in that
-  account is accepted by `memory` and `agent`. Scoping one per
-  application means replacing that include with a token-id or token-tag include
-  in `tofu/access.tf`. The dedicated `ssh` token and its `service_auth_ssh`
-  policy are deleted with the SSH route (#767 T6); the remaining tokens are
-  minted in Zero Trust → Access controls → Service credentials and their
-  expiring-token notification is the rotation reminder.
+`tofu/rate-limit.tf` declares the zone's ruleset with `rules = []`, and that is
+the deployed state: the zone plan allows exactly one `http_ratelimit` rule (a
+second fails the apply with "2 out of 1"), and the rule it used to hold spent
+the slot on the reader's login endpoint — which no longer passes through
+Cloudflare. The guard on the edge enforces the same 10-per-10-s-per-IP budget
+itself, and the three public names are grey records outside every phase of the
+ruleset. The cost of dropping the media rule that the slot displaced is a
+recorded residual in `docs/core/backrest.md`, "The single rate-limit slot".
 
 ## CAA
 
@@ -283,51 +290,33 @@ whole policy.
 
 ## Retired hostnames
 
-`llm.sammohr.dev` is retired (the cluster served models) and `chat.sammohr.dev`
-was replaced by `agent.sammohr.dev`. `nanobot.sammohr.dev` is retired with the
-agent cutover (SDLC #583): it falls under the wildcard CNAME, and the wildcard
-Access application denies it once its own application is gone. The runtime that
-used to answer it is gone as well, so that application is the only edge object
-left to delete; its existence is an operator step, not a repository change.
+`llm.sammohr.dev` (the cluster served models), `chat.sammohr.dev` (replaced by
+`agent.sammohr.dev`), `nanobot.sammohr.dev` (SDLC #583), `music.sammohr.dev`
+and `kanbei.sammohr.dev` are gone from the zone: no DNS record, no tunnel
+route, no Access application. Their runtime went with the cluster or
+`nix-config`, so there is nothing left to delete in Zero Trust;
+`docs/manual-steps.md#kanbei-behind-access` records what Kanbei's route was.
 
-All three applications carried `prevent_destroy`, so they cannot be deleted by
-dropping the block: the state entry goes first, then the object is deleted in
-Zero Trust.
-
-```sh
-tofu -chdir=tofu state rm cloudflare_zero_trust_access_application.llm
-tofu -chdir=tofu state rm cloudflare_zero_trust_access_application.chat
-tofu -chdir=tofu state rm cloudflare_zero_trust_access_application.nanobot
-```
-
-`docs/manual-steps.md#kanbei-behind-access` has the surrounding steps (dashboard
-deletion, the nix-config ingress removal and the agent cutover).
+`memory.sammohr.dev` went the same way: the MCP wrapper is reached in-cluster
+(`docs/broker.md`), so the name has no record either.
 
 ## The reader's gate is gone, on purpose
 
 `recovery.sammohr.dev` (#707) used to have its own application with the email
 policy and the `service auth` policy. Design #701 wants the name open so family
-can use it with nothing set up in advance, and the 2026-11-20 re-affirmation kept
-it password-only, so the application is removed and the name is in
-`local.public_apps`. It carried `prevent_destroy`, so its state entry goes first:
+can use it with nothing set up in advance, and the 2026-11-20 re-affirmation
+kept it password-only, so the application is deleted with the rest of them
+(SDLC #833) and the name is served by the edge.
 
-```sh
-tofu -chdir=tofu state rm cloudflare_zero_trust_access_application.backrest
-```
+Two consequences worth knowing:
 
-Two consequences worth knowing before the apply:
-
-- The wildcard would otherwise deny the name, so removing the application
-  **without** the public-set entry leaves it owner-only rather than open. The two
-  halves of this change ship together, and `tests/tofu/check.sh` asserts both.
-- The zone plan allows exactly one `http_ratelimit` rule (a second fails the
-  apply with "2 out of 1"), so `tofu/rate-limit.tf` spends its only slot on the
-  reader's login endpoint at 10 requests per 10 s and deletes the media rule
-  (`photos`/`music`/`opds`, 1000 per 10 s) rather than merging two populations
-  onto a threshold that fits neither. That deletion is a residual, not a
-  cleanup: those names are proxied and the rule was live. The cost, and the
-  trigger for revisiting the choice, are in `docs/core/backrest.md`
-  ("The single rate-limit slot").
+- The reader's password is the only login, and the guard in front of Backrest
+  owns the 10-per-10-s-per-IP budget because no Cloudflare phase sees the
+  traffic any more (`docs/core/backrest.md`).
+- What makes the exposure acceptable is write denial, not a gate: the guard
+  refuses every write RPC and the R2 token cannot write, so the surface is a
+  read-only browser. If that denial weakens, adding an Access application back
+  is the documented fallback — a reviewed change, not a dashboard edit.
 
 ## Token and agent
 
@@ -335,7 +324,7 @@ Two consequences worth knowing before the apply:
 environment and the operator's secret store. It is never a variable in
 `tofu/`, never in a manifest, and never in a workflow file. The agent holds no
 Cloudflare token at all: it has no Cloudflare egress through the broker and no
-service-token secret, and `tests/tofu/check.sh` asserts that no cluster manifest
+service-token secret, and `tests/tofu/check.sh` asserts that no shipped tree
 names one.
 
 ## Verifying
@@ -346,29 +335,16 @@ Static half — no credentials, what CI runs:
 tests/tofu/check.sh
 ```
 
-Expected: `tofu: 258 passed, 0 failed` with `tofu` on `PATH`; 256 without it, because the fmt/validate pair skips (CI runs both). The count grows with the config.
+Expected: `tofu: 224 passed, 0 failed` with `tofu` on `PATH`; two fewer without
+it, because the fmt/validate pair skips (CI runs both). The count grows with the
+config.
 
-Runtime half — needs a token that can read Access:
+Runtime half — the zone has no Access object to read and no tunnel to probe, so
+there is no token-driven edge check any more. The live proof for what the zone
+serves is the public probe, which resolves the names and checks each answers as
+its own application:
 
 ```sh
-CLOUDFLARE_API_TOKEN=... tests/access/check.sh
+scripts/verify-public-edge.sh     # photos and opds, over valid TLS
+ssh root@smoresnet /root/edge/verify.sh   # the box: firewall, Caddy, three site blocks
 ```
-
-Expected on a healthy zone:
-
-```
-probe probe-1762866000.sammohr.dev against sammohr.dev
-
-ok   Access matches probe-1762866000.sammohr.dev to application "wildcard default-deny"
-ok   the matching application is the wildcard, not an override
-     HTTP 302
-ok   the edge redirects to the Access login instead of the origin
-
-access: 3 passed, 0 failed
-```
-
-`HTTP 302` with a `location:` on `*.cloudflareaccess.com` is the pass; `401` or
-`403` is also a denial and passes. A `200`, `404` or any tunnel error (`502`,
-`530`, `1033`) is a failure: the origin answered, so Access was not applied to
-that name. Without `CLOUDFLARE_API_TOKEN` the script prints a skip notice and
-exits 0.

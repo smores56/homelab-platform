@@ -119,7 +119,6 @@ Expected: `{"default_workflow_permissions":"read","can_approve_pull_request_revi
 ```sh
 scripts/check-all.sh                # every group, in parallel; CI runs it per shard
 scripts/check-all.sh --only lint    # action pins, secret boundary, CODEOWNERS, yamllint, shellcheck
-tests/access/check.sh               # skips without CLOUDFLARE_API_TOKEN
 ```
 
 All of the above pass on `main`; see `docs/negative-tests.md` for the fork-PR
