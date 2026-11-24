@@ -118,10 +118,11 @@ Every snapshot is written with:
 - the unit's fixed path list
 
 After exit 0 the snapshot is tagged `verified` in a separate command. Restic's
-`host,paths` parent selection and retention address the same unit because
-those two values never change for a given unit/backend. An incomplete snapshot
-(exit 3) is never tagged and can never be selected by retention or by the
-verifier.
+`host,paths` parent selection and retention address the same unit, and the
+driver rewrites the state's `paths` to the set it just archived: a unit that
+gains a dataset starts a new parent family and the verifier follows it instead
+of comparing new snapshots against the old set. An incomplete snapshot (exit 3)
+is never tagged and can never be selected by retention or by the verifier.
 
 ## A run: states and persistence
 

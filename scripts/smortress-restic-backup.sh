@@ -161,9 +161,13 @@ finish_attempt() {
   journal_append "$journal" "$line" || return 1
 
   if [[ $result == success ]]; then
+    # The state records the set this run actually archived. A unit's dataset set
+    # can change (a state dataset joins it), and the verifier compares snapshots
+    # against this file, so leaving the old set here would make the unit look
+    # stale forever after the previous family ages out.
     state_write "$state" \
-      '.last_success = {end: $end, snapshot: $snap} | .final = {end: $end, snapshot: $snap}' \
-      --arg end "$end" --arg snap "$snapshot" || return 1
+      '.last_success = {end: $end, snapshot: $snap} | .final = {end: $end, snapshot: $snap} | .paths = $paths' \
+      --arg end "$end" --arg snap "$snapshot" --argjson paths "$paths_json" || return 1
   fi
   return 0
 }
