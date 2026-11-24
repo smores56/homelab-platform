@@ -62,9 +62,9 @@ tests for every other port.
 
 Let's Encrypt, TLS-ALPN-01 only: the Caddyfile disables the HTTP challenge and
 `auto_https disable_redirects` keeps Caddy off port 80, which is never opened.
-No CAA record is written for the edge account — the zone's CAA story stays
-pinned to Kanbei's account, and a second pin would make a rebuild's new ACME
-account the outage (`docs/cloudflare.md`, "CAA").
+No CAA record names the edge account — the zone's policy names the CA, not an
+ACME account (`docs/cloudflare.md`, "CAA"), so a rebuild's freshly registered
+account is authorized as soon as it orders.
 
 **Issuance needs the public name, so it happens after the cutover.** ACME
 validates `photos.sammohr.dev` and `opds.sammohr.dev` by resolving them: while

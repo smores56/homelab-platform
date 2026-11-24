@@ -87,23 +87,6 @@ variable "edge_ipv4" {
   }
 }
 
-variable "acme_account_id" {
-  type        = string
-  description = "Numeric Let's Encrypt ACME account id behind the in-VM CSR client. Pinned into the CAA accounturi so no other account of that CA can issue for the zone. Empty until that client has registered: the pin is applied later, and no CAA record is written meanwhile."
-  default     = ""
-
-  validation {
-    condition     = var.acme_account_id == "" || can(regex("^[0-9]+$", var.acme_account_id))
-    error_message = "acme_account_id is the numeric account number from the ACME account URL (/acme/acct/<id>), or empty until that account exists."
-  }
-}
-
-variable "acme_directory" {
-  type        = string
-  description = "ACME directory URL of that account, used to derive its account URI. Staging here pins staging: a CAA accounturi never mixes the two."
-  default     = "https://acme-v02.api.letsencrypt.org/directory"
-}
-
 variable "tailnet" {
   type        = string
   description = "Tailnet name (the label before .ts.net) whose policy tofu/tailscale.tf owns. Empty until the owner supplies it at cutover, and the ACL resource is gated on it so nothing about the tailnet is planned while it is empty."

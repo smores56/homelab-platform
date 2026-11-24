@@ -7,11 +7,6 @@ data "cloudflare_zone" "this" {
 }
 
 locals {
-  # Let's Encrypt account URI, in the exact form the ACME client writes into a
-  # CSR. CAA `accounturi` compares the string literally, so a staging directory
-  # URL yields a staging pin and the two must not be mixed.
-  acme_account_uri = "${trimsuffix(var.acme_directory, "/directory")}/acme/acct/${var.acme_account_id}"
-
   # Two tunnels, two owners (docs/cloudflare.md):
   #   host    - no connector; the nix-config cloudflared retired with the host's
   #             last route. Human-owned.

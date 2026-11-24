@@ -147,9 +147,8 @@ that already exists.
 ```
 
 The account, apex, alert address and both tunnel ids come from the committed
-`tofu/terraform.tfvars`; `acme_account_id` there stays empty until step 16. The
-cluster host set is not a variable either — it follows `local.cluster_ingress`
-in `tofu/cluster.tf`.
+`tofu/terraform.tfvars`. The cluster host set is not a variable either — it
+follows `local.cluster_ingress` in `tofu/cluster.tf`.
 
 Two credentials are environment inputs, and the script is the one place that
 fetches them: SOPS decrypts the operator store in this repository
@@ -174,8 +173,6 @@ No variable carries a tunnel secret, and none is a credential.
 | `host_tunnel_id` | UUID of the nix-config host tunnel |
 | `cluster_tunnel_id` | UUID of the k3s tunnel; empty until it exists |
 | `cluster_hosts` | subdomains routed to the cluster tunnel; unset by default, derived from `local.cluster_ingress` in `tofu/cluster.tf`. Pin it only to roll a single name back to the host tunnel |
-| `acme_account_id` | numeric Let's Encrypt account pinned in CAA |
-| `acme_directory` | ACME directory of that account (staging pins staging) |
 
 ## Access: default deny
 
@@ -240,46 +237,53 @@ zone with no application of its own is reachable only by the owner's identity.
 
 ## CAA
 
-Two records at the apex pin issuance to the ACME account the in-VM CSR client
-uses:
+The zone carries no `CAA` record today: `dig +short CAA sammohr.dev` answers
+nothing. That is deliberate — CAA forbids issuance by every CA it does not name,
+so a record written before the edge certificate's own order has run would be a
+policy nobody can verify. The unpinned `letsencrypt.org` `issue`/`issuewild` pair
+lands with the public edge (design #842 T4); `scripts/verify-caa.sh` reports an
+empty set as a notice, not a failure, for exactly this window.
 
-```
-sammohr.dev. 3600 IN CAA 0 issue     "letsencrypt.org; accounturi=https://acme-v02.api.letsencrypt.org/acme/acct/<id>"
-sammohr.dev. 3600 IN CAA 0 issuewild "letsencrypt.org; accounturi=https://acme-v02.api.letsencrypt.org/acme/acct/<id>"
-```
+**No account URI is pinned.** A CAA value may carry
+`accounturi=https://acme-v02.api.letsencrypt.org/acme/acct/<id>`, but that string
+is compared literally against the URI in the CSR, so it authorizes one ACME
+account on one directory — a staging URI pins staging, a production URI pins
+production, and the two never mix. The edge's Caddy account is not a stable
+identity: a rebuild re-registers and the account it replaces is gone
+(`docs/core/public-edge.md`, "Certificates"), so a pin would turn a routine
+rebuild into an outage that only surfaces at renewal. The records therefore name
+the CA and nothing narrower. `issuewild` is a separate tag because a wildcard
+order is not authorized by `issue`.
 
-`accounturi` is compared literally against the URI in the CSR, so the account
-id and the directory must both be the production pair. `issuewild` is a separate
-tag because a wildcard order is not authorized by `issue`.
-
-**Caveat — this is a narrowing, not a lockdown.** With Universal SSL enabled,
-Cloudflare appends its own CAA records (`pki.goog`, `letsencrypt.org`,
+**Caveat — the zone's records are only part of the answer.** With Universal SSL
+enabled, Cloudflare appends its own CAA records (`pki.goog`, `letsencrypt.org`,
 `ssl.com`, `sectigo.com`, DigiCert) to any zone that has a CAA record. They are
 invisible in the dashboard and appear only in DNS. Because CAA authorizes
-issuance if *any* matching record permits it, the unpinned `letsencrypt.org`
-record keeps any Let's Encrypt account able to issue for the edge certificate;
-the pin binds the account Kanbei's own order uses, and the Cloudflare-managed
-records keep Universal SSL working. Verify with:
+issuance if *any* matching record permits it, the effective policy is the union
+of what this repository declares and what Cloudflare manages; the managed set is
+what keeps Universal SSL able to renew, and `scripts/verify-caa.sh` asserts the
+issuer of the certificate actually served is admitted by that union. Verify with:
 
 ```sh
 dig +short CAA sammohr.dev
 ```
 
-Expected: the two pinned records above **plus** the Cloudflare-added set, e.g.
+Expected once T4 has applied: the two `letsencrypt.org` records **plus** the
+Cloudflare-added set, e.g.
 
 ```
-0 issue "letsencrypt.org; accounturi=https://acme-v02.api.letsencrypt.org/acme/acct/<id>"
-0 issuewild "letsencrypt.org; accounturi=https://acme-v02.api.letsencrypt.org/acme/acct/<id>"
-0 issue "pki.goog; cansignhttpexchanges=yes"
-0 issuewild "pki.goog; cansignhttpexchanges=yes"
 0 issue "letsencrypt.org"
 0 issuewild "letsencrypt.org"
+0 issue "pki.goog; cansignhttpexchanges=yes"
+0 issuewild "pki.goog; cansignhttpexchanges=yes"
+0 issue "sectigo.com"
 ...
 ```
 
-A `dig` that shows only the pinned pair means Universal SSL is off (or the zone
-uses Advanced certificates), which is also acceptable but then the pin is the
-whole policy.
+A `dig` that shows only the records this repository declares means Universal SSL
+is off (or the zone uses Advanced certificates), which is also acceptable but
+then those records are the whole policy — which is why they name the CA the edge
+actually uses.
 
 ## Retired hostnames
 
