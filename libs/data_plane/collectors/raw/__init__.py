@@ -25,6 +25,7 @@ from .replica import (
     carry_forward,
     previous_replica,
 )
+from .tasks import collect_tasks
 
 __all__ = [
     "ABSENCE_NO_TOMBSTONE",
@@ -42,5 +43,6 @@ __all__ = [
     "collect_maildir",
     "collect_notes",
     "collect_simplefin",
+    "collect_tasks",
     "previous_replica",
 ]

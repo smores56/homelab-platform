@@ -162,6 +162,57 @@ class NotesCommandTests(unittest.TestCase):
             self.assertIsNone(RawReplica.latest_generation(root / "replica"))
 
 
+class TasksCommandTests(unittest.TestCase):
+    def test_publishes_a_tasks_generation(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            directory = root / "todo"
+            directory.mkdir()
+            (directory / "todo.txt").write_text(
+                "(A) verify access returns\n(D) water the plants\n", encoding="utf-8"
+            )
+            (directory / "done.txt").write_text(
+                "x 2026-11-01 call the clinic\n", encoding="utf-8"
+            )
+            code, out, err = _run(
+                [
+                    "--root",
+                    str(root / "replica"),
+                    "--generation",
+                    "gen-0001",
+                    "--captured-at",
+                    CAPTURED,
+                    "tasks",
+                    "--entities",
+                    str(directory),
+                ]
+            )
+            self.assertEqual(code, 0, err)
+            payload = json.loads(out)
+            self.assertEqual(payload["source_id"], "tasks.todo")
+            self.assertEqual(payload["objects"], 3)
+            replica = RawReplica(root / "replica")
+            self.assertEqual(replica.source_id, "tasks.todo")
+            self.assertEqual(replica.generation_id, "gen-0001")
+            self.assertEqual(len(replica.object_ids()), 3)
+
+    def test_a_missing_directory_is_a_refusal_not_a_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            code, _, err = _run(
+                [
+                    "--root",
+                    str(root / "replica"),
+                    "tasks",
+                    "--entities",
+                    str(root / "no-such-todo"),
+                ]
+            )
+            self.assertEqual(code, EXIT_REFUSED)
+            self.assertIn("is not a directory", err)
+            self.assertIsNone(RawReplica.latest_generation(root / "replica"))
+
+
 class FinanceCommandTests(unittest.TestCase):
     def test_pending_must_be_requested(self) -> None:
         with tempfile.TemporaryDirectory() as work:
