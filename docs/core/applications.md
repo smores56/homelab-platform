@@ -571,12 +571,14 @@ Caddy answers 502 or refuses, a drained Service times out, and both are red. The
 result pages through Healthchecks via the `NAMES_PING_URL` secret; the operator
 commands are in `docs/manual-steps.md`.
 
-`agent.sammohr.dev` already existed as the dead cluster tunnel's proxied CNAME,
-which #833 retires, and Cloudflare refuses two records at one name, so the two
-applies cannot travel together: PR #120 drops the `agent` entry from
-`local.cluster_ingress` and applies that destroy first, and the record above is
-created in the zone's own apply afterwards. Between the two the name falls through
-to the wildcard, which is the Access deny: refused, not served.
+Historical: `agent.sammohr.dev` was a proxied CNAME to the dead cluster tunnel,
+and Cloudflare refuses two records at one name, so the two applies could not
+travel together — PR #120 dropped the `agent` entry from `local.cluster_ingress`
+and applied that destroy first, then the zone's own apply created the record
+above. Between the two the name fell through to the wildcard, which was the
+Access deny then: refused, not served. Both the ingress map and the wildcard are
+retired (SDLC #833), so the record is now one apply of `tofu/dns.tf` with
+nothing left to order against it.
 
 The two edge ports are a third kind: not for people, but for `tag:vps` only
 (`tofu/tailscale.tf`), because the public names proxy to a dedicated port each

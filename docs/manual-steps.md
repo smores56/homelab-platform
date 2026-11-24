@@ -1353,32 +1353,42 @@ pre-reboot snapshot the deploy gate took.
 
 ### Hosted Backrest
 
-The reader's gate repository, Worker secrets, deploy and matrix are
-`docs/core/backrest.md`, "Operator order"; the read-only boundary, the gate
-matrix and the preauthorized VPS fallback are that document's own sections.
+The reader's gate repository, deploy and matrix are `docs/core/backrest.md`,
+"Operator order"; the read-only boundary, the gate matrix and where the reader
+runs are that document's own sections.
 
 ## Tailnet and access
 
-### Prove the Access default-deny
+### Prove the Access default-deny (retired)
 
-The static half runs in CI; this is the live half. From a network that is not the
-tailnet, with no Cloudflare session, a name the policy does not name must hit the
-wildcard deny rather than an origin:
+There is nothing to prove: the zone holds no Access application or policy
+(SDLC #833), so a name with no DNS record is answered by Cloudflare itself rather
+than by a deny policy. The live proof of what the zone serves is the public
+probe, which resolves the names and checks each answers as its own application:
 
 ```sh
-curl -sS -o /dev/null -D - https://<unnamed-host>.sammohr.dev/ | head -3
-# expect: an Access redirect or 403, never an application page
+dig +short nothing-here.sammohr.dev
+# expect: no output. Empty answer means the name has no record in the zone, so
+# the resolver returns NXDOMAIN — an answer here is a name that was re-created
+scripts/verify-public-edge.sh     # photos and opds, over valid TLS
 ```
+
+The static half is `tests/tofu/check.sh`, which asserts there is no Access object
+left to reintroduce.
 
 ### Kanbei behind Access
 
-`tofu/kanbei.tf` creates the Access application for `kanbei.sammohr.dev`. A retired
-object carried `prevent_destroy`, so the operator removes the state entry before the
-block: `tofu -chdir=tofu state rm cloudflare_zero_trust_access_application.kanbei`.
-A machine-to-machine client reaches it through a `service auth` policy and its own
-service token, minted in Zero Trust → Access → Service Credentials; rotating the
-token is a re-mint plus the policy's token id.
+Historical: `kanbei.sammohr.dev` was a public hostname behind an Access
+application whose policy was the owner's email (SDLC #586). Both are gone — the
+application with the rest of the zone's Access objects (SDLC #833) and the
+host tunnel's wildcard record that resolved the name. `tofu/kanbei.tf` is now a
+note with no resource in it, so there is no state entry to remove and no
+`service auth` policy or service token to rotate.
 
+What is left is the `webProxy.services.kanbei` ingress rule in `nix-config`,
+which has no connector: a name that does not resolve is refused before any
+origin is reached. Publishing it again is a reviewed change — a DNS record here
+plus a connector — never a dashboard edit.
 
 ### The tailnet policy, sshd, and sudo
 
@@ -1399,29 +1409,66 @@ checkout.
 
 ```sh
 ./scripts/tofu-cloudflare.sh plan -no-color     # expect: 5 to destroy, 0 to add, 0 to change
-gh workflow run tofu-apply.yml                  # refuses a destructive plan unattended
+gh workflow run tofu-apply.yml                  # dispatch applies the destroys (it IS the approval)
 ./scripts/tofu-cloudflare.sh state list | grep ssh || echo "no ssh objects in state"
 ```
 
 A replace or a destroy anywhere else means the state and the config disagree: stop
-and compare. The tunnel object itself was created in the dashboard and this
-repository never owned it, so with the ingress gone it has no rules and no
-connector: remove it in Zero Trust → Networks → Tunnels. In Access → Applications
-the list must then hold `wildcard default-deny`, `memory`, `agent`, `backrest`,
-`kanbei` and the public set, and no `ssh`.
+and compare. The two tunnel objects are not in `tofu/` state and never were —
+one was created in the dashboard and the other went with the cluster tree — so
+the apply cannot delete them and the account is the only place to prove they are
+gone. List them, and delete any that come back:
+
+```sh
+account=$(awk -F'"' '/^account_id/ { print $2 }' tofu/terraform.tfvars)
+export CLOUDFLARE_API_TOKEN=$(sops -d --extract '["platform-zone-rw-api-token"]' secrets/cloudflare.yaml)
+curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+  "https://api.cloudflare.com/client/v4/accounts/$account/cfd_tunnel?is_deleted=false" |
+  jq -r '.result[] | "\(.id)  \(.name)  \(.status)"'
+# expect: no output — the account holds no live tunnel, so nothing is left to join
+curl -sS -X DELETE -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+  "https://api.cloudflare.com/client/v4/accounts/$account/cfd_tunnel/<tunnel-id>"  # only for an id listed above
+```
+
+An empty listing, an empty Access → Applications list and a `tofu` plan with no
+destroy left are the three proofs; the dashboard equivalent of the listing is
+Zero Trust → Networks → Tunnels. An entry that reappears in either list is drift
+to delete, not a step in this order: nothing in `tofu/` creates a tunnel any
+more, so an apply cannot have made it.
 
 ### Remove the reader's Access gate
 
-`tofu/access.tf` declares no `backrest` application: the name is in
-`local.public_apps`, so Access passes it to the Worker and Backrest's password is
-the only login. The application carried `prevent_destroy`, so drop its state entry
-**first** — dropping the block alone fails the apply:
+`tofu/access.tf` declares no Access object at all (SDLC #833), so nothing gates
+the name and Backrest's password is the only login. The application is deleted
+with the rest of them, and `prevent_destroy` is read from *configuration*: with
+the block gone the plan holds a destroy, so there is no `state rm` first and no
+dashboard deletion before the apply.
 
 ```sh
-tofu -chdir=tofu state rm cloudflare_zero_trust_access_application.backrest
-gh workflow run tofu-apply.yml
+./scripts/tofu-cloudflare.sh plan -no-color     # expect: destroys only, or no changes once applied
+gh workflow run tofu-apply.yml                  # dispatch applies the destroys (it IS the approval)
 curl -sS -o /dev/null -D - https://recovery.sammohr.dev/ | head -3
 ```
+
+The probe must show Backrest's own login, never a redirect to
+`*.cloudflareaccess.com`: an Access redirect means something recreated an
+application on the name.
+
+### Remove the stale `~/.cloudflared` caches
+
+The tunnels are gone, so every `cloudflared` credential, certificate and connector
+config left on an operator machine is dead configuration that will try to
+reconnect. They live outside this repository and nothing in `tofu/` or CI removes
+them:
+
+```sh
+rm -rf ~/.cloudflared                      # per operator machine and per root account
+ls ~/.cloudflared 2>/dev/null || echo "no connector cache"
+systemctl --user list-units 'cloudflared*'  # a unit left behind keeps retrying
+```
+
+A connector that still starts is the only local symptom, and it fails loudly in
+its own log while the zone carries no tunnel for it to join.
 
 ### The T6 retirement gate
 
@@ -1456,8 +1503,10 @@ sudo scripts/legacy/retirement-gate.sh --keep           # leave the targets for 
 ## Public edge VPS
 
 The edge VPS order — tailnet policy, `tag:vps` key, panel firewall, console join,
-bootstrap, Serve routes, the two-commit cutover and the timed rebuild drill — is
-`docs/core/public-edge.md`, "The operator order".
+bootstrap, Serve routes, the cutover and the timed rebuild drill — is
+`docs/core/public-edge.md`, "The operator order". The box terminates TLS for
+three names (`photos`, `opds`, `recovery`); `provision/edge/verify.sh` asserts
+exactly those three site blocks and never a fourth.
 
 ## Former section numbers
 
@@ -1469,7 +1518,7 @@ each number landed.
 | §2, §4, §5 | GitHub: identity, environments, and tokens |
 | §6, §12 | Secrets and rotation |
 | §14, §46 | The tailnet policy and the enrollment key |
-| §18 | Prove the Access default-deny |
+| §18 | Prove the Access default-deny (retired with the gate) |
 | §21 | Kanbei behind Access |
 | §35 | Claim the SimpleFIN access URL; Publish and sign the application images |
 | §36 | T0: freeze, rescue, verify, and publish the kit |

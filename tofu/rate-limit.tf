@@ -16,12 +16,12 @@
 # What that slot costs: this ruleset used to hold a second rule — `music`,
 # `photos` and `opds` at 1000 requests per 10 s per IP, sized for an Immich
 # timeline scroll — and the slot count forced the choice. That rule was live, not
-# vestigial: the three names are in `local.public_apps` (access.tf) and resolve
-# through proxied CNAMEs to the cluster tunnel (dns.tf), `photos` fronting
-# `immich-server` (cluster.tf), so their traffic does reach this phase. Dropping
-# it removes a real edge control and leaves those hosts unpoliced at the edge;
-# `docs/core/backrest.md` records the residual, its cost and the trigger for
-# revisiting the choice.
+# vestigial: the three names resolved through proxied CNAMEs to the cluster
+# tunnel, `photos` fronting `immich-server`, so their traffic did reach this
+# phase. Dropping it removed a real edge control; the three names have since left
+# the zone with that tunnel (SDLC #833), and the VPS that now answers `photos`
+# and `opds` sits outside every phase of this ruleset. `docs/core/backrest.md`
+# records the residual, its cost and the trigger for revisiting the choice.
 #
 # `agent-hooks` is deliberately absent: its deliveries are individually
 # authenticated and deduped, a shared per-IP budget would drop a legitimate burst

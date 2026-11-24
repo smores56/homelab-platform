@@ -3,8 +3,8 @@
 # this, and it is the one command to paste after any change made by hand.
 #
 # It proves the shape the design depends on and nothing it cannot see: the
-# certificate, the two public names and the origin parity are checked from
-# outside by scripts/verify-public-edge.sh, not here.
+# certificate, the public names and the origin parity are checked from outside
+# by scripts/verify-public-edge.sh, not here.
 # shellcheck disable=SC2329  # helpers are invoked through check()
 set -uo pipefail
 
@@ -58,13 +58,16 @@ check "the installed Caddyfile validates" \
   caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
 check "Caddy serves photos.sammohr.dev" grep -qxF 'photos.sammohr.dev {' /etc/caddy/Caddyfile
 check "Caddy serves opds.sammohr.dev" grep -qxF 'opds.sammohr.dev {' /etc/caddy/Caddyfile
+check "Caddy serves recovery.sammohr.dev" grep -qxF 'recovery.sammohr.dev {' /etc/caddy/Caddyfile
 check "Caddy never answers HTTP-01" grep -qF 'disable_http_challenge' /etc/caddy/Caddyfile
 check "Caddy has no admin API" grep -qF 'admin off' /etc/caddy/Caddyfile
-# Exactly two site blocks, never a third: a site added by hand is a name
-# published by accident, and every positive grep above would still pass.
+# Exactly the three site blocks the design publishes, never a fourth: a site
+# added by hand is a name published by accident, and every positive grep above
+# would still pass.
 eq "$(grep -E '^[a-z0-9.-]+[[:space:]]*\{' /etc/caddy/Caddyfile \
   | sed 's/[[:space:]]*{$//' | sort | tr '\n' ' ')" \
-  'opds.sammohr.dev photos.sammohr.dev ' "Caddy serves exactly the two names"
+  'opds.sammohr.dev photos.sammohr.dev recovery.sammohr.dev ' \
+  "Caddy serves exactly the three names"
 check_not "no site proxies 443" grep -qF ':443' /etc/caddy/Caddyfile
 check_not "no site answers plain HTTP" grep -qF 'http://' /etc/caddy/Caddyfile
 eq "$(stat -c '%a' /etc/caddy/edge.env)" 640 "the Caddy environment file is root-readable only"

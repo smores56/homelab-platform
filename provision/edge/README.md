@@ -1,7 +1,7 @@
 # The public edge
 
-The RackNerd KVM VPS that serves `photos.sammohr.dev` and
-`opds.sammohr.dev` (design #725). It is a tailnet node carrying `tag:vps`,
+The RackNerd KVM VPS that serves `photos.sammohr.dev`, `opds.sammohr.dev` and
+`recovery.sammohr.dev` (design #725). It is a tailnet node carrying `tag:vps`,
 and its only public listener is Caddy on 443. Nothing here is in the smortress
 image: the box is a separate host with a hand-run bootstrap, because RackNerd's
 ctrl panel offers no cloud-init and no API to declare one.
@@ -62,9 +62,12 @@ ctrl panel offers no cloud-init and no API to declare one.
    box: before the cutover the order fails and Caddy keeps retrying, which is why
    this step sits on the cutover's side of the line.
 
-The DNS cutover is not part of this: it waits for #709's retirement gate and is
-two commits applied by CI (pin `cluster_hosts`, then set `edge_ipv4`), cluster
-records first. See `docs/core/public-edge.md`.
+The DNS cutover is not part of this: it waits for #709's retirement gate, and it
+is one commit applied by CI — `edge_ipv4` in `tofu/terraform.tfvars` — which
+creates the three grey `A` records. The two-commit dance (pin `cluster_hosts`,
+then set `edge_ipv4`) existed only while the cluster tunnel still owned the
+names; that tunnel and `cluster_hosts` are retired (SDLC #833). Dropping
+`edge_ipv4` is the rollback. See `docs/core/public-edge.md`.
 
 `verify.sh`'s direct-path check can fail in the first seconds after the join,
 before the WireGuard path is established; re-run it rather than changing

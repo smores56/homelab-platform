@@ -1,9 +1,11 @@
 # Public edge (T1 of #725)
 
-The box that serves `photos.sammohr.dev` and `opds.sammohr.dev` to the
-internet. It exists so those three names can leave Cloudflare's data path: the
-atoms of the design are a tagged tailnet node, Caddy on 443 with a Let's
-Encrypt certificate, and a tailnet ACL that admits two ports and nothing else.
+The box that serves `photos.sammohr.dev`, `opds.sammohr.dev` and
+`recovery.sammohr.dev` to the internet, and the only public surface the zone has
+(SDLC #833 retired every Access application and tunnel). It exists so the media
+names can leave Cloudflare's data path: the atoms of the design are a tagged
+tailnet node, Caddy on 443 with a Let's Encrypt certificate, and a tailnet ACL
+that admits two ports and nothing else.
 
 Operator commands live in `docs/manual-steps.md#public-edge-vps`; this document is
 the shape, the failure modes and the rebuild.
@@ -34,7 +36,7 @@ Tailscale are OS infrastructure on a box whose only application is a TLS proxy.
 
 | Piece | Declared in | Purpose |
 | --- | --- | --- |
-| Caddy | `provision/edge/Caddyfile` | TLS for the three names: two proxy to Serve ports 8446 and 8447, the third to the box's own Backrest |
+| Caddy | `provision/edge/Caddyfile` | TLS for the three names: `photos` and `opds` proxy to Serve ports 8446/8447 on smortress, `recovery` to the Backrest guard on loopback |
 | nftables | `provision/edge/nftables.conf` | 443 and udp/41641 public, 22 on `tailscale0` only |
 | sshd | `provision/edge/05-edge-hardening.conf` + `authorized_keys` | keys only, no password, no root password login; `05-` so it beats cloud-init's `50-cloud-init.conf` |
 | tailscale | `provision/edge/bootstrap.sh` | joins once as `tag:vps` with hostname `smoresnet` (the panel name, the OS name and the tailnet name are one word), tags set key expiry off; the bootstrap realigns an existing node's name |
@@ -58,6 +60,10 @@ index. `photos` proxies to 8446 and `opds` to 8447, and the ACL
 (`tofu/tailscale.tf`) admits `tag:vps -> tag:smortress:8446,8447` with deny
 tests for every other port.
 
+`recovery` involves no Serve port at all: Backrest runs on this box and Caddy
+proxies to its guard on `127.0.0.1:9898`, so the tailnet carries no recovery
+traffic and the ACL needs no rule for it.
+
 ### Certificates
 
 Let's Encrypt, TLS-ALPN-01 only: the Caddyfile disables the HTTP challenge and
@@ -66,15 +72,15 @@ The zone's `CAA` records name the CA, not the edge's ACME account
 (`docs/cloudflare.md`, "CAA"), so a rebuild's freshly registered account is
 authorized as soon as it orders.
 
-**Issuance needs the public name, so it happens after the cutover.** ACME
-validates `photos.sammohr.dev` and `opds.sammohr.dev` by resolving them: while
-they are proxied CNAMEs to the cluster tunnel, Let's Encrypt reaches Cloudflare
-and the challenge fails (`Cannot negotiate ALPN protocol "acme-tls/1"`). Caddy
-keeps retrying, and the first successful order is seconds after the `A` records
-appear. Before the cutover there is nothing public to probe: the names resolve
-elsewhere and no certificate exists here. The pre-cutover proof is the box's own
-`verify.sh` with `EXPECT_UPSTREAM=1`, which proves the firewall, both origins
-answering, and that this box cannot reach smortress's 443 at all.
+**Issuance needs the public name.** ACME validates each name by resolving it,
+so the order only succeeds once the grey `A` record points here: while a name was
+a proxied CNAME to the cluster tunnel, Let's Encrypt reached Cloudflare and the
+challenge failed (`Cannot negotiate ALPN protocol "acme-tls/1"`). Caddy keeps
+retrying, and the first successful order is seconds after the record appears —
+which is why a new box, or a `edge_ipv4` change, is followed by a wait rather
+than a config edit. The on-box proof that does not need public DNS is `verify.sh`
+with `EXPECT_UPSTREAM=1`: firewall, both Serve origins answering, and this box
+unable to reach smortress's 443 at all.
 
 The ACME account key and the certificates live in Caddy's data directory
 (`/var/lib/caddy/.local/share/caddy`). Losing them costs only a re-issue; keep
@@ -83,44 +89,29 @@ fail unattended.
 
 ## DNS and the cutover
 
-`tofu/dns.tf` declares two grey-cloud `A` records with an explicit 300 s TTL,
-gated on `var.edge_ipv4`. While it is empty the names stay proxied CNAMEs to the
-cluster tunnel and nothing about the edge is public.
+`tofu/dns.tf` declares the grey-cloud `A` records for `photos`, `opds` and
+`recovery` with an explicit 300 s TTL, gated on `var.edge_ipv4`. The cutover is
+done: `edge_ipv4 = "192.236.188.99"` is committed, so the three names resolve to
+this box and nothing in the zone is proxied. Rollback is dropping that one value
+— the records go and the names stop resolving, because the wildcard CNAME they
+used to fall through is retired with the tunnels (SDLC #833). There is no
+`cluster_hosts` to restore and no second record at either name any more.
 
-One plan that both set `edge_ipv4` and dropped the names from the cluster set
-would hold a destroy and a create at the same name. OpenTofu cannot order one
-before the other and Cloudflare refuses two records at a name, so the cutover is
-two commits, each applied by CI (`tofu-apply` on `main`) with no local
-credentials:
+The cutover that created them was two commits while the cluster tunnel still
+owned the names: pin `cluster_hosts` without `photos` and `opds`, apply, then set
+`edge_ipv4` and apply again. Cloudflare refuses two records at one name and
+OpenTofu cannot order a destroy before a create, which is why it could not be one
+plan. Both of those inputs are gone — the tunnel, its CNAMEs and `cluster_hosts`
+are retired (SDLC #833) — so one field carries the records: setting `edge_ipv4`
+creates them, dropping it removes them, and the only window left is the seconds
+between the apply and Caddy's next order.
 
-Before any of it, prove the host copy is the authoritative library:
+Before the first cutover, `scripts/legacy/compare-photos-origin.sh` compared
+`/api/server/statistics` on the cluster copy against the host's; the cluster copy
+is gone, so there is one library now and no comparison to run.
 
-```sh
-CLUSTER_URL=https://photos.sammohr.dev CLUSTER_API_KEY=… \
-HOST_URL=https://smortress.<tailnet>.ts.net HOST_API_KEY=… \
-  scripts/legacy/compare-photos-origin.sh
-```
-
-It compares `/api/server/statistics` on both copies; a difference means the
-cutover would serve a different library. `EDGE_USAGE_DELTA` allows a byte
-tolerance, nothing else.
-
-1. `tofu/terraform.tfvars`: pin `cluster_hosts` to the remaining names, without
-   `photos` and `opds`. The apply deletes their proxied CNAMEs.
-2. `tofu/terraform.tfvars`: add `edge_ipv4 = "<vps-ipv4>"`. The apply creates
-   both grey-cloud `A` records, and Caddy's next order succeeds.
-
-Between the two applies the names fall through to the wildcard, which is the
-host tunnel behind the Access deny: refused, not served. That window is one CI
-run, and it is the only one either order has.
-
-The cluster tunnel keeps its ingress rules for both names. With no DNS record
-they serve nothing; #709 decides when the rules go, not this cutover.
-
-The cutover waits on #709's retirement gate: it changes which Immich is
-authoritative, which is a data decision, not a DNS one. Rollback is the same two
-commits in reverse — drop `edge_ipv4` (the `A` records go, names fall to the
-deny), then restore `cluster_hosts` (the CNAMEs return).
+The cutover waited on #709's retirement gate because it changed which Immich is
+authoritative, a data decision rather than a DNS one.
 
 The public probe is a post-cutover step, run once Caddy has ordered:
 
@@ -138,9 +129,9 @@ the names and `scripts/verify-caa.sh` for the CA the zone's `CAA` records admit
 
 10 TB/month at 1 Gbps. RackNerd does not degrade over the allowance: it
 null-routes or suspends the service, which takes both public names down while
-every tailnet route stays up. Record the 30-day `photos` + `opds` transfer from
-Cloudflare's analytics before the cutover, and watch the ctrl panel's graph
-against it afterwards.
+every tailnet route stays up. The pre-cutover baseline was 30 days of `photos` + `opds` transfer from
+Cloudflare's analytics; the running number is the ctrl panel's graph, since no
+Cloudflare phase sees this traffic any more.
 
 This is also why the box advertises no exit node: exit traffic would spend the
 photo allowance, and a null-route would then take both roles down at once.
@@ -151,7 +142,7 @@ photo allowance, and a null-route would then take both roles down at once.
 | --- | --- | --- |
 | 502 with a valid certificate | tailnet down, smortress down, or Serve 8446/8447 not declared | `provision/edge/verify.sh`; `tailscale status` on both ends; `systemctl status smortress-tailscale-serve` |
 | certificate expired | ctrl firewall blocks 443, clock wrong, or ACME account refused | `journalctl -u caddy`; `timedatectl`; check the panel rule list |
-| both names dead, tailnet fine | panel null-route, suspension, or host down | ctrl panel; reboot; console |
+| every name dead, tailnet fine | panel null-route, suspension, or host down | ctrl panel; reboot; console |
 | new IP after rebuild | a replacement VPS, not an OS reinstall | update `edge_ipv4`, apply, re-run the probe |
 | 404s where an app should answer | ACL, firewalld on smortress, or the Serve route | `tailscale ping`, then the host's `tailscale serve status` |
 
@@ -173,8 +164,9 @@ the rebuild, run once and timed before the cutover:
 4. Reconnect over the tailnet and run `provision/edge/verify.sh` with
    `EXPECT_UPSTREAM=1`.
 5. If the IPv4 changed, update `edge_ipv4` and apply; otherwise nothing to do.
-6. Record the elapsed time. If it is not minutes, T2 does not move Backrest
-   here.
+6. Record the elapsed time. The reader runs here (#725 T2), so a rebuild is also
+   the recovery reader's outage: minutes is the budget, and a longer one goes in
+   the kit as a finding rather than a footnote.
 
 Restoring the Caddy data directory before step 3 shortens the wait for
 certificates; it is optional, and the ACME account it carries is the same one,
@@ -195,7 +187,7 @@ what the repository *cannot* reproduce, with what is done about each item.
 | SSH host key (ed25519 only) | Kit row plus `EDGE_HOST_KEY`; omitted, the box generates a new one and every `known_hosts` entry goes stale. The template's rsa and ecdsa pairs are deleted, because they are in no kit and would be a second, never-verified identity. |
 | Caddy's data directory (ACME account, certificates) | Not restored. A rebuild re-issues, which costs seconds and needs nothing from the kit; the account it replaces is not pinned by CAA, so a new one is valid immediately. |
 | Panel network firewall | Not enabled (owner decision). The host nftables ruleset is the only layer; the cost is that a boot-time firewall failure or a compromised host is unbounded, and 443 depends on the host rules being right. |
-| The public IPv4 | May change on a replacement (not on a reinstall). DNS takes it in `var.edge_ipv4`; the probes resolve the names, so only the cutover needs the value. |
+| The public IPv4 | May change on a replacement (not on a reinstall). DNS takes it in `var.edge_ipv4`, which is already set; an update to that one value plus an apply repoints all three names. |
 | Hostname | Closed: the bootstrap sets `smoresnet` on the OS and on the tailnet. |
 | Package versions | Distro packages plus unattended upgrades; deliberately unpinned, so a rebuild may pick up newer Caddy. The bootstrap's 2.6 gate is the only floor. |
 | Time, sshd policy, firewall, Serve routes on smortress | Closed: bootstrap for the box, the image for smortress, tofu for the tailnet. |
@@ -287,20 +279,18 @@ waits for the retirement gate and the origin-parity comparison, not for the box.
    → `http://127.0.0.1:8083`, and a green upstream run: the firewall shape, both
    Serve ports answering, the upstream certificate verifying, and this box unable to
    reach smortress on 443.
-7. **The cutover.** Prove the host copy is the authoritative library first, with
-   `CLUSTER_URL=… CLUSTER_API_KEY=… HOST_URL=… HOST_API_KEY=…
-   scripts/legacy/compare-photos-origin.sh`: both counts must match, and usage within
-   `EDGE_USAGE_DELTA` if you allow one. Then record 30 days of `photos` + `opds`
-   transfer from Cloudflare's analytics; if it is a meaningful fraction of 10 TB,
-   stop and size the plan instead.
+7. **The names.** The cutover is done, so this step is the address only: record
+   30 days of `photos` + `opds` transfer from before the cutover against the ctrl
+   panel's graph now, and stop to size the plan if the traffic is a meaningful
+   fraction of 10 TB. The library comparison that gated the first cutover compared
+   a cluster copy that no longer exists (`scripts/legacy/compare-photos-origin.sh`).
 
-   Cloudflare refuses two records at one name and OpenTofu cannot order a destroy
-   before a create, so the cutover is two commits, each applied by CI:
+   The records exist: `edge_ipv4` is committed, so `photos`, `opds` and `recovery`
+   already point here. A replacement box with a new address is one value and one
+   apply — the two-commit dance the first cutover needed existed only while the
+   cluster tunnel still owned those names, and that tunnel is retired (SDLC #833):
 
    ```sh
-   $EDITOR tofu/terraform.tfvars   # cluster_hosts = [<every host but photos and opds>]
-   git commit -qm 'chore(tofu): take photos and opds off the cluster tunnel'
-   git push
    $EDITOR tofu/terraform.tfvars   # edge_ipv4 = "<vps-ipv4>"
    git commit -qm 'feat(tofu): point the edge names at the VPS'
    git push
@@ -308,11 +298,11 @@ waits for the retirement gate and the origin-parity comparison, not for the box.
    ```
 
    The probe checks each name answers *as its application*: Immich's own HTML shell
-   for any path, OPDShelf's 401 challenge for any path. Rollback is the same two
-   commits in reverse.
+   for any path, OPDShelf's 401 challenge for any path. Rollback is dropping
+   `edge_ipv4`, which removes the records.
 8. **The rebuild drill, timed.** Reinstall the template from the panel on the real
    box, then repeat steps 2 through 6 (the reinstall destroyed the node identity, so
    the key is new too). The kit rows must already hold the ctrl login with its 2FA
    recovery codes, the edge SSH host key and Caddy's data directory. Record the
    elapsed time and the panel bandwidth graph; if the rebuild is not minutes,
-   Backrest does not move here.
+   the reader's outage is longer than it should be.
