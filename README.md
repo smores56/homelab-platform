@@ -36,7 +36,6 @@ changes by pull request from a fork, so no PR workflow can read a secret.
 | `tests/data-plane/` | Data-plane unit tests: contracts, backup plan, migration gates, restore planning |
 | `tests/deploy/` | Offline checks for the deploy receiver: listener, verification, gates, apps apply, CI notify |
 | `tests/tofu/` | Static assertions on the Cloudflare config (`tests/tofu/check.sh`) |
-| `tests/access/` | Live Access default-deny probe (`tests/access/check.sh`, skips without a token) |
 | `tests/edge/` | Offline checks for the public-edge probe (`tests/edge/check.sh`) |
 | `scripts/` | CI helpers, shellchecked |
 | `docs/` | Core image, apps tenant, Restic plane, backrest, public edge, recovery kit, broker, webhook, agent facade, runbook, manual steps |
@@ -53,7 +52,6 @@ tests/tofu/check.sh                      # Cloudflare config shape, no credentia
 tests/data-plane/check.sh                # data-plane unit tests, no host
 tests/core/check.sh                      # core gate, apps tenant, Restic plane and deploy docs
 tests/deploy/*.sh                        # deploy receiver, verification, gates, apps apply, notification
-tests/access/check.sh                    # live Access deny, skips without a token
 scripts/render-recovery-groups.py --check # the recovery manifest matches its source
 ```
 
