@@ -526,16 +526,15 @@ fill_queue() { # <state-dir>: the listener's cap, 32 entries
 }
 
 # A full queue in a state dir of its own, so the shared listener's queue stays
-# as short as the cases above left it. The fill is a fixture, not the subject, so
-# it lives once under $BATS_FILE_TMPDIR and each test brings its own listener to
-# it; a case run alone fills it first.
+# as short as the cases above left it. The fill is a fixture, not the subject,
+# but it has to be per test: bats runs the file's cases concurrently under
+# --jobs, and a fill shared through $BATS_FILE_TMPDIR let both cases fill the
+# same directory, so the second one counted 64 entries.
 capped_queue() { # -> cap_base
-    cap_state=$work/cap-state
-    if [[ ! -d $cap_state/queue ]] || [[ $(queue_count_in "$cap_state") -ne 32 ]]; then
-        mkdir -p "$cap_state/queue" "$cap_state/work"
-        chmod 0700 "$cap_state" "$cap_state/queue"
-        fill_queue "$cap_state"
-    fi
+    cap_state=$BATS_TEST_TMPDIR/cap-state
+    mkdir -p "$cap_state/queue" "$cap_state/work"
+    chmod 0700 "$cap_state" "$cap_state/queue"
+    fill_queue "$cap_state"
     cap_port=$(free_port)
     start_listener "$cap_state" "$secrets_dir" "$cap_port" "$BATS_TEST_TMPDIR/cap.log"
     pids+=("$listener_pid")
