@@ -1038,34 +1038,41 @@ Until the first new-family snapshot is `verified` in each backend,
 URL: that is the expected red window, not a fault.
 
 Run this once, per backend, after the first `music` snapshot of the new family
-is `verified`, and check the count before forgetting:
+is `verified`. Restic's `--path` keeps a snapshot that contains the given path
+*among its paths*, so it matches both families. Select the old family by its
+single-path set and forget those snapshots by ID instead. Check the count first:
 
 ```sh
 sudo bash -c '
   source /usr/libexec/restic-plane-common
   for backend in ssd hdd r2; do
     load_backend_env "$backend"
-    restic -r "$(repo_for "$backend")" snapshots --json \
-      --path "/var/srv/music/.zfs/snapshot/$backend" | jq length
+    count=$(restic -r "$(repo_for "$backend")" snapshots --json --host smortress \
+      --tag unit:music,verified --path "/var/srv/music/.zfs/snapshot/$backend" \
+      | jq "[.[] | select((.paths|length) == 1)] | length")
+    echo "$backend: $count old-family snapshot(s)"
   done'
 ```
 
-The count is the old family only: the new snapshots name both `/var/srv/music`
-and `/var/lib/navidrome`, so the exact `--path` cannot select them. Forget the old
-family:
+A new-family snapshot lists both `/var/srv/music/.zfs/snapshot/<backend>` and
+`/var/lib/navidrome/.zfs/snapshot/<backend>`, so it never counts above. When the
+counts match what the old family held, drop exactly those snapshots:
 
 ```sh
 sudo bash -c '
   source /usr/libexec/restic-plane-common
   for backend in ssd hdd r2; do
     load_backend_env "$backend"
-    restic -r "$(repo_for "$backend")" forget --host smortress \
-      --tag unit:music,verified --group-by host,paths \
-      --path "/var/srv/music/.zfs/snapshot/$backend" --keep-last 0 \
-      --unsafe-allow-remove-all
+    repo=$(repo_for "$backend")
+    ids=$(restic -r "$repo" snapshots --json --host smortress \
+      --tag unit:music,verified --path "/var/srv/music/.zfs/snapshot/$backend" \
+      | jq -r ".[] | select((.paths|length) == 1) | .id")
+    [[ -z $ids ]] || restic -r "$repo" forget $ids
   done'
 ```
 
+`restic forget` takes an exclusive lock, so wait until a running backup finishes;
+`forget --dry-run --no-lock` previews the same set while one holds the repository.
 The next daily maintenance prunes the freed snapshot metadata.
 
 ### Verify the applications and the closed LAN
