@@ -105,8 +105,8 @@ check "stale-route pruning only considers tenant handlers" \
   has 'select(startswith("/apps/"))' "$serve_script"
 # Declarative in this script is not declarative in tailscaled: a handler keeps
 # answering after the declaration that made it is gone, so a port that a later
-# version stops declaring -- the edge's 8446 and 8447 once it is Service-only --
-# is turned off here or it lingers for good.
+# version stops declaring -- the two host ports the edge read before it used the
+# Services -- is turned off here or it lingers for good.
 check "a port that left core_routes is turned off on the next run" \
   has 'serve --https="$port" off' "$serve_script"
 if grep -qE -- '--set-path=/wallpapers[^ ]* .*off' "$serve_script"; then
@@ -237,13 +237,18 @@ check "Syncthing's QUIC port is permitted on the tailscale zone" \
 # to be open on the tailnet zone or the notify path silently times out.
 check "the deploy receiver's port is permitted on the tailscale zone" \
   has '<port port="8484" protocol="tcp"/>' image/rootfs/etc/firewalld/zones/tailscale.xml
-# The public edge (design #725) reaches Immich and OPDShelf through Serve's two
-# dedicated ports. An ACL accept that the zone drops is a route that never
-# works, and the failure looks like an edge bug rather than a firewall one.
-check "the edge's Immich route is permitted on the tailscale zone" \
-  has '<port port="8446" protocol="tcp"/>' image/rootfs/etc/firewalld/zones/tailscale.xml
-check "the edge's OPDShelf route is permitted on the tailscale zone" \
-  has '<port port="8447" protocol="tcp"/>' image/rootfs/etc/firewalld/zones/tailscale.xml
+# The public edge (design #725) proxies the `svc:immich` and `svc:opds` Services,
+# so it needs no port of its own and the zone is Syncthing's two plus the
+# receiver's one. A `<port>` no route stands behind is an opening on the tailnet
+# zone that nothing would notice, so the set is pinned whole rather than one
+# retired entry at a time.
+zone_ports=$(grep -oE '<port port="[0-9]+" protocol="[a-z]+"/>' \
+  image/rootfs/etc/firewalld/zones/tailscale.xml | tr '\n' ' ')
+if [[ $zone_ports == '<port port="22000" protocol="tcp"/> <port port="22000" protocol="udp"/> <port port="8484" protocol="tcp"/> ' ]]; then
+  ok "the tailscale zone opens only Syncthing and the deploy receiver"
+else
+  bad "the tailscale zone opens only Syncthing and the deploy receiver" "$zone_ports"
+fi
 
 # The apps tenant (#726) is named everywhere and numbered nowhere. sysusers
 # allocates its id, so anything that named 1001 — the dataset owner, the user

@@ -44,20 +44,19 @@ fail() {
 command -v jq >/dev/null 2>&1 || fail "jq is missing"
 
 # https port -> loopback port. 443 Immich, 8443 OPDShelf, 10000 Syncthing GUI,
-# 8444 the personal web UI, 8445 the general one, 8448 Navidrome. 8446 and 8447
-# repeat Immich and OPDShelf for the public edge (design #725): the edge may not
-# use 443, because that port also carries the agent gateways and the wallpaper
-# tree, and a port-scoped tailnet rule cannot express a path. The wallpaper
-# library is absent here: it is a directory published as static files under a
-# path on 443, not a loopback port with a root path.
+# 8444 the personal web UI, 8445 the general one, 8448 Navidrome. Every one of them
+# serves the owner's own tailnet clients; the public edge does not read them. It
+# proxies the `svc:immich` and `svc:opds` Services instead (design #725), because
+# the edge may not use 443, which also carries the agent gateways and the
+# wallpaper tree, and a port-scoped tailnet rule cannot express a path. The
+# wallpaper library is absent here: it is a directory published as static files
+# under a path on 443, not a loopback port with a root path.
 declare -A core_routes=(
   [443]=2283
   [8443]=8083
   [10000]=8384
   [8444]=18006
   [8445]=18007
-  [8446]=2283
-  [8447]=8083
   [8448]=4533
 )
 
@@ -200,8 +199,8 @@ status=$("$tailscale_bin" serve status --json) || {
 # file: Serve answers a handler for as long as its config names it, and nothing in
 # tailscaled knows a newer script retired the route. So deleting an entry from
 # core_routes above is enough to retire it on the next run -- without this loop the
-# handler outlived the declaration, and the public edge's 8446 and 8447 would have
-# kept answering long after the edge moved onto Service names.
+# handler outlived the declaration. That is how the two host ports the public edge
+# used (8446 and 8447) leave, now that the edge reads the Services instead.
 #
 # Every https port in the status is stale unless core_routes names it. 443 is
 # exempt: that is the tenant root, where the two gateways and the wallpaper tree

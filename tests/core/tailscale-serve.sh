@@ -182,8 +182,7 @@ core_status() {
     cat >"$status" <<'EOF'
 {
   "TCP": {"443": {"HTTPS": true}, "8443": {"HTTPS": true}, "10000": {"HTTPS": true},
-          "8444": {"HTTPS": true}, "8445": {"HTTPS": true},
-          "8446": {"HTTPS": true}, "8447": {"HTTPS": true}},
+          "8444": {"HTTPS": true}, "8445": {"HTTPS": true}},
   "Web": {
     "host:443": {"Handlers": {
       "/": {"Proxy": "http://127.0.0.1:2283"},
@@ -194,9 +193,7 @@ core_status() {
     "host:8443": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:8083"}}},
     "host:10000": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:8384"}}},
     "host:8444": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:18006"}}},
-    "host:8445": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:18007"}}},
-    "host:8446": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:2283"}}},
-    "host:8447": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:8083"}}}
+    "host:8445": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:18007"}}}
   }
 }
 EOF
@@ -206,6 +203,13 @@ reset_case() {
     : >"$log"
     rm -f "$plan"
     core_status
+}
+
+# The number of host ports the script declares, read out of it rather than repeated
+# here: three assertions below count the routes a run logs, and every one of them
+# moves when an entry leaves core_routes.
+core_route_count() {
+    sed -n '/^declare -A core_routes=(/,/^)/p' "$script" | grep -cE '^  \[[0-9]+\]='
 }
 
 served() { # port -> handler path or empty
@@ -231,11 +235,6 @@ serves() { # path target label
 serves host:443 / http://127.0.0.1:2283 '443 still fronts Immich'
 serves host:8443 / http://127.0.0.1:8083 '8443 still fronts OPDShelf'
 serves host:10000 / http://127.0.0.1:8384 '10000 still fronts Syncthing'
-# The public edge (design #725) is the reason these two exist: it may not use
-# 443, so Immich and OPDShelf are repeated on ports a port-scoped tailnet rule
-# can name without also publishing the agent gateways and `/wallpapers`.
-serves host:8446 / http://127.0.0.1:2283 '8446 fronts Immich for the public edge'
-serves host:8447 / http://127.0.0.1:8083 '8447 fronts OPDShelf for the public edge'
 serves host:8448 / http://127.0.0.1:4533 '8448 fronts Navidrome'
 
 # --- the deploy receiver's TCP forward is a core route -----------------------
@@ -333,7 +332,7 @@ else
         "$(jq -r '.Services // {} | keys | join(" ")' "$status" 2>/dev/null)"
 fi
 if [[ "$(jq -r '.Web | keys | join(" ")' "$status" 2>/dev/null)" == \
-    'host:10000 host:443 host:8443 host:8444 host:8445 host:8446 host:8447 host:8448' ]]; then
+    'host:10000 host:443 host:8443 host:8444 host:8445 host:8448' ]]; then
     ok 'no app Service declaration opens a host port'
 else
     bad 'no app Service declaration opens a host port' \
@@ -428,10 +427,9 @@ fi
 #
 # The script is declarative for the routes it declares, but tailscaled's state is
 # not: a handler whose declaration is gone keeps answering until something turns
-# it off. The edge's 8446 and 8447 are the case that matters -- they exist for the
-# public edge alone and must not outlive it -- so a Web port nobody declares is
-# retired on the next run, while every port still in core_routes, 443, the
-# receiver's TCP forward and the per-app Services are left alone.
+# it off. So a Web port nobody declares is retired on the next run, while every
+# port still in core_routes, 443, the receiver's TCP forward and the per-app
+# Services are left alone.
 
 reset_case
 jq '.Web["host:9999"] = {"Handlers": {"/": {"Proxy": "http://127.0.0.1:2283"}}}' "$status" \
@@ -476,6 +474,27 @@ else
     ok 'the reconcile turns off Web ports only'
 fi
 
+# The two host ports the public edge used before it proxied the Services (design
+# #725) are exactly that case, and a box that still carries them must lose them:
+# nothing has any reason to reach Immich or OPDShelf on the host's own address but
+# the owner, who has 443 and 8443.
+reset_case
+jq '.Web["host:8446"] = {"Handlers": {"/": {"Proxy": "http://127.0.0.1:2283"}}}
+    | .Web["host:8447"] = {"Handlers": {"/": {"Proxy": "http://127.0.0.1:8083"}}}' \
+    "$status" >"$work/s" && mv "$work/s" "$status"
+run
+eq "$?" 0 'the retired edge ports do not fail the run'
+for port in 8446 8447; do
+    eq "$(grep -cF -- "serve --https=$port off" "$log")" 1 \
+        "the retired edge port $port is turned off exactly once"
+done
+if jq -e '.Web | (has("host:8446") or has("host:8447")) | not' "$status" >/dev/null 2>&1; then
+    ok 'neither retired edge port is left in the Serve config'
+else
+    bad 'neither retired edge port is left in the Serve config' \
+        "$(jq -r '.Web | keys | join(" ")' "$status" 2>/dev/null)"
+fi
+
 # A port Tailscale refuses to turn off is reported and stops the prunes, like a
 # stale `/apps/` route that will not go: the run fails rather than leaving the
 # rest of the config half-reconciled without saying so.
@@ -517,7 +536,7 @@ serves host:443 / http://127.0.0.1:2283 'no plan keeps the core root route'
 reset_case
 plan_with "$(jq -cn --argjson a "$(app_entry alpha 21234 4001 1G internet)" '{alpha: $a}')" >"$plan"
 if FAKE_STATUS_FAIL=1 run; then ok 'an unreadable status still applies the plan'; else bad 'an unreadable status still applies the plan' "$(cat "$work/stderr")"; fi
-if [[ $(grep -c -- '--bg --https=' "$log") == 12 ]]; then
+if [[ $(grep -c -- '--bg --https=' "$log") == $(( $(core_route_count) + 4 )) ]]; then
     ok 'the core routes, the two core paths, the wallpaper route and the app route are declared without status'
 else
     bad 'the core routes, the two core paths, the wallpaper route and the app route are declared without status' "$(cat "$log")"
@@ -543,7 +562,7 @@ if WALLPAPERS_DIR=$work/absent run; then
 else
     ok 'a missing wallpaper directory fails the run'
 fi
-if [[ $(grep -c -- '--bg --https=' "$log") == 10 ]]; then
+if [[ $(grep -c -- '--bg --https=' "$log") == $(( $(core_route_count) + 2 )) ]]; then
     ok 'a missing wallpaper directory still leaves the core routes declared'
 else
     bad 'a missing wallpaper directory still leaves the core routes declared' "$(cat "$log")"
@@ -604,7 +623,7 @@ if [[ -n $tenant_traffic ]]; then
 else
     ok 'a rejected plan changes no app route'
 fi
-if [[ $(grep -c -- '--bg --https=' "$log") == 11 ]]; then
+if [[ $(grep -c -- '--bg --https=' "$log") == $(( $(core_route_count) + 3 )) ]]; then
     ok 'a rejected plan still declares the core routes, the two core paths and the wallpapers route'
 else
     bad 'a rejected plan still declares the core routes and the wallpapers route' "$(cat "$log")"

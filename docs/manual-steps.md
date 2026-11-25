@@ -963,11 +963,12 @@ sudo systemctl start smortress-tailscale-serve.service
 tailscale serve status
 ```
 
-Expect nine routes: 443 to `http://127.0.0.1:2283` (Immich, plus `/wallpapers/`,
+Expect seven routes: 443 to `http://127.0.0.1:2283` (Immich, plus `/wallpapers/`,
 `/apps/agent-local` and `/apps/agent-general`), 8443 to `http://127.0.0.1:8083`
 (OPDShelf), 10000 to `http://127.0.0.1:8384` (Syncthing GUI), 8444 and 8445 to the
-agent web UIs, 8446/8447 for the public edge, and 8448 to `http://127.0.0.1:4533`
-(Navidrome). Nothing here is Funnel. The
+agent web UIs, 8448 to `http://127.0.0.1:4533` (Navidrome), and the deploy
+receiver's `tcp/8484` forward. The public edge is not in this table: it proxies the
+`svc:immich` and `svc:opds` Services. Nothing here is Funnel. The
 wallpaper route shows a `Path` target rather than a `Proxy`:
 
 ```sh

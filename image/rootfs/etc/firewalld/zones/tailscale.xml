@@ -1,12 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <zone>
   <short>Tailscale</short>
-  <description>Only the Tailscale interface. SSH is always on; 22000 is Syncthing's sync protocol, which is not HTTP and cannot be fronted by Tailscale Serve. 8484 is the deploy receiver, which Serve forwards from the tailnet. 8446 and 8447 are Serve's dedicated Immich and OPDShelf routes for the public edge, which may not use 443. The Immich, OPDShelf, Syncthing and Navidrome interfaces and the two agent web UIs publish on loopback and reach the tailnet through Serve, so they need no port here. Nothing listens on the LAN.</description>
+  <description>Only the Tailscale interface. SSH is always on; 22000 is Syncthing's sync protocol, which is not HTTP and cannot be fronted by Tailscale Serve. 8484 is the deploy receiver, which Serve forwards from the tailnet. The Immich, OPDShelf, Syncthing and Navidrome interfaces and the two agent web UIs publish on loopback and reach the tailnet through Serve, so they need no port here; the public edge reads the Immich and OPDShelf Services, so it needs none either. Nothing listens on the LAN.</description>
   <interface name="tailscale0"/>
   <service name="ssh"/>
   <port port="22000" protocol="tcp"/>
   <port port="22000" protocol="udp"/>
   <port port="8484" protocol="tcp"/>
-  <port port="8446" protocol="tcp"/>
-  <port port="8447" protocol="tcp"/>
 </zone>

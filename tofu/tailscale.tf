@@ -68,16 +68,6 @@ locals {
         dst    = ["tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000"]
       },
       {
-        # The public edge (design #725). The VPS terminates public TLS and needs
-        # the two dedicated Serve ports, never 443: 443 also carries the agent
-        # gateway APIs and the wallpaper tree, and a port-scoped rule cannot
-        # express a path. The edge is not in group:owner, so it never reaches
-        # sshd on the host.
-        action = "accept"
-        src    = ["tag:vps"]
-        dst    = ["tag:smortress:8446", "tag:smortress:8447"]
-      },
-      {
         # The owner reaches the edge's sshd and nothing else on it. The edge is
         # a public box, so its login is tailnet-only: the panel firewall refuses
         # 22 from the internet and this is the only rule that opens it.
@@ -196,14 +186,14 @@ locals {
         ip  = ["443"]
       },
       {
-        # The public edge (design #725) on its way off the host's 8446/8447: the
-        # VPS resolves the two names the applications own and proxies to them, so
-        # it needs a grant apiece, on the same 443 and narrower than the two host
-        # ports it replaces -- each VIP terminates at one application, where 8446
-        # and 8447 were Serve handlers on the host's own address. The host-port
-        # grants stay until the edge is running this config, which is why both
-        # forms are admitted at once: dropping them first would take photos and
-        # the catalogue down for the length of one bootstrap.
+        # The public edge (design #725) gets a grant apiece, on the same 443 the
+        # owner reads: the VPS resolves the two names the applications own and
+        # proxies to them, and each Service terminates at one application, so the
+        # rule is narrower than any host port could be. This is the edge's only path
+        # into the host -- a Service destination cannot be an `acl` destination, so
+        # no host-port rule names it -- and never 443 on the host's own name, which
+        # also carries the agent gateway APIs and the wallpaper tree, where a
+        # port-scoped rule cannot express a path.
         src = ["tag:vps"]
         dst = ["svc:immich"]
         ip  = ["443"]
@@ -266,25 +256,20 @@ locals {
         accept = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:vps:22", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443"]
       },
       {
-        # The owner reaches the edge login, never the edge's upstream ports and
-        # never the deploy receiver: 8446/8447 belong to tag:vps and 8484 to CI.
-        # A rule that widened either would fail here.
+        # The owner reaches the edge login, never the deploy receiver: 8484
+        # belongs to tag:deploy. A rule that widened it would fail here.
         src  = var.tailscale_login
-        deny = ["tag:smortress:8446", "tag:smortress:8447", "tag:smortress:8484"]
+        deny = ["tag:smortress:8484"]
       },
       {
         src  = "tag:untrusted"
-        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8446", "tag:smortress:8447", "tag:vps:22", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443"]
+        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:vps:22", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443"]
       },
       {
-        # The edge reaches the two Serve ports and nothing else on the host: no
-        # sshd, no agent gateway, no Syncthing, no deploy receiver. The two
-        # Service names it is granted are not host ports and cannot be named
-        # here; they leave the deny list below instead.
-        src    = "tag:vps"
-        accept = ["tag:smortress:8446", "tag:smortress:8447"]
-      },
-      {
+        # The edge reaches no host port at all. Its two destinations are Service
+        # names from the grants above, and a Service destination cannot be named in
+        # `acl` or in a test, so this deny of every other host port and edge login is
+        # the whole guard: a rule that gave the tag a port would fail here.
         src  = "tag:vps"
         deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8484", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443"]
       },
@@ -302,7 +287,7 @@ locals {
         # seven are admitted to some source, six of them to this tag. The
         # remaining entries are every host port and edge login any rule admits.
         src  = "tag:deploy"
-        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8446", "tag:smortress:8447", "tag:vps:22"]
+        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:vps:22"]
       },
     ]
   }
