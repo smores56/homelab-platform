@@ -801,8 +801,8 @@ has 'the policy admits Serve traffic' '"tag:smortress:443", "tag:smortress:8443"
 has 'the policy admits Syncthing' '"tag:smortress:22000"'
 has 'the device is resolved by hostname' 'hostname[[:space:]]*=[[:space:]]*"smortress"'
 has 'the device carries the tag declaratively' 'resource "tailscale_device_tags" "smortress"'
-has 'the device tag and the Service exist before the policy names them' \
-  'depends_on[[:space:]]*=[[:space:]]*\[tailscale_device_tags\.smortress, tailscale_service\.agent_ui\]'
+has 'the device tag and the two Services exist before the policy names them' \
+  'depends_on[[:space:]]*=[[:space:]]*\[tailscale_device_tags\.smortress, tailscale_service\.agent_ui, tailscale_service\.opds\]'
 has 'the policy keeps the owner in one group' '"group:owner"[[:space:]]*=[[:space:]]*\[var\.tailscale_login\]'
 has 'the tailnet login is its own variable' 'variable "tailscale_login"'
 has 'the tests name the tailnet login, not the Access email' 'src[[:space:]]*=[[:space:]]*var\.tailscale_login'
@@ -818,19 +818,22 @@ has 'a test proves the deploy node reaches no other host port' \
   'deny[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8446", "tag:smortress:8447", "tag:vps:22"\]'
 has 'the policy carries tests' 'tests[[:space:]]*=[[:space:]]*\['
 has 'a test proves every admitted port reaches the owner' \
-  'accept[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:vps:22", "svc:agent-ui:443"\]'
+  'accept[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:vps:22", "svc:agent-ui:443", "svc:opds:443"\]'
 has 'a test proves the owner does not reach the edge ports' \
   'deny[[:space:]]*=[[:space:]]*\["tag:smortress:8446", "tag:smortress:8447", "tag:smortress:8484"\]'
 has 'a test proves the edge reaches only the two Serve ports' \
   'accept[[:space:]]*=[[:space:]]*\["tag:smortress:8446", "tag:smortress:8447"\]'
 has 'a test proves a tagged device reaches none of them' \
-  'deny[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8446", "tag:smortress:8447", "tag:vps:22", "svc:agent-ui:443"\]'
+  'deny[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8446", "tag:smortress:8447", "tag:vps:22", "svc:agent-ui:443", "svc:opds:443"\]'
+has 'a test proves the edge does not reach either Service' \
+  'deny[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8484", "svc:agent-ui:443", "svc:opds:443"\]'
 
 # The agent UI's Service VIP (design #834). Tailscale owns the address, so it is
 # a grant destination and a test destination, never an `acl`: a grant names the
 # service and the port, and the auto-approver is what lets the host advertise it
 # without the owner approving each advertisement by hand.
 has 'the agent UI is a tailscale_service' 'resource "tailscale_service" "agent_ui"'
+has 'OPDShelf is a tailscale_service of its own' 'resource "tailscale_service" "opds"'
 service_block=$(extract tailscale_service.agent_ui)
 if [[ -z $service_block ]]; then
   bad "the agent UI Service exists"
@@ -844,30 +847,52 @@ else
     bad "the Service is gated on var.tailnet"
   fi
 fi
+# The first application off the per-port scheme carries the same shape as the UI's
+# Service: one gated Service on the tailnet's own address, the same 443, and an
+# auto-approver so the host's advertisement needs no hand approval.
+opds_block=$(extract tailscale_service.opds)
+if [[ -z $opds_block ]]; then
+  bad "the OPDShelf Service exists"
+else
+  ok "the OPDShelf Service exists"
+  if grep -qF 'name  = "svc:opds"' <<<"$opds_block"; then ok "the OPDShelf Service is svc:opds"; else bad "the OPDShelf Service is svc:opds"; fi
+  if grep -qF 'ports = ["tcp:443"]' <<<"$opds_block"; then ok "the OPDShelf Service advertises tcp:443"; else bad "the OPDShelf Service advertises tcp:443"; fi
+  if grep -qE 'count[[:space:]]*=[[:space:]]*var\.tailnet == "" \? 0 : 1' <<<"$opds_block"; then
+    ok "the OPDShelf Service is gated on var.tailnet"
+  else
+    bad "the OPDShelf Service is gated on var.tailnet"
+  fi
+fi
 has 'the policy grants the owner the Service' 'dst[[:space:]]*=[[:space:]]*\["svc:agent-ui"\]'
+has 'the policy grants the owner the OPDShelf Service' 'dst[[:space:]]*=[[:space:]]*\["svc:opds"\]'
 has 'the grant names the one service port' 'ip[[:space:]]*=[[:space:]]*\["443"\]'
 has 'the grant source is the owner group' 'grants[[:space:]]*=[[:space:]]*\['
 has 'the host auto-approves the Service' '"svc:agent-ui"[[:space:]]*=[[:space:]]*\["tag:smortress"\]'
+has 'the host auto-approves the OPDShelf Service' '"svc:opds"[[:space:]]*=[[:space:]]*\["tag:smortress"\]'
 has 'the auto-approver is declared under services' 'autoApprovers[[:space:]]*=[[:space:]]*\{'
-# Both UI names ride this one Service, so one grant per admitted source covers
-# them: the destination is the service and the port, never the name. Two grants
-# are the whole admitted set -- the owner's (#834) and the CI names probe's
-# (#848) -- so a third, or a second port on either, is a widening nobody decided.
+# Both UI names ride one Service, so one grant per admitted source covers them:
+# the destination is the service and the port, never the name. Three grants are
+# the whole admitted set -- the owner's on each Service (#834, and OPDShelf's)
+# and the CI names probe's on the UI (#848) -- so a fourth, a second port on any
+# or a probe grant on the catalogue, is a widening nobody decided.
 grants=$(awk '/^    grants = \[/ { f = 1 } f { print } f && /^    \]/ { exit }' "$work/code.tf")
 if [[ -z $grants ]]; then
   bad "the grants list is declared"
 else
   ok "the grants list is declared"
-  eq "$(grep -cE '^        src = ' <<<"$grants")" "2" 'the Service is granted to exactly two sources'
-  if grep -qF 'src = ["group:owner"]' <<<"$grants"; then ok 'the owner is one of them'; else bad 'the owner is one of them'; fi
-  if grep -qF 'src = ["tag:deploy"]' <<<"$grants"; then ok 'the names probe is the other'; else bad 'the names probe is the other'; fi
-  eq "$(grep -cF 'ip  = ["443"]' <<<"$grants")" "2" 'both grants name the one Service port'
+  eq "$(grep -cE '^        src = ' <<<"$grants")" "3" 'the Services are granted to exactly three sources'
+  eq "$(grep -cF 'src = ["group:owner"]' <<<"$grants")" "2" 'the owner reaches both Services'
+  if grep -qF 'src = ["tag:deploy"]' <<<"$grants"; then ok 'the names probe is the third'; else bad 'the names probe is the third'; fi
+  eq "$(grep -cF 'ip  = ["443"]' <<<"$grants")" "3" 'every grant names the one Service port'
 fi
-# Two accepts and two denies: the owner and the probe reach the port, the edge
-# (tag:vps) and a device in no group (tag:untrusted) do not. A fifth entry would
-# be a destination no other test keeps out.
+# Two accepts and two denies per Service: the owner and (for the UI) the probe
+# reach the port, the edge (tag:vps) and a device in no group (tag:untrusted) do
+# not. A further entry would be a destination no other test keeps out.
 eq "$(grep -cF -- '"svc:agent-ui:443"' "$work/code.tf")" "4" \
-  "the Service port is two accepts and two denies in the tests"
+  "the UI Service port is two accepts and two denies in the tests"
+# OPDShelf has no probe: one accept, the owner's, and the same two denies.
+eq "$(grep -cF -- '"svc:opds:443"' "$work/code.tf")" "3" \
+  "the OPDShelf Service port is one accept and two denies in the tests"
 # The provider is declared with an explicit scope list (design #841 T1): a plan
 # asks its read-only client for exactly the four read scopes, so the token it
 # mints cannot save a policy, delete a device or rewrite a Service, and a client

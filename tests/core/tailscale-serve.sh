@@ -9,8 +9,8 @@
 # library as static files under `/wallpapers`, one route per app, pruning of an
 # app that left the plan without touching the static route or a core path, a
 # refused claim on a core path, and a refusal to build a route from a plan that
-# names a foreign path or port. The agent UI's Service VIP endpoint is counted the
-# same way: it is the last core declaration, and the fake logs it.
+# names a foreign path or port. The Service VIP endpoints are counted the same
+# way: each is a core declaration, and the fake logs one and records the other.
 #
 #   tests/core/tailscale-serve.sh
 set -uo pipefail
@@ -47,7 +47,10 @@ trap 'rm -rf "$work"' EXIT
 # the case sets up. `off` is a removal, so the status it prints afterwards is
 # the file rewritten without that handler. A target that is an absolute path is
 # Serve's static-file form and lands in `Path`, exactly as the real one does, and
-# a directory mount gains the trailing slash Serve adds itself.
+# a directory mount gains the trailing slash Serve adds itself. A `--service`
+# declaration belongs to the Service VIP and not to the host, so it lands in
+# `Services` keyed `<service>:<port>`: recorded as a host handler it would take
+# that port's root path, which on 443 is Immich's.
 cat >"$work/tailscale" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -70,17 +73,31 @@ case $1 in
                 kind=Proxy
                 port=443
                 tcp=
+                service=
                 for arg in "$@"; do
                     case $arg in
                         --set-path=*) path=${arg#--set-path=} ;;
                         --https=*) port=${arg#--https=} ;;
                         --tcp=*) tcp=${arg#--tcp=} ;;
+                        --service=*) service=${arg#--service=} ;;
                         http://*) target=$arg ;;
                         tcp://*) target=$arg ;;
                         /*) target=$arg; kind=Path ;;
                         off) target=off ;;
                     esac
                 done
+                if [[ -n $service ]]; then
+                    [[ ${FAKE_FAIL_SERVICE:-} == 1 ]] && exit 1
+                    if [[ -z $target || $target == off ]]; then
+                        echo "fake tailscale: unparsed service declaration: $*" >&2
+                        exit 2
+                    fi
+                    jq --arg key "$service:${tcp:-$port}" --arg target "$target" '
+                        .Services //= {} | .Services[$key] = {"Proxy": $target}' \
+                        "$FAKE_STATUS" >"$FAKE_STATUS.next"
+                    mv "$FAKE_STATUS.next" "$FAKE_STATUS"
+                    exit 0
+                fi
                 if [[ -n $tcp ]]; then
                     [[ ${FAKE_FAIL_TCP:-} == 1 ]] && exit 1
                     if [[ $target != tcp://* ]]; then
@@ -187,6 +204,10 @@ static_served() { # port, handler path -> the directory or file it publishes
     jq -r --arg port "$1" --arg path "$2" '.Web[$port].Handlers[$path].Path // empty' "$status" 2>/dev/null
 }
 
+service_served() { # <service>:<port> -> the target it advertises
+    jq -r --arg key "$1" '.Services[$key].Proxy // empty' "$status" 2>/dev/null
+}
+
 # --- core routes always exist -------------------------------------------------
 
 reset_case
@@ -228,11 +249,11 @@ fi
 # --- the agent UI is a Service VIP, advertised once --------------------------
 #
 # The Service's address belongs to the tailnet, and it answers only when a tagged
-# node advertises the endpoint. The fake records a `--service` declaration under
-# TCP because it reads only `--tcp=`, which is exactly why the argv log is the
-# assertion: the flag has to be there, or the declaration lands on the host's own
-# 443 instead of the Service's. It is the last core declaration, so a Service the
-# tailnet does not have yet costs the UI and not the applications.
+# node advertises the endpoint. The fake keys a `--service` declaration under
+# `Services`, so the argv log carries the assertion: the flag has to be there, or
+# the declaration lands on the host's own 443 instead of the Service's. It is the
+# last core declaration, so a Service the tailnet does not have yet costs the UI
+# and not the applications.
 service_line=$(grep -nF -- '--service=svc:agent-ui' "$log" | cut -d: -f1 || true)
 gateway_line=$(grep -nF -- '--set-path=/apps/agent-local ' "$log" | cut -d: -f1 || true)
 eq "$(grep -cF -- 'serve --bg --service=svc:agent-ui --tcp=443 tcp://127.0.0.1:9443' "$log")" 1 \
@@ -244,6 +265,43 @@ else
     bad 'the Service endpoint is declared after every other core route' \
         "service at '$service_line', wallpapers at '$wallpapers_line', agent-local at '$gateway_line'"
 fi
+
+# --- OPDShelf is the first application off the per-port scheme ---------------
+#
+# A Service is the application's own name rather than a port on the host's, and
+# Tailscale terminates TLS for it and issues the certificate for that name, so
+# this is an `--https` declaration and not a `--tcp` forward like the UI's. It is
+# a Service, though, so it must never land in `Web`: `host:443` already fronts
+# Immich, and a service declaration recorded as a host handler would replace it.
+# The 8443 host route stays declared above, as the rollback.
+opds_line=$(grep -nF -- '--service=svc:opds' "$log" | cut -d: -f1 || true)
+status_line=$(grep -nF -- 'serve status --json' "$log" | cut -d: -f1 || true)
+eq "$(grep -cF -- 'serve --bg --service=svc:opds --https=443 http://127.0.0.1:8083' "$log")" 1 \
+    'the OPDShelf Service endpoint is declared exactly once, over https/443'
+eq "$(service_served svc:opds:443)" 'http://127.0.0.1:8083' \
+    'svc:opds advertises OPDShelf on its own port, not a host port'
+if [[ -n $opds_line && -n $service_line ]] && ((opds_line > service_line)); then
+    ok 'the OPDShelf Service is declared after the agent UI Service'
+else
+    bad 'the OPDShelf Service is declared after the agent UI Service' \
+        "opds at '$opds_line', agent-ui at '$service_line'"
+fi
+if [[ -n $opds_line && -n $status_line ]] && ((opds_line < status_line)); then
+    ok 'the OPDShelf Service is declared before the Serve status read'
+else
+    bad 'the OPDShelf Service is declared before the Serve status read' \
+        "opds at '$opds_line', status at '$status_line'"
+fi
+eq "$(jq -r '.Web["host:443"].Handlers["/"].Proxy // empty' "$status")" 'http://127.0.0.1:2283' \
+    'host:443 still fronts Immich after a Service declaration'
+if jq -e '[.Web["host:443"].Handlers[] | .Proxy // empty | select(. == "http://127.0.0.1:8083")] | length == 0' \
+    "$status" >/dev/null; then
+    ok 'no OPDShelf handler is left on the host 443'
+else
+    bad 'no OPDShelf handler is left on the host 443' "$(served host:443)"
+fi
+eq "$(jq -r '.TCP["443"].HTTPS // empty' "$status")" 'true' \
+    'a Service declaration leaves the host 443 route alone'
 
 # --- the two agent gateways own a fixed path each on 443 ----------------------
 
