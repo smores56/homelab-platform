@@ -84,7 +84,7 @@ own window, not inside a data migration. OPDShelf is pinned at the digest the
 legacy deployment ran; it has no database, so a version change is a reader
 change.
 
-`tests/core/app-quadlets.sh` fails if any Quadlet names a reference the pin table
+`tests/core/app-quadlets.bats` fails if any Quadlet names a reference the pin table
 does not produce, if a pin already points at our namespace, if an upstream
 registry appears in the policy, or if a built row names a Containerfile that is
 not in the tree.
@@ -731,7 +731,7 @@ successful start — it is proven by serving representative data from it.
   published ports and name resolution are dead -- which is exactly what happened
   before the network was changed. A future change that attaches a second network
   to `agent-local` could add a default route with it;
-  `tests/core/app-quadlets.sh` asserts the unit declares exactly one network and
+  `tests/core/app-quadlets.bats` asserts the unit declares exactly one network and
   which one, and that no publishing container sits on an internal network. The
   residual of a forwarding-enabled network is host services bound on the bridge
   address; the bridge carries no credential, socket or dataset.

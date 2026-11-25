@@ -7,7 +7,8 @@
 #                             [--check-claims]
 #
 # --changed selects groups from `git diff BASE` plus untracked files, and runs
-# everything when a changed path no group claims. --paths-from reads that file
+# everything when a changed path no group claims. A converted suite passes
+# --jobs 4 so one file uses the same four slots a group does. --paths-from reads that file
 # list from a file instead, which the self-test uses.
 set -euo pipefail
 
@@ -67,9 +68,9 @@ secrets|tests/secrets/policy.sh && tests/secrets/migration.sh && tests/secrets/d
 server-image|scripts/check-server-image.sh && scripts/render-ignition.sh --synthetic --check && tests/core/ignition-boundary.sh && scripts/render-ignition.sh --synthetic --stock --check|scripts/lib/*,scripts/check/image/*,image/*,ignition/*,units/*,images/*,tests/fixtures/*,docs/core/server-image.md,scripts/check-server-image.sh
 edge|tests/edge/check.sh|tests/edge/*,scripts/verify-public-edge.sh,scripts/verify-caa.sh
 tailnet-names|tests/tailnet-names/check.sh|tests/tailnet-names/*,scripts/verify-tailnet-names.sh
-core|bats tests/core/check.bats && bats tests/core/storage-layout.bats && bats tests/tags.bats && bats tests/core/restic-drill.bats && bats tests/core/tailscale-serve.bats && bats tests/core/apps-egress.bats && bats tests/core/apps-user.bats && bats tests/core/agent-drill.bats && bats tests/core/operator-access.bats && bats tests/core/restic-plane.bats && tests/core/smortress-restic-progress.sh && tests/core/agent-recovery.sh && tests/core/app-quadlets.sh && tests/core/agent-jobs.sh|tests/core/*,tests/tags.*,tests/helpers.bash,scripts/core/*,scripts/access-*,scripts/storage-layout.sh,scripts/init-zpool.sh,units/systemd/smortress-zpool.service
+core|bats --jobs 4 tests/core/check.bats && bats --jobs 4 tests/core/storage-layout.bats && bats --jobs 4 tests/tags.bats && bats --jobs 4 tests/core/restic-drill.bats && bats --jobs 4 tests/core/tailscale-serve.bats && bats --jobs 4 tests/core/apps-egress.bats && bats --jobs 4 tests/core/apps-user.bats && bats --jobs 4 tests/core/agent-drill.bats && bats --jobs 4 tests/core/operator-access.bats && bats --jobs 4 tests/core/restic-plane.bats && bats --jobs 4 tests/core/app-quadlets.bats && tests/core/smortress-restic-progress.sh && tests/core/agent-recovery.sh && tests/core/agent-jobs.sh|tests/core/*,tests/tags.*,tests/helpers.bash,scripts/core/*,scripts/access-*,scripts/storage-layout.sh,scripts/init-zpool.sh,units/systemd/smortress-zpool.service
 apps|tests/apps/check.sh && tests/apps/render.sh && tests/apps/quota.sh && tests/apps/ingress.sh|tests/apps/*,scripts/apps-*
-deploy|bats tests/deploy/state.bats && bats tests/deploy/atomic.bats && bats tests/deploy/receiver.bats && tests/deploy/verify.sh && tests/deploy/platform.sh && tests/deploy/boot.sh && tests/deploy/apps.sh && tests/deploy/apps-health.sh && tests/deploy/notify.sh && tests/deploy/poll.sh && tests/deploy/heartbeat.sh|tests/deploy/*,scripts/deploy-*,scripts/deploy/apps/*,image/rootfs/usr/libexec/deploy-verify.py,image/rootfs/usr/libexec/deploy-receiver.py,scripts/smortress-boot-gate.sh,scripts/smortress-apps-health.sh
+deploy|bats --jobs 4 tests/deploy/state.bats && bats --jobs 4 tests/deploy/atomic.bats && bats --jobs 4 tests/deploy/receiver.bats && tests/deploy/verify.sh && tests/deploy/platform.sh && tests/deploy/boot.sh && tests/deploy/apps.sh && tests/deploy/apps-health.sh && tests/deploy/notify.sh && tests/deploy/poll.sh && tests/deploy/heartbeat.sh|tests/deploy/*,scripts/deploy-*,scripts/deploy/apps/*,image/rootfs/usr/libexec/deploy-verify.py,image/rootfs/usr/libexec/deploy-receiver.py,scripts/smortress-boot-gate.sh,scripts/smortress-apps-health.sh
 data-plane|scripts/render-source-schemas.py --check && tests/data-plane/check.sh|tests/data-plane/*,apps/data_plane/*,libs/data_plane/*,scripts/render-source-schemas.py,recovery/*,deploy/data-plane/*
 tuta-calendar|venv="${XDG_CACHE_HOME:-$HOME/.cache}/check-all/tuta-calendar"; if [ ! -x "$venv/bin/python" ]; then python3 -m venv "$venv" && "$venv/bin/pip" install -q --disable-pip-version-check -r images/tuta-calendar/requirements.lock; fi; PATH="$venv/bin:$PATH" tests/tuta-calendar/check.sh|tests/tuta-calendar/*,apps/tuta_calendar/*
 agent-egress|tests/agent-egress/check.sh|tests/agent-egress/*,apps/agent_egress/*
