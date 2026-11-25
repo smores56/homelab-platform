@@ -1353,27 +1353,33 @@ systemctl status smortress-agent-shell-bridge smortress-agent-shell-bridge-perso
 sudo stat -c '%U:%G %a %n' \
   /run/smortress/agent-shell-general /run/smortress/agent-shell-general/general.sock \
   /run/smortress/agent-shell-personal /run/smortress/agent-shell-personal/personal.sock
-# root:1000 710 /run/smortress/agent-shell-general
-# root:1000 660 /run/smortress/agent-shell-general/general.sock
-# root:1000 710 /run/smortress/agent-shell-personal
-# root:1000 660 /run/smortress/agent-shell-personal/personal.sock
+# root:core 710 /run/smortress/agent-shell-general
+# root:core 660 /run/smortress/agent-shell-general/general.sock
+# root:core 710 /run/smortress/agent-shell-personal
+# root:core 660 /run/smortress/agent-shell-personal/personal.sock
+# core is gid 1000, the facade containers' group
 sudo podman exec smortress-agent-facade-general python3 -c '
 import socket
 sock = socket.socket(socket.AF_UNIX)
 sock.connect("/run/agent-shell/general.sock")
-sock.sendall(b"{\"command\": \"id -u; ls /var/srv/git | head -3\"}\n")
+sock.sendall(b"{\"command\": \"id -u; cat /proc/self/uid_map; ls /work | head -3; test -e /var/srv/git && echo LEAK-host-path || echo no-host-path\"}\n")
 print(sock.makefile().readline())'
 sudo podman exec smortress-agent-facade-personal python3 -c '
 import socket
 sock = socket.socket(socket.AF_UNIX)
 sock.connect("/run/agent-shell/personal.sock")
-sock.sendall(b"{\"command\": \"id -u; test ! -e /var/srv/git && echo no-general-tree; python3 -c \\\"import urllib.request; urllib.request.urlopen(\\\\\\\"https://example.com\\\\\\\", timeout=3)\\\" || echo blocked\"}\n")
+sock.sendall(b"{\"command\": \"id -u; cat /proc/self/uid_map; ls -A /work | wc -l; ls /sys/class/net\"}\n")
 print(sock.makefile().readline())'
 ```
 
-The general answer names uid 1000 and the general tree, so the job is a container
-and not the host; the personal answer names uid 1000, `no-general-tree` and
-`blocked`, so the same transport reaches a job with no live tree and no route.
+Both answers start with `0`: a rootless container is root **inside its own user
+namespace**, so the number that says who runs it is `/proc/self/uid_map`, which
+names the class runner on the host (`0 970 1` for general, `0 971 1` for personal)
+and that class's subuid range (`400000` or `300000`). The general answer then
+lists `/work` (the live tree — the host's `/var/srv/git` is the mount's source and
+does not exist inside the container) and `no-host-path`; the personal answer prints
+`0` for an empty disposable `/work` and `lo` alone, so the same transport reaches a
+job with no live tree and no route.
 Cross-class access is a missing mount, not a refusal: each facade's container has
 only its own class's directory, so the other class's socket path does not exist
 inside it.
