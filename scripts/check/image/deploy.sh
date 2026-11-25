@@ -125,6 +125,32 @@ fi
 check "the Serve unit is ordered after the wallpapers dataset is ready" \
   grep -qE '^After=.*zfs-ready@raw-wallpapers\.service' units/systemd/smortress-tailscale-serve.service
 
+# The web terminal (#954) is a session host, so the unit has to hide nothing its
+# panes use: the zellij binary, its config and its token database all come from
+# the owner's home, the shims need a writable /tmp, and sudo in a pane needs the
+# setuid bit NoNewPrivileges would block. The socket directory is the one an SSH
+# login resolves, so a browser attaches to the sessions an SSH client started.
+terminal_unit=units/systemd/smortress-zellij-web.service
+check "the image enables the web terminal" \
+  grep -qE '^[[:space:]]+smortress-zellij-web\.service[[:space:]]*\\?$' image/Containerfile
+check "the terminal listens on loopback only" \
+  has 'web --ip 127.0.0.1 --port 8082' "$terminal_unit"
+check "the terminal shares the fixed socket directory" \
+  has 'Environment=ZELLIJ_SOCKET_DIR=/run/zellij' "$terminal_unit"
+check "the terminal puts the mise shims first on PATH" \
+  has 'Environment=PATH=/var/home/smores/.local/share/mise/shims:' "$terminal_unit"
+check "the terminal creates main after the server starts" \
+  has 'ExecStartPost=-/var/home/smores/.local/share/mise/shims/zellij attach main --create-background' "$terminal_unit"
+check "the terminal keeps session daemons across a restart" \
+  grep -qx 'KillMode=process' "$terminal_unit"
+if grep -qE '^(ProtectHome|PrivateTmp|NoNewPrivileges)=' "$terminal_unit"; then
+  bad "the terminal unit hides nothing its panes need"
+else
+  ok "the terminal unit hides nothing its panes need"
+fi
+check "tmpfiles creates the socket directory for the owner" \
+  has 'd /run/zellij 0700 smores smores -' image/rootfs/etc/tmpfiles.d/smortress.conf
+
 # shellcheck source=app-images.sh disable=SC1091
 source scripts/app-images.sh
 # A table entry is used either as a Quadlet's Image= or as an argument of a
