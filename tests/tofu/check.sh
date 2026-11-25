@@ -802,7 +802,7 @@ has 'the policy admits Syncthing' '"tag:smortress:22000"'
 has 'the device is resolved by hostname' 'hostname[[:space:]]*=[[:space:]]*"smortress"'
 has 'the device carries the tag declaratively' 'resource "tailscale_device_tags" "smortress"'
 has 'the device tag and the Services exist before the policy names them' \
-  'depends_on[[:space:]]*=[[:space:]]*\[tailscale_device_tags\.smortress, tailscale_service\.agent_ui, tailscale_service\.opds, tailscale_service\.immich, tailscale_service\.navidrome, tailscale_service\.assistant, tailscale_service\.agent\]'
+  'depends_on[[:space:]]*=[[:space:]]*\[tailscale_device_tags\.smortress, tailscale_service\.agent_ui, tailscale_service\.opds, tailscale_service\.immich, tailscale_service\.navidrome, tailscale_service\.assistant, tailscale_service\.agent, tailscale_service\.sync\]'
 has 'the policy keeps the owner in one group' '"group:owner"[[:space:]]*=[[:space:]]*\[var\.tailscale_login\]'
 has 'the tailnet login is its own variable' 'variable "tailscale_login"'
 has 'the tests name the tailnet login, not the Access email' 'src[[:space:]]*=[[:space:]]*var\.tailscale_login'
@@ -818,15 +818,15 @@ has 'a test proves the deploy node reaches no other host port' \
   'deny[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8446", "tag:smortress:8447", "tag:vps:22"\]'
 has 'the policy carries tests' 'tests[[:space:]]*=[[:space:]]*\['
 has 'a test proves every admitted port reaches the owner' \
-  'accept[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:vps:22", "svc:agent-ui:443", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443"\]'
+  'accept[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:vps:22", "svc:agent-ui:443", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443"\]'
 has 'a test proves the owner does not reach the edge ports' \
   'deny[[:space:]]*=[[:space:]]*\["tag:smortress:8446", "tag:smortress:8447", "tag:smortress:8484"\]'
 has 'a test proves the edge reaches only the two Serve ports' \
   'accept[[:space:]]*=[[:space:]]*\["tag:smortress:8446", "tag:smortress:8447"\]'
 has 'a test proves a tagged device reaches none of them' \
-  'deny[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8446", "tag:smortress:8447", "tag:vps:22", "svc:agent-ui:443", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443"\]'
+  'deny[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8446", "tag:smortress:8447", "tag:vps:22", "svc:agent-ui:443", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443"\]'
 has 'a test proves the edge does not reach the Services' \
-  'deny[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8484", "svc:agent-ui:443", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443"\]'
+  'deny[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8484", "svc:agent-ui:443", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443"\]'
 
 # The agent UI's Service VIP (design #834). Tailscale owns the address, so it is
 # a grant destination and a test destination, never an `acl`: a grant names the
@@ -863,10 +863,11 @@ else
     bad "the OPDShelf Service is gated on var.tailnet"
   fi
 fi
-# The four core apps that followed the catalogue off the per-port scheme carry
-# the same shape: one gated Service per application, on the same 443.
+# The core apps that followed the catalogue off the per-port scheme carry the
+# same shape: one gated Service per application, on the same 443. The Syncthing
+# GUI is among them now that its host check is off (docs/manual-steps.md).
 for spec in 'immich:Immich' 'navidrome:Navidrome' \
-  'assistant:personal web UI' 'agent:general web UI'; do
+  'assistant:personal web UI' 'agent:general web UI' 'sync:Syncthing GUI'; do
   address=${spec%%:*}
   label=${spec#*:}
   service=svc:$address
@@ -886,43 +887,43 @@ for spec in 'immich:Immich' 'navidrome:Navidrome' \
 done
 has 'the policy grants the owner the Service' 'dst[[:space:]]*=[[:space:]]*\["svc:agent-ui"\]'
 has 'the policy grants the owner the OPDShelf Service' 'dst[[:space:]]*=[[:space:]]*\["svc:opds"\]'
-for dst in svc:immich svc:navidrome svc:assistant svc:agent; do
+for dst in svc:immich svc:navidrome svc:assistant svc:agent svc:sync; do
   has "the policy grants the owner $dst" "dst[[:space:]]*=[[:space:]]*\\[\"$dst\"\\]"
 done
 has 'the grant names the one service port' 'ip[[:space:]]*=[[:space:]]*\["443"\]'
 has 'the grant source is the owner group' 'grants[[:space:]]*=[[:space:]]*\['
 has 'the host auto-approves the Service' '"svc:agent-ui"[[:space:]]*=[[:space:]]*\["tag:smortress"\]'
 has 'the host auto-approves the OPDShelf Service' '"svc:opds"[[:space:]]*=[[:space:]]*\["tag:smortress"\]'
-for dst in svc:immich svc:navidrome svc:assistant svc:agent; do
+for dst in svc:immich svc:navidrome svc:assistant svc:agent svc:sync; do
   has "the host auto-approves $dst" "\"$dst\"[[:space:]]*=[[:space:]]*\\[\"tag:smortress\"\\]"
 done
 has 'the auto-approver is declared under services' 'autoApprovers[[:space:]]*=[[:space:]]*\{'
 # Both UI names ride one Service, so one grant per admitted source covers them:
-# the destination is the service and the port, never the name. Seven grants are
-# the whole admitted set -- the owner's on each of the six Services (#834, the
-# catalogue's and the four core apps') and the CI names probe's on the UI (#848)
-# -- so an eighth, a second port on any, or a probe grant on an application
-# Service, is a widening nobody decided.
+# the destination is the service and the port, never the name. Eight grants are
+# the whole admitted set -- the owner's on each of the seven Services (#834, the
+# catalogue's, the four core apps' and the Syncthing GUI's) and the CI names
+# probe's on the UI (#848) -- so a ninth, a second port on any, or a probe grant
+# on an application Service, is a widening nobody decided.
 grants=$(awk '/^    grants = \[/ { f = 1 } f { print } f && /^    \]/ { exit }' "$work/code.tf")
 if [[ -z $grants ]]; then
   bad "the grants list is declared"
 else
   ok "the grants list is declared"
-  eq "$(grep -cE '^        src = ' <<<"$grants")" "7" 'the Services are granted to exactly seven sources'
-  eq "$(grep -cF 'src = ["group:owner"]' <<<"$grants")" "6" 'the owner reaches all six Services'
-  if grep -qF 'src = ["tag:deploy"]' <<<"$grants"; then ok 'the names probe is the seventh'; else bad 'the names probe is the seventh'; fi
-  eq "$(grep -cF 'ip  = ["443"]' <<<"$grants")" "7" 'every grant names the one Service port'
+  eq "$(grep -cE '^        src = ' <<<"$grants")" "8" 'the Services are granted to exactly eight sources'
+  eq "$(grep -cF 'src = ["group:owner"]' <<<"$grants")" "7" 'the owner reaches all seven Services'
+  if grep -qF 'src = ["tag:deploy"]' <<<"$grants"; then ok 'the names probe is the eighth'; else bad 'the names probe is the eighth'; fi
+  eq "$(grep -cF 'ip  = ["443"]' <<<"$grants")" "8" 'every grant names the one Service port'
 fi
 # Two accepts and two denies per Service: the owner and (for the UI) the probe
 # reach the port, the edge (tag:vps) and a device in no group (tag:untrusted) do
 # not. A further entry would be a destination no other test keeps out.
 eq "$(grep -cF -- '"svc:agent-ui:443"' "$work/code.tf")" "4" \
   "the UI Service port is two accepts and two denies in the tests"
-# OPDShelf and the four core apps have no probe: one accept each, the owner's,
-# and the same two denies.
+# OPDShelf, the four core apps and the Syncthing GUI have no probe: one accept
+# each, the owner's, and the same two denies.
 eq "$(grep -cF -- '"svc:opds:443"' "$work/code.tf")" "3" \
   "the OPDShelf Service port is one accept and two denies in the tests"
-for dst in svc:immich svc:navidrome svc:assistant svc:agent; do
+for dst in svc:immich svc:navidrome svc:assistant svc:agent svc:sync; do
   eq "$(grep -cF -- "\"$dst:443\"" "$work/code.tf")" "3" \
     "the $dst Service port is one accept and two denies in the tests"
 done

@@ -950,8 +950,12 @@ curl -fsS https://smortress.<tailnet>.ts.net/wallpapers/ | head
 systemctl status zfs-ready@raw-wallpapers.service   # an empty listing means not mounted
 ```
 
-Syncthing refuses a proxied Host header, so turn its check off with the key from the
-config on its dataset, or its GUI answers `403` behind Serve:
+Syncthing refuses a proxied Host header, and Serve forwards the client's Host
+unchanged, so its check has to be off for `https://sync.<tailnet>.ts.net/` to
+answer -- this is the route's prerequisite, not a troubleshooting step: turn it off
+with the key from the config on its dataset. That setting is host state, not image
+state (it lives in `config.xml` on `state/syncthing-config`), so a host rebuilt from
+the image comes back with the default and the key has to be applied again:
 
 ```sh
 key=$(sudo sed -n 's:.*<apikey>\(.*\)</apikey>.*::p' /var/lib/syncthing/config/config.xml)

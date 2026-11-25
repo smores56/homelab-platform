@@ -178,8 +178,10 @@ fi
 # certificate for each service name. A Service that is a few minutes old prints
 # "approval from an admin is required" and answers nothing until the tailnet's
 # auto-approver (tofu/tailscale.tf) has taken it, so a pending advertisement is
-# not a failed one. Syncthing's GUI is not here: its Host guard rejects the Serve
-# route it already has, and its 10000 route is unchanged.
+# not a failed one. Syncthing's GUI is advertised as a Service below: Serve
+# forwards the client's Host unchanged, so the host check has to be off on the
+# host (docs/manual-steps.md, "Syncthing refuses a proxied Host header"), and
+# its 10000 route is unchanged.
 if ! "$tailscale_bin" serve --bg --service=svc:immich --https=443 http://127.0.0.1:2283; then
   fail "could not advertise the Immich Service on svc:immich https/443"
 fi
@@ -191,6 +193,12 @@ if ! "$tailscale_bin" serve --bg --service=svc:assistant --https=443 http://127.
 fi
 if ! "$tailscale_bin" serve --bg --service=svc:agent --https=443 http://127.0.0.1:18007; then
   fail "could not advertise the general web UI Service on svc:agent https/443"
+fi
+# The Syncthing GUI, on a Service like the rest now that its host check is off.
+# Serve forwards the client's Host unchanged, so a GUI that checks it answers 403
+# to this name; the 10000 host route stays as the rollback and still works.
+if ! "$tailscale_bin" serve --bg --service=svc:sync --https=443 http://127.0.0.1:8384; then
+  fail "could not advertise the Syncthing GUI Service on svc:sync https/443"
 fi
 
 # The status is only needed to prune stale app routes; if it cannot be read,

@@ -305,11 +305,12 @@ eq "$(jq -r '.TCP["443"].HTTPS // empty' "$status")" 'true' \
 
 # --- the rest of the core apps get a Service each, the same shape ------------
 #
-# Immich, Navidrome and the two agent web UIs follow the catalogue off the
-# per-port scheme: each declaration is `--https` against a Service of its own, so
-# Tailscale terminates TLS for that name, and each is additive -- the host routes
-# (443, 8448, 8444, 8445) stay declared above as the rollback. Syncthing's GUI is
-# not among them: its Host guard rejects the Serve route it already has.
+# Immich, Navidrome, the two agent web UIs and the Syncthing GUI follow the
+# catalogue off the per-port scheme: each declaration is `--https` against a
+# Service of its own, so Tailscale terminates TLS for that name, and each is
+# additive -- the host routes (443, 8448, 8444, 8445, 10000) stay declared above
+# as the rollback. The GUI is only here because its host check is off: Serve
+# forwards the client's Host unchanged (docs/manual-steps.md).
 eq "$(grep -cF -- 'serve --bg --service=svc:immich --https=443 http://127.0.0.1:2283' "$log")" 1 \
     'the Immich Service endpoint is declared exactly once, over https/443'
 eq "$(service_served svc:immich:443)" 'http://127.0.0.1:2283' \
@@ -326,7 +327,11 @@ eq "$(grep -cF -- 'serve --bg --service=svc:agent --https=443 http://127.0.0.1:1
     'the general web UI Service endpoint is declared exactly once, over https/443'
 eq "$(service_served svc:agent:443)" 'http://127.0.0.1:18007' \
     'svc:agent advertises the general UI on its own port, not a host port'
-app_services='["svc:immich", "svc:navidrome", "svc:assistant", "svc:agent"]'
+eq "$(grep -cF -- 'serve --bg --service=svc:sync --https=443 http://127.0.0.1:8384' "$log")" 1 \
+    'the Syncthing GUI Service endpoint is declared exactly once, over https/443'
+eq "$(service_served svc:sync:443)" 'http://127.0.0.1:8384' \
+    'svc:sync advertises the Syncthing GUI on its own port, not a host port'
+app_services='["svc:immich", "svc:navidrome", "svc:assistant", "svc:agent", "svc:sync"]'
 if jq -e --argjson names "$app_services" \
     '[.Services // {} | keys[] | select(. | endswith(":443")) | rtrimstr(":443")] as $served
      | ($names - $served) | length == 0' "$status" >/dev/null 2>&1; then
@@ -346,7 +351,8 @@ serves host:443 / http://127.0.0.1:2283 'host:443 still fronts Immich as the rol
 serves host:8448 / http://127.0.0.1:4533 'host:8448 still fronts Navidrome as the rollback'
 serves host:8444 / http://127.0.0.1:18006 'host:8444 still fronts the personal UI as the rollback'
 serves host:8445 / http://127.0.0.1:18007 'host:8445 still fronts the general UI as the rollback'
-app_service_lines=$(grep -nE -- '--service=svc:(immich|navidrome|assistant|agent) ' "$log" | cut -d: -f1 || true)
+serves host:10000 / http://127.0.0.1:8384 'host:10000 still fronts the Syncthing GUI as the rollback'
+app_service_lines=$(grep -nE -- '--service=svc:(immich|navidrome|assistant|agent|sync) ' "$log" | cut -d: -f1 || true)
 if [[ -n $app_service_lines ]] && ((opds_line < $(head -n1 <<<"$app_service_lines") &&
     $(tail -n1 <<<"$app_service_lines") < status_line)); then
     ok 'the app Services are declared after the catalogue and before the Serve status read'

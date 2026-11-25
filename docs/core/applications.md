@@ -552,7 +552,7 @@ mapping file.
 | --- | --- | --- |
 | Immich | `127.0.0.1:2283` | `https://immich.<tailnet>.ts.net/`, `https://smortress.<tailnet>.ts.net/` and, for the edge only, `https://smortress.<tailnet>.ts.net:8446/` |
 | OPDShelf | `127.0.0.1:8083` | `https://opds.<tailnet>.ts.net/`, `https://smortress.<tailnet>.ts.net:8443/` and, for the edge only, `https://smortress.<tailnet>.ts.net:8447/` |
-| Syncthing GUI | `127.0.0.1:8384` | `https://smortress.<tailnet>.ts.net:10000/` |
+| Syncthing GUI | `127.0.0.1:8384` | `https://sync.<tailnet>.ts.net/` and `https://smortress.<tailnet>.ts.net:10000/` |
 | Navidrome | `127.0.0.1:4533` | `https://navidrome.<tailnet>.ts.net/` and `https://smortress.<tailnet>.ts.net:8448/` |
 | Wallpapers | `/srv/wallpapers` (static files) | `https://smortress.<tailnet>.ts.net/wallpapers/` |
 | Personal agent gateway | `127.0.0.1:18001` | `https://smortress.<tailnet>.ts.net/apps/agent-local/v1` |
