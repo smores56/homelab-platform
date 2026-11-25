@@ -188,14 +188,6 @@ if ! "$tailscale_bin" serve --bg --service=svc:sync --https=443 http://127.0.0.1
   fail "could not advertise the Syncthing GUI Service on svc:sync https/443"
 fi
 
-# The zellij web terminal, declared last of every route: `fail()` aborts the
-# script, so a terminal the tailnet will not take must not cost a route declared
-# after it. Zellij binds loopback itself and Serve terminates TLS for the Service
-# name, so this adds no host port and no certificate of our own.
-if ! "$tailscale_bin" serve --bg --service=svc:terminal --https=443 http://127.0.0.1:8082; then
-  fail "could not advertise the zellij web terminal on svc:terminal https/443"
-fi
-
 # The status is only needed to prune stale app routes; if it cannot be read,
 # declare the plan's routes anyway and leave the pruning to a later run.
 status=$("$tailscale_bin" serve status --json) || {
@@ -291,5 +283,13 @@ for path in "${!app_routes[@]}"; do
     fail "could not serve $backend on https/443$path"
   fi
 done
+
+# The zellij web terminal, declared last of every route: `fail()` aborts the
+# script, so a terminal the tailnet will not take must not cost a route declared
+# after it. Zellij binds loopback itself and Serve terminates TLS for the Service
+# name, so this adds no host port and no certificate of our own.
+if ! "$tailscale_bin" serve --bg --service=svc:terminal --https=443 http://127.0.0.1:8082; then
+  fail "could not advertise the zellij web terminal on svc:terminal https/443"
+fi
 
 "$tailscale_bin" serve status || true

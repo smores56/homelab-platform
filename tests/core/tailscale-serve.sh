@@ -108,7 +108,7 @@ case $1 in
                     esac
                 done
                 if [[ -n $service ]]; then
-                    [[ ${FAKE_FAIL_SERVICE:-} == 1 ]] && exit 1
+                    [[ ${FAKE_FAIL_SERVICE:-} == 1 || ${FAKE_FAIL_SERVICE_NAME:-} == "$service" ]] && exit 1
                     if [[ -z $target || $target == off ]]; then
                         echo "fake tailscale: unparsed service declaration: $*" >&2
                         exit 2
@@ -346,23 +346,22 @@ eq "$(grep -cF -- 'serve --bg --service=svc:terminal --https=443 http://127.0.0.
     'the zellij web Service endpoint is declared exactly once, over https/443'
 eq "$(service_served svc:terminal:443)" 'http://127.0.0.1:8082' \
     'svc:terminal advertises zellij web on its own port, not a host port'
-terminal_line=$(grep -nF -- '--service=svc:terminal' "$log" | cut -d: -f1 || true)
-last_other_service=$(grep -nE -- '--service=svc:' "$log" | grep -vF -- 'svc:terminal' |
+terminal_line=$(grep -nF -- '--service=svc:terminal' "$log" | cut -d: -f1 | head -n1)
+last_other_route=$(grep -nE -- 'serve --bg' "$log" | grep -vF -- 'svc:terminal' |
     cut -d: -f1 | sort -n | tail -n1 || true)
-if [[ -n $terminal_line && -n $last_other_service ]] &&
-    ((last_other_service < terminal_line && terminal_line < status_line)); then
-    ok 'svc:terminal is declared after every other Service and before the Serve status read'
+if [[ -n $terminal_line && -n $last_other_route ]] && ((last_other_route < terminal_line)); then
+    ok 'svc:terminal is the last route declared, so a refused terminal costs no other route'
 else
-    bad 'svc:terminal is declared after every other Service and before the Serve status read' \
-        "terminal at '$terminal_line', last other Service at '$last_other_service', status at '$status_line'"
+    bad 'svc:terminal is the last route declared, so a refused terminal costs no other route' \
+        "terminal at '$terminal_line', last other route at '$last_other_route'"
 fi
 app_services='["svc:immich", "svc:navidrome", "svc:assistant", "svc:agent", "svc:sync", "svc:terminal"]'
 if jq -e --argjson names "$app_services" \
     '[.Services // {} | keys[] | select(. | endswith(":443")) | rtrimstr(":443")] as $served
      | ($names - $served) | length == 0' "$status" >/dev/null 2>&1; then
-    ok 'every core app Service is recorded under Services, not on a host port'
+    ok 'every core Service is recorded under Services, not on a host port'
 else
-    bad 'every core app Service is recorded under Services, not on a host port' \
+    bad 'every core Service is recorded under Services, not on a host port' \
         "$(jq -r '.Services // {} | keys | join(" ")' "$status" 2>/dev/null)"
 fi
 if [[ "$(jq -r '.Web | keys | join(" ")' "$status" 2>/dev/null)" == \
@@ -739,6 +738,19 @@ else
     bad 'a rejected plan still declares the receiver forward' "$(cat "$log")"
 fi
 eq "$(tcp_forward)" 127.0.0.1:8484 'a rejected plan leaves the receiver forward in place'
+
+# The consequence of being last, on the case that matters: the tenant routes and
+# the prune have already run, so a Service the tailnet refuses costs the terminal.
+reset_case
+plan_with "$(jq -cn --argjson a "$(app_entry alpha 21234 4001 1G internet)" '{alpha: $a}')" >"$plan"
+FAKE_FAIL_SERVICE_NAME=svc:terminal run
+eq "$?" 1 'a refused terminal Service fails the run'
+serves host:443 /apps/alpha http://127.0.0.1:21234 'a refused terminal still leaves the tenant route declared'
+if [[ -n $(service_served svc:terminal:443) ]]; then
+    bad 'a refused terminal advertises nothing' "$(service_served svc:terminal:443)"
+else
+    ok 'a refused terminal advertises nothing'
+fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 ((fail == 0))
