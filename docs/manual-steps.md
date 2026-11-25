@@ -958,7 +958,7 @@ state (it lives in `config.xml` on `state/syncthing-config`), so a host rebuilt 
 the image comes back with the default and the key has to be applied again:
 
 ```sh
-key=$(sudo sed -n 's:.*<apikey>\(.*\)</apikey>.*::p' /var/lib/syncthing/config/config.xml)
+key=$(sudo sed -n 's:.*<apikey>\(.*\)</apikey>.*:\1:p' /var/lib/syncthing/config/config.xml)
 sudo curl -fsS -X PATCH -H "X-API-Key: $key" -H 'Content-Type: application/json' \
   -d '{"insecureSkipHostcheck": true}' http://127.0.0.1:8384/rest/config/gui
 ```
