@@ -120,8 +120,10 @@ PYTHONPATH=libs AGENT_FACADE_TOKEN_FILE=/run/secrets/agent-facade-personal \
   --host 127.0.0.1 --port 18004 --memory-root /var/lib/agent-facade
 
 # general deployment, stdio MCP child, with the bridge socket (shell.run)
+# and the two live trees (repos, books)
 PYTHONPATH=libs AGENT_FACADE_TOKEN=... AGENT_FACADE_DEPLOYMENT=general \
   AGENT_FACADE_SHELL_SOCKET=/run/agent-shell/general.sock \
+  AGENT_FACADE_REPO_ROOT=/srv/git AGENT_FACADE_BOOKS_ROOT=/srv/books \
   python3 -m apps.agent_facade --transport stdio
 ```
 
@@ -129,7 +131,8 @@ Every flag also has an `AGENT_FACADE_*` environment variable:
 `AGENT_FACADE_TRANSPORT`, `AGENT_FACADE_DEPLOYMENT`, `AGENT_FACADE_TOKEN`,
 `AGENT_FACADE_TOKEN_FILE`, `AGENT_FACADE_MEMORY_ROOT`, `AGENT_FACADE_INDEX_ROOT`,
 `AGENT_FACADE_HOST`, `AGENT_FACADE_PORT`, `AGENT_FACADE_MAX_BODY_BYTES`,
-`AGENT_FACADE_SHELL_SOCKET`. The last one is the deployment's own bridge socket
+`AGENT_FACADE_SHELL_SOCKET`, `AGENT_FACADE_REPO_ROOT` and
+`AGENT_FACADE_BOOKS_ROOT`. `SHELL_SOCKET` is the deployment's own bridge socket
 (`/run/agent-shell/general.sock` or `/run/agent-shell/personal.sock` behind the
 class's mount); without it the process serves no `shell.run`. The HTTP default
 bind is `127.0.0.1:18004`; `--transport`
@@ -137,6 +140,16 @@ defaults to `stdio`, `--deployment` has no default and is required. `--index-roo
 defaults to `/index`, the directory the personal Quadlet mounts; the source index
 below it is derived, so an unwritable root costs a scan and nothing else. Logs go
 to stderr, so stdout belongs to stdio alone.
+
+## Live trees: repos and books (general only)
+
+`--repo-root` and `--books-root` serve the general deployment's two trees live,
+read-only, with no generation and no publication step: `repos` is a file at `HEAD`
+of a clean-bare clone (`repos::<host>/<owner>/<repo>::<path>`), and `books` is one
+OPDShelf entry's `metadata.opf` (`books::<author>/<title>`). A search is bounded by
+a 5 s deadline and a path/book cap, binary blobs are refused, and a body is cut at
+64 KiB with `truncated` in its provenance. The contract comes from the deployment's
+own table, so a personal facade naming either root fails at startup.
 
 ## Status: live replicas where wired, fixtures elsewhere
 

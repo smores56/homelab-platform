@@ -1423,6 +1423,30 @@ print([tool["name"] for tool in json.load(urllib.request.urlopen(request))["resu
 The same call with the personal deployment's token answers `401`: one token is one
 deployment, so a token that names the personal facade cannot reach the general one.
 
+The general facade's two live sources (SDLC #851) read the trees through its own
+read-only mounts, so a `sources.search` names a real path in a clone and a real
+book, and `sources.read` returns the file at `HEAD` or the OPF's fields:
+
+```sh
+sudo podman exec smortress-agent-facade-general python3 -c '
+import json, urllib.request
+token = open("/run/secrets/agent-facade-general-token").read().strip()
+def call(name, arguments):
+    body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                       "params": {"name": name, "arguments": arguments}}).encode()
+    request = urllib.request.Request(
+        "http://127.0.0.1:18005/mcp", data=body,
+        headers={"Content-Type": "application/json", "X-Deployment-Token": token})
+    return json.load(urllib.request.urlopen(request))["result"]["content"][0]["text"]
+for source, query in (("repos", "requires"), ("books", "dune")):
+    print(source, call("sources.search", {"source": source, "query": query, "limit": 2})[:200])
+print(call("sources.read", {"source": "repos", "id": "repos::github.com/smores56/homelab-platform::justfile"})[:400])'
+```
+
+A personal facade naming either root does not start: the contract is the
+deployment table's, so `tree_adapters_for` refuses the binding before the service
+listens.
+
 ### Run the agent runtime drill
 
 `scripts/agent-runtime-drill.sh` answers three rows of the T6 matrix that no static

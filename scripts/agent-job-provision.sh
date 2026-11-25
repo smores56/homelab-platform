@@ -204,6 +204,11 @@ nft -f "$nft_file"
 if [[ -d $workspace ]]; then
   setfacl -m "u:agent-shell-general:rwx" "$workspace"
   setfacl -m "d:u:agent-shell-general:rwx" "$workspace"
+  # The general facade reads the same tree as a source (repos, SDLC #851) and
+  # runs as uid 1000. The mode keeps "other" out, so the read is an ACL and not a
+  # relabel: the tree keeps container_file_t and the group bit stays r-x.
+  setfacl -m "u:core:r-x" "$workspace"
+  setfacl -m "d:u:core:r-x" "$workspace"
 else
   echo "agent-job-provision: $workspace is absent; zfs-ready@raw-git has not run" >&2
 fi

@@ -493,6 +493,15 @@ if ! grep -q "agent-shell-general" "$work/subids/check"; then
 else
   bad '--check writes nothing'
 fi
+# The general facade reads the same tree as the repos source (SDLC #851) and runs
+# as uid 1000, which the mode keeps out. The read is an ACL, never a relabel.
+if grep -qF 'setfacl -m "u:core:r-x" "$workspace"' "$provision" &&
+  grep -qF 'setfacl -m "d:u:core:r-x" "$workspace"' "$provision"; then
+  ok 'provisioning grants the facade read on the general tree by ACL'
+else
+  bad 'provisioning grants the facade read on the general tree by ACL' \
+    "$(grep -n 'core:r-x\|setfacl' "$provision" | head -6)"
+fi
 if ! grep -q '^podman pull ' "$work/provision.log" 2>/dev/null; then
   ok '--check does not pull the job image'
 else

@@ -9,10 +9,13 @@ a repos or books adapter is not a state the service can reach. A lookup miss is
 a missing key in that deployment's table, not a policy branch a later edit could
 invert.
 
-Every adapter is a fixture: deterministic records held in process, no network,
-no filesystem walk, and no live personal data. A source declares its own
-visibility in a ``SourceContract``, so the table and the contract are checked
-against each other at import time.
+The table's own adapter is a fixture: deterministic records held in process, no
+network and no filesystem walk. A deployment that is handed a real source
+replaces that entry -- a published raw generation for the personal replicas
+(``replica_sources``), or a live read-only tree for the general ``repos`` and
+``books`` (``tree_sources``) -- and the replacement carries the fixture's
+contract. A source declares its own visibility there, so the table and the
+contract are checked against each other at construction time.
 """
 
 from __future__ import annotations

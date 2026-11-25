@@ -995,6 +995,54 @@ else
     "$(cat "$shell_cil" 2>/dev/null | head -3)"
 fi
 
+# 13c. The two live general sources (T9, SDLC #851): `repos` reads the clean-bare
+#      clones under /var/srv/git and `books` the OPDShelf library under
+#      /var/srv/books. Both are live mounts of the general facade only, read-only,
+#      and labeled by their datasets: a :z/:Z here would rewrite a shared label,
+#      which is why the acceptance forbids it. The personal facade names neither.
+if grep -qF -- '--repo-root /srv/git --books-root /srv/books ' <<<"$(sed -n 's/^Exec=//p' "$general_facade") " ; then
+  ok 'the general facade reads the two live trees'
+else
+  bad 'the general facade reads the two live trees' "$(sed -n 's/^Exec=//p' "$general_facade")"
+fi
+if grep -qxF 'Volume=/var/srv/git:/srv/git:ro' "$general_facade" &&
+  grep -qxF 'Volume=/var/srv/books:/srv/books:ro' "$general_facade"; then
+  ok 'both general trees are mounted read-only'
+else
+  bad 'both general trees are mounted read-only' "$(grep -h '/var/srv' "$general_facade")"
+fi
+if grep -E '^Volume=/var/srv/(git|books):' "$general_facade" | grep -qE ':(z|Z)($|,)' ||
+  grep -E '^(Volume|Exec)=' "$general_facade" | grep -qF 'label=disable'; then
+  bad 'the tree mounts relabel nothing'
+else
+  ok 'the tree mounts relabel nothing'
+fi
+if ! grep -qF -- '--repo-root' "$personal_facade" &&
+  ! grep -qF -- '--books-root' "$personal_facade" &&
+  ! grep -qF '/var/srv/git' "$personal_facade" &&
+  ! grep -qF '/var/srv/books' "$personal_facade"; then
+  ok 'the personal facade names neither general tree'
+else
+  bad 'the personal facade names neither general tree' "$(grep -hE 'repo-root|books-root|/var/srv' "$personal_facade")"
+fi
+if grep -lF -e '/var/srv/git' -e '/var/srv/books' units/quadlet/*.container |
+  grep -vxF -- "$general_facade" | grep -q .; then
+  bad 'only the general facade mounts the general trees' \
+    "$(grep -lF -e '/var/srv/git' -e '/var/srv/books' units/quadlet/*.container)"
+else
+  ok 'only the general facade mounts the general trees'
+fi
+
+# A module the runtime image does not copy is an ImportError at the first start,
+# not a review note: the list is explicit, so every module has to be on it.
+for module in apps/agent_facade/*.py; do
+  if grep -qF "$module" images/agent-runtime/Containerfile; then
+    ok "the runtime image installs ${module#apps/agent_facade/}"
+  else
+    bad "the runtime image installs ${module#apps/agent_facade/}"
+  fi
+done
+
 # A token in a template would be a credential in an image both gateways share, and
 # the placeholder is only safe while it is exactly the placeholder.
 if grep -rhn 'X-Deployment-Token:' "${agent_templates[@]}" | grep -qvE ': __FACADE_TOKEN__$'; then
