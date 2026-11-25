@@ -1622,23 +1622,31 @@ session started over SSH attaches from a browser and a browser-started session i
 visible over SSH. The unit creates `main` at every boot, and no host port, proxy or
 container is added.
 
+Two dotfiles make the sharing real, and neither is optional: `web_sharing "on"` in
+`~/.config/zellij/config.kdl` is what lets a browser attach to a session an SSH
+login started, and `~/.config/shell/env.d/20-zellij-socket.sh` is what points that
+login at `/run/zellij`. Both reach the host through `mise dotfiles`; before they
+do, SSH sessions use `$XDG_RUNTIME_DIR/zellij` and the browser lists sessions it
+cannot attach to, with no error to say why. `zellij setup --check` accepts the
+config, so it is not the probe either.
+
 One read-write login token, printed once, is the whole credential: store it in the
-password manager, never in this repository, and mint it with the unit's
-environment so it lands in the directory the server reads.
+password manager and never in this repository. The token store follows `HOME`
+(`~/.local/share/zellij/tokens.db`), not the socket directory, so the command has
+to run as the owner with the owner's home -- `-H` is what makes it work from a
+root shell, where it would otherwise write to `/root` and the server would never
+see it.
 
 ```sh
-sudo -u smores env ZELLIJ_SOCKET_DIR=/run/zellij \
-  /var/home/smores/.local/share/mise/shims/zellij web --create-token
-sudo -u smores env ZELLIJ_SOCKET_DIR=/run/zellij \
-  /var/home/smores/.local/share/mise/shims/zellij web --list-tokens
+sudo -u smores -H /var/home/smores/.local/share/mise/shims/zellij web --create-token
+sudo -u smores -H /var/home/smores/.local/share/mise/shims/zellij web --list-tokens
 ```
 
 Zellij 0.46 names every token `token_N` (`--create-token` cannot be combined with
 `--token-name`), and a token does not expire, so rotation is a revoke and a mint:
 
 ```sh
-sudo -u smores env ZELLIJ_SOCKET_DIR=/run/zellij \
-  /var/home/smores/.local/share/mise/shims/zellij web --revoke-token token_1
+sudo -u smores -H /var/home/smores/.local/share/mise/shims/zellij web --revoke-token token_1
 ```
 
 The host-local proof is the server, the session list and the Service, in that
