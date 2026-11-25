@@ -173,6 +173,26 @@ if ! "$tailscale_bin" serve --bg --service=svc:opds --https=443 http://127.0.0.1
   fail "could not advertise the OPDShelf Service on svc:opds https/443"
 fi
 
+# The other core applications off the per-port scheme, the same `--https` form as
+# the catalogue's: Serve terminates TLS and Tailscale issues and renews the
+# certificate for each service name. A Service that is a few minutes old prints
+# "approval from an admin is required" and answers nothing until the tailnet's
+# auto-approver (tofu/tailscale.tf) has taken it, so a pending advertisement is
+# not a failed one. Syncthing's GUI is not here: its Host guard rejects the Serve
+# route it already has, and its 10000 route is unchanged.
+if ! "$tailscale_bin" serve --bg --service=svc:immich --https=443 http://127.0.0.1:2283; then
+  fail "could not advertise the Immich Service on svc:immich https/443"
+fi
+if ! "$tailscale_bin" serve --bg --service=svc:navidrome --https=443 http://127.0.0.1:4533; then
+  fail "could not advertise the Navidrome Service on svc:navidrome https/443"
+fi
+if ! "$tailscale_bin" serve --bg --service=svc:assistant --https=443 http://127.0.0.1:18006; then
+  fail "could not advertise the personal web UI Service on svc:assistant https/443"
+fi
+if ! "$tailscale_bin" serve --bg --service=svc:agent --https=443 http://127.0.0.1:18007; then
+  fail "could not advertise the general web UI Service on svc:agent https/443"
+fi
+
 # The status is only needed to prune stale app routes; if it cannot be read,
 # declare the plan's routes anyway and leave the pruning to a later run.
 status=$("$tailscale_bin" serve status --json) || {

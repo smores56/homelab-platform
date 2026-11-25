@@ -109,8 +109,9 @@ locals {
     # port, and the VIP is no host. A grant names the service instead. The agent
     # UI's one port is reached by exactly two sources (design #834): the owner,
     # and the CI probe (#848), which is worth nothing unless it is not the owner.
-    # OPDShelf's is owner-only: the catalogue is the owner's, and nothing else has
-    # asked for it.
+    # OPDShelf's is owner-only, and so is each of the four core apps that follow
+    # it off the per-port scheme: the catalogue and the applications are the
+    # owner's, and nothing else has asked for them.
     grants = [
       {
         src = ["group:owner"]
@@ -137,6 +138,28 @@ locals {
         dst = ["svc:opds"]
         ip  = ["443"]
       },
+      {
+        # The rest of the core apps off the per-port scheme, one owner grant each
+        # for the same reason as the catalogue's.
+        src = ["group:owner"]
+        dst = ["svc:immich"]
+        ip  = ["443"]
+      },
+      {
+        src = ["group:owner"]
+        dst = ["svc:navidrome"]
+        ip  = ["443"]
+      },
+      {
+        src = ["group:owner"]
+        dst = ["svc:assistant"]
+        ip  = ["443"]
+      },
+      {
+        src = ["group:owner"]
+        dst = ["svc:agent"]
+        ip  = ["443"]
+      },
     ]
 
     # The advertisement is the host's own, so it approves itself: without an
@@ -144,8 +167,12 @@ locals {
     # and the VIP stays dark until someone notices.
     autoApprovers = {
       services = {
-        "svc:agent-ui" = ["tag:smortress"]
-        "svc:opds"     = ["tag:smortress"]
+        "svc:agent-ui"  = ["tag:smortress"]
+        "svc:opds"      = ["tag:smortress"]
+        "svc:immich"    = ["tag:smortress"]
+        "svc:navidrome" = ["tag:smortress"]
+        "svc:assistant" = ["tag:smortress"]
+        "svc:agent"     = ["tag:smortress"]
       }
     }
 
@@ -183,7 +210,7 @@ locals {
     tests = [
       {
         src    = var.tailscale_login
-        accept = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:vps:22", "svc:agent-ui:443", "svc:opds:443"]
+        accept = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:vps:22", "svc:agent-ui:443", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443"]
       },
       {
         # The owner reaches the edge login, never the edge's upstream ports and
@@ -194,7 +221,7 @@ locals {
       },
       {
         src  = "tag:untrusted"
-        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8446", "tag:smortress:8447", "tag:vps:22", "svc:agent-ui:443", "svc:opds:443"]
+        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8446", "tag:smortress:8447", "tag:vps:22", "svc:agent-ui:443", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443"]
       },
       {
         # The edge reaches the two Serve ports and nothing else: no sshd, no
@@ -204,7 +231,7 @@ locals {
       },
       {
         src  = "tag:vps"
-        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8484", "svc:agent-ui:443", "svc:opds:443"]
+        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8484", "svc:agent-ui:443", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443"]
       },
       {
         # The deploy node reaches the receiver and the names probe reaches the UI
@@ -244,11 +271,11 @@ resource "tailscale_device_tags" "smortress" {
 resource "tailscale_acl" "this" {
   count = var.tailnet == "" ? 0 : 1
 
-  # The tag and the Service must exist before a rule names them, or the policy
+  # The tag and the Services must exist before a rule names them, or the policy
   # names a tag no device carries and a service the tailnet does not have, and
   # the validator refuses it: the route would close in the same apply that opens
   # it.
-  depends_on = [tailscale_device_tags.smortress, tailscale_service.agent_ui, tailscale_service.opds]
+  depends_on = [tailscale_device_tags.smortress, tailscale_service.agent_ui, tailscale_service.opds, tailscale_service.immich, tailscale_service.navidrome, tailscale_service.assistant, tailscale_service.agent]
 
   # This resource is the whole policy, not a patch: the provider refuses to
   # replace a policy it did not write unless that is said out loud, and the
@@ -283,5 +310,43 @@ resource "tailscale_service" "opds" {
   count = var.tailnet == "" ? 0 : 1
 
   name  = "svc:opds"
+  ports = ["tcp:443"]
+}
+
+# The rest of the core apps off the per-port scheme, the same shape and the same
+# reason as OPDShelf's: a Service gives the application a name of its own instead
+# of a second port on the host's, and Tailscale terminates TLS there and issues
+# the certificate for that name, so `https://immich.<tailnet>.ts.net/` and its
+# three siblings are URLs the applications own. The host routes in
+# scripts/tailscale-serve.sh (443, 8448, 8444, 8445) stay as the rollback, so this
+# is additive. Owner-only, like the catalogue's. Syncthing's GUI has no Service:
+# its Host guard rejects the Serve route it already has.
+resource "tailscale_service" "immich" {
+  count = var.tailnet == "" ? 0 : 1
+
+  name  = "svc:immich"
+  ports = ["tcp:443"]
+}
+
+resource "tailscale_service" "navidrome" {
+  count = var.tailnet == "" ? 0 : 1
+
+  name  = "svc:navidrome"
+  ports = ["tcp:443"]
+}
+
+# The personal web UI, 127.0.0.1:18006 behind Caddy on 8444. Its `sammohr.dev`
+# name keeps riding `svc:agent-ui`: this Service only publishes the tailnet name.
+resource "tailscale_service" "assistant" {
+  count = var.tailnet == "" ? 0 : 1
+
+  name  = "svc:assistant"
+  ports = ["tcp:443"]
+}
+
+resource "tailscale_service" "agent" {
+  count = var.tailnet == "" ? 0 : 1
+
+  name  = "svc:agent"
   ports = ["tcp:443"]
 }

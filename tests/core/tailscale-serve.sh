@@ -303,6 +303,58 @@ fi
 eq "$(jq -r '.TCP["443"].HTTPS // empty' "$status")" 'true' \
     'a Service declaration leaves the host 443 route alone'
 
+# --- the rest of the core apps get a Service each, the same shape ------------
+#
+# Immich, Navidrome and the two agent web UIs follow the catalogue off the
+# per-port scheme: each declaration is `--https` against a Service of its own, so
+# Tailscale terminates TLS for that name, and each is additive -- the host routes
+# (443, 8448, 8444, 8445) stay declared above as the rollback. Syncthing's GUI is
+# not among them: its Host guard rejects the Serve route it already has.
+eq "$(grep -cF -- 'serve --bg --service=svc:immich --https=443 http://127.0.0.1:2283' "$log")" 1 \
+    'the Immich Service endpoint is declared exactly once, over https/443'
+eq "$(service_served svc:immich:443)" 'http://127.0.0.1:2283' \
+    'svc:immich advertises Immich on its own port, not a host port'
+eq "$(grep -cF -- 'serve --bg --service=svc:navidrome --https=443 http://127.0.0.1:4533' "$log")" 1 \
+    'the Navidrome Service endpoint is declared exactly once, over https/443'
+eq "$(service_served svc:navidrome:443)" 'http://127.0.0.1:4533' \
+    'svc:navidrome advertises Navidrome on its own port, not a host port'
+eq "$(grep -cF -- 'serve --bg --service=svc:assistant --https=443 http://127.0.0.1:18006' "$log")" 1 \
+    'the personal web UI Service endpoint is declared exactly once, over https/443'
+eq "$(service_served svc:assistant:443)" 'http://127.0.0.1:18006' \
+    'svc:assistant advertises the personal UI on its own port, not a host port'
+eq "$(grep -cF -- 'serve --bg --service=svc:agent --https=443 http://127.0.0.1:18007' "$log")" 1 \
+    'the general web UI Service endpoint is declared exactly once, over https/443'
+eq "$(service_served svc:agent:443)" 'http://127.0.0.1:18007' \
+    'svc:agent advertises the general UI on its own port, not a host port'
+app_services='["svc:immich", "svc:navidrome", "svc:assistant", "svc:agent"]'
+if jq -e --argjson names "$app_services" \
+    '[.Services // {} | keys[] | select(. | endswith(":443")) | rtrimstr(":443")] as $served
+     | ($names - $served) | length == 0' "$status" >/dev/null 2>&1; then
+    ok 'every core app Service is recorded under Services, not on a host port'
+else
+    bad 'every core app Service is recorded under Services, not on a host port' \
+        "$(jq -r '.Services // {} | keys | join(" ")' "$status" 2>/dev/null)"
+fi
+if [[ "$(jq -r '.Web | keys | join(" ")' "$status" 2>/dev/null)" == \
+    'host:10000 host:443 host:8443 host:8444 host:8445 host:8446 host:8447 host:8448' ]]; then
+    ok 'no app Service declaration opens a host port'
+else
+    bad 'no app Service declaration opens a host port' \
+        "$(jq -r '.Web | keys | join(" ")' "$status" 2>/dev/null)"
+fi
+serves host:443 / http://127.0.0.1:2283 'host:443 still fronts Immich as the rollback'
+serves host:8448 / http://127.0.0.1:4533 'host:8448 still fronts Navidrome as the rollback'
+serves host:8444 / http://127.0.0.1:18006 'host:8444 still fronts the personal UI as the rollback'
+serves host:8445 / http://127.0.0.1:18007 'host:8445 still fronts the general UI as the rollback'
+app_service_lines=$(grep -nE -- '--service=svc:(immich|navidrome|assistant|agent) ' "$log" | cut -d: -f1 || true)
+if [[ -n $app_service_lines ]] && ((opds_line < $(head -n1 <<<"$app_service_lines") &&
+    $(tail -n1 <<<"$app_service_lines") < status_line)); then
+    ok 'the app Services are declared after the catalogue and before the Serve status read'
+else
+    bad 'the app Services are declared after the catalogue and before the Serve status read' \
+        "apps at '$(tr '\n' ' ' <<<"$app_service_lines")', opds at '$opds_line', status at '$status_line'"
+fi
+
 # --- the two agent gateways own a fixed path each on 443 ----------------------
 
 serves host:443 /apps/agent-local http://127.0.0.1:18001 'the personal gateway gets /apps/agent-local'
