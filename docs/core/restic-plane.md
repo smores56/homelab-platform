@@ -277,6 +277,7 @@ so a success whose result could not be written also fails.
 | --- | --- | --- | --- | --- | --- |
 | `ssd`, `hdd` | 3600 s | 1800 s | 2 (+60 s sleep) | 4320 s | 8400 s |
 | `ssd`, `hdd`, first upload | — | 14400 s | 1 (+60 s sleep) | 15060 s | 8400 s |
+| `ssd`, `hdd`, `agent-local` | 3600 s | 14400 s | 2 (+60 s sleep) | 29520 s | 33600 s |
 | `r2` | 86400 s | 14400 s | 2 (+600 s sleep) | 31800 s | 118800 s |
 | `r2`, first upload | 86400 s | 32400 s | 1 (+600 s sleep) | 34800 s | 118800 s |
 
@@ -288,6 +289,12 @@ first-upload run expiry uses the first-upload bound and its single attempt:
 unchanged: it counts from a first success, which a first upload does not have,
 so the fail-closed "no persisted successful snapshot" verdict covers that window
 instead of an age budget.
+
+The agent's local state outgrew the hourly window (2026-11-24), so
+`agent-local` alone takes the long local bound on `ssd` and `hdd`
+(`RESTIC_DEADLINE_LOCAL_LONG`, 14400 s) while every other unit keeps 1800 s.
+Both budgets are derived from the deadline a unit actually gets, so they widen
+with it: `33600 = 3600 + 2×14460 + 1080` and `29520 = 2×14460 + 600`.
 
 The unit's `TimeoutStartSec=50400` is the safety net, and it is above the worst
 single group rather than below it: `50400 = 32400 (one first r2 attempt) +

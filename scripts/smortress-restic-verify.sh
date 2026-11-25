@@ -104,8 +104,8 @@ check_unit() {
   state=$(state_file_for "$backend" "$unit")
   journal=$(journal_for "$backend" "$unit")
   staging_json=$(unit_paths_json "$unit" "$backend")
-  max_age=$(max_age_for "$backend")
-  expiry=$(run_expiry_for "$backend")
+  max_age=$(max_age_for "$backend" "$unit")
+  expiry=$(run_expiry_for "$backend" "$unit")
 
   if [[ ! -s $state ]]; then
     fail "$backend/$unit: no status state at $state"
@@ -255,7 +255,7 @@ local_paths() { # <backend> <unit>
 
 local_unit_verdict() { # <backend> <unit> <repo> <paths-json> -> one object
   local backend=$1 unit=$2 repo=$3 want=$4 out newest max_age id="" time="" verified="" age reason
-  max_age=$(max_age_for "$backend")
+  max_age=$(max_age_for "$backend" "$unit")
   if ! out=$(with_deadline "$(job_deadline "$backend")" "$restic_bin" -r "$repo" \
     snapshots --json --no-lock --host "$restic_host" --tag "unit:$unit" 2>/dev/null); then
     printf '{"fresh":false,"reason":"repository-unreadable"}\n'

@@ -47,6 +47,14 @@ r2_repository='s3:https://385f7d47e2e8438fbda5d6f76d760434.r2.cloudflarestorage.
 deadline_local=${RESTIC_DEADLINE_LOCAL:-1800}
 deadline_r2=${RESTIC_DEADLINE_R2:-14400}
 deadline_maintenance=${RESTIC_DEADLINE_MAINTENANCE:-14400}
+
+# One local dataset outgrew the hourly window: the agent's state is tens of GiB
+# and a routine increment of it has been timing out at 1800 s since 2026-11-24.
+# That unit alone gets the R2-sized bound, so the other eight keep the tight
+# hourly guarantee. The freshness and expiry budgets derive from the deadline a
+# unit actually gets, so they widen with it.
+long_local_units=${RESTIC_LONG_LOCAL_UNITS:-agent-local}
+deadline_local_long=${RESTIC_DEADLINE_LOCAL_LONG:-14400}
 attempts=${RESTIC_ATTEMPTS:-2}
 retry_sleep_local=${RESTIC_RETRY_SLEEP_LOCAL:-60}
 retry_sleep_r2=${RESTIC_RETRY_SLEEP_R2:-600}
@@ -71,14 +79,9 @@ deadline_first_local=${RESTIC_DEADLINE_FIRST_LOCAL:-14400}
 deadline_first_r2=${RESTIC_DEADLINE_FIRST_R2:-32400}
 attempts_first=${RESTIC_ATTEMPTS_FIRST:-1}
 
-# Freshness budget: schedule + every bounded retry + grace. A snapshot older
-# than this cannot be a current recovery point. keep-in-sync with
-# docs/core/restic-plane.md and the numbers asserted by
-# tests/core/restic-plane.sh.
-max_age_local=${RESTIC_MAX_AGE_LOCAL:-8400}       # 3600 + 2*(1800+60) + 1200
-max_age_r2=${RESTIC_MAX_AGE_R2:-118800}           # 86400 + 2*(14400+600) + 3600
-run_expiry_local=${RESTIC_RUN_EXPIRY_LOCAL:-4320} # 2*(1800+60) + 600
-run_expiry_r2=${RESTIC_RUN_EXPIRY_R2:-31800}      # 2*(14400+600) + 1800
+# Freshness and expiry budgets are derived in max_age_for and run_expiry_for
+# below: schedule + every bounded retry + grace. keep-in-sync with
+# docs/core/restic-plane.md and the numbers asserted by tests/core/restic-plane.sh.
 
 say() { printf '%s\n' "$*"; }
 warn() { printf '%s: %s\n' "${0##*/}" "$*" >&2; }
@@ -198,11 +201,31 @@ with_deadline() {
   timeout --signal=TERM --kill-after="$kill_after" "$secs" "$@"
 }
 
-job_deadline() { if [[ $1 == r2 ]]; then printf '%s\n' "$deadline_r2"; else printf '%s\n' "$deadline_local"; fi; }
+job_deadline() { # <backend> [unit]
+  if [[ $1 == r2 ]]; then
+    printf '%s\n' "$deadline_r2"
+  elif [[ -n ${2-} && " ${long_local_units} " == *" $2 "* ]]; then
+    printf '%s\n' "$deadline_local_long"
+  else
+    printf '%s\n' "$deadline_local"
+  fi
+}
 job_deadline_first() { if [[ $1 == r2 ]]; then printf '%s\n' "$deadline_first_r2"; else printf '%s\n' "$deadline_first_local"; fi; }
 job_retry_sleep() { if [[ $1 == r2 ]]; then printf '%s\n' "$retry_sleep_r2"; else printf '%s\n' "$retry_sleep_local"; fi; }
-max_age_for() { if [[ $1 == r2 ]]; then printf '%s\n' "$max_age_r2"; else printf '%s\n' "$max_age_local"; fi; }
-run_expiry_for() { if [[ $1 == r2 ]]; then printf '%s\n' "$run_expiry_r2"; else printf '%s\n' "$run_expiry_local"; fi; }
+# A snapshot older than the schedule interval plus every bounded retry cannot be
+# a current recovery point.
+max_age_for() { # <backend> [unit]
+  local schedule=3600 grace=1080
+  if [[ $1 == r2 ]]; then schedule=86400; grace=2400; fi
+  printf '%s\n' "$((schedule + attempts * ($(job_deadline "$1" "${2-}") + $(job_retry_sleep "$1")) + grace))"
+}
+# An attempt that is still running is legal for as long as its own retries plus
+# grace after the run started.
+run_expiry_for() { # <backend> [unit]
+  local grace=600
+  if [[ $1 == r2 ]]; then grace=1800; fi
+  printf '%s\n' "$((attempts * ($(job_deadline "$1" "${2-}") + $(job_retry_sleep "$1")) + grace))"
+}
 
 # Same shape as run_expiry_for, sized with the first-upload bound, so a unit that
 # has never succeeded is not called dead while its first attempt is still legal.
