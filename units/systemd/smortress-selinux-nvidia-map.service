@@ -14,12 +14,18 @@ After=local-fs.target
 # A model server started first probes CUDA once, gives up, and keeps the CPU
 # device for its whole life; ordering here is what makes the rule effective.
 Before=agent-model.service
+# libsemanage takes one store-wide lock: this unit loads second, so the two
+# cannot lose each other's rule to a lock timeout.
+After=smortress-selinux-agent-shell.service
+StartLimitIntervalSec=0
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/bin/semodule -i /usr/share/selinux/smortress/agent-nvidia-map.cil
 TimeoutStartSec=120
+Restart=on-failure
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
