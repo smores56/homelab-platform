@@ -6,39 +6,49 @@ name: tofu-plan-pr
 # ones (`CLOUDFLARE_PLAN_API_TOKEN`, `R2_STATE_READONLY_*`); the write token
 # stays in `tofu-apply.yml`, which never runs on a PR.
 #
-# The Tailscale pair is the one credential here that is not read-only by scope:
-# `TAILSCALE_OAUTH_CLIENT_*` has no narrower scope than `policy_file`, which can
-# rewrite the whole tailnet, so a plan reaches a credential that could write. The
-# credential is write-scoped to the policy and cannot be narrowed further; what
-# keeps that safe is that a plan saves no policy, the API evaluates
-# `tailscale_acl.tests` on any save, and guards 3 and 4 below refuse a PR that
-# could run something other than the reviewed HCL.
+# The Tailscale pair is read-only by scope too, and it is a client of its own
+# (design #841 T1): `TAILSCALE_PLAN_OAUTH_CLIENT_*` is granted `policy_file:read`,
+# `devices:core:read`, `devices:posture_attributes:read` and `services:read` and
+# nothing else, so a branch that rewrites this file reaches a credential that can
+# read, validate and preview the policy and can neither save one nor touch a
+# device or a Service. That is observed, not promised: "prove the plan
+# credentials cannot write" below mints a token from it and fails the job unless
+# the API answers 403 to a write, so a client minted with write scopes stops the
+# plan on the PR that finds it rather than passing quietly.
 #
-# Four guards, because on `pull_request` the workflow file that runs is the PR
-# head's, not the base one:
+# Four guards on the guard step, because on `pull_request` the workflow file that
+# runs is the PR head's, not the base one:
 #
 #   1. fork PRs receive no environment secrets at all; the job says so and
 #      stops before anything reads a credential;
 #   2. the job uses `cloudflare-plan`, not `cloudflare`: a separate environment
-#      holding only the read-only pair and the Tailscale client, restricted to
-#      `main` and `smores/*`. A branch edit that declares `environment:
+#      holding only the read-only pair and the read-only Tailscale client,
+#      restricted to `main` and `smores/*`. A branch edit that declares `environment:
 #      cloudflare` is refused before any secret is injected, so the write token
 #      is unreachable from a branch;
 #   3. a PR touching `.github/` or `scripts/` fails closed: the head workflow
 #      is the one holding the token, so CI changes need an owner bypass after a
 #      human read, never an automatic plan;
 #   4. executable HCL (`local-exec`, `remote-exec`, `provisioner`, the
-#      `external` data source) is refused unless the owner applies the
-#      `tofu-allow-exec` label, and any `*.tf.json` under `tofu/` is refused
-#      outright: OpenTofu loads JSON config beside the HCL, where the same
-#      construct is JSON a keyword grep reads straight past, and no label makes
-#      that reviewable.
+#      `external` data source) is refused unconditionally, and any `*.tf.json`
+#      under `tofu/` is refused outright: OpenTofu loads JSON config beside the
+#      HCL, where the same construct is JSON a keyword grep reads straight past.
+#      There is no label to allow one through: a Write collaborator labels their
+#      own PR, and on a `synchronize` run the sender is the pusher, so who
+#      applied the label is only knowable from the issue timeline -- a call the
+#      guard cannot make cheaply and no PR has ever needed.
+#
+# A fifth step, `scripts/check-tofu-providers.py`, closes the fetch set before
+# `tofu init` on the same reasoning: `init` downloads every provider a config
+# names and runs it with the plan's credentials in the environment, so only the
+# providers in the committed lock file may be declared and no `module` may name
+# a remote source.
 #
 # scripts/check-pr-secret-boundary.sh asserts these guards statically, and
 # tests/tofu/check.sh asserts the credential split.
 on:
   pull_request:
-    types: [opened, synchronize, reopened, labeled, unlabeled]
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: read
@@ -72,11 +82,9 @@ jobs:
         id: guard
         # guard: fork-only
         # guard: ci-change-refused
-        # guard: exec-label
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
-          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
         run: |
           set -euo pipefail
           if [[ $HEAD_REPO != "$GITHUB_REPOSITORY" ]]; then
@@ -112,13 +120,17 @@ jobs:
             exit 1
           fi
 
-          if grep -rnE 'local-exec|remote-exec|provisioner|data[[:space:]]+"external"' tofu/; then
-            if [[ ",$LABELS," != *,tofu-allow-exec,* ]]; then
-              echo "::error::tofu/ contains an executable construct (matches above)."
-              echo "::error::A plan runs provider code on this runner; add the tofu-allow-exec label after reading every match, or remove it."
-              exit 1
-            fi
-            echo "::warning::executable HCL allowed by the tofu-allow-exec label"
+          # guard: exec-refused
+          # A plan runs provider code on this runner, so one provisioner or
+          # external data source is the whole refusal. `data` and its type are
+          # two tokens and HCL may break the line between them, so the scan reads
+          # each file whole (`-z`) instead of line by line.
+          exec_hits=$(grep -rlzE 'local-exec|remote-exec|provisioner|data[[:space:]]+"external"' tofu/ | tr '\0' '\n' || true)
+          if [[ -n $exec_hits ]]; then
+            echo "::error::tofu/ contains an executable construct:"
+            grep -rnE 'local-exec|remote-exec|provisioner|data[[:space:]]*"external"' tofu/ || true
+            echo "::error::A plan runs provider code on this runner; remove the construct (files: $exec_hits)."
+            exit 1
           fi
 
           echo "run=true" >>"$GITHUB_OUTPUT"
@@ -129,20 +141,119 @@ jobs:
           scripts/install-ci-tools.sh "$RUNNER_TEMP/bin"
           echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
 
+      # The fetch set, closed before `init` can act on it: only the providers in
+      # the committed lock file and no remote module. `init` downloads and runs
+      # whatever the config names, and by then the plan's credentials are in the
+      # environment, so this is the guard that has to run first.
+      - name: assert only locked providers and no remote module
+        # guard: provider-allowlist
+        if: steps.guard.outputs.run == 'true'
+        run: scripts/check-tofu-providers.py tofu
+
+      # The header's claim, observed: a write with each credential must come
+      # back 403. Every attempt below is chosen so that a credential which could
+      # write still changes nothing -- an empty DNS body creates no record and a
+      # non-policy body saves no policy -- so the probe is safe to run against a
+      # credential that is wrong. It runs before `init`, so a stray write-scoped
+      # secret fails the plan instead of reaching provider code.
+      - name: prove the plan credentials cannot write
+        # guard: read-only-probe
+        if: steps.guard.outputs.run == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PLAN_API_TOKEN }}
+          # The provider reads TAILSCALE_OAUTH_CLIENT_*; the value behind those
+          # names here is the plan's read-only client, never the apply's.
+          TAILSCALE_OAUTH_CLIENT_ID: ${{ secrets.TAILSCALE_PLAN_OAUTH_CLIENT_ID }}
+          TAILSCALE_OAUTH_CLIENT_SECRET: ${{ secrets.TAILSCALE_PLAN_OAUTH_CLIENT_SECRET }}
+        run: |
+          set -uo pipefail
+          for name in CLOUDFLARE_API_TOKEN TAILSCALE_OAUTH_CLIENT_ID TAILSCALE_OAUTH_CLIENT_SECRET; do
+            if [[ -z ${!name:-} ]]; then
+              echo "::error::$name is absent from the cloudflare-plan environment, so nothing can be proved."
+              echo "::error::See docs/manual-steps.md, \"The plan-only credentials\"."
+              exit 1
+            fi
+          done
+          fail=0
+
+          # Cloudflare: the plan token reads the zone's DNS and must not write it.
+          zone=$(curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            'https://api.cloudflare.com/client/v4/zones?per_page=1' | jq -r '.result[0].id // empty')
+          if [[ -z $zone ]]; then
+            echo "::error::the plan token lists no zone, so it is not the read-only token docs/manual-steps.md describes."
+            exit 1
+          fi
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H 'Content-Type: application/json' \
+            --data '{}' "https://api.cloudflare.com/client/v4/zones/$zone/dns_records")
+          if [[ $code == 403 ]]; then
+            echo "ok: Cloudflare refuses a DNS write with 403"
+          else
+            echo "::error::a DNS write with the plan token answered $code, not 403: the token is not read-only."
+            fail=1
+          fi
+
+          # Tailscale: mint the token the plan itself asks for, then try the one
+          # write that matters, replacing the whole policy.
+          read_scopes='policy_file:read devices:core:read devices:posture_attributes:read services:read'
+          token=$(curl -fsS -X POST https://api.tailscale.com/api/v2/oauth/token \
+            --data-urlencode "client_id=$TAILSCALE_OAUTH_CLIENT_ID" \
+            --data-urlencode "client_secret=$TAILSCALE_OAUTH_CLIENT_SECRET" \
+            --data grant_type=client_credentials \
+            --data-urlencode "scope=$read_scopes" | jq -r '.access_token // empty')
+          if [[ -z $token ]]; then
+            echo "::error::the plan client cannot mint a token for '$read_scopes'."
+            echo "::error::Mint it with exactly those scopes (docs/manual-steps.md, \"The plan-only credentials\")."
+            exit 1
+          fi
+          code=$(curl -s -o "$RUNNER_TEMP/acl-probe.json" -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer $token" -H 'Content-Type: application/hujson' \
+            --data 'plan-time probe: not a policy, never saved' \
+            'https://api.tailscale.com/api/v2/tailnet/-/acl')
+          if [[ $code == 403 ]]; then
+            echo "ok: Tailscale refuses a policy write with 403"
+          else
+            echo "::error::a policy write with the plan client answered $code, not 403: the client can write the tailnet."
+            cat "$RUNNER_TEMP/acl-probe.json"
+            fail=1
+          fi
+
+          # The token above is already narrowed to the read scopes, so the 403
+          # there is also what a write-scoped client would give. Asking for the
+          # write scope itself is the check that the client carries none: the
+          # token request has to be refused.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST https://api.tailscale.com/api/v2/oauth/token \
+            --data-urlencode "client_id=$TAILSCALE_OAUTH_CLIENT_ID" \
+            --data-urlencode "client_secret=$TAILSCALE_OAUTH_CLIENT_SECRET" \
+            --data grant_type=client_credentials \
+            --data-urlencode 'scope=policy_file')
+          if [[ $code == 400 || $code == 403 ]]; then
+            echo "ok: the plan client cannot mint a policy_file write token ($code)"
+          else
+            echo "::error::the plan client answered $code to a request for the policy_file write scope, so it can write."
+            fail=1
+          fi
+
+          exit "$fail"
+
       - name: init and plan
         id: plan
         if: steps.guard.outputs.run == 'true'
         env:
           # guard: read-only-credentials
-          # Read-only by contract (docs/manual-steps.md step 14). A workflow edit
-          # on a branch can therefore reach only a credential that can read.
-          # The Tailscale pair is the exception to that word: `policy_file`
-          # cannot be read-only, so the header's note is what bounds it.
+          # Read-only by scope, not by contract: the Cloudflare token and the
+          # Tailscale client are the pair "prove the plan credentials cannot
+          # write" just watched answer 403 to a write (design #841 T1), so a
+          # workflow edit on a branch reaches only a credential that can read.
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PLAN_API_TOKEN }}
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_STATE_READONLY_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_STATE_READONLY_SECRET_ACCESS_KEY }}
-          TAILSCALE_OAUTH_CLIENT_ID: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
-          TAILSCALE_OAUTH_CLIENT_SECRET: ${{ secrets.TAILSCALE_OAUTH_CLIENT_SECRET }}
+          # The provider's own variable names, filled from the plan's client: the
+          # plan never holds TAILSCALE_OAUTH_CLIENT_*, the apply's write client.
+          TAILSCALE_OAUTH_CLIENT_ID: ${{ secrets.TAILSCALE_PLAN_OAUTH_CLIENT_ID }}
+          TAILSCALE_OAUTH_CLIENT_SECRET: ${{ secrets.TAILSCALE_PLAN_OAUTH_CLIENT_SECRET }}
+          # Ask that client for exactly its four read scopes (tofu/tailscale.tf).
+          TF_VAR_tailscale_readonly: true
         run: |
           set -o pipefail
           for name in CLOUDFLARE_API_TOKEN AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY \
@@ -150,7 +261,7 @@ jobs:
             if [[ -z ${!name:-} ]]; then
               echo "::error::$name is absent from the cloudflare-plan environment."
               echo "::error::A silent skip would let a PR merge without a plan; provision the credentials."
-              echo "::error::See docs/manual-steps.md steps 14 and 46."
+              echo "::error::See docs/manual-steps.md, \"The plan-only credentials\"."
               exit 1
             fi
           done

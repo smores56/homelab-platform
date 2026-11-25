@@ -14,10 +14,9 @@ file, so treat a change to it as the tailnet's entire access model — and read 
 `tests` block as the assertion it is, because the Tailscale API refuses to save a
 policy whose tests fail. The resource is gated on `tailnet` in
 `terraform.tfvars`, and its provider authenticates with
-`TAILSCALE_OAUTH_CLIENT_ID` / `TAILSCALE_OAUTH_CLIENT_SECRET`: an OAuth client
-with the `policy_file` scope only, minted per `docs/manual-steps.md` section 45.
-Both providers take their credentials from the environment; nothing here holds
-one.
+`TAILSCALE_OAUTH_CLIENT_ID` / `TAILSCALE_OAUTH_CLIENT_SECRET`: the apply's OAuth
+client, with the `policy_file` scope. Both providers take their credentials from
+the environment; nothing here holds one.
 
 1. Branch, change `tofu/`, open a PR. `tofu plan` is a required check: it plans
    against the live state with read-only credentials and comments the plan on
@@ -30,9 +29,12 @@ one.
 State lives in the `homelab-tofu-state` R2 bucket (`backend.tf`), never in git.
 The write credentials exist only in the `cloudflare` environment; the read-only
 pair and the read-only Cloudflare token exist only in `cloudflare-plan`. The
-Tailscale OAuth client is the environment secrets
-`TAILSCALE_OAUTH_CLIENT_ID` and `TAILSCALE_OAUTH_CLIENT_SECRET`, in both
-environments, because the provider configures even when `tailnet` is empty: every
-tofu job stops there until the pair exists. `policy_file` has no read-only scope,
-so the pre-merge plan holds a client that could write; a plan never saves the
-policy, and the API's own tests are what make one safe to read.
+apply's Tailscale client is `TAILSCALE_OAUTH_CLIENT_ID` /
+`TAILSCALE_OAUTH_CLIENT_SECRET` in `cloudflare`. The pre-merge plan holds a
+client of its own, `TAILSCALE_PLAN_OAUTH_CLIENT_*` in `cloudflare-plan`, granted
+`policy_file:read`, `devices:core:read`, `devices:posture_attributes:read` and
+`services:read` (design #841): `scopes` in `tailscale.tf` is what the plan asks
+for, and `tofu-plan-pr.yml` probes the client until a policy write answers 403.
+A provider configures even when `tailnet` is empty, so every tofu job stops until
+its pair exists. `cloudflare-plan` holds only the plan pair; the weekly drift check plans with it
+too.

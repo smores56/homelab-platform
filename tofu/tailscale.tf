@@ -9,15 +9,40 @@
 # named the tailnet yet, so the resource has no instances and nothing about the
 # tailnet is planned from a checkout that only manages the zone.
 #
-# Credentials come from the environment and are never authored here:
-# TAILSCALE_OAUTH_CLIENT_ID and TAILSCALE_OAUTH_CLIENT_SECRET, the admin-only
-# OAuth client with the `policy_file` scope (secrets/tailscale.yaml locally). CI
-# supplies the same two values from the environment secrets of those names in
-# `cloudflare` and `cloudflare-plan`, and a provider configures even when
-# `tailnet` is empty, so every tofu job in CI needs them. This policy is the
-# only network half: Tailnet Lock is deliberately not used, so what a joined
-# node may reach is exactly what these rules accept and nothing else.
-provider "tailscale" {}
+# Credentials come from the environment and are never authored here, and they
+# are not one credential everywhere (design #841). An apply holds the admin-only
+# client with the `policy_file` scope, which can rewrite the whole tailnet
+# (TAILSCALE_OAUTH_CLIENT_ID and TAILSCALE_OAUTH_CLIENT_SECRET, from
+# secrets/tailscale.yaml locally and the `cloudflare` environment in CI). The
+# pre-merge plan holds a client that reads and cannot write, because on a
+# `pull_request` the workflow that runs is the PR head's; `scopes` below is
+# where the plan says what it asks that client for. A provider configures even
+# when `tailnet` is empty, so every tofu job in CI still needs a pair.
+
+locals {
+  # The plan's whole authority (design #841). `policy_file:read` reads,
+  # validates and previews the policy, which is every Tailscale call a plan
+  # makes; `devices:core:read` and `devices:posture_attributes:read` are the
+  # pair the API requires beside it; `services:read` refreshes
+  # `tailscale_service.agent_ui`. Asking for exactly these is what keeps a plan
+  # from minting a token that could save a policy, delete a device or rewrite a
+  # Service, and a client granted less fails the plan at configure time.
+  tailscale_plan_scopes = [
+    "policy_file:read",
+    "devices:core:read",
+    "devices:posture_attributes:read",
+    "services:read",
+  ]
+}
+
+provider "tailscale" {
+  # Set only for the pre-merge plan, which passes TF_VAR_tailscale_readonly
+  # (#841 T1) and probes its client until a policy write answers 403; drift
+  # follows on its own task. An apply leaves it false and takes the write
+  # client's own scopes, because it writes the policy, the tags and the
+  # Services. `null` is "ask for no narrowing", not "ask for nothing".
+  scopes = var.tailscale_readonly ? local.tailscale_plan_scopes : null
+}
 
 locals {
   tailnet_policy = {
