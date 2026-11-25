@@ -29,7 +29,15 @@ from typing import Iterable
 
 from data_plane.errors import DataPlaneError
 
-from . import contracts, memory, replica_sources, server, shell as shell_transport, sources
+from . import (
+    contracts,
+    memory,
+    replica_sources,
+    server,
+    shell as shell_transport,
+    sources,
+    tree_sources,
+)
 
 DEFAULT_TRANSPORT = "stdio"
 DEFAULT_HOST = "127.0.0.1"
@@ -42,6 +50,11 @@ TOKEN_ENV = "AGENT_FACADE_TOKEN"
 #: The bridge socket, and with it ``shell.run``: a deployment that is not given
 #: one serves no shell tool at all. The personal deployment is never given one.
 SHELL_SOCKET_ENV = "AGENT_FACADE_SHELL_SOCKET"
+#: The two live general trees: clean-bare clones and an OPDShelf library. A
+#: deployment that names them serves those sources from the tree; the personal
+#: table has neither name, so naming one there is a startup failure.
+REPO_ROOT_ENV = "AGENT_FACADE_REPO_ROOT"
+BOOKS_ROOT_ENV = "AGENT_FACADE_BOOKS_ROOT"
 TRANSPORTS = ("stdio", "http")
 
 LOG = logging.getLogger("agent-facade")
@@ -120,6 +133,19 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--repo-root",
+        default=_env(REPO_ROOT_ENV),
+        help=(
+            "live clean-bare clones for repos (<host>/<owner>/<repo>/.git); "
+            "general deployment only"
+        ),
+    )
+    parser.add_argument(
+        "--books-root",
+        default=_env(BOOKS_ROOT_ENV),
+        help="live OPDShelf library for books (<author>/<title>/metadata.opf); general deployment only",
+    )
+    parser.add_argument(
         "--replica",
         action="append",
         default=[],
@@ -179,9 +205,17 @@ def build_facade(args: argparse.Namespace) -> server.Facade:
     token = _token(args.token_file)
     if token is None:
         LOG.warning("no deployment token configured; every tool call will be refused")
-    replacements = replica_sources.adapters_for(
-        deployment, _replicas(args.replica), args.index_root
+    replacements = dict(
+        replica_sources.adapters_for(deployment, _replicas(args.replica), args.index_root)
     )
+    live_roots: dict[str, str] = {}
+    if args.repo_root:
+        live_roots["repos"] = args.repo_root
+    if args.books_root:
+        live_roots["books"] = args.books_root
+    # The tree adapters take the contract from this deployment's table, so a
+    # personal facade naming either root fails here rather than serving it.
+    replacements.update(tree_sources.tree_adapters_for(deployment, live_roots))
     shell = None
     if args.shell_socket:
         shell = shell_transport.ShellRunner(args.shell_socket)

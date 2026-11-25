@@ -244,6 +244,32 @@ image's config template carries the placeholder `__FACADE_TOKEN__` and
 `smortress-agent-config.service` substitutes the decrypted value when it seeds the
 file, so the token is in no image, no document and no command line.
 
+## Live general trees
+
+The general deployment's two sources are live, not published generations
+(SDLC #851): `--repo-root /srv/git` and `--books-root /srv/books` mount the two
+trees read-only into that one container and the adapters read them on each call.
+
+| Source | Record id | `read` returns | `search` matches |
+| --- | --- | --- | --- |
+| `repos` | `repos::<host>/<owner>/<repo>::<path>` | the file's text at `HEAD` of that clean-bare clone | files whose `HEAD` content holds every word (`git grep -I`), then paths that do |
+| `books` | `books::<author>/<title>` | the `metadata.opf` fields: title, creator, description, date, language | title, author and description |
+
+The revision of a `repos` record is the commit it was read at, and of a `books`
+record the SHA-256 of the OPF, so a citation stays reproducible while the tree
+moves on. Bounds are the containment: a search walks at most 20000 paths and
+4000 books under a 5 s deadline, `git grep -I` never reads a binary blob, a
+binary file is refused rather than mangled, and a body is capped at 64 KiB with
+`truncated` in its provenance.
+
+Both mounts carry no `:z`/`:Z` and no `label=disable`: the datasets are
+`container_file_t` already and keep that label. `/var/srv/books` is `core:core`
+0740; `/var/srv/git` is `0770 smores:smores` with an ACL for the general shell
+runner, and provisioning adds `u:core:r-x` (plus the default ACL) so this
+container's uid 1000 can read it. The personal facade names neither root, and
+`tree_adapters_for` takes its contract from the deployment's own table, so a
+personal facade naming one fails at startup instead of serving it.
+
 ## Checks
 
 ```sh

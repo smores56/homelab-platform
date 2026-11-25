@@ -30,8 +30,8 @@
 # container can dial the other class's socket.
 [Unit]
 Description=Agent source facade, general deployment (MCP on agent-general.network)
-Requires=zfs-ready@state-agent-general.service sops-decrypt.service smortress-app-secrets.service smortress-agent-config.service smortress-agent-shell-bridge.service
-After=network-online.target zfs-ready@state-agent-general.service sops-decrypt.service smortress-app-secrets.service smortress-agent-config.service smortress-agent-shell-bridge.service
+Requires=zfs-ready@state-agent-general.service zfs-ready@raw-git.service zfs-ready@raw-books.service sops-decrypt.service smortress-app-secrets.service smortress-agent-config.service smortress-agent-shell-bridge.service
+After=network-online.target zfs-ready@state-agent-general.service zfs-ready@raw-git.service zfs-ready@raw-books.service sops-decrypt.service smortress-app-secrets.service smortress-agent-config.service smortress-agent-shell-bridge.service
 Wants=network-online.target
 
 [Container]
@@ -40,7 +40,7 @@ ContainerName=smortress-agent-facade-general
 Network=agent-general.network
 User=1000:1000
 Entrypoint=python3
-Exec=-m apps.agent_facade --transport http --deployment general --token-file /run/secrets/agent-facade-general-token --memory-root /memory --host 0.0.0.0 --port 18005 --shell-socket /run/agent-shell/general.sock
+Exec=-m apps.agent_facade --transport http --deployment general --token-file /run/secrets/agent-facade-general-token --memory-root /memory --host 0.0.0.0 --port 18005 --shell-socket /run/agent-shell/general.sock --repo-root /srv/git --books-root /srv/books
 Secret=agent-facade-general-token,type=mount,target=/run/secrets/agent-facade-general-token,uid=1000,gid=1000,mode=0400
 Environment=PYTHONPATH=/usr/lib/agent-facade/libs:/usr/lib/agent-facade
 # The image layer carrying the code is read-only, so a bytecode cache write can only fail.
@@ -56,6 +56,13 @@ Volume=/var/lib/agent/general/memory:/memory:z
 # bridge restart, so the socket the bridge rebinds appears here without a
 # container restart.
 Volume=/run/smortress/agent-shell-general:/run/agent-shell:z
+# The two general sources (SDLC #851): live, read-only, and labeled already.
+# No :z/:Z and no label=disable: both trees carry container_file_t and keep it,
+# so a bind never rewrites a shared label. /var/srv/git is 0770 with an ACL for
+# this container's uid 1000 (provisioning grants read); /var/srv/books is
+# core:core 0740. Nothing here is a personal path.
+Volume=/var/srv/git:/srv/git:ro
+Volume=/var/srv/books:/srv/books:ro
 ReadOnly=true
 NoNewPrivileges=true
 DropCapability=ALL
