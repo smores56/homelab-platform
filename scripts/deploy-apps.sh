@@ -47,7 +47,7 @@
 # after it started changing the host and the previous revision was restored.
 #
 # This takes no deploy lock: the drain and the boot gate that call it already hold
-# one. Every knob is environment-overridable so tests/deploy/apps.sh can drive this
+# one. Every knob is environment-overridable so tests/deploy/apps.bats can drive this
 # exact code. Production sets none of them: the defaults are the host contract,
 # not a way to skip a check.
 #
