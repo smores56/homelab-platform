@@ -13,12 +13,18 @@ After=local-fs.target
 # The bridge must start with the rule loaded: a socket created before it is
 # still denied, and a bridge restart is the operator's retry path.
 Before=smortress-agent-shell-bridge.service
+# libsemanage takes one store-wide lock, so two of these units starting together
+# means the loser exits 1 and never loads its rule. Ordering settles it for the
+# normal boot and the retry covers a lock still held by something else.
+StartLimitIntervalSec=0
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/bin/semodule -i /usr/share/selinux/smortress/agent-shell.cil
 TimeoutStartSec=120
+Restart=on-failure
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
