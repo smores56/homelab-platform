@@ -13,6 +13,15 @@ After=network-online.target
 # booted, so it waits for the gate. After= only: a gate that failed must not stop
 # the queue from draining.
 After=smortress-boot-gate.service
+# The apps tenant is applied through `systemctl --user --machine=apps@.host`,
+# which needs systemd-machined. On 2026-11-25 the socket was active and the
+# service was not, and every drain died at "Reload daemon failed: Transport
+# endpoint is not connected" until an operator started it by hand, holding every
+# image behind the queue. Wants= and not Requires=: a machined fault must not stop
+# a platform image from draining, but the service has to start with the drain
+# rather than after the first apps apply. After= keeps that order.
+Wants=systemd-machined.service
+After=systemd-machined.service
 # A wedged drain must not hold the shutdown path.
 Conflicts=shutdown.target
 Before=shutdown.target

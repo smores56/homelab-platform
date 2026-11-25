@@ -1,13 +1,14 @@
 #!/usr/bin/env bats
-# Offline checks for the Restic plane (SDLC #706, T3): the backup driver's exit
-# codes, stale-staging reconciliation, the readiness and mount gates, the
-# retention filter, first-upload sizing, and progress publication.
+# Offline checks for the Restic plane (SDLC #706, T3): fail-closed freshness and
+# the deploy gate's local query, the backup driver's exit codes, stale-staging
+# reconciliation, the readiness and mount gates, the retention filter,
+# first-upload sizing, and progress publication.
 #
 # The host half — real disks, real repositories, real Healthchecks — is in
 # docs/manual-steps.md section 38. This proves the half that does not need root
 # or a network. restic, zfs, curl and sops are stubs; the command lines and the
-# durable state are real. tests/core/restic-plane.sh still holds the freshness
-# verifier, init and sops sections until they convert (#934, #924).
+# durable state are real. tests/core/restic-plane.sh still holds the init and
+# sops sections until they convert (#934, #924).
 load ../helpers
 
 driver=scripts/smortress-restic-backup.sh
@@ -588,6 +589,474 @@ run_with_unmounted_repository() {
         scripts/smortress-restic-*.sh; then
         fail "something deletes snapshot sets or repository roots in bulk"
     fi
+}
+
+# --- 5. freshness verifier -----------------------------------------------
+# The hourly verifier joins the durable state to what the repositories actually
+# contain, and pings one Healthchecks check only when every destination is
+# current. Each case below seeds the plane it needs: the shell suite seeded it
+# nine times for assertions that shared eleven runs, so the slowest area of the
+# file ran as one serial pass.
+
+# unit_paths <unit> <backend>: the storage table's path set for a unit on a
+# backend, as a JSON array. The same list unit_paths_json builds, from the two
+# strings setup_file handed on: the arrays it needs are gone by the test body.
+unit_paths() {
+    local entry keys='' key
+    local -a paths=()
+    for entry in $unit_keys; do
+        [[ ${entry%%=*} == "$1" ]] && { keys=${entry#*=}; break; }
+    done
+    [[ -n $keys ]] || {
+        printf 'unknown unit: %s\n' "$1" >&2
+        return 1
+    }
+    for key in ${keys//,/ }; do
+        paths+=("$(mount_for "$key")/.zfs/snapshot/$2")
+    done
+    jq -cn --args '$ARGS.positional' -- "${paths[@]}"
+}
+
+# unit_count: how many restore units the table names.
+unit_count() {
+    local entry n=0
+    for entry in $unit_keys; do n=$((n + 1)); done
+    printf '%s\n' "$n"
+}
+
+# seed_state <backend> <unit> [<result>] [<exit>] [<snapshot>]: one unit's status
+# file and journal, as a run with that result leaves them.
+seed_state() {
+    local backend=$1 unit=$2 now
+    now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    install -d -m 0700 "$work/state/state" "$work/state/journal"
+    jq -n --arg b "$backend" --arg u "$unit" --argjson p "$(unit_paths "$unit" "$backend")" \
+        --arg start "$now" --arg end "$now" \
+        --arg result "${3:-success}" --argjson exit "${4:-0}" --arg snap "${5:-strepo}" '
+        {schema: 2, backend: $b, unit: $u, host: "smortress",
+         repository: "stub", paths: $p,
+         last_attempt: {n: 1, start: $start, end: $end, exit: $exit,
+                        result: $result, reason: "", snapshot: $snap},
+         last_success: {end: $end, snapshot: $snap},
+         final: {end: $end, snapshot: $snap},
+         pending_reap: []}' >"$work/state/state/$backend-$unit.json"
+    jq -cn --arg result "${3:-success}" --arg snap "${5:-strepo}" \
+        '{schema:2, attempt:1, result:$result, snapshot:$snap}' \
+        >"$work/state/journal/$backend-$unit.jsonl"
+}
+
+# Every healthy unit of every backend in one jq, then one write per file: 27
+# units x 3 backends through seed_state would be 54 jq processes, and nearly
+# every freshness case seeds the plane before its assertion.
+seed_all_healthy() {
+    local now entry
+    local -a table=()
+    now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    install -d -m 0700 "$work/state/state" "$work/state/journal"
+    # The storage table as setup_file read it: one key=<mountpoint> per dataset
+    # and one unit:<unit>=<keys> per unit, so jq can build each unit's snapshot
+    # paths without calling unit_paths per unit. The mountpoints are the real
+    # ones, so this test's scratch tree is prefixed here.
+    for entry in $mounts; do table+=("${entry%%=*}=$work${entry#*=}"); done
+    for entry in $unit_keys; do table+=("unit:${entry%%=*}=${entry#*=}"); done
+    while IFS=$'\t' read -r file doc; do
+        printf '%s\n' "$doc" >"$work/state/$file"
+    done < <(jq -rn --arg now "$now" --args '
+    def kv: (index("=")) as $i | {(.[0:$i]): .[$i+1:]};
+    ($ARGS.positional | map(kv) | add) as $t
+    | ($t | to_entries) as $rows
+    | [ $rows[] | select(.key | startswith("unit:")) as $u
+        | ["ssd", "hdd", "r2"][] as $b
+        | {file: "state/\($b)-\($u.key[5:]).json",
+           doc: {schema: 2, backend: $b, unit: ($u.key[5:]), host: "smortress",
+                 repository: "stub",
+                 paths: [($u.value | split(",")[]) as $k
+                         | ($rows[] | select(.key == $k) | .value)
+                           + "/.zfs/snapshot/" + $b],
+                 last_attempt: {n: 1, start: $now, end: $now, exit: 0,
+                                result: "success", reason: "", snapshot: "strepo"},
+                 last_success: {end: $now, snapshot: "strepo"},
+                 final: {end: $now, snapshot: "strepo"},
+                 pending_reap: []}},
+          {file: "journal/\($b)-\($u.key[5:]).jsonl",
+           doc: {schema: 2, attempt: 1, result: "success", snapshot: "strepo"}} ]
+    | .[] | "\(.file)\t\(.doc | tojson)"' -- "${table[@]}")
+}
+
+# first_running <backend> <unit> <seconds ago>: the unit's second attempt is in
+# flight and nothing has ever succeeded. A unit that has never succeeded is
+# uploading its first snapshot, which is bounded by the first-upload deadline;
+# judging that run by the routine window would call a legitimate first upload
+# dead and expire it.
+first_running() {
+    local start
+    start=$(date -u -d "@$(($(date -u +%s) - $3))" +%Y-%m-%dT%H:%M:%SZ)
+    jq --arg start "$start" '.last_success = null | .final = null
+        | .last_attempt = {n: 2, start: $start, end: null, exit: null,
+                           result: "running", reason: "", snapshot: null}' \
+        "$work/state/state/$1-$2.json" >"$work/state/state/$1-$2.json.tmp" &&
+        mv "$work/state/state/$1-$2.json.tmp" "$work/state/state/$1-$2.json"
+    jq -cn '{schema: 2, attempt: 1, result: "failure", snapshot: null}' \
+        >"$work/state/journal/$1-$2.jsonl"
+}
+
+# healthy_plane: a fully seeded plane with its Healthchecks check configured, as
+# the hourly verifier sees it.
+healthy_plane() {
+    seed_all_healthy
+    export RESTIC_HEALTHCHECK_URL=https://hc.invalid/ping/abc
+}
+
+# failing_destination: one unit's newest attempt failed after a recent success.
+failing_destination() {
+    healthy_plane
+    seed_state ssd photos failure 1 ""
+}
+
+@test "a healthy plane verifies" {
+    healthy_plane
+    drive scripts/smortress-restic-verify.sh
+    assert_equal "$rc" 0
+}
+
+@test "exactly one Healthchecks ping on success" {
+    healthy_plane
+    drive scripts/smortress-restic-verify.sh
+    assert_equal "$(wc -l <"$log/curl-urls" | tr -d ' ')" 1
+}
+
+@test "the ping goes to the configured check" {
+    healthy_plane
+    drive scripts/smortress-restic-verify.sh
+    assert_equal "$(cat "$log/curl-urls")" "$RESTIC_HEALTHCHECK_URL"
+}
+
+@test "a newer failed run fails freshness even with a recent success" {
+    failing_destination
+    drive scripts/smortress-restic-verify.sh
+    assert_not_equal "$rc" 0
+}
+
+@test "no success ping while a destination is failing" {
+    failing_destination
+    drive scripts/smortress-restic-verify.sh
+    if grep -qx "$RESTIC_HEALTHCHECK_URL" "$log/curl-urls"; then
+        fail "the success check was pinged while a destination is failing"
+    fi
+}
+
+@test "the failure is reported to the same check" {
+    failing_destination
+    drive scripts/smortress-restic-verify.sh
+    assert_logged '/fail$' "$log/curl-urls"
+}
+
+@test "a run that died without completing expires" {
+    seed_all_healthy
+    jq '.last_attempt.n = 2 | .last_attempt.result = "running" | .last_attempt.start = "2000-01-01T00:00:00Z"' \
+        "$work/state/state/hdd-books.json" >"$work/state/state/hdd-books.json.tmp" &&
+        mv "$work/state/state/hdd-books.json.tmp" "$work/state/state/hdd-books.json"
+    drive scripts/smortress-restic-verify.sh --no-ping
+    assert_not_equal "$rc" 0
+}
+
+@test "a first upload inside its own window is not called dead" {
+    seed_all_healthy
+    first_running ssd photos 6000
+    drive scripts/smortress-restic-verify.sh --no-ping
+    if grep -q 'never completed' <<<"$out"; then
+        fail "a legal first upload was called dead" "$out"
+    fi
+}
+
+@test "a first upload past its own window still expires" {
+    seed_all_healthy
+    first_running ssd photos 20000
+    drive scripts/smortress-restic-verify.sh --no-ping
+    assert_contains "$out" 'never completed'
+}
+
+@test "missing status state fails closed" {
+    seed_all_healthy
+    rm -f "$work/state/state/r2-files.json"
+    drive scripts/smortress-restic-verify.sh --no-ping
+    assert_not_equal "$rc" 0
+}
+
+@test "a recorded snapshot missing from the repository fails" {
+    seed_all_healthy
+    export STUB_SNAPSHOTS_JSON='[]'
+    drive scripts/smortress-restic-verify.sh --no-ping
+    assert_not_equal "$rc" 0
+}
+
+@test "an unverified tag or wrong source path fails" {
+    seed_all_healthy
+    STUB_SNAPSHOTS_JSON=$(jq -cn '[{id: "strepo", time: "2026-01-01T00:00:00Z", hostname: "smortress", paths: ["x"], tags: ["group:photos", "host:smortress"]}]')
+    export STUB_SNAPSHOTS_JSON
+    drive scripts/smortress-restic-verify.sh --no-ping
+    assert_not_equal "$rc" 0
+}
+
+@test "a missing Healthchecks URL refuses to claim freshness" {
+    seed_all_healthy
+    unset RESTIC_HEALTHCHECK_URL
+    drive scripts/smortress-restic-verify.sh
+    assert_not_equal "$rc" 0
+}
+
+@test "no ping without a configured URL" {
+    seed_all_healthy
+    unset RESTIC_HEALTHCHECK_URL
+    drive scripts/smortress-restic-verify.sh
+    if [[ -s $log/curl-urls ]]; then
+        fail "a ping was sent without a configured URL" "$(cat "$log/curl-urls")"
+    fi
+}
+
+# --- 5b. the deploy gate's local query -----------------------------------
+# `--local --json` is read-only and answers per restore unit, per local
+# repository, because the caller owns the fallback: an unusable repository is a
+# payload fact, freshness is a payload fact, and only a query that cannot run at
+# all is an exit code. It never pings, so it works before the check exists.
+
+# local_query: the gate's question about a healthy plane, with a Healthchecks URL
+# configured to prove the query never uses it.
+local_query() {
+    healthy_plane
+    drive scripts/smortress-restic-verify.sh --local --json
+    # A verdict that is not JSON makes every assertion below fail with the same
+    # message, so print what was actually returned instead of hiding it.
+    if ! jq -e . >/dev/null 2>&1 <<<"$out"; then
+        printf 'local verdict was not JSON: %s\n' "$out" >&2
+    fi
+}
+
+@test "a healthy plane answers the local query" {
+    local_query
+    assert_equal "$rc" 0
+}
+
+@test "the SSD is reported usable" {
+    local_query
+    assert_equal "$(jq -r '.ssd.usable' <<<"$out")" true
+}
+
+@test "the HDD is reported usable" {
+    local_query
+    assert_equal "$(jq -r '.hdd.usable' <<<"$out")" true
+}
+
+@test "a fresh SSD unit is reported fresh" {
+    local_query
+    assert_equal "$(jq -r '.ssd.units.photos.fresh' <<<"$out")" true
+}
+
+@test "a fresh HDD unit is reported fresh" {
+    local_query
+    assert_equal "$(jq -r '.hdd.units["repo-archive"].fresh' <<<"$out")" true
+}
+
+@test "every restore unit is reported" {
+    local_query
+    assert_equal "$(jq -r '.ssd.units | length' <<<"$out")" "$(unit_count)"
+}
+
+@test "the local query covers only the two local repositories" {
+    local_query
+    assert_equal "$(jq -r 'has("r2")' <<<"$out")" false
+}
+
+@test "the local query never pings Healthchecks" {
+    local_query
+    if [[ -s $log/curl-urls ]]; then
+        fail "the local query pinged Healthchecks" "$(cat "$log/curl-urls")"
+    fi
+}
+
+@test "the local query needs no Healthchecks URL" {
+    seed_all_healthy
+    unset RESTIC_HEALTHCHECK_URL
+    drive scripts/smortress-restic-verify.sh --local --json
+    assert_equal "$rc" 0
+}
+
+# A verdict is freshness, not an exit code: the gate decides what a stale unit
+# means (back it up, or hold the deploy).
+
+# stale_snapshot: photos' only snapshot is verified but 9000s old, past its max
+# age.
+stale_snapshot() {
+    seed_all_healthy
+    local stale_time
+    stale_time=$(date -u -d "@$(($(date -u +%s) - 9000))" +%Y-%m-%dT%H:%M:%SZ)
+    STUB_SNAPSHOTS_JSON=$(jq -cn --arg t "$stale_time" --argjson p "$(unit_paths photos ssd)" '
+        [{id: "old1", time: $t, hostname: "smortress", paths: $p,
+          tags: ["unit:photos", "host:smortress", "verified"]}]')
+    export STUB_SNAPSHOTS_JSON
+    drive scripts/smortress-restic-verify.sh --local --json
+}
+
+@test "a stale snapshot is a verdict, not a failure of the query" {
+    stale_snapshot
+    assert_equal "$rc" 0
+}
+
+@test "a snapshot past the max age is not fresh" {
+    stale_snapshot
+    assert_equal "$(jq -r '.ssd.units.photos.fresh' <<<"$out")" false
+}
+
+@test "a stale snapshot says why" {
+    stale_snapshot
+    assert_equal "$(jq -r '.ssd.units.photos.reason' <<<"$out")" stale
+}
+
+# unverified_snapshot: photos' only snapshot is current but never tagged
+# verified, so it is not a recovery point.
+unverified_snapshot() {
+    seed_all_healthy
+    STUB_SNAPSHOTS_JSON=$(jq -cn --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        --argjson p "$(unit_paths photos ssd)" '
+        [{id: "nv1", time: $t, hostname: "smortress", paths: $p,
+          tags: ["unit:photos", "host:smortress"]}]')
+    export STUB_SNAPSHOTS_JSON
+    drive scripts/smortress-restic-verify.sh --local --json
+}
+
+@test "an untagged snapshot is not fresh" {
+    unverified_snapshot
+    assert_equal "$(jq -r '.ssd.units.photos.reason' <<<"$out")" unverified
+}
+
+# The 970 is the preferred repository and the HDD is the fallback when it is
+# absent, so "no SSD" must be a usable=false payload and not a broken query. This
+# test's mountinfo is its own, so the SSD line goes and nothing is put back.
+absent_ssd() {
+    seed_all_healthy
+    sed -i "\|$repos/ssd|d" "$work/mountinfo"
+    drive scripts/smortress-restic-verify.sh --local --json
+}
+
+@test "an absent SSD does not break the local query" {
+    absent_ssd
+    assert_equal "$rc" 0
+}
+
+@test "an absent SSD is reported unusable" {
+    absent_ssd
+    assert_equal "$(jq -r '.ssd.usable' <<<"$out")" false
+}
+
+@test "the HDD stays usable" {
+    absent_ssd
+    assert_equal "$(jq -r '.hdd.usable' <<<"$out")" true
+}
+
+@test "no unit is fresh on an unusable repository" {
+    absent_ssd
+    assert_equal "$(jq -r '.ssd.units.photos.fresh' <<<"$out")" false
+}
+
+# A caller-named cache that cannot be created is a destination verdict, not a
+# crash and not a warning on the stream a JSON consumer parses. This is what a
+# GitHub runner exposed: /var/cache is unwritable there, and a stderr line merged
+# into the output turned every assertion into a jq parse error.
+uncreatable_cache() {
+    seed_all_healthy
+    rc=0
+    out=$(env RESTIC_CACHE_DIR=/proc/smortress-restic-cache \
+        scripts/smortress-restic-verify.sh --local --json 2>"$log/cache-stderr") || rc=$?
+}
+
+@test "an uncreatable cache is a verdict, not a crash" {
+    uncreatable_cache
+    assert_equal "$rc" 0
+}
+
+@test "the verdict stays JSON without a cache" {
+    uncreatable_cache
+    if ! jq -e . >/dev/null 2>&1 <<<"$out"; then
+        fail "the verdict was not JSON" "$out"
+    fi
+}
+
+@test "an uncreatable cache makes the repository unusable" {
+    uncreatable_cache
+    assert_equal "$(jq -r '.ssd.usable' <<<"$out")" false
+}
+
+@test "the uncreatable cache is named on stderr" {
+    uncreatable_cache
+    assert_logged 'cannot create the restic cache' "$log/cache-stderr"
+}
+
+# Nothing to join against is the one thing the query cannot answer.
+@test "missing plane state fails the local query" {
+    rm -rf "${work:?}/state"
+    drive scripts/smortress-restic-verify.sh --local --json
+    assert_not_equal "$rc" 0
+}
+
+@test "the aggregate mode takes no --json" {
+    seed_all_healthy
+    drive scripts/smortress-restic-verify.sh --json
+    assert_equal "$rc" 2
+}
+
+@test "the local mode requires --json" {
+    seed_all_healthy
+    drive scripts/smortress-restic-verify.sh --local
+    assert_equal "$rc" 2
+}
+
+# --- 5b. a unit that gained a dataset reconciles its recorded paths --------
+#
+# The verifier reads .paths from the state the backup driver wrote, because that
+# is the set actually archived. When a dataset joins a unit after it has run,
+# the stored set is stale until the next successful run. Without the rewrite the
+# verifier keeps comparing new snapshots against the old paths and the unit can
+# never be fresh again, which holds every deploy.
+
+# stale_recorded_path_set: music's state records only raw/music, the set it
+# archived before state/navidrome joined the unit.
+stale_recorded_path_set() {
+    seed_state ssd music
+    jq --arg p "$(mount_for raw/music)/.zfs/snapshot/ssd" '.paths = [$p]' \
+        "$work/state/state/ssd-music.json" >"$work/state/state/ssd-music.json.tmp" &&
+        mv "$work/state/state/ssd-music.json.tmp" "$work/state/state/ssd-music.json"
+}
+
+@test "a unit whose dataset set changed still backs up" {
+    stale_recorded_path_set
+    export STUB_BACKUP_ID=reconcile1 STUB_BACKUP_TREE=treeR
+    drive "$driver" ssd --unit music --no-maintenance
+    assert_equal "$rc" 0
+}
+
+@test "a successful run records the path set it archived" {
+    stale_recorded_path_set
+    export STUB_BACKUP_ID=reconcile1 STUB_BACKUP_TREE=treeR
+    drive "$driver" ssd --unit music --no-maintenance
+    assert_equal "$(jq -c '.paths | sort' "$work/state/state/ssd-music.json")" \
+        "$(unit_paths music ssd | jq -c 'sort')"
+}
+
+# --- 5c. a stale recorded path set is not called fresh ---------------------
+#
+# The local query prefers the state's recorded set while it still matches the
+# table. After a dataset joins a unit and before its first new-family backup,
+# the recorded set is stale; using it would report a pre-change snapshot as
+# fresh while the new dataset has never been backed up.
+@test "a snapshot from the old path family is not fresh" {
+    stale_recorded_path_set
+    STUB_SNAPSHOTS_JSON=$(jq -cn --arg t "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        --arg p "$(mount_for raw/music)/.zfs/snapshot/ssd" '
+        [{id: "oldfam", time: $t, hostname: "smortress", paths: [$p],
+          tags: ["unit:music", "host:smortress", "verified"]}]')
+    export STUB_SNAPSHOTS_JSON
+    drive scripts/smortress-restic-verify.sh --local --json
+    assert_equal "$(jq -r '.ssd.units.music.fresh' <<<"$out")" false
 }
 
 # --- 9. first-upload sizing ---------------------------------------------
