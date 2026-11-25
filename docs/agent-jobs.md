@@ -99,7 +99,29 @@ Every command gets:
   unit, not a rootless user manager, owns the limits, so a host without
   delegated controllers still fails closed on a limit it cannot set; on timeout
   the whole cgroup is killed and the dispatcher removes any leftover container.
-- an output cap of 1 MiB, applied by the dispatcher after the command.
+- an output cap of 1 MiB, applied where the bytes are written: the unit runs a
+  per-job script that pipes the container into `head -c`, so the file can never
+  outgrow the cap and a job that prints forever stops itself on the closed pipe.
+  `pipefail` keeps the container's status rather than `head`'s. The dispatcher
+  reads that file after the unit exits, truncates and reports `truncated` when
+  the byte past the cap exists.
+
+The unit is started without `--pipe`. That option asks PID1 to hand the unit the
+dispatcher's own descriptors, and on this host every such start from a service
+domain is refused — `Failed to start transient service unit: Connection reset by
+peer` — while the identical call from a login shell succeeds and dropping only
+`--pipe` makes it work:
+
+```
+no-pipe        rc=0
+pipe-no-wait   rc=1  Connection reset by peer
+pipe-wait      rc=1  Connection reset by peer
+```
+
+A policy rule allowing `init_t` and `unconfined_service_t` to share
+`fifo_file` did not change it, and it reproduces on a fresh boot. Nothing about
+the containment depends on the pipe, so the capture moved into the unit rather
+than the platform being asked to accept a start that this host refuses.
 
 The general class's egress is filtered by the uid-keyed table in
 `image/rootfs/etc/nftables/smortress-agent-jobs.nft`: `fib daddr type local`,
