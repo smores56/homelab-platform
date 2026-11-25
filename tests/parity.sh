@@ -44,13 +44,14 @@ bats "$new" >"$work/new.log" 2>&1 || new_rc=$?
 # its own normalizer so an assertion text that itself starts with a number
 # survives.
 old_names() { grep '^ok' "$1" | sed -E 's/^ok +//' | sort; }
-new_names() { grep '^ok' "$1" | sed -E 's/^ok +[0-9]+ +//' | sort; }
+new_names() { grep '^ok' "$1" | grep -v '# skip' | sed -E 's/^ok +[0-9]+ +//' | sort; }
 old_ok=$(old_names "$work/old.log" | wc -l)
 new_ok=$(new_names "$work/new.log" | wc -l)
 diff -u <(old_names "$work/old.log") <(new_names "$work/new.log") >"$work/names.diff" || true
 
-printf 'parity: %s shell %s ok (exit %s), bats %s ok (exit %s)\n' \
-  "$name" "$old_ok" "$old_rc" "$new_ok" "$new_rc"
+new_skipped=$(grep -c '^ok .*# skip' "$work/new.log" || true)
+printf 'parity: %s shell %s ok (exit %s), bats %s ok (exit %s, %s skipped)\n' \
+  "$name" "$old_ok" "$old_rc" "$new_ok" "$new_rc" "$new_skipped"
 
 if [[ $old_rc -ne 0 || $new_rc -ne 0 || $old_ok -ne $new_ok || -s $work/names.diff ]]; then
   cat "$work/names.diff" >&2

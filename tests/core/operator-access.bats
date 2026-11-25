@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# bats file_tags=core
 # Offline checks for scripts/operator-access.sh.
 #
 # The host half — a real dataset owned 1000:1000 and the real operator account —

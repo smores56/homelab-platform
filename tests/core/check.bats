@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# bats file_tags=core
 # Offline checks for the T0 gate scripts (SDLC #703), run by bats.
 #
 # The privileged half — freezing a real cluster, reading a real repository —
@@ -6,10 +7,10 @@
 # handling, the read-only default, the refusal to run unprivileged, and the
 # promises the gate document makes about what these scripts can do.
 #
-# The six harnesses the shell suite called — restic-plane, the progress command,
-# agent-recovery, operator-access, the Quadlet suites and the agent shell
-# dispatcher — are converted suites of their own (#937), so the runner selects
-# them by tag and this file keeps the static assertions, as #937 prescribes.
+# The harnesses the shell suite chained inline — restic-plane, the progress
+# command, agent-recovery, the Quadlet suites and the agent shell dispatcher —
+# are separate suites the runner runs on their own; operator-access was the one
+# this task converted. This file keeps only the static assertions.
 #
 #   bats tests/core/check.bats
 load ../helpers
@@ -78,7 +79,11 @@ done
 # pre-migration /var/lib/data made every presence check fail the moment the data
 # moved, which reads as a backup problem while being a stale path.
 @test "the verifier checks the trees the live layout keeps" {
-    ! grep -q '/var/lib/data' scripts/legacy/verify-legacy-backups.sh
+    # `!` alone fails only as the last command in a bats test (SC2314).
+    if grep -q '/var/lib/data' scripts/legacy/verify-legacy-backups.sh; then
+        printf 'the verifier still names the pre-migration path\n' >&2
+        return 1
+    fi
     grep -q '/var/srv/files/vault' scripts/legacy/verify-legacy-backups.sh
     grep -q '/var/lib/immich/dumps/immich.dump' scripts/legacy/verify-legacy-backups.sh
 }

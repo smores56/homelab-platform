@@ -45,6 +45,7 @@ suites() {  # every suite path under tests/, one per line
 }
 
 @test "every tags.tsv pattern names a path in the tree" {
+    set -f  # a pattern is a glob to match with, not one to expand against the tree
     stale=''
     while IFS=$tab read -r tag patterns || [ -n "$tag" ]; do
         case $tag in ''|'#'*) continue ;; esac
@@ -53,6 +54,7 @@ suites() {  # every suite path under tests/, one per line
             [ -n "$found" ] || stale="$stale $pattern"
         done
     done <"$tags_file"
+    set +f
     assert_equal "$stale" ""
 }
 
