@@ -3,7 +3,7 @@
 # `all` runs every suite and `none` runs none; a path no row claims is `all`.
 #
 # The harness decides what runs, so a change to it changes any result: `all`.
-all	tests/tags.sh tests/tags.tsv tests/helpers.bash .githooks/*
+all	tests/tags.sh tests/tags.tsv tests/tags.bats tests/helpers.bash tests/parity.sh .githooks/*
 none	*.md docs/* .github/* .gitignore CODEOWNERS
 core/storage-layout	tests/core/storage-layout.bats scripts/storage-layout.sh scripts/init-zpool.sh units/systemd/smortress-zpool.service
 tags	tests/tags.bats

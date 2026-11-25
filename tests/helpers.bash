@@ -16,12 +16,5 @@ export BATS_LIB_PATH
 bats_load_library bats-support
 bats_load_library bats-assert
 
-# run --separate-stderr is load-bearing: assert_silent checks both streams.
-bats_require_minimum_version 1.5.0
-assert_silent() {
-    # shellcheck disable=SC2154 # bats sets both from the last `run`
-    assert_equal "$output$stderr" ""
-}
-
 # The suites exercise scripts that expect the checkout as their cwd.
 cd "$repo_root" || return 1

@@ -5,8 +5,10 @@
 # usage: tests/parity.sh tests/core/storage-layout [<base>]
 #
 # The old suite is read from the base ref, so this works after it is deleted
-# from the tree. Counts and exit codes are compared, not names: the shell suite
-# prints `ok   <text>` and bats prints `ok <n> <text>`.
+# from the tree. Exit codes, counts and the assertion texts are compared: the
+# shell suite prints `ok   <text>` and bats prints `ok <n> <text>`, so names are
+# normalized before the diff, which catches a dropped check replaced by a
+# duplicate in another test.
 #
 # A conversion aid for #907; it stops being useful once the last shell suite is
 # gone (#931 deletes it with check-all.sh).
@@ -38,13 +40,18 @@ git worktree add -q --detach "$work/tree" "$base"
 old_rc=0 new_rc=0
 (cd "$work/tree" && bash "$old") >"$work/old.log" 2>&1 || old_rc=$?
 bats "$new" >"$work/new.log" 2>&1 || new_rc=$?
-old_ok=$(grep -c '^ok' "$work/old.log" || true)
-new_ok=$(grep -c '^ok' "$work/new.log" || true)
+names() {  # names <log>: the assertion texts, without the runner's prefix
+  grep '^ok' "$1" | sed -E 's/^ok +([0-9]+ +)?//' | sort
+}
+old_ok=$(names "$work/old.log" | wc -l)
+new_ok=$(names "$work/new.log" | wc -l)
+diff -u <(names "$work/old.log") <(names "$work/new.log") >"$work/names.diff" || true
 
 printf 'parity: %s shell %s ok (exit %s), bats %s ok (exit %s)\n' \
   "$name" "$old_ok" "$old_rc" "$new_ok" "$new_rc"
 
-if [[ $old_rc -ne 0 || $new_rc -ne 0 || $old_ok -ne $new_ok ]]; then
+if [[ $old_rc -ne 0 || $new_rc -ne 0 || $old_ok -ne $new_ok || -s $work/names.diff ]]; then
+  cat "$work/names.diff" >&2
   printf 'parity: MISMATCH; logs follow\n' >&2
   printf -- '--- %s ---\n' "$old" >&2
   cat "$work/old.log" >&2

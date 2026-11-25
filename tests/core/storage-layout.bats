@@ -75,22 +75,24 @@ load ../helpers
 @test "every ownership override names a known dataset" {
     # shellcheck source=/dev/null
     source scripts/storage-layout.sh
-    orphans=0
+    orphans=''
     for key in "${!dataset_root_owner[@]}" "${!dataset_root_mode[@]}"; do
-        [[ -n ${dataset_mount[$key]:-} ]] || orphans=$((orphans + 1))
+        [[ -n ${dataset_mount[$key]:-} ]] || orphans="$orphans $key"
     done
-    assert_equal "$orphans" 0
+    [[ -z $orphans ]] || printf 'override on an unknown dataset:%s\n' "$orphans" >&2
+    assert_equal "$orphans" ""
 }
 
 @test "every dataset quota is on a known dataset and well formed" {
     # shellcheck source=/dev/null
     source scripts/storage-layout.sh
-    orphans=0
+    orphans=''
     for key in "${!dataset_quota[@]}"; do
-        [[ -n ${dataset_mount[$key]:-} ]] || orphans=$((orphans + 1))
-        [[ ${dataset_quota[$key]} =~ ^[0-9]+[KMGT]$ ]] || orphans=$((orphans + 1))
+        [[ -n ${dataset_mount[$key]:-} ]] || orphans="$orphans $key(unknown)"
+        [[ ${dataset_quota[$key]} =~ ^[0-9]+[KMGT]$ ]] || orphans="$orphans $key(${dataset_quota[$key]})"
     done
-    assert_equal "$orphans" 0
+    [[ -z $orphans ]] || printf 'bad quota:%s\n' "$orphans" >&2
+    assert_equal "$orphans" ""
 }
 
 @test "the tenant dataset carries its own quota" {
@@ -123,6 +125,7 @@ load ../helpers
         esac
         [[ $key == raw/* || $key == state/* ]] || foreign="$foreign $key"
     done
+    [[ -z $foreign ]] || printf 'outside both roots:%s\n' "$foreign" >&2
     assert_equal "$foreign" ""
 }
 
@@ -134,6 +137,7 @@ load ../helpers
         parent=${key%%/*}
         [[ " ${dataset_parents[*]} " == *" $parent "* ]] || orphans="$orphans $key"
     done
+    [[ -z $orphans ]] || printf 'no declared parent:%s\n' "$orphans" >&2
     assert_equal "$orphans" ""
 }
 
@@ -150,6 +154,7 @@ load ../helpers
             seen[$key]=$unit
         done < <(unit_keys "$unit")
     done
+    [[ -z $duplicates ]] || printf 'in two units:%s\n' "$duplicates" >&2
     assert_equal "$duplicates" ""
 }
 
@@ -170,6 +175,7 @@ load ../helpers
         [[ " ${dataset_unrestored[*]:-} " == *" $key "* ]] && continue
         [[ -n ${seen[$key]:-} ]] || missing="$missing $key"
     done
+    [[ -z $missing ]] || printf 'no unit restores:%s\n' "$missing" >&2
     assert_equal "$missing" ""
 }
 
@@ -187,6 +193,7 @@ load ../helpers
         [[ -n ${dataset_mount[$key]:-} ]] || orphans="$orphans $key"
         [[ -z ${seen[$key]:-} ]] || orphans="$orphans $key"
     done
+    [[ -z $orphans ]] || printf 'unrestorable but restored or unmounted:%s\n' "$orphans" >&2
     assert_equal "$orphans" ""
 }
 
@@ -223,6 +230,7 @@ load ../helpers
         instance=$(readiness_instance "$key")
         [[ $(readiness_key "$instance") == "$key" ]] || mapping="$mapping $key"
     done
+    [[ -z $mapping ]] || printf 'does not map back:%s\n' "$mapping" >&2
     assert_equal "$mapping" ""
 }
 
@@ -322,9 +330,12 @@ SH
     raw_parent=$(grep -n '^zfs create -o mountpoint=none -o canmount=off smortress/raw$' "$BATS_TEST_TMPDIR/log" | cut -d: -f1)
     state_parent=$(grep -n '^zfs create -o mountpoint=none -o canmount=off smortress/state$' "$BATS_TEST_TMPDIR/log" | cut -d: -f1)
     first_child=$(grep -n '^zfs create -o canmount=on .* smortress/raw/files$' "$BATS_TEST_TMPDIR/log" | cut -d: -f1)
-    assert [ -n "$raw_parent" ]
-    assert [ -n "$state_parent" ]
-    assert [ -n "$first_child" ]
-    assert [ "$raw_parent" -lt "$first_child" ]
-    assert [ "$state_parent" -lt "$first_child" ]
+    if [[ -n $raw_parent && -n $state_parent && -n $first_child ]] &&
+        ((raw_parent < first_child && state_parent < first_child)); then
+        ordered=true
+    else
+        cat "$BATS_TEST_TMPDIR/log" >&2
+        ordered=false
+    fi
+    assert "$ordered"
 }

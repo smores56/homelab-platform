@@ -3,7 +3,17 @@
 # retagged or replaced upstream asset fails the checksum instead of running.
 set -euo pipefail
 
-dest="${1:-$HOME/.local/bin}"
+dest=${1:-$HOME/.local/bin}
+# bats installs bin/, libexec/ and lib/ under a prefix, so dest must be its bin:
+# checking after the install would run install.sh somewhere else first.
+dest=${dest%/}
+case $(basename -- "$dest") in
+  bin) ;;
+  *)
+    printf 'install-ci-tools: dest must be a directory named bin, got %s\n' "$dest" >&2
+    exit 2
+    ;;
+esac
 mkdir -p "$dest"
 root=$(cd -- "$(dirname -- "$0")/.." && pwd)
 # shellcheck source=/dev/null
@@ -54,10 +64,6 @@ fetch "https://github.com/bats-core/bats-core/archive/refs/tags/v${BATS_VERSION}
   bats.tar.gz "$BATS_SHA256"
 tar -xzf "$tmp/bats.tar.gz" -C "$tmp"
 "$tmp/bats-core-$BATS_VERSION/install.sh" "$(dirname -- "$dest")" >/dev/null
-[[ -x $dest/bats ]] || {
-  printf 'install: bats landed in %s/bin; pass a directory named bin\n' "$(dirname -- "$dest")" >&2
-  exit 1
-}
 
 fetch "https://ftp.gnu.org/gnu/parallel/parallel-${PARALLEL_VERSION}.tar.bz2" \
   parallel.tar.bz2 "$PARALLEL_SHA256"

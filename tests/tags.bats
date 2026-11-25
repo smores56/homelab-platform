@@ -27,7 +27,8 @@ suites() {  # every suite path under tests/, one per line
     while IFS= read -r suite; do
         selected=$(sh "$tags_sh" "$suite")
         case " $selected " in
-            *" $suite "*) ;;
+            # `all` selects the suite too; a row may claim it either way.
+            *" $suite "*|*" all "*) ;;
             *) bad="$bad $suite" ;;
         esac
     done < <(suites)
