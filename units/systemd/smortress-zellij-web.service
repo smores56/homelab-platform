@@ -3,8 +3,11 @@
 # fronts as svc:terminal (scripts/tailscale-serve.sh). The socket directory is
 # the one every SSH login resolves (dotfiles, env.d/20-zellij-socket.sh), so a
 # browser attaches to the sessions an SSH client started and starts sessions an
-# SSH client can attach to. tmpfiles creates it at boot; a system unit cannot
-# reach $XDG_RUNTIME_DIR/zellij, which is the directory an SSH login would use.
+# SSH client can attach to. It is this unit's own runtime directory, created by
+# systemd as the user the server runs as: a system unit cannot reach the
+# per-session $XDG_RUNTIME_DIR/zellij an SSH login would use, and a tmpfiles
+# entry cannot name that login without depending on the account existing when
+# tmpfiles runs -- the failure this repository has already lost a boot to.
 #
 # It runs as the owner and hides nothing: the zellij binary and its config come
 # from mise in that home, the token database is ~/.local/share/zellij/tokens.db,
@@ -16,7 +19,7 @@
 # restart has to leave them running, or reconnecting a browser would end the work
 # it was attached to.
 Description=zellij web terminal
-After=local-fs.target systemd-tmpfiles-setup.service
+After=local-fs.target
 Conflicts=shutdown.target
 Before=shutdown.target
 
@@ -30,6 +33,12 @@ WorkingDirectory=/var/home/smores
 Environment=PATH=/var/home/smores/.local/share/mise/shims:/var/home/smores/.local/bin:/usr/local/bin:/usr/bin
 Environment=ZELLIJ_SOCKET_DIR=/run/zellij
 Environment=TERM=xterm-256color
+# Preserved rather than removed on stop: the sessions keep running
+# (KillMode=process), and the socket directory is where a later SSH login finds
+# them. systemd creates it with this unit's user and group, mode 0700.
+RuntimeDirectory=zellij
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
 ExecStart=/var/home/smores/.local/share/mise/shims/zellij web --ip 127.0.0.1 --port 8082
 # The `-` prefix is load-bearing: `attach --create-background` exits 1 when the
 # session already exists, which is the healthy case on every boot after the first.

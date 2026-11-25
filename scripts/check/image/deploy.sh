@@ -148,8 +148,10 @@ if grep -qE '^(ProtectHome|PrivateTmp|NoNewPrivileges)=' "$terminal_unit"; then
 else
   ok "the terminal unit hides nothing its panes need"
 fi
-check "tmpfiles creates the socket directory for the owner" \
-  has 'd /run/zellij 0700 smores smores -' image/rootfs/etc/tmpfiles.d/smortress.conf
+check "the terminal owns the socket directory as its runtime directory" \
+  has 'RuntimeDirectory=zellij' "$terminal_unit"
+check "the terminal keeps the socket directory across a stop" \
+  grep -qx 'RuntimeDirectoryPreserve=yes' "$terminal_unit"
 
 # shellcheck source=app-images.sh disable=SC1091
 source scripts/app-images.sh
