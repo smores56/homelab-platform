@@ -33,26 +33,8 @@ for tool in jq timeout; do
   }
 done
 
-pass=0
-fail=0
-ok() {
-  pass=$((pass + 1))
-  printf 'ok   %s\n' "$1"
-}
-bad() {
-  fail=$((fail + 1))
-  printf 'FAIL %s\n' "$1" >&2
-  [[ -n ${2:-} ]] && printf '     %s\n' "${2//$'\n'/$'\n'     }" >&2
-  return 0
-}
-check_eq() { # got want label
-  if [[ $1 == "$2" ]]; then ok "$3"; else bad "$3" "want '$2', got '$1'"; fi
-}
-check_json() { # doc filter want label
-  local got
-  got=$(jq -r "$2" <<<"$1" 2>/dev/null)
-  check_eq "$got" "$3" "$4"
-}
+# shellcheck source=tests/deploy/lib.sh
+source "$root/tests/deploy/lib.sh"
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
@@ -127,25 +109,10 @@ jq --arg b "$backend" --arg u "$unit" \
   "$STUB_VERIFY_DOC" >"$STUB_VERIFY_DOC.tmp" && mv "$STUB_VERIFY_DOC.tmp" "$STUB_VERIFY_DOC"
 EOF
 
-# deploy_notify hands the URL over as a curl config on stdin so it never appears
-# in argv; the stub reads it from there when no argument names one.
-cat >"$bin/curl" <<'EOF'
-#!/usr/bin/env bash
-url=
-while (($#)); do
-  case $1 in
-    --config) shift 2 ;;
-    --max-time | --retry | --connect-timeout) shift 2 ;;
-    -*) shift ;;
-    *) url=$1; shift ;;
-  esac
-done
-if [[ -z $url ]]; then
-  url=$(sed -n 's/^url = "\(.*\)"$/\1/p' | head -n 1)
-fi
-printf '%s\n' "$url" >>"$STUB_LOG/curl-urls"
-exit "${STUB_CURL_EXIT:-0}"
-EOF
+# deploy_notify hands the URL over as a curl config on stdin, never in argv; the
+# fake reads it from there when no argument names one.
+install_fake_curl "$bin"
+export FAKE_PING_LOG=$STUB_LOG/curl-urls
 
 # `bootc status --booted --json` is the only thing a reconcile reads from the
 # host, and a stub is the only way to present a boot the record disagrees with.
@@ -195,7 +162,7 @@ reset_gate() {
   : >"$log/verify-calls"
   : >"$log/backup-calls"
   : >"$log/curl-urls"
-  unset STUB_VERIFY_EXIT STUB_VERIFY_SLEEP STUB_BACKUP_EXIT STUB_BACKUP_SLEEP STUB_CURL_EXIT
+  unset STUB_VERIFY_EXIT STUB_VERIFY_SLEEP STUB_BACKUP_EXIT STUB_BACKUP_SLEEP
   seed_doc true true "$all_fresh"
 }
 
@@ -207,10 +174,6 @@ run_platform() {
 run_cli() {
   out=$(bash "$cli" "$@" 2>&1)
   rc=$?
-}
-
-journal_field() { # <event> <jq path>
-  jq -r "select(.event==\"$1\") | $2" "$state_dir/journal.jsonl" 2>/dev/null
 }
 
 seed_held() { # <digest> <released>
@@ -671,5 +634,4 @@ fi
 check_eq "$(journal_field gate-infra-failure '.reason')" query-failed \
   "the bounded child that timed out is journaled as an infrastructure failure"
 
-printf '\n%d passed, %d failed\n' "$pass" "$fail"
-((fail == 0))
+finish

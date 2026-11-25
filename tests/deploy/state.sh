@@ -28,27 +28,8 @@ for tool in jq timeout; do
   }
 done
 
-pass=0
-fail=0
-ok() {
-  pass=$((pass + 1))
-  printf 'ok   %s\n' "$1"
-}
-bad() {
-  fail=$((fail + 1))
-  printf 'FAIL %s\n' "$1" >&2
-  [[ -n ${2:-} ]] && printf '     %s\n' "${2//$'\n'/$'\n'     }" >&2
-  return 0
-}
-check_eq() { # got want label
-  if [[ $1 == "$2" ]]; then ok "$3"; else bad "$3" "want '$2', got '$1'"; fi
-}
-check_file() { # path label
-  if [[ -f $1 ]]; then ok "$2"; else bad "$2" "missing $1"; fi
-}
-journal_field() { # <event> <jq path>
-  jq -r "select(.event==\"$1\") | $2" "$DEPLOY_STATE_DIR/journal.jsonl" 2>/dev/null
-}
+# shellcheck source=tests/deploy/lib.sh
+source "$root/tests/deploy/lib.sh"
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
@@ -768,5 +749,4 @@ check_eq "$(DEPLOY_STATE_DIR=$DEPLOY_STATE_DIR PATH=/usr/bin:/bin bash -c '
   deploy_resolve "" no-such-tool-812 /nowhere/no-such-tool-812
 ')" /nowhere/no-such-tool-812 "deploy_resolve falls back to the checkout sibling"
 
-printf '\n%d passed, %d failed\n' "$pass" "$fail"
-((fail == 0))
+finish

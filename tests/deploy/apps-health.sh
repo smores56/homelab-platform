@@ -37,30 +37,8 @@ for tool in jq timeout python3; do
   }
 done
 
-pass=0
-fail=0
-ok() {
-  pass=$((pass + 1))
-  printf 'ok   %s\n' "$1"
-}
-bad() {
-  fail=$((fail + 1))
-  printf 'FAIL %s\n' "$1" >&2
-  [[ -n ${2:-} ]] && printf '     %s\n' "${2//$'\n'/$'\n'     }" >&2
-  return 0
-}
-check_eq() { # got want label
-  if [[ $1 == "$2" ]]; then ok "$3"; else bad "$3" "want '$2', got '$1'"; fi
-}
-check_file() { # path label
-  if [[ -s $1 ]]; then ok "$2"; else bad "$2" "missing or empty: $1"; fi
-}
-check_no_file() { # path label
-  if [[ -e $1 ]]; then bad "$2" "$(cat "$1" 2>/dev/null)"; else ok "$2"; fi
-}
-check_grep() { # file pattern label
-  if grep -qF -- "$2" "$1" 2>/dev/null; then ok "$3"; else bad "$3" "no '$2' in $1"; fi
-}
+# shellcheck source=tests/deploy/lib.sh
+source "$root/tests/deploy/lib.sh"
 
 work=$(mktemp -d)
 listener=
@@ -143,25 +121,9 @@ EOF
 # deploy_notify hands the URL over as a curl config on stdin, never in argv; the
 # tenant ping passes it as an argument. Both are recorded with their body so a
 # case can assert the suffix and the reason the check received.
-cat >"$bin/curl" <<'EOF'
-#!/usr/bin/env bash
-url=
-body=
-while (($#)); do
-  case $1 in
-    --config) shift 2 ;;
-    --data-binary) body=${2-}; shift 2 ;;
-    --max-time | --retry | --connect-timeout | --retry-delay | -o) shift 2 ;;
-    -*) shift ;;
-    *) url=$1; shift ;;
-  esac
-done
-if [[ -z $url ]]; then
-  url=$(sed -n 's/^url = "\(.*\)"$/\1/p' | head -n 1)
-fi
-printf '%s\t%s\n' "${url:-}" "$body" >>"$STUB_LOG/curl-urls"
-exit 0
-EOF
+install_fake_curl "$bin"
+export FAKE_PING_LOG=$STUB_LOG/curl-urls
+export FAKE_PING_BODY=1
 chmod 0755 "$bin"/*
 
 export STUB_SYSTEMCTL_ACTIVE=$work/active-units
@@ -201,10 +163,6 @@ else
 fi
 
 # --- the fixtures ------------------------------------------------------------
-journal_field() { # <event> <jq path>
-  jq -r "select(.event==\"$1\") | $2" "$state_dir/journal.jsonl" 2>/dev/null
-}
-
 reset_case() {
   rm -f "$state_dir"/state.json "$state_dir"/pending.json "$state_dir"/apply.json \
     "$state_dir"/denylist.json "$state_dir"/journal.jsonl "$DEPLOY_PING_SECRET" \
@@ -449,5 +407,4 @@ else
   ok "the tenant prober never pings the deploy check"
 fi
 
-printf '\n%d passed, %d failed\n' "$pass" "$fail"
-((fail == 0))
+finish
