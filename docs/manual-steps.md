@@ -1311,39 +1311,67 @@ output over 1 MiB is truncated and reported; a job past 300 seconds has its cgro
 killed and any leftover container removed. Shell jobs are unsupervised by design:
 the only approval contract is the write broker's `libs/data_plane/approval.py`.
 
-A facade does not run an entry point itself: it holds a socket served by
-`smortress-agent-shell-bridge.service`, and that socket is the only path to a
-general job (`docs/agent-jobs.md#transport`). `/run/smortress` is root 0700 and the
-socket's directory is 0710 root:1000, so no host uid can traverse to it; the only
-client is the container that mounts the directory as `/run/agent-shell`:
+A facade does not run an entry point itself: it holds a socket served by its
+class's bridge — `smortress-agent-shell-bridge` (general) or
+`smortress-agent-shell-bridge-personal` — and that socket is the only path to a job
+in that class (`docs/agent-jobs.md#transport`). Each socket sits in its own
+directory, `/run/smortress/agent-shell-<class>`, under the root 0700
+`/run/smortress`, and each directory is 0710 root:1000. The only client is the
+container that mounts its own class's directory as `/run/agent-shell`:
 
 ```sh
-systemctl status smortress-agent-shell-bridge
-sudo stat -c '%U:%G %a %n' /run/smortress/agent-shell /run/smortress/agent-shell/general.sock
-# root:1000 710 /run/smortress/agent-shell
-# root:1000 660 /run/smortress/agent-shell/general.sock
+systemctl status smortress-agent-shell-bridge smortress-agent-shell-bridge-personal
+sudo stat -c '%U:%G %a %n' \
+  /run/smortress/agent-shell-general /run/smortress/agent-shell-general/general.sock \
+  /run/smortress/agent-shell-personal /run/smortress/agent-shell-personal/personal.sock
+# root:1000 710 /run/smortress/agent-shell-general
+# root:1000 660 /run/smortress/agent-shell-general/general.sock
+# root:1000 710 /run/smortress/agent-shell-personal
+# root:1000 660 /run/smortress/agent-shell-personal/personal.sock
 sudo podman exec smortress-agent-facade-general python3 -c '
 import socket
 sock = socket.socket(socket.AF_UNIX)
 sock.connect("/run/agent-shell/general.sock")
 sock.sendall(b"{\"command\": \"id -u; ls /var/srv/git | head -3\"}\n")
 print(sock.makefile().readline())'
+sudo podman exec smortress-agent-facade-personal python3 -c '
+import socket
+sock = socket.socket(socket.AF_UNIX)
+sock.connect("/run/agent-shell/personal.sock")
+sock.sendall(b"{\"command\": \"id -u; test ! -e /var/srv/git && echo no-general-tree; python3 -c \\\"import urllib.request; urllib.request.urlopen(\\\\\\\"https://example.com\\\\\\\", timeout=3)\\\" || echo blocked\"}\n")
+print(sock.makefile().readline())'
 ```
 
-The answer names uid 1000 and the general tree, so the job is a container and not
-the host. Any other uid is refused by the socket's group, and the host path is
-refused before that by the root-only parent -- no gateway, model server or web UI
-has a mount to try with:
+The general answer names uid 1000 and the general tree, so the job is a container
+and not the host; the personal answer names uid 1000, `no-general-tree` and
+`blocked`, so the same transport reaches a job with no live tree and no route.
+Cross-class access is a missing mount, not a refusal: each facade's container has
+only its own class's directory, so the other class's socket path does not exist
+inside it.
+
+```sh
+sudo podman exec smortress-agent-facade-personal test -e /run/agent-shell/general.sock &&
+  echo reachable || echo "general socket not mounted"        # not mounted
+sudo podman exec smortress-agent-facade-general test -e /run/agent-shell/personal.sock &&
+  echo reachable || echo "personal socket not mounted"       # not mounted
+```
+
+Any other uid is refused by the socket's group, and the host path is refused before
+that by the root-only parent -- no gateway, model server or web UI has a mount to
+try with:
 
 ```sh
 sudo runuser -u nobody -- python3 -c '
 import socket
-socket.socket(socket.AF_UNIX).connect("/run/smortress/agent-shell/general.sock")'    # Permission denied
+socket.socket(socket.AF_UNIX).connect("/run/smortress/agent-shell-general/general.sock")'  # Permission denied
+sudo runuser -u nobody -- python3 -c '
+import socket
+socket.socket(socket.AF_UNIX).connect("/run/smortress/agent-shell-personal/personal.sock")'  # Permission denied
 ```
 
-`tools/list` on the general facade names `shell.run` and the personal facade does
-not, which is the same fact from the client's side (the token is the deployment's
-own, read from its mounted file):
+`tools/list` names `shell.run` on both facades now, and each entry runs in its own
+class: the tool's presence is still the socket's presence, and the class is the
+bridge's constant (the token is the deployment's own, read from its mounted file):
 
 ```sh
 sudo podman exec smortress-agent-facade-general python3 -c '

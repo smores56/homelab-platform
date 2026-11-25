@@ -477,6 +477,7 @@ declare -A unlisted_why=(
   [smortress-agent-config.service]='seeds the agent state datasets: an agent-plane fault must not roll the platform digest back'
   [smortress-agent-job-provision.service]='provisions the rootless job runners: an agent-plane fault must not roll the platform digest back'
   [smortress-agent-shell-bridge.service]='serves the agent shell socket: an agent-plane fault must not roll the platform digest back'
+  [smortress-agent-shell-bridge-personal.service]='serves the personal agent shell socket: an agent-plane fault must not roll the platform digest back'
   [smortress-nvidia-cdi.service]='ConditionPathExists on /usr/bin/nvidia-ctk: on a host with no NVIDIA tooling the unit is skipped, not failed'
   [smortress-selinux-nvidia-map.service]='ConditionPathExists on the model CIL module: without SELinux or that module it is skipped, not failed'
   [smortress-selinux-agent-shell.service]='ConditionPathExists on the shell CIL module: without SELinux or that module it is skipped, not failed'

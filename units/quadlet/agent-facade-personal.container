@@ -25,10 +25,21 @@
 # none of this process's business. smortress-agent-config.service creates it with
 # the dataset's uid and mode, because a directory podman has to create for a bind
 # mount would be root-owned inside a 0750 dataset.
+#
+# /run/agent-shell is this class's shell transport (SDLC #860): the directory
+# holding the socket served by smortress-agent-shell-bridge-personal.service,
+# mounted rw because connect(2) needs write permission on the socket inode, and
+# only this container gets it. The socket's class is a constant in that unit, so
+# `shell.run` here runs a job with `--network=none` and no host mount: disposable
+# scratch and the container's read-only root, nothing reachable. The directory,
+# not the socket file, is mounted so a bridge restart replaces the socket inside
+# an inode this container still sees. The general facade mounts only its own
+# class's directory, so neither container can dial the other class's socket -- the
+# two facades share uid 1000, so the mount is the separation.
 [Unit]
 Description=Agent source facade, personal deployment (MCP on agent-local.network)
-Requires=zfs-ready@state-agent-local.service sops-decrypt.service smortress-app-secrets.service smortress-agent-config.service
-After=network-online.target zfs-ready@state-agent-local.service sops-decrypt.service smortress-app-secrets.service smortress-agent-config.service
+Requires=zfs-ready@state-agent-local.service sops-decrypt.service smortress-app-secrets.service smortress-agent-config.service smortress-agent-shell-bridge-personal.service
+After=network-online.target zfs-ready@state-agent-local.service sops-decrypt.service smortress-app-secrets.service smortress-agent-config.service smortress-agent-shell-bridge-personal.service
 Wants=network-online.target
 
 [Container]
@@ -37,7 +48,7 @@ ContainerName=smortress-agent-facade-personal
 Network=agent-local.network
 User=1000:1000
 Entrypoint=python3
-Exec=-m apps.agent_facade --transport http --deployment personal --token-file /run/secrets/agent-facade-personal-token --memory-root /memory --index-root /index --replica mail=/replica/mail --replica calendar=/replica/calendar --replica finance=/replica/finance --replica brave=/replica/brave --replica notes=/replica/notes --replica tasks=/replica/tasks --host 0.0.0.0 --port 18004
+Exec=-m apps.agent_facade --transport http --deployment personal --token-file /run/secrets/agent-facade-personal-token --memory-root /memory --index-root /index --replica mail=/replica/mail --replica calendar=/replica/calendar --replica finance=/replica/finance --replica brave=/replica/brave --replica notes=/replica/notes --replica tasks=/replica/tasks --host 0.0.0.0 --port 18004 --shell-socket /run/agent-shell/personal.sock
 Secret=agent-facade-personal-token,type=mount,target=/run/secrets/agent-facade-personal-token,uid=1000,gid=1000,mode=0400
 Environment=PYTHONPATH=/usr/lib/agent-facade/libs:/usr/lib/agent-facade
 # The image layer carrying the code is read-only, so a bytecode cache write can only fail.
@@ -56,6 +67,9 @@ Volume=/var/lib/agent/local/replica:/replica:ro,z
 # deleted with no consequence but the cost of the next build. It is not in the
 # memory tree because it answers for the replicas, not for what the agent wrote.
 Volume=/var/lib/agent/local/index:/index:z
+# The personal bridge's directory, and nothing else is in it. No :ro: connect(2)
+# needs the write bit on the socket inode, and the mount is the permission.
+Volume=/run/smortress/agent-shell-personal:/run/agent-shell:z
 ReadOnly=true
 NoNewPrivileges=true
 DropCapability=ALL

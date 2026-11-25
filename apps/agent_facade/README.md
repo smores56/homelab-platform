@@ -46,13 +46,16 @@ same table, so a client can discover the boundary without guessing.
 | `memory.write` | `{key, value, tags?, provenance}` | `{key, revision, digest}` |
 | `memory.search` | `{query, limit?}` | `{query, hits: [{key, snippet, revision}]}` |
 | `memory.rebuild` | none | `{indexed}` |
-| `shell.run` | `{command}` | `{status, output, truncated}` — general deployment only |
+| `shell.run` | `{command}` | `{status, output, truncated}` — only when the process was given a bridge socket |
 
 `shell.run` is the one exception to "no shell": it exists only when the process
-was started with `--shell-socket`, which is the general deployment's bridge
-(`scripts/agent-shell-bridge.py`, `docs/agent-jobs.md`). With no socket the tool
-is not in `tools/list` and the name is unknown, so the personal deployment has no
-shell at all. The command is unsupervised by design, its output is merged and
+was started with `--shell-socket`, the deployment's class-fixed bridge
+(`scripts/agent-shell-bridge.py`, `docs/agent-jobs.md`). The general deployment's
+socket runs general-class jobs (the one live `/var/srv/git` tree and filtered
+egress); the personal deployment's runs personal-class jobs (`--network=none`, no
+host mount, disposable scratch), and each facade mounts only its own class's
+socket directory. With no socket the tool is not in `tools/list` and the name is
+unknown. The command is unsupervised by design, its output is merged and
 capped at 1 MiB with `truncated` telling a clipped run from a short one, and it
 cannot name a class, an image, a mount, a network or a Podman flag: those are
 constants in the dispatcher behind the socket.
@@ -126,9 +129,10 @@ Every flag also has an `AGENT_FACADE_*` environment variable:
 `AGENT_FACADE_TRANSPORT`, `AGENT_FACADE_DEPLOYMENT`, `AGENT_FACADE_TOKEN`,
 `AGENT_FACADE_TOKEN_FILE`, `AGENT_FACADE_MEMORY_ROOT`, `AGENT_FACADE_INDEX_ROOT`,
 `AGENT_FACADE_HOST`, `AGENT_FACADE_PORT`, `AGENT_FACADE_MAX_BODY_BYTES`,
-`AGENT_FACADE_SHELL_SOCKET`. The last one is the general deployment's bridge
-socket; without it the process serves no `shell.run`, which is how the personal
-deployment has no shell. The HTTP default bind is `127.0.0.1:18004`; `--transport`
+`AGENT_FACADE_SHELL_SOCKET`. The last one is the deployment's own bridge socket
+(`/run/agent-shell/general.sock` or `/run/agent-shell/personal.sock` behind the
+class's mount); without it the process serves no `shell.run`. The HTTP default
+bind is `127.0.0.1:18004`; `--transport`
 defaults to `stdio`, `--deployment` has no default and is required. `--index-root`
 defaults to `/index`, the directory the personal Quadlet mounts; the source index
 below it is derived, so an unwritable root costs a scan and nothing else. Logs go

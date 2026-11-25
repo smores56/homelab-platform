@@ -31,13 +31,17 @@ private workspace and no agent state.
 ## Transport
 
 The dispatcher has no network surface at all. One program above it does the
-addressing, and it is the whole transport (SDLC #859):
+addressing, and it is the whole transport (SDLC #859, #860). There is one bridge
+per class, so each class's dispatcher path and socket path are literals in a unit:
 
 | Piece | Where it lives | Who can reach it |
 | --- | --- | --- |
-| `smortress-agent-shell-bridge.service` | root service, `scripts/agent-shell-bridge.py` at `/usr/libexec/agent-shell-bridge` | — |
-| `/run/smortress/agent-shell/general.sock` | a tmpfiles directory, 0710 root:1000, under the root 0700 `/run/smortress`; the socket is 0660, group 1000 | the general facade container, by a mount of that directory |
-| `/usr/libexec/agent-job-general` | a constant in the bridge, chosen by `--class` at startup | the bridge |
+| `smortress-agent-shell-bridge.service` | root service, `scripts/agent-shell-bridge.py` at `/usr/libexec/agent-shell-bridge`, `--class general` | — |
+| `/run/smortress/agent-shell-general/general.sock` | a tmpfiles directory, 0710 root:1000, under the root 0700 `/run/smortress`; the socket is 0660, group 1000 | the general facade container, by a mount of that directory |
+| `/usr/libexec/agent-job-general` | a constant in the general bridge | the general bridge |
+| `smortress-agent-shell-bridge-personal.service` | the same program, `--class personal` | — |
+| `/run/smortress/agent-shell-personal/personal.sock` | the same directory mode and parent, in its own directory | the personal facade container, by a mount of that directory |
+| `/usr/libexec/agent-job-personal` | a constant in the personal bridge | the personal bridge |
 
 The bridge serves one tool, `shell.run`, to one client. A request is one JSON
 line whose only field is `command`: unknown fields, a non-string or empty command,
@@ -55,7 +59,12 @@ field, so what is left to protect is *who can ask at all*. A Unix socket answers
 that with the filesystem — the parent is root 0700, the socket's directory is
 0710 with one group and the inode is 0660, and only that group's container mounts
 the directory. The directory rather than the file is mounted so a bridge restart
-rebinds a socket this container still sees. A TCP listener would be a second
+rebinds a socket this container still sees. One directory per class is what makes
+cross-class access impossible rather than merely unused: both facades run as uid
+1000, so file mode cannot tell them apart, but a container can only dial a socket
+whose directory it mounts, and the personal facade mounts
+`agent-shell-personal` alone while the general facade mounts
+`agent-shell-general` alone. A TCP listener would be a second
 way in with no consumer, reachable by anything that can route to the host, needing
 its own authentication on top of a token that already exists for the MCP surface.
 There is no such listener, and the gateway, the model server and the web UI have
@@ -76,9 +85,9 @@ container starts.
 
 The bridge never creates its directory: tmpfiles does, and the bridge refuses to
 serve from one that is writable by group or other. The personal class is the same
-program with a different `--class`; its bridge is T18 of #702 and does not exist
-yet, so the personal facade has no shell tool at all rather than a tool that
-refuses.
+program with a different `--class`, in its own unit and directory
+(`smortress-agent-shell-bridge-personal.service`); a facade without a socket has
+no shell tool at all rather than a tool that refuses.
 
 ## Containment
 
@@ -165,10 +174,9 @@ start a job whose runtime directory is missing or owned by someone else.
 
 `scripts/agent-job-provision.sh --check` reports drift and writes nothing. The
 dispatcher re-loads the egress table itself before every launch, so a skipped or
-failed boot unit cannot leave a job running without the boundary.
-`smortress-agent-shell-bridge.service` requires and follows that unit, because a
-bridge serving a socket whose every job fails is worse than one that did not
-start.
+failed boot unit cannot leave a job running without the boundary. Both bridges
+require and follow that unit, because a bridge serving a socket whose every job
+fails is worse than one that did not start.
 
 ## Approval seam
 
@@ -184,7 +192,9 @@ nothing here may be used to record or complete one.
 ## Operator steps
 
 See `docs/manual-steps.md#agent-shell-jobs` for prepulling the pinned image as each
-runner, verifying the units, and running the two probes. `tests/core/agent-jobs.sh`
-covers the offline half: class-fixed entry points, the mount/network split, the
-containment flags, the firewall ranges, the digest pin and the subuid overlap
-refusal.
+runner, verifying the units, and running each class's probe plus the cross-class
+refusals. `tests/core/agent-jobs.sh` covers the offline half: class-fixed entry
+points, the mount/network split, the containment flags, the firewall ranges, the
+digest pin and the subuid overlap refusal; `tests/core/app-quadlets.sh` covers the
+transport wiring — two directories, two bridges, one facade mount each and neither
+naming the other class.

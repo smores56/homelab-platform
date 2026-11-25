@@ -20,13 +20,14 @@
 # with the dataset's uid and mode, because a directory podman has to create for a
 # bind mount would be root-owned inside a 0750 dataset.
 #
-# /run/agent-shell is the one shell transport (SDLC #859): the directory holding
-# the socket served by smortress-agent-shell-bridge.service, mounted rw because
-# connect(2) needs write permission on the socket inode, and only this container
-# gets it. The directory, not the socket file, is mounted so a bridge restart
-# replaces the socket inside an inode this container still sees. With the socket
-# the facade serves `shell.run`; the personal facade is started without one and
-# therefore has no such tool at all.
+# /run/agent-shell is this class's shell transport (SDLC #859): the directory
+# holding the socket served by smortress-agent-shell-bridge.service, mounted rw
+# because connect(2) needs write permission on the socket inode, and only this
+# container gets it. The directory, not the socket file, is mounted so a bridge
+# restart replaces the socket inside an inode this container still sees. With the
+# socket the facade serves `shell.run` in the general class; the personal facade
+# mounts only its own class's directory (agent-shell-personal), so neither
+# container can dial the other class's socket.
 [Unit]
 Description=Agent source facade, general deployment (MCP on agent-general.network)
 Requires=zfs-ready@state-agent-general.service sops-decrypt.service smortress-app-secrets.service smortress-agent-config.service smortress-agent-shell-bridge.service
@@ -54,7 +55,7 @@ Volume=/var/lib/agent/general/memory:/memory:z
 # it even if it were mounted elsewhere. The directory's inode is stable across a
 # bridge restart, so the socket the bridge rebinds appears here without a
 # container restart.
-Volume=/run/smortress/agent-shell:/run/agent-shell:z
+Volume=/run/smortress/agent-shell-general:/run/agent-shell:z
 ReadOnly=true
 NoNewPrivileges=true
 DropCapability=ALL

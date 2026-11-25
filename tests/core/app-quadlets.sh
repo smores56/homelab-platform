@@ -875,84 +875,125 @@ for spec in personal:local:18004 general:general:18005; do
     bad "the seed unit substitutes the $deployment placeholder"
   fi
 done
-# 13b. The one shell transport (T17, SDLC #859). `shell.run` exists in a facade
-#      only when the process was given a bridge socket, and the socket is a file
-#      in a root 0700 directory that only the general facade's container mounts.
-#      The control is that nowhere else has a mount or an address for it: the
-#      personal facade, both gateways, the model server and both web UIs must not
-#      name the path, and the bridge must publish nothing.
-shell_socket=/run/agent-shell/general.sock
+# 13b. The two shell transports (T17/T18, SDLC #859/#860). `shell.run` exists in
+#      a facade only when the process was given a bridge socket, and each class
+#      gets its own directory, bridge and class-fixed dispatcher. The control is
+#      the mount: a container can only dial the socket whose directory it mounts,
+#      and a bridge's class is a constant in its unit, so neither transport can
+#      ask for the other class. Both gateways, the model server and both web UIs
+#      must name neither path.
 general_facade=units/quadlet/agent-facade-general.container
 personal_facade=units/quadlet/agent-facade-personal.container
-if grep -qF -- "--shell-socket $shell_socket " <<<"$(sed -n 's/^Exec=//p' "$general_facade") " ; then
-  ok 'the general facade runs with the bridge socket'
+general_bridge=units/systemd/smortress-agent-shell-bridge.service
+personal_bridge=units/systemd/smortress-agent-shell-bridge-personal.service
+general_dir=/run/smortress/agent-shell-general
+personal_dir=/run/smortress/agent-shell-personal
+if grep -qF -- '--shell-socket /run/agent-shell/general.sock ' <<<"$(sed -n 's/^Exec=//p' "$general_facade") " ; then
+  ok 'the general facade runs with the general bridge socket'
 else
-  bad 'the general facade runs with the bridge socket' "$(sed -n 's/^Exec=//p' "$general_facade")"
+  bad 'the general facade runs with the general bridge socket' "$(sed -n 's/^Exec=//p' "$general_facade")"
 fi
-if grep -qxF 'Volume=/run/smortress/agent-shell:/run/agent-shell:z' "$general_facade"; then
-  ok 'the general facade mounts the socket directory read-write, and connects because of that'
+if grep -qF -- '--shell-socket /run/agent-shell/personal.sock ' <<<"$(sed -n 's/^Exec=//p' "$personal_facade") " ; then
+  ok 'the personal facade runs with the personal bridge socket'
 else
-  bad 'the general facade mounts the socket directory read-write, and connects because of that'
+  bad 'the personal facade runs with the personal bridge socket' "$(sed -n 's/^Exec=//p' "$personal_facade")"
+fi
+# One directory per class, and each facade mounts only its own: the socket a
+# container can dial is the one its mount exposes, so a shared directory would
+# put both sockets behind one mount. Read-write because connect(2) needs the write
+# bit on the socket inode.
+if grep -qxF "Volume=$general_dir:/run/agent-shell:z" "$general_facade" &&
+  grep -qxF "Volume=$personal_dir:/run/agent-shell:z" "$personal_facade"; then
+  ok 'each facade mounts only its own socket directory'
+else
+  bad 'each facade mounts only its own socket directory' \
+    "$(grep -h 'agent-shell' "$general_facade" "$personal_facade")"
+fi
+if ! grep -qF "$personal_dir" "$general_facade" &&
+  ! grep -qF "$general_dir" "$personal_facade" &&
+  ! grep -qF 'agent-shell-bridge-personal' "$general_facade" &&
+  ! grep -qF 'smortress-agent-shell-bridge.service' "$personal_facade"; then
+  ok 'neither facade names the other class: no socket path, no bridge unit'
+else
+  bad 'neither facade names the other class: no socket path, no bridge unit' \
+    "$(grep -n 'agent-shell' "$general_facade" "$personal_facade")"
 fi
 if grep -qE '^Requires=.*smortress-agent-shell-bridge\.service$' "$general_facade" &&
-  grep -qE '^After=.*smortress-agent-shell-bridge\.service$' "$general_facade"; then
-  ok 'the general facade starts after the bridge'
+  grep -qE '^After=.*smortress-agent-shell-bridge\.service$' "$general_facade" &&
+  grep -qE '^Requires=.*smortress-agent-shell-bridge-personal\.service$' "$personal_facade" &&
+  grep -qE '^After=.*smortress-agent-shell-bridge-personal\.service$' "$personal_facade"; then
+  ok 'each facade starts after its own bridge'
 else
-  bad 'the general facade starts after the bridge' \
-    "$(sed -n '/^\[Unit\]/,/^\[/p' "$general_facade")"
+  bad 'each facade starts after its own bridge' \
+    "$(grep -hE '^(Requires|After)=' "$general_facade" "$personal_facade")"
 fi
-if ! grep -qF -- '--shell-socket' "$personal_facade" &&
-  ! grep -qF '/run/agent-shell' "$personal_facade"; then
-  ok 'the personal facade takes neither the flag nor the mount'
+# A socket path belongs to exactly one facade and one bridge. Anything else that
+# named it would be a second client or a second server for the same inode.
+allowed_paths="$general_facade
+$personal_facade
+$general_bridge
+$personal_bridge"
+if grep -lF -e '/run/agent-shell' -e '/run/smortress/agent-shell-' \
+    units/quadlet/*.container units/systemd/*.service |
+  grep -vxF -f <(printf '%s\n' "$allowed_paths") | grep -q .; then
+  bad 'only the two facades and the two bridges name a socket path' \
+    "$(grep -lF -e '/run/agent-shell' -e '/run/smortress/agent-shell-' \
+      units/quadlet/*.container units/systemd/*.service)"
 else
-  bad 'the personal facade takes neither the flag nor the mount' "$(grep -F -- '--shell-socket' "$personal_facade")"
+  ok 'only the two facades and the two bridges name a socket path'
 fi
-if grep -lF '/run/agent-shell' units/quadlet/*.container units/systemd/*.service |
-  grep -vxF -- "$general_facade" | grep -vxF -- 'units/systemd/smortress-agent-shell-bridge.service' | grep -q .; then
-  bad 'only the general facade and the bridge name the socket path' \
-    "$(grep -lF '/run/agent-shell' units/quadlet/*.container units/systemd/*.service)"
+# The two processes that can run a job are root and own no container: a unit that
+# gained a Podman socket would be a second, unfiltered way to run one. The class
+# and the socket are literals, so the unit, not a request, picks the dispatcher.
+if grep -qx 'UMask=0077' "$general_bridge" &&
+  grep -qE '^ExecStart=/usr/libexec/agent-shell-bridge --class general --socket '"$general_dir"'/general\.sock --socket-group 1000$' "$general_bridge" &&
+  grep -qx 'UMask=0077' "$personal_bridge" &&
+  grep -qE '^ExecStart=/usr/libexec/agent-shell-bridge --class personal --socket '"$personal_dir"'/personal\.sock --socket-group 1000$' "$personal_bridge"; then
+  ok 'each bridge runs as root with its own fixed class and socket'
 else
-  ok 'only the general facade and the bridge name the socket path'
+  bad 'each bridge runs as root with its own fixed class and socket' \
+    "$(grep -h '^ExecStart' "$general_bridge" "$personal_bridge")"
 fi
-# The one process that can run a job is root and it owns no container: a unit
-# that gained a Podman socket would be a second, unfiltered way to run one.
-bridge_service=units/systemd/smortress-agent-shell-bridge.service
-if grep -qx 'UMask=0077' "$bridge_service" &&
-  grep -qE '^ExecStart=/usr/libexec/agent-shell-bridge --class general --socket /run/smortress/agent-shell/general.sock --socket-group 1000$' "$bridge_service"; then
-  ok 'the bridge runs as root with a fixed class and a fixed socket'
+if grep -qE 'agent-job-general' "$personal_bridge" ||
+  grep -qE 'agent-job-personal' "$general_bridge"; then
+  bad 'neither bridge names the other class dispatcher'
 else
-  bad 'the bridge runs as root with a fixed class and a fixed socket' "$(cat "$bridge_service" 2>/dev/null)"
+  ok 'neither bridge names the other class dispatcher'
 fi
-# The directory is tmpfiles' so a bridge restart keeps the inode the container
+for bridge in "$general_bridge" "$personal_bridge"; do
+  if grep -qE '^(PublishPort|Network)=' "$bridge" ||
+    grep -qE 'podman\.sock|CONTAINER_HOST' "$bridge"; then
+    bad "the bridge publishes nothing and holds no Podman socket: $bridge"
+  fi
+done
+ok 'the bridges publish nothing and hold no Podman socket'
+# The directories are tmpfiles' so a bridge restart keeps the inode the container
 # already mounted; 0710 with the facade's gid is the traversal, and the parent
-# /run/smortress stays root 0700 so no host uid reaches it.
+# /run/smortress stays root 0700 so no host uid reaches either path.
 tmpfiles=image/rootfs/etc/tmpfiles.d/smortress-agent-shell.conf
-if grep -qx 'd /run/smortress/agent-shell 0710 root 1000 -' "$tmpfiles" &&
+if grep -qx "d $general_dir 0710 root 1000 -" "$tmpfiles" &&
+  grep -qx "d $personal_dir 0710 root 1000 -" "$tmpfiles" &&
   grep -qx 'd /run/smortress 0700 root root -' image/rootfs/etc/tmpfiles.d/smortress.conf; then
-  ok 'tmpfiles owns the socket directory, 0710 root:1000 under a root 0700 parent'
+  ok 'tmpfiles owns both socket directories, 0710 root:1000 under a root 0700 parent'
 else
-  bad 'tmpfiles owns the socket directory, 0710 root:1000 under a root 0700 parent' \
+  bad 'tmpfiles owns both socket directories, 0710 root:1000 under a root 0700 parent' \
     "$(grep -n 'agent-shell' "$tmpfiles" 2>/dev/null)"
-fi
-if grep -qE '^(PublishPort|Network)=' "$bridge_service" ||
-  grep -qE 'podman\.sock|CONTAINER_HOST' "$bridge_service"; then
-  bad 'the bridge publishes nothing and holds no Podman socket'
-else
-  ok 'the bridge publishes nothing and holds no Podman socket'
 fi
 # A Unix socket's connectto check is against the domain of the process that
 # created it, not the file's label, so a container may not connect to an
-# unconfined system service's socket without a rule. The rule is one domain pair
-# and one socket class, and the bridge orders itself after the unit that loads it.
+# unconfined system service's socket without a rule. One rule covers both bridges
+# (same two domains), and each bridge orders itself after the unit that loads it.
 shell_cil=image/rootfs/usr/share/selinux/smortress/agent-shell.cil
 shell_selinux_unit=units/systemd/smortress-selinux-agent-shell.service
 if grep -qE '^\(allow container_t unconfined_service_t \(unix_stream_socket \(connectto ' "$shell_cil" &&
-  grep -qx 'Before=smortress-agent-shell-bridge.service' "$shell_selinux_unit" &&
+  grep -qx 'Before=smortress-agent-shell-bridge.service smortress-agent-shell-bridge-personal.service' "$shell_selinux_unit" &&
   grep -qx 'ExecStart=/usr/bin/semodule -i /usr/share/selinux/smortress/agent-shell.cil' "$shell_selinux_unit" &&
-  grep -qx 'Wants=smortress-selinux-agent-shell.service' "$bridge_service"; then
-  ok 'one CIL rule permits the socket connect and the bridge loads it first'
+  grep -qx 'Wants=smortress-selinux-agent-shell.service' "$general_bridge" &&
+  grep -qx 'After=smortress-selinux-agent-shell.service' "$personal_bridge"; then
+  ok 'one CIL rule permits both socket connects and each bridge loads it first'
 else
-  bad 'one CIL rule permits the socket connect and the bridge loads it first' "$(cat "$shell_cil" 2>/dev/null | head -3)"
+  bad 'one CIL rule permits both socket connects and each bridge loads it first' \
+    "$(cat "$shell_cil" 2>/dev/null | head -3)"
 fi
 
 # A token in a template would be a credential in an image both gateways share, and

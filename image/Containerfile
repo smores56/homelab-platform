@@ -257,6 +257,7 @@ RUN set -eux; \
       smortress-agent-config.service \
       smortress-agent-job-provision.service \
       smortress-agent-shell-bridge.service \
+      smortress-agent-shell-bridge-personal.service \
       smortress-nvidia-cdi.service \
       smortress-selinux-nvidia-map.service \
       smortress-selinux-agent-shell.service \

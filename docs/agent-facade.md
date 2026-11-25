@@ -124,9 +124,11 @@ collectors/adapters land.
 `shell.run` is the one tool that is not a typed read of a named source, and it is
 the only one whose presence is a deployment fact rather than a registry entry: a
 facade appends it to `tools/list` exactly when the process was started with
-`--shell-socket`, and refuses the name otherwise. The socket is a file only the
-general facade container mounts (`docs/agent-jobs.md`), so the personal deployment
-does not have a shell tool that refuses — it has no shell tool. The command is
+`--shell-socket`, and refuses the name otherwise. Each deployment's quadlet mounts
+exactly its own class's socket directory (`docs/agent-jobs.md`), so `shell.run` on
+the general facade runs a job in the general class and on the personal facade a job
+with no route and no host mount; a facade started without a socket has no shell
+tool at all. The command is
 unsupervised YOLO by design, the same doctrine as the dispatcher: there is no
 approval, no review and no second submission surface, and what contains it is the
 container below the socket, not a check above it. Output is merged and capped at
@@ -203,8 +205,8 @@ with `Entrypoint=python3` replacing the image's gateway dispatcher:
 
 | Quadlet | Container name | Network | Port | Writable mounts |
 | --- | --- | --- | --- | --- |
-| `agent-facade-personal` | `smortress-agent-facade-personal` | `agent-local.network` (no default route) | `18004` | `/memory` = `state/agent-local/memory`; `/index` = `state/agent-local/index` |
-| `agent-facade-general` | `smortress-agent-facade-general` | `agent-general.network` | `18005` | `/memory` = `state/agent-general/memory`; `/run/agent-shell` = the bridge's socket directory (rw: `connect(2)` needs the inode's write bit) |
+| `agent-facade-personal` | `smortress-agent-facade-personal` | `agent-local.network` (no default route) | `18004` | `/memory` = `state/agent-local/memory`; `/index` = `state/agent-local/index`; `/run/agent-shell` = the personal bridge's socket directory (rw: `connect(2)` needs the inode's write bit) |
+| `agent-facade-general` | `smortress-agent-facade-general` | `agent-general.network` | `18005` | `/memory` = `state/agent-general/memory`; `/run/agent-shell` = the general bridge's socket directory (rw: `connect(2)` needs the inode's write bit) |
 
 Neither publishes a port. The only client is that deployment's gateway, which
 reaches the facade by container name (`http://smortress-agent-facade-personal:18004/mcp`,
@@ -224,12 +226,15 @@ Each container runs as uid 1000 with `ReadOnly=true`, `NoNewPrivileges=true` and
 `DropCapability=ALL`, holds one token as a mounted file, and writes nowhere but
 `/memory` and, on the personal side, `/index`. Only the personal facade takes
 `--index-root`: the general deployment has no replica source, so it has nothing to
-index. Only the general facade takes `--shell-socket`, and it mounts the bridge's
-socket directory into `/run/agent-shell`; the directory is 0710 root:1000 and the
-socket 0660, so the mount is what grants the group and nothing else on the host
-can open it. It is not `:ro`: connecting to a Unix socket needs write permission
-on the inode. Mounting the directory rather than the socket means a bridge
-restart is invisible to this container.
+index. Both facades take `--shell-socket` and mount their own class's bridge
+directory into `/run/agent-shell`: `agent-shell-general` or
+`agent-shell-personal`, each 0710 root:1000 with a 0660 socket. The two
+containers share uid 1000, so the mode cannot tell them apart; the mount is the
+separation, and each bridge's class is a constant in its unit, so the personal
+socket can only ever run a personal job and the general socket a general one.
+The mount is not `:ro`: connecting to a Unix socket needs write permission on the
+inode. Mounting the directory rather than the socket means a bridge restart is
+invisible to this container.
 
 The gateway's `mcp_servers` entry sends that token as `X-Deployment-Token`; the
 image's config template carries the placeholder `__FACADE_TOKEN__` and
