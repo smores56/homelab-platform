@@ -16,4 +16,5 @@ core/tailscale-serve	tests/core/tailscale-serve.bats scripts/tailscale-serve.sh 
 deploy/state	tests/deploy/state.bats scripts/deploy-state.sh scripts/deploy-drain.sh scripts/deploy-platform.sh scripts/deploy-apps.sh units/systemd/smortress-deploy.service units/systemd/smortress-boot-gate.service
 deploy/atomic	tests/deploy/atomic.bats scripts/deploy-state.sh image/rootfs/usr/libexec/deploy-verify.py image/rootfs/usr/libexec/deploy-receiver.py
 deploy/receiver	tests/deploy/receiver.bats scripts/deploy-state.sh image/rootfs/usr/libexec/deploy-receiver.py
+core/restic-plane	tests/core/restic-plane.bats scripts/smortress-restic-* scripts/restic-plane-common.sh scripts/storage-layout.sh
 tags	tests/tags.bats

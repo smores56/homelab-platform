@@ -3,10 +3,14 @@
 #
 # The host half — real disks, real repositories, real Healthchecks — is in
 # docs/manual-steps.md section 38. This proves the half that does not need root
-# or a network: exit-code handling, the verified-tag gate, retention filters,
-# stale-staging reconciliation, fail-closed freshness, and that a job cannot
-# run before its dataset is ready. restic, zfs, curl and sops are stubs; the
-# command lines and the durable state are real.
+# or a network: fail-closed freshness, the deploy gate's local query, repository
+# init, the sops-decrypt format column, and that no unit starts before its
+# dataset is ready. restic, zfs, curl and sops are stubs; the command lines and
+# the durable state are real.
+#
+# The backup driver's own half — exit codes, stale-staging reconciliation, the
+# readiness and mount gates, retention, first-upload sizing and progress
+# publication — is tests/core/restic-plane.bats.
 #
 #   tests/core/restic-plane.sh
 # shellcheck disable=SC2034  # out is kept for debugging failed assertions
@@ -233,186 +237,6 @@ state_json() {
   jq -r "$2" "$state/state/$1.json" 2>/dev/null
 }
 
-# --- 1. exit codes -------------------------------------------------------
-reset_state
-export STUB_BACKUP_EXIT=1 STUB_BACKUP_ID=""
-run scripts/smortress-restic-backup.sh ssd --unit photos --no-maintenance
-if ((rc != 0)); then ok "exit 1 is a failed run"; else bad "exit 1 is a failed run" "rc=$rc"; fi
-eq "$(state_json ssd-photos '.last_attempt.result')" failure "failed run is recorded as failure"
-eq "$(state_json ssd-photos '.last_attempt.reason')" exit-1 "failure reason records the exit code"
-if grep -q '^tag ' "$log/restic"; then bad "no verified tag after exit 1"; else ok "no verified tag after exit 1"; fi
-
-reset_state
-export STUB_BACKUP_EXIT=3 STUB_BACKUP_ID="incomplete1"
-run scripts/smortress-restic-backup.sh ssd --unit photos --no-maintenance
-if ((rc != 0)); then ok "exit 3 is a failed run"; else bad "exit 3 is a failed run"; fi
-eq "$(state_json ssd-photos '.last_attempt.reason')" exit-3 "exit 3 keeps its own reason"
-eq "$(state_json ssd-photos '.pending_reap[0]')" incomplete1 "an incomplete snapshot ID is recorded for reaping"
-if grep -q '^tag ' "$log/restic"; then bad "an exit-3 snapshot is never tagged verified"; else ok "an exit-3 snapshot is never tagged verified"; fi
-
-reset_state
-export STUB_BACKUP_EXIT=0 STUB_BACKUP_ID="complete1"
-run scripts/smortress-restic-backup.sh ssd --unit photos --no-maintenance
-eq "$rc" 0 "exit 0 succeeds"
-eq "$(state_json ssd-photos '.last_attempt.result')" success "success is recorded"
-eq "$(state_json ssd-photos '.final.snapshot')" complete1 "the final snapshot ID is persisted"
-if grep -q -- 'tag --add verified complete1' "$log/restic"; then
-  ok "the successful snapshot is tagged verified"
-else
-  bad "the successful snapshot is tagged verified" "$(cat "$log/restic")"
-fi
-
-# A second verified snapshot for the same unit and path set is normal. The run
-# must pick the one whose tree it just wrote, not whichever is newest by time.
-reset_state
-export STUB_BACKUP_ID=complete3 STUB_BACKUP_TREE=treeB
-STUB_SNAPSHOTS_JSON=$(cat <<'JSON'
-[{"id":"older1","tree":"treeA","time":"2026-01-01T00:00:00Z","hostname":"smortress","paths":[],"tags":["unit:photos","host:smortress","verified"]},
-{"id":"newer2","tree":"treeB","time":"2026-01-01T00:05:00Z","hostname":"smortress","paths":[],"tags":["unit:photos","host:smortress","verified"]}]
-JSON
-)
-export STUB_SNAPSHOTS_JSON
-run scripts/smortress-restic-backup.sh ssd --unit photos --no-maintenance
-eq "$rc" 0 "a run succeeds when an older verified snapshot has a different tree"
-eq "$(state_json ssd-photos '.final.snapshot')" newer2 "the tree selects the snapshot this attempt wrote"
-unset STUB_SNAPSHOTS_JSON
-if [[ ! -e $(mountpoint_for raw/photos)/.zfs/snapshot/ssd ]] || [[ -z $(ls -A "$(mountpoint_for raw/photos)/.zfs/snapshot/ssd" 2>/dev/null) ]]; then
-  ok "the staging snapshot was destroyed"
-else
-  bad "the staging snapshot was destroyed"
-fi
-
-# restic tag rewrites the snapshot, so the id changes; recording the pre-tag id
-# makes the freshness verifier report a snapshot that no longer exists.
-reset_state
-export STUB_BACKUP_EXIT=0 STUB_BACKUP_ID="pretag1" STUB_VERIFIED_ID="tagged1"
-run scripts/smortress-restic-backup.sh ssd --unit photos --no-maintenance
-eq "$rc" 0 "a tagged snapshot succeeds"
-eq "$(state_json ssd-photos .final.snapshot)" tagged1 "the post-tag snapshot ID is the one recorded"
-if grep -q -- "tag --add verified pretag1" "$log/restic"; then
-  ok "the tag is applied to the pre-tag snapshot"
-else
-  bad "the tag is applied to the pre-tag snapshot"
-fi
-reset_state
-export STUB_BACKUP_ID="" STUB_VERIFIED_ID=""
-
-reset_state
-export STUB_BACKUP_EXIT=0 STUB_BACKUP_ID="complete2" STUB_TAG_EXIT=1
-run scripts/smortress-restic-backup.sh ssd --unit photos --no-maintenance
-if ((rc != 0)); then ok "tagging failure fails the run"; else bad "tagging failure fails the run"; fi
-eq "$(state_json ssd-photos '.last_attempt.reason')" tag-failed "tagging failure is its own reason"
-eq "$(state_json ssd-photos '.pending_reap[0]')" complete2 "an untagged snapshot is reaped by recorded ID"
-
-# restic exit 11 is a lock failure: remove only stale locks, then retry once.
-reset_state
-export STUB_BACKUP_EXIT=0 STUB_BACKUP_ID="lock1" STUB_VERIFIED_ID="lock1v" STUB_TAG_EXIT_ONCE=11
-run scripts/smortress-restic-backup.sh ssd --unit photos --no-maintenance
-eq "$rc" 0 "a stale lock is retried after unlocking"
-if grep -q ' unlock' "$log/restic"; then ok "stale locks are removed before the retry"; else bad "stale locks are removed before the retry"; fi
-export STUB_TAG_EXIT_ONCE=""
-reset_state
-export STUB_BACKUP_ID="" STUB_VERIFIED_ID=""
-
-# --- 2. stale staging reconciliation ------------------------------------
-reset_state
-export STUB_BACKUP_EXIT=0 STUB_BACKUP_ID="complete3" STUB_ZFS_LIST_EXIT=0
-run scripts/smortress-restic-backup.sh ssd --unit photos --no-maintenance
-eq "$rc" 0 "a stale staging snapshot does not block the run"
-if [[ $(grep -n '^destroy smortress/raw/photos@ssd' "$log/zfs" | head -n1 | cut -d: -f1) -lt \
-  $(grep -n '^snapshot smortress/raw/photos@ssd' "$log/zfs" | head -n1 | cut -d: -f1) ]]; then
-  ok "reconciliation destroys the stale snapshot before creating a new one"
-else
-  bad "reconciliation destroys the stale snapshot before creating a new one" "$(cat "$log/zfs")"
-fi
-if grep -q 'destroy smortress/raw/photos@hdd\|destroy smortress/raw/books@ssd' "$log/zfs"; then
-  bad "a job destroys only its own staging snapshot"
-else
-  ok "a job destroys only its own staging snapshot"
-fi
-
-# --- 2b. a staging failure says why -------------------------------------
-# The 2026-11-22 hdd/photos failure recorded "snapshot-reconcile" and nothing
-# else, because zfs's stderr went to /dev/null at every destroy site.
-reset_state
-export STUB_BACKUP_EXIT=0 STUB_BACKUP_ID="complete3" STUB_ZFS_LIST_EXIT=0 STUB_ZFS_DESTROY_EXIT=1
-busy="cannot destroy 'smortress/raw/photos@ssd': dataset is busy"
-export STUB_ZFS_STDERR=$busy
-run scripts/smortress-restic-backup.sh ssd --unit photos --no-maintenance
-if ((rc != 0)); then ok "a stale snapshot that will not destroy fails the job"; else bad "a stale snapshot that will not destroy fails the job"; fi
-eq "$(state_json ssd-photos '.last_attempt.reason')" snapshot-reconcile "the failure reason stays symbolic"
-if [[ $out == *"$busy"* ]]; then
-  ok "a failed reconciliation records zfs's own message"
-else
-  bad "a failed reconciliation records zfs's own message" "$out"
-fi
-eq "$(grep -c '^destroy smortress/raw/photos@ssd' "$log/zfs")" 2 \
-  "a busy destroy is retried once before the attempt fails"
-
-reset_state
-export STUB_BACKUP_EXIT=0 STUB_BACKUP_ID="complete4" STUB_ZFS_LIST_EXIT=1 STUB_ZFS_DESTROY_FAIL_LATE=1
-export STUB_ZFS_STDERR=$busy
-run scripts/smortress-restic-backup.sh ssd --unit photos --no-maintenance
-eq "$rc" 0 "a staging snapshot that will not destroy does not fail a good backup"
-if [[ $out == *"$busy"* ]]; then
-  ok "a failed end-of-run cleanup names the zfs error"
-else
-  bad "a failed end-of-run cleanup names the zfs error" "$out"
-fi
-unset STUB_ZFS_DESTROY_FAIL_LATE STUB_ZFS_STDERR
-
-# --- 3. readiness and mount gates ---------------------------------------
-reset_state
-export STUB_BACKUP_EXIT=0 STUB_BACKUP_ID="should-not-happen" STUB_READY_EXIT=1
-run scripts/smortress-restic-backup.sh ssd --unit photos --no-maintenance
-if ((rc != 0)); then ok "a failed readiness unit fails the job"; else bad "a failed readiness unit fails the job"; fi
-eq "$(state_json ssd-photos '.last_attempt.reason')" readiness "readiness failure is recorded"
-if grep -q 'zfs snapshot\|^backup ' "$log/zfs" "$log/restic"; then
-  bad "no snapshot or backup happens before readiness"
-else
-  ok "no snapshot or backup happens before readiness"
-fi
-
-reset_state
-sed -i "\|$repos/ssd|d" "$work/mountinfo"
-export STUB_BACKUP_EXIT=0 STUB_BACKUP_ID="should-not-happen"
-run scripts/smortress-restic-backup.sh ssd --unit photos --no-maintenance
-if ((rc != 0)); then ok "an unmounted repository path fails the job"; else bad "an unmounted repository path fails the job"; fi
-eq "$(state_json ssd-photos '.last_attempt.reason')" repo-not-mounted "unmounted repository is recorded"
-if grep -q '^tag ' "$log/restic"; then bad "nothing is written to an unmounted repository"; else ok "nothing is written to an unmounted repository"; fi
-printf '36 25 8:1 / %s rw,relatime - ext4 /dev/sdb1 rw\n' "$repos/ssd" >>"$work/mountinfo"
-
-# --- 4. retention filter and deletion shape -----------------------------
-joined=$(sed -e :a -e '/\\$/N; s/\\\n/ /; ta' scripts/smortress-restic-backup.sh)
-retention_bad=""
-while IFS= read -r line; do
-  [[ $line == *--keep-* ]] || continue
-  [[ $line == *'--tag "unit:'* && $line == *',verified'* ]] || retention_bad=$line
-done <<<"$joined"
-# Two --tag flags are OR in restic; only one comma-separated flag is AND, and a
-# wrong form makes one unit's forget touch another unit's verified snapshots.
-if grep -nE -- '--tag "unit:\$[a-z]+" --tag verified' scripts/smortress-restic-*.sh; then
-  bad "unit and verified are matched with one AND tag"
-else
-  ok "unit and verified are matched with one AND tag"
-fi
-
-if [[ -z $retention_bad ]]; then
-  ok "every retention command requires both unit and verified tags"
-else
-  bad "every retention command requires both unit and verified tags" "$retention_bad"
-fi
-if grep -qE -- '--keep-last|--keep-within|--keep-tag|unlock' scripts/smortress-restic-*.sh; then
-  bad "retention uses no wildcard bucket and no routine unlock"
-else
-  ok "retention uses no wildcard bucket and no routine unlock"
-fi
-if grep -qE -- 'forget .*\*|rm -rf[^#]*(/var/lib/restic|/var/lib/homelab/restic)' scripts/smortress-restic-*.sh; then
-  bad "no bulk deletion of snapshot sets or repository roots"
-else
-  ok "no bulk deletion of snapshot sets or repository roots"
-fi
-
 # --- 5. freshness verifier ----------------------------------------------
 seed_state() {
   local backend=$1 unit=$2
@@ -432,10 +256,41 @@ seed_state() {
     >"$state/journal/$backend-$unit.jsonl"
 }
 
+# Every healthy unit of every backend in one jq, then one write per file: 27
+# units x 3 backends through seed_state would be 54 jq processes, and sections 5
+# to 8 seed the plane before nearly every assertion.
 seed_all_healthy() {
-  for b in ssd hdd r2; do
-    for g in "${units[@]}"; do seed_state "$b" "$g"; done
-  done
+  local now entry
+  local -a table=()
+  now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  install -d -m 0700 "$state/state" "$state/journal"
+  # The storage table as the shell read it: one key=<mountpoint> per dataset and
+  # one unit:<unit>=<keys> per unit, so jq can build each unit's snapshot paths
+  # without calling unit_paths_json per unit.
+  for entry in "${dataset_order[@]}"; do table+=("$entry=${dataset_mount[$entry]}"); done
+  for entry in "${units[@]}"; do table+=("unit:$entry=${unit_datasets[$entry]// /,}"); done
+  while IFS=$'\t' read -r file doc; do
+    printf '%s\n' "$doc" >"$state/$file"
+  done < <(jq -rn --arg now "$now" --args '
+    def kv: (index("=")) as $i | {(.[0:$i]): .[$i+1:]};
+    ($ARGS.positional | map(kv) | add) as $t
+    | ($t | to_entries) as $rows
+    | [ $rows[] | select(.key | startswith("unit:")) as $u
+        | ["ssd", "hdd", "r2"][] as $b
+        | {file: "state/\($b)-\($u.key[5:]).json",
+           doc: {schema: 2, backend: $b, unit: ($u.key[5:]), host: "smortress",
+                 repository: "stub",
+                 paths: [($u.value | split(",")[]) as $k
+                         | ($rows[] | select(.key == $k) | .value)
+                           + "/.zfs/snapshot/" + $b],
+                 last_attempt: {n: 1, start: $now, end: $now, exit: 0,
+                                result: "success", reason: "", snapshot: "strepo"},
+                 last_success: {end: $now, snapshot: "strepo"},
+                 final: {end: $now, snapshot: "strepo"},
+                 pending_reap: []}},
+          {file: "journal/\($b)-\($u.key[5:]).jsonl",
+           doc: {schema: 2, attempt: 1, result: "success", snapshot: "strepo"}} ]
+    | .[] | "\(.file)\t\(.doc | tojson)"' -- "${table[@]}")
 }
 
 reset_state
@@ -915,134 +770,6 @@ if grep -q -- '--keep-daily 14 --keep-weekly 8 --keep-monthly 12' scripts/smortr
 else
   bad "retention keeps 14 daily, 8 weekly, 12 monthly"
 fi
-
-# --- 9. first-upload sizing ---------------------------------------------
-# A unit's first upload has nothing deduplicated yet, so it is read, chunked and
-# written in full: it gets its own deadline and a single attempt. A unit with a
-# success already recorded against the repository it writes keeps the routine
-# bound and its retries. The state file itself says which of the two it is.
-reset_state
-export STUB_BACKUP_EXIT=1 STUB_BACKUP_ID=""
-run RESTIC_ATTEMPTS=2 RESTIC_ATTEMPTS_FIRST=1 \
-  scripts/smortress-restic-backup.sh ssd --unit photos --no-maintenance
-eq "$(grep -c ' backup --host' "$log/restic")" 1 \
-  "a unit with no recorded success gets one first attempt"
-eq "$(state_json ssd-photos '.last_attempt.result')" failure \
-  "the single first attempt still records its failure"
-
-reset_state
-export STUB_BACKUP_EXIT=0 STUB_BACKUP_ID="first1" STUB_VERIFIED_ID="first1v"
-run scripts/smortress-restic-backup.sh ssd --unit photos --no-maintenance
-eq "$(state_json ssd-photos '.last_attempt.result')" success "the first upload can succeed"
-: >"$log/restic"
-export STUB_BACKUP_EXIT=1 STUB_BACKUP_ID=""
-run RESTIC_ATTEMPTS=2 RESTIC_ATTEMPTS_FIRST=1 \
-  scripts/smortress-restic-backup.sh ssd --unit photos --no-maintenance
-eq "$(grep -c ' backup --host' "$log/restic")" 2 \
-  "a unit with a recorded success keeps the routine retries"
-
-# Same state, different repository: the recorded success proves nothing about
-# the repository this run writes, so it is a first upload again.
-: >"$log/restic"
-jq '.repository = "s3:https://elsewhere.invalid/other"' \
-  "$state/state/ssd-photos.json" >"$state/state/ssd-photos.json.tmp" &&
-  mv "$state/state/ssd-photos.json.tmp" "$state/state/ssd-photos.json"
-run RESTIC_ATTEMPTS=2 RESTIC_ATTEMPTS_FIRST=1 \
-  scripts/smortress-restic-backup.sh ssd --unit photos --no-maintenance
-eq "$(grep -c ' backup --host' "$log/restic")" 1 \
-  "a success against another repository does not count as a success"
-
-# The deadline varies per unit, which is what the run is actually given: the
-# slow first upload outlives the routine deadline, the same slowness afterwards
-# does not.
-reset_state
-export STUB_BACKUP_EXIT=0 STUB_BACKUP_ID="slow1" STUB_VERIFIED_ID="slow1v" STUB_BACKUP_SLEEP=3
-run RESTIC_DEADLINE_LOCAL=2 RESTIC_DEADLINE_FIRST_LOCAL=15 \
-  scripts/smortress-restic-backup.sh ssd --unit photos --no-maintenance
-eq "$rc" 0 "a slow first upload is not killed by the routine deadline"
-eq "$(state_json ssd-photos '.last_attempt.result')" success \
-  "a slow first upload is not recorded as timeout"
-: >"$log/restic"
-run RESTIC_DEADLINE_LOCAL=2 scripts/smortress-restic-backup.sh ssd --unit photos --no-maintenance
-eq "$(state_json ssd-photos '.last_attempt.reason')" timeout \
-  "a slow routine run keeps the tighter deadline"
-
-# The agent's local state outgrew the hourly window, so that unit alone gets the
-# long local bound: a slow increment of it succeeds while every other unit still
-# keeps the tight one.
-reset_state
-export STUB_BACKUP_EXIT=0 STUB_BACKUP_ID="slowagent" STUB_VERIFIED_ID="slowagentv"
-run scripts/smortress-restic-backup.sh ssd --unit agent-local --no-maintenance
-run scripts/smortress-restic-backup.sh ssd --unit photos --no-maintenance
-: >"$log/restic"
-export STUB_BACKUP_SLEEP=3
-run RESTIC_DEADLINE_LOCAL=2 RESTIC_DEADLINE_LOCAL_LONG=15 \
-  scripts/smortress-restic-backup.sh ssd --unit agent-local --no-maintenance
-eq "$(state_json ssd-agent-local '.last_attempt.result')" success \
-  "agent-local's routine run gets the long local deadline"
-run RESTIC_DEADLINE_LOCAL=2 RESTIC_DEADLINE_LOCAL_LONG=15 \
-  scripts/smortress-restic-backup.sh ssd --unit photos --no-maintenance
-eq "$(state_json ssd-photos '.last_attempt.reason')" timeout \
-  "the other units keep the hourly deadline"
-unset STUB_BACKUP_SLEEP
-
-# The freshness and expiry budgets are derived from the deadline the unit
-# actually gets, so the long attempt is not called stale while it is still legal.
-budgets=$(RESTIC_ATTEMPTS=2 RESTIC_RETRY_SLEEP_LOCAL=60 \
-  RESTIC_DEADLINE_LOCAL=1800 RESTIC_DEADLINE_LOCAL_LONG=14400 bash -c '
-  source scripts/restic-plane-common.sh
-  printf "%s %s %s\n" "$(max_age_for ssd agent-local)" \
-    "$(run_expiry_for ssd agent-local)" "$(max_age_for ssd photos)"')
-eq "$budgets" "33600 29520 8400" "agent-local's budgets follow its deadline"
-
-# --- 9. progress publication ---------------------------------------------
-# Watching a run is read-only and belongs to the operator, so the driver
-# publishes restic's own status records and each unit's last result to a
-# world-readable tree beside the durable state, which stays root-only.
-reset_state
-export STUB_BACKUP_ID="live1" STUB_VERIFIED_ID="live1v" STUB_BACKUP_STATUS=1 STUB_BACKUP_SLEEP=4
-(
-  scripts/smortress-restic-backup.sh ssd --unit photos --no-maintenance >/dev/null 2>&1
-) &
-live_pid=$!
-# Sample the stream while restic is still uploading, keyed on the record
-# itself: the file existing is not proof the status arrived yet.
-sampled='' marker_mode='' stream_mode=''
-for _ in $(seq 100); do
-  sampled=$(jq -c 'select(.percent_done == 0.25)' "$work/progress/ssd-photos.jsonl" 2>/dev/null | tail -n1)
-  if [[ -n $sampled && -r $work/progress/current-ssd.json ]]; then
-    marker_mode=$(stat -c %a "$work/progress/current-ssd.json" 2>/dev/null)
-    stream_mode=$(stat -c %a "$work/progress/ssd-photos.jsonl" 2>/dev/null)
-    break
-  fi
-  sleep 0.1
-done
-eq "$(jq -r '.backend + "/" + .unit' "$work/progress/current-ssd.json" 2>/dev/null)" ssd/photos \
-  "a running unit is published as current"
-eq "$(jq -r '.percent_done' <<<"$sampled")" 0.25 \
-  "restic's status records reach the progress tree"
-eq "$marker_mode" 644 "the current marker is world-readable"
-eq "$stream_mode" 644 "the status stream is world-readable"
-if [[ $sampled == *secret.txt* ]]; then
-  bad "the world-readable stream does not name the files being read" "$sampled"
-else
-  ok "the world-readable stream does not name the files being read"
-fi
-if [[ $sampled != *'"message_type":"error"'* ]]; then
-  ok "error records, which name the failing file, are not published"
-else
-  bad "error records, which name the failing file, are not published" "$sampled"
-fi
-wait "$live_pid"
-if [[ -e $work/progress/current-ssd.json ]]; then
-  bad "current is cleared after the run" "$(cat "$work/progress/current-ssd.json")"
-else
-  ok "current is cleared after the run"
-fi
-eq "$(jq -r '.result' "$work/progress/last/ssd-photos.json" 2>/dev/null)" success \
-  "the last result is published for a reader without root"
-eq "$(stat -c %a "$work/progress/last/ssd-photos.json" 2>/dev/null)" 644 \
-  "the last result is world-readable"
 
 printf '\n%d checks, %d failed\n' "$pass" "$fail"
 ((fail == 0))
