@@ -207,16 +207,16 @@ Both halves are outside the repository's own checks, and
   wallpaper listing. A status code alone cannot prove that: Immich answers 200
   and OPDShelf 401 for any path.
 - `scripts/verify-caa.sh`: reads the zone's `CAA` records and the issuer of the
-  certificate `kanbei.sammohr.dev` serves, and requires the issuer's CA domain in
+  certificate `photos.sammohr.dev` serves, and requires the issuer's CA domain in
   an `issue` value — Google Trust Services to `pki.goog`, Let's
   Encrypt to `letsencrypt.org`, DigiCert to `digicert.com`, Sectigo to
   `sectigo.com`, ZeroSSL to `zerossl.com`. `issuewild` governs wildcard orders
   only and admits no ordinary order, so it never satisfies this probe
   (`CAA_WILDCARD=1` checks it for a wildcard name instead). The served issuer is
   admitted by the union of the two `letsencrypt.org` records this repository
-  declares and the CA set Cloudflare appends for the proxied names; an empty set
-  is a notice, not a failure, which keeps the check meaningful for a zone that
-  has none.
+  declares and the CA set Cloudflare appends for the proxied names (#833 retired
+  the last of those); an empty set is a notice, not a failure, which keeps the
+  check meaningful for a zone that has none.
 
 ## The operator order
 

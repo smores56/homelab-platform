@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Assert that the certificate the public edge serves is one the zone's own CAA
-# policy admits (design #842). `kanbei.sammohr.dev` is Cloudflare-proxied, so the
-# record in front is Cloudflare's CA choice, not Caddy's ACME account: a `CAA`
-# record can forbid the CA that is actually issuing, and renewal then stops
-# weeks before anyone notices. The issuer organization is what maps to a CA
+# policy admits (design #842). The probe reads a name the edge actually serves
+# (`photos.sammohr.dev`, Let's Encrypt) so a `CAA` record that forbids the
+# issuing CA stops renewal weeks before anyone notices. `kanbei.sammohr.dev` used
+# to be the proxied probe; #833 retired it with the wildcard record. The issuer organization is what maps to a CA
 # domain, not the CN, because the CA rotates WE1/WE2/E1 between certificates.
 #
 # An empty CAA set is a notice, not a failure: with no record there is nothing to
@@ -19,12 +19,12 @@
 # a wildcard. A set carrying only `issuewild` satisfies a wildcard order and
 # leaves every ordinary order refused, which is a renewal outage weeks out.
 #
-# Knobs: CAA_ZONE (sammohr.dev), CAA_NAME (kanbei.sammohr.dev), CAA_WILDCARD (0),
+# Knobs: CAA_ZONE (sammohr.dev), CAA_NAME (photos.sammohr.dev), CAA_WILDCARD (0),
 # DIG_BIN and OPENSSL_BIN (tests/edge/check.sh drives the same code).
 set -uo pipefail
 
 zone=${CAA_ZONE:-sammohr.dev}
-name=${CAA_NAME:-kanbei.sammohr.dev}
+name=${CAA_NAME:-photos.sammohr.dev}
 case ${CAA_WILDCARD:-0} in
   1) need=issuewild ;;
   *) need=issue ;;

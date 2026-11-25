@@ -306,10 +306,10 @@ anyone notices. The order of operations for that move is therefore: add the CA
 that will issue to these records first, then move the certificate.
 
 `scripts/verify-caa.sh` asserts the union against reality: it reads the issuer of
-the certificate `kanbei.sammohr.dev` serves, maps it to a CA domain (Google Trust
+the certificate `photos.sammohr.dev` serves, maps it to a CA domain (Google Trust
 Services to `pki.goog`, Let's Encrypt to `letsencrypt.org`, DigiCert to
 `digicert.com`, Sectigo to `sectigo.com`, ZeroSSL to `zerossl.com`) and requires
-that domain in an `issue`/`issuewild` value. It runs daily in
+that domain in an `issue` value. It runs daily in
 `.github/workflows/verify-public-edge.yml`, so a carve-out that stops renewal
 fails there before the certificate expires. An empty set is a notice rather than
 a failure: the check reports the served issuer and passes, and the two records
