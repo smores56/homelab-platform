@@ -12,13 +12,15 @@
 # The real renderer runs against fixture tenants. `curl`, `sops`, `podman`,
 # `runuser`, `systemctl` and `df` are fakes on PATH, and the state, the tenant
 # home and the plan are throwaway paths; the rendered units, the plan, the
-# records, the journal and the command lines are real. No root, no image, no
-# network.
+# records, the journal and the command lines are real. The drain and the boot
+# gate run their real scripts for the interrupted-apply cases, with this same
+# deploy-apps as their child. No root, no image, no network.
 #
-# This file is §1-§9 of tests/deploy/apps.sh. The rest of that suite -- the
-# health matrix, the interrupted apply, the work-tree lifetime and the remaining
-# revert cases, §9b-§16 -- stays there until #928 converts it into this file, and
-# still runs (`bash tests/deploy/apps.sh`).
+# This file is §1-§16 of the suite that was tests/deploy/apps.sh. A test carries
+# one name, so §1-§4 are one test with the shell suite's texts riding along as
+# assertion labels, and §11/§11b keep the interrupted-apply tree they stage and
+# the aftermath they read in one test each. Where the old suite gave two checks
+# the same text (§9 and §9c, §9b and §9j), the second name carries its section.
 #
 #   bats tests/deploy/apps.bats
 load ../helpers
@@ -494,6 +496,14 @@ run_gate() {
     rc=0
     out=$(timeout 60 bash "$gate" 2>&1) || rc=$?
 }
+run_revert() {
+    rc=0
+    out=$(bash "$apps" revert 2>&1) || rc=$?
+}
+run_sweep() {
+    rc=0
+    out=$(bash "$apps" sweep 2>&1) || rc=$?
+}
 line_of() { # <file> <pattern>
     grep -nF -- "$2" "$1" 2>/dev/null | head -n 1 | cut -d: -f1
 }
@@ -516,9 +526,8 @@ journal_field() { # <event> <jq-path>
 # --- an interrupted apply, staged by hand ------------------------------------
 # §11's staging of the crash state a killed process leaves: apply.json, the new
 # plan and units already installed, one secret already replaced, and the previous
-# revision saved under work/render.prev. It is defined here because §15 calls it
-# and it must not have to move again when the rest of the suite converts; the
-# shell suite's own copy is the one §11 uses until then.
+# revision saved under work/render.prev. §11 stages it for the drain and for the
+# boot gate, and §15 bends the state it saved.
 stage_interrupted() { # <intended-commit> <tree>
     local dir=$state_dir/work/apps-$1 tree=$2 prev='{}' name pname
     local -a previous=() intended=() intended_secrets=()
@@ -600,6 +609,9 @@ in_file() { # <file> <fixed string> <text>
 }
 not_in_file() { # <file> <fixed string> <text>
     ! grep -qF -- "$2" "$1" 2>/dev/null || fail "$3: '$2' is in $1"
+}
+not_matching() { # <file> <ere> <text>: in_file's counterpart for a pattern
+    ! grep -qE -- "$2" "$1" 2>/dev/null || fail "$3: $(grep -E -- "$2" "$1")"
 }
 in_text() { # <text> <fixed string> <text>
     [[ $1 == *"$2"* ]] || fail "$3: no '$2' in: $1"
@@ -1036,4 +1048,770 @@ apply_a_failure_mid_apply() {
 @test "the restore ran as the tenant" {
     apply_a_failure_mid_apply
     assert grep -qF 'user restart alpha.service' "$log/actions"
+}
+
+# --- 9b. a revert removes the app the failed apply added ---------------------
+apply_an_added_app_that_fails() {
+    fixture
+    run_apply "$c_depart"
+    same "$rc" 0 "the single-app revision applies"
+    : >"$log/actions"
+    set_secrets "$secrets_v1"
+    export FAKE_SYSTEMCTL_FAIL_ONCE='start beta.service'
+    run_apply "$c_v1"
+    unset FAKE_SYSTEMCTL_FAIL_ONCE
+}
+
+@test "an added app that fails to start rolls back" {
+    apply_an_added_app_that_fails
+    assert_equal "$rc" 5
+}
+
+@test "the revert removes the added unit" {
+    apply_an_added_app_that_fails
+    assert [ ! -e "$APPS_UNIT_DIR/beta.container" ]
+}
+
+@test "the revert removes the added secret" {
+    apply_an_added_app_that_fails
+    assert [ ! -e "$secret_store/app-beta-beta-key" ]
+}
+
+@test "the revert stops the added app" {
+    apply_an_added_app_that_fails
+    assert grep -qF 'user stop beta.service' "$log/actions"
+}
+
+@test "the revert stops the added app's ingress" {
+    apply_an_added_app_that_fails
+    assert grep -qF 'system stop smortress-app-ingress@beta' "$log/actions"
+}
+
+@test "the revert keeps the previous commit recorded" {
+    apply_an_added_app_that_fails
+    assert_equal "$(jq -r '.repos["homelab-apps"].commit' "$state_dir/state.json")" "$c_depart"
+}
+
+@test "the previous app's unit stays" {
+    apply_an_added_app_that_fails
+    assert [ -s "$APPS_UNIT_DIR/alpha.container" ]
+}
+
+# --- 9c. an app that does not come up is not committed -----------------------
+# The next boot's gate would find the unit inactive and roll back the platform
+# image, so an apply may not commit a revision whose apps are not running.
+apply_an_app_that_stays_down() {
+    fixture
+    run_apply "$c_v1"
+    same "$rc" 0 "the two-app revision applies"
+    plan_before=$(sha "$APPS_PLAN")
+    unit_before=$(sha "$APPS_UNIT_DIR/alpha.container")
+    state_before=$(sha "$state_dir/state.json")
+    : >"$log/actions"
+    set_secrets "$secrets_v1b"
+    export FAKE_UNIT_INACTIVE=alpha.service
+    run_apply "$c_v2"
+    unset FAKE_UNIT_INACTIVE
+}
+
+@test "an app that stays down exits 5 after the revert" {
+    apply_an_app_that_stays_down
+    assert_equal "$rc" 5
+}
+
+@test "the unhealthy app is named" {
+    apply_an_app_that_stays_down
+    assert_equal "$(journal_field apps-unhealthy '.app')" alpha
+}
+
+@test "the unhealthy unit is journaled" {
+    apply_an_app_that_stays_down
+    assert_equal "$(journal_field apps-unhealthy '.unit')" alpha.service
+}
+
+@test "the state systemd reported is journaled" {
+    apply_an_app_that_stays_down
+    assert_equal "$(journal_field apps-unhealthy '.state')" inactive
+}
+
+@test "the failure names health, not a mutation" {
+    apply_an_app_that_stays_down
+    assert_equal "$(journal_field apps-failed '.reason' | tail -n 1)" app-unhealthy
+}
+
+@test "the down app does not commit its revision" {
+    apply_an_app_that_stays_down
+    assert_equal "$(jq -r '.repos["homelab-apps"].commit' "$state_dir/state.json")" "$c_v1"
+}
+
+@test "the revert restores the previous plan (§9c)" {
+    apply_an_app_that_stays_down
+    assert_equal "$(sha "$APPS_PLAN")" "$plan_before"
+}
+
+@test "the revert restores the previous unit (§9c)" {
+    apply_an_app_that_stays_down
+    assert_equal "$(sha "$APPS_UNIT_DIR/alpha.container")" "$unit_before"
+}
+
+@test "the revert restores the previous secret" {
+    apply_an_app_that_stays_down
+    assert_equal "$(cat "$secret_store/app-alpha-api-key")" one
+}
+
+@test "the revert restores the previous state (§9c)" {
+    apply_an_app_that_stays_down
+    assert_equal "$(sha "$state_dir/state.json")" "$state_before"
+}
+
+@test "the revert clears the crash record (§9c)" {
+    apply_an_app_that_stays_down
+    assert [ ! -e "$state_dir/apply.json" ]
+}
+
+@test "the unhealthy apply pages the deploy check" {
+    apply_an_app_that_stays_down
+    assert_equal "$(tail -n 1 "$log/notify-urls")" "$ping_url/fail"
+}
+
+# --- 9d. an app the commit did not touch cannot block it ---------------------
+# An apply cannot repair a revision it did not write: a stale inactive app is the
+# boot gate's business, not a reason to refuse every later commit.
+apply_past_an_inactive_app() {
+    fixture
+    run_apply "$c_v1"
+    set_secrets "$secrets_v1b"
+    export FAKE_UNIT_INACTIVE=beta.service
+    run_apply "$c_secret"
+    unset FAKE_UNIT_INACTIVE
+}
+
+@test "an inactive app the commit did not change applies" {
+    apply_past_an_inactive_app
+    assert_equal "$rc" 0
+}
+
+@test "the changed app is still checked" {
+    apply_past_an_inactive_app
+    assert grep -qF 'show -p ActiveState -p NRestarts alpha.service' "$log/systemctl-calls"
+}
+
+@test "the untouched app is not judged" {
+    apply_past_an_inactive_app
+    assert_equal "$(journal_field apps-unhealthy '.app')" ""
+}
+
+# --- 9e. an app that crashes after it starts is not committed ----------------
+# Restart= brings a crashed container back fast enough that every sample can
+# still read `active`; NRestarts moving past its baseline is the evidence.
+apply_an_app_that_restarts() {
+    fixture
+    run_apply "$c_v1"
+    same "$rc" 0 "the two-app revision applies"
+    set_secrets "$secrets_v1b"
+    export FAKE_UNIT_RESTART=alpha.service APPS_HEALTH_SETTLE=2
+    run_apply "$c_v2"
+    unset FAKE_UNIT_RESTART
+}
+
+@test "an app restarted inside the settle window exits 5" {
+    apply_an_app_that_restarts
+    assert_equal "$rc" 5
+}
+
+@test "the restarted unit is journaled" {
+    apply_an_app_that_restarts
+    assert_equal "$(journal_field apps-unhealthy '.unit')" alpha.service
+}
+
+@test "the restart is journaled as the verdict" {
+    apply_an_app_that_restarts
+    assert_equal "$(journal_field apps-unhealthy '.state')" restarted
+}
+
+# --- 9f. a slow start is not a crash ----------------------------------------
+apply_a_slow_start() {
+    fixture
+    run_apply "$c_v1"
+    set_secrets "$secrets_v1b"
+    export FAKE_UNIT_SLOW=alpha.service
+    run_apply "$c_v2"
+    unset FAKE_UNIT_SLOW
+}
+
+@test "an app that comes up late still applies" {
+    apply_a_slow_start
+    assert_equal "$rc" 0
+}
+
+# --- 9g. a transport blip is asked again, not judged -------------------------
+apply_through_a_probe_blip() {
+    fixture
+    run_apply "$c_v1"
+    set_secrets "$secrets_v1b"
+    export FAKE_SHOW_TRANSPORT_ONCE=1
+    run_apply "$c_v2"
+    unset FAKE_SHOW_TRANSPORT_ONCE
+}
+
+@test "one unreachable probe does not fail the apply" {
+    apply_through_a_probe_blip
+    assert_equal "$rc" 0
+}
+
+# --- 9h. a manager that cannot be asked never reads as healthy ---------------
+apply_with_an_unreachable_manager() {
+    fixture
+    run_apply "$c_v1"
+    set_secrets "$secrets_v1b"
+    export FAKE_SHOW_DOWN=1
+    run_apply "$c_v2"
+    unset FAKE_SHOW_DOWN
+}
+
+@test "an app whose state cannot be read is not committed" {
+    apply_with_an_unreachable_manager
+    assert_equal "$rc" 5
+}
+
+@test "the unknown state is journaled" {
+    apply_with_an_unreachable_manager
+    assert_equal "$(journal_field apps-unhealthy '.state')" unknown
+}
+
+# --- 9i. a healthy app survives a real settle window ------------------------
+apply_through_a_settle_window() {
+    fixture
+    run_apply "$c_v1"
+    set_secrets "$secrets_v1b"
+    export APPS_HEALTH_SETTLE=2
+    run_apply "$c_v2"
+}
+
+@test "a healthy app applies through the settle window" {
+    apply_through_a_settle_window
+    assert_equal "$rc" 0
+}
+
+@test "no health verdict is journaled" {
+    apply_through_a_settle_window
+    assert_equal "$(journal_field apps-unhealthy '.app')" ""
+}
+
+# --- 9j. a unit that is not loaded is already stopped -----------------------
+# The revert stops the apps the failed apply added. systemd exits 5 for a unit it
+# never had, and reading that as a failure left the record behind forever.
+apply_an_added_app_a_stop_cannot_load() {
+    fixture
+    run_apply "$c_depart"
+    same "$rc" 0 "the single-app revision applies"
+    : >"$log/actions"
+    set_secrets "$secrets_v1"
+    export FAKE_SYSTEMCTL_FAIL_ONCE='start beta.service' FAKE_SYSTEMCTL_NOTLOADED=stop
+    run_apply "$c_v1"
+    unset FAKE_SYSTEMCTL_FAIL_ONCE FAKE_SYSTEMCTL_NOTLOADED
+}
+
+@test "a failed apply still exits 5" {
+    apply_an_added_app_a_stop_cannot_load
+    assert_equal "$rc" 5
+}
+
+@test "the revert stops the added app (§9j)" {
+    apply_an_added_app_a_stop_cannot_load
+    assert grep -qF 'user stop beta.service' "$log/actions"
+}
+
+@test "the revert stops the added app's ingress (§9j)" {
+    apply_an_added_app_a_stop_cannot_load
+    assert grep -qF 'system stop smortress-app-ingress@beta' "$log/actions"
+}
+
+@test "a not-loaded stop completes the revert" {
+    apply_an_added_app_a_stop_cannot_load
+    assert [ ! -e "$state_dir/apply.json" ]
+}
+
+@test "the revert keeps the previous commit recorded (§9j)" {
+    apply_an_added_app_a_stop_cannot_load
+    assert_equal "$(jq -r '.repos["homelab-apps"].commit' "$state_dir/state.json")" "$c_depart"
+}
+
+# --- 9k. a manager that is gone is not "already stopped" --------------------
+# The other side of the same mapping: an unreachable manager must fail the
+# revert and keep the record, or the next boot believes the host is consistent.
+revert_through_a_dead_manager() {
+    fixture
+    run_apply "$c_depart"
+    set_secrets "$secrets_v1"
+    export FAKE_SYSTEMCTL_FAIL_ONCE='start beta.service'
+    export FAKE_SYSTEMCTL_TRANSPORT='stop beta.service'
+    run_apply "$c_v1"
+    unset FAKE_SYSTEMCTL_FAIL_ONCE FAKE_SYSTEMCTL_TRANSPORT
+}
+
+@test "an unreachable manager still exits 5" {
+    revert_through_a_dead_manager
+    assert_equal "$rc" 5
+}
+
+@test "a failed revert keeps the record" {
+    revert_through_a_dead_manager
+    assert [ -s "$state_dir/apply.json" ]
+}
+
+@test "the failed revert says why" {
+    revert_through_a_dead_manager
+    assert_equal "$(journal_field apps-revert-failed '.reason' | tail -n 1)" restore-incomplete
+}
+
+@test "the failed revert pages the deploy check" {
+    revert_through_a_dead_manager
+    assert_equal "$(tail -n 1 "$log/notify-urls")" "$ping_url/fail"
+}
+
+# --- 9l. a transport blip on a control call is asked again ------------------
+apply_through_a_restart_blip() {
+    fixture
+    run_apply "$c_v1"
+    same "$rc" 0 "the two-app revision applies"
+    set_secrets "$secrets_v1b"
+    export FAKE_SYSTEMCTL_TRANSPORT_ONCE='restart alpha.service'
+    run_apply "$c_v2"
+    unset FAKE_SYSTEMCTL_TRANSPORT_ONCE
+}
+
+@test "a transport blip on restart does not fail the apply" {
+    apply_through_a_restart_blip
+    assert_equal "$rc" 0
+}
+
+@test "the restart is retried once" {
+    apply_through_a_restart_blip
+    assert_equal "$(grep -c 'user restart alpha.service' "$log/actions")" 2
+}
+
+# --- 9m. a connection reset on a control call is asked again ----------------
+apply_through_a_reset() {
+    fixture
+    run_apply "$c_v1"
+    same "$rc" 0 "the two-app revision applies"
+    set_secrets "$secrets_v1b"
+    export FAKE_SYSTEMCTL_RESET_ONCE='restart alpha.service'
+    run_apply "$c_v2"
+    unset FAKE_SYSTEMCTL_RESET_ONCE
+}
+
+@test "a connection reset on restart does not fail the apply" {
+    apply_through_a_reset
+    assert_equal "$rc" 0
+}
+
+@test "the restart is retried after a reset" {
+    apply_through_a_reset
+    assert_equal "$(grep -c 'user restart alpha.service' "$log/actions")" 2
+}
+
+# --- 10. a Serve failure after the commit does not revert --------------------
+apply_with_a_failing_serve() {
+    fixture
+    run_apply "$c_v1"
+    set_secrets "$secrets_v1b"
+    export FAKE_SYSTEMCTL_FAIL=smortress-tailscale-serve.service
+    run_apply "$c_v2"
+    unset FAKE_SYSTEMCTL_FAIL
+}
+
+@test "a Serve failure still leaves the commit running" {
+    apply_with_a_failing_serve
+    assert_equal "$rc" 0
+}
+
+@test "the applied commit stays recorded" {
+    apply_with_a_failing_serve
+    assert_equal "$(jq -r '.repos["homelab-apps"].commit' "$state_dir/state.json")" "$c_v2"
+}
+
+@test "the applied secret value stays" {
+    apply_with_a_failing_serve
+    assert_equal "$(cat "$secret_store/app-alpha-api-key")" two
+}
+
+@test "a Serve failure leaves no crash record" {
+    apply_with_a_failing_serve
+    assert [ ! -e "$state_dir/apply.json" ]
+}
+
+@test "the failed Serve restart is journaled" {
+    apply_with_a_failing_serve
+    assert_equal "$(journal_field apps-serve-failed '.commit')" "$c_v2"
+}
+
+@test "a Serve failure does not log a revert" {
+    apply_with_a_failing_serve
+    assert_equal "$(journal_field apps-reverted '.commit')" ""
+}
+
+@test "a Serve failure pages the deploy check" {
+    apply_with_a_failing_serve
+    assert_equal "$(tail -n 1 "$log/notify-urls")" "$ping_url/fail"
+}
+
+# --- 11. an interrupted apply is reverted by the drain and by the boot gate ---
+# The state a killed process leaves: apply.json, the new plan and units already
+# installed, one secret already replaced, and the previous revision saved under
+# work/render.prev. Both entry points must put all of it back, so the two trees
+# stage the same crash state and stay one test: a replay per assertion would
+# stage it again for a check that reads the other entry point's aftermath.
+@test "the drain exits after reverting the interrupted apply (§11: drain and boot gate)" {
+    fixture
+    run_apply "$c_v1"
+    plan_before=$(sha "$APPS_PLAN")
+    unit_before=$(sha "$APPS_UNIT_DIR/alpha.container")
+    state_before=$(sha "$state_dir/state.json")
+    stage_interrupted "$c_v2" "$trees/$c_v2/homelab-apps-$c_v2"
+    same "$(sha "$APPS_PLAN")" "$(sha "$state_dir/work/apps-$c_v2/render.next/plan.json")" \
+        "the interrupted apply left the new plan installed"
+    : >"$log/actions"
+    run_drain
+    same "$rc" 0 "the drain exits after reverting the interrupted apply"
+    same "$(sha "$APPS_PLAN")" "$plan_before" "the drain restores the previous plan"
+    same "$(sha "$APPS_UNIT_DIR/alpha.container")" "$unit_before" \
+        "the drain restores the previous unit"
+    same "$(cat "$secret_store/app-alpha-api-key")" one "the drain restores the previous secret"
+    same "$(sha "$state_dir/state.json")" "$state_before" "the drain restores the previous state"
+    absent "$state_dir/apply.json" "the drain clears the crash record"
+    same "$(journal_field apply-reverted '.by')" drain "the drain journals the reverted apply"
+    in_file "$log/actions" 'system restart smortress-tailscale-serve.service' \
+        "the drain regenerates Serve after the revert"
+
+    reset_case
+    run_apply "$c_v1"
+    plan_before=$(sha "$APPS_PLAN")
+    unit_before=$(sha "$APPS_UNIT_DIR/alpha.container")
+    state_before=$(sha "$state_dir/state.json")
+    stage_interrupted "$c_v2" "$trees/$c_v2/homelab-apps-$c_v2"
+    : >"$log/actions"
+    : >"$log/bootc-calls"
+    run_gate
+    same "$rc" 0 "the boot gate passes on a boot with no pending deploy"
+    same "$(sha "$APPS_PLAN")" "$plan_before" "the gate restores the previous plan"
+    same "$(sha "$APPS_UNIT_DIR/alpha.container")" "$unit_before" \
+        "the gate restores the previous unit"
+    same "$(cat "$secret_store/app-alpha-api-key")" one "the gate restores the previous secret"
+    same "$(sha "$state_dir/state.json")" "$state_before" "the gate restores the previous state"
+    absent "$state_dir/apply.json" "the gate clears the crash record"
+    same "$(journal_field apply-interrupted '.phase')" installing \
+        "the gate journals the interrupted phase it found"
+    same "$(journal_field apply-reverted '.by')" boot-gate \
+        "the gate journals the reverted apply"
+    # The gate reads the booted digest even here, so a boot state.json does not
+    # name is noticed (tests/deploy/boot.sh owns that check); it must not switch
+    # or roll back on a boot with no pending deployment.
+    not_matching "$log/bootc-calls" '^(switch|rollback)' \
+        "a boot with no pending deploy switches nothing"
+}
+
+# --- 11b. work trees do not outlive their apply ----------------------------
+# A work tree holds the decrypted tenant secrets, so an exit that is not the
+# revert path has to take it with it -- including the exits nobody wrote a branch
+# for, which is what the trap on the way out is for. The three blocks below stay
+# one test: each reads only the tree and the sweep journal it just wrote, and a
+# replay per text would lay down the same plaintext work trees again.
+@test "a failed apply takes its work tree with it (§11b: work-tree lifetime)" {
+    fixture
+    mkdir -p "$state_dir/work/apps-$c_v1/tree"
+    printf '{"apps":{}}\n' >"$state_dir/work/apps-$c_v1/tree/secrets.json"
+    printf 'plaintext\n' >"$state_dir/work/apps-$c_v1/secrets.json"
+    # A journal that cannot be appended stops the apply before its first mutation.
+    rm -f "$state_dir/journal.jsonl"
+    mkdir -p "$state_dir/journal.jsonl"
+    run_apply "$c_v1"
+    rmdir "$state_dir/journal.jsonl"
+    same "$rc" 4 "an exit before the first mutation exits 4"
+    absent "$state_dir/work/apps-$c_v1" "a failed apply takes its work tree with it"
+
+    # A tree an interrupted apply left behind is plaintext nothing will clean up, and
+    # an unbounded state directory is a leak that grows with every failed deploy.
+    reset_case
+    run_apply "$c_v1"
+    mkdir -p "$state_dir/work/apps-$c_pull/tree"
+    printf '{"apps":{}}\n' >"$state_dir/work/apps-$c_pull/tree/secrets.json"
+    printf 'plaintext\n' >"$state_dir/work/apps-$c_pull/secrets.json"
+    touch -d '3 days ago' "$state_dir/work/apps-$c_pull"
+    # The tree apply.json still names is the crash state a revert restores from: it
+    # stays, however old it is.
+    mkdir -p "$state_dir/work/apps-$c_v2/render.prev"
+    jq -nc --arg work "$state_dir/work/apps-$c_v2" \
+        '{schema:1,phase:"installing",commit:"'"$c_v2"'",work:$work,
+          previousUnits:[],intendedUnits:[],previousPlan:true,previousState:true,
+          previousSecrets:{},intendedSecrets:[],startedAt:"2026-11-21T00:00:00Z"}' | apply_write
+    touch -d '3 days ago' "$state_dir/work/apps-$c_v2"
+    run_sweep
+    same "$rc" 0 "the sweep succeeds"
+    absent "$state_dir/work/apps-$c_pull" "a stale work tree is swept"
+    [[ -d $state_dir/work/apps-$c_v2/render.prev ]] ||
+        fail "the tree apply.json names survives the sweep: $(find "$state_dir/work")"
+    same "$(journal_field apps-work-swept '.removed')" 1 "the swept tree is journaled"
+
+    # A tree younger than the grace period is a deploy that may still be in flight.
+    reset_case
+    run_apply "$c_v1"
+    mkdir -p "$state_dir/work/apps-$c_changed"
+    printf 'plaintext\n' >"$state_dir/work/apps-$c_changed/secrets.json"
+    run_sweep
+    [[ -d $state_dir/work/apps-$c_changed ]] || fail "a young work tree is left alone"
+}
+
+# --- 12. a revert with no record is a no-op ---------------------------------
+revert_with_no_record() {
+    fixture
+    : >"$log/actions"
+    run_revert
+}
+
+@test "a revert with no record is a no-op" {
+    revert_with_no_record
+    assert_equal "$rc" 0
+}
+
+@test "a no-op revert touches nothing" {
+    revert_with_no_record
+    assert [ ! -s "$log/actions" ]
+}
+
+# --- 13. a forged app name never reaches a unit instance ---------------------
+# The tenant's own unit directory is not a trusted source of names: a file with
+# the render marker in it is taken as an installed app, so a forged one lands in
+# the departed set. It must be refused and journaled, never spelled into a root
+# `systemctl` line or a path under the tenant's home.
+apply_a_forged_unit_name() {
+    fixture
+    run_apply "$c_v1"
+    same "$rc" 0 "the base revision applies before the forged unit"
+    forged='x;reboot'
+    printf '# Rendered from apps/forged/app.toml\n[Container]\nImage=ghcr.io/example/alpha@%s\n' "$d_a" \
+        >"$APPS_UNIT_DIR/$forged.container"
+    : >"$log/actions"
+    : >"$state_dir/journal.jsonl"
+    run_apply "$c_empty"
+}
+
+@test "an apply that meets a forged unit name rolls back" {
+    apply_a_forged_unit_name
+    assert_equal "$rc" 5
+}
+
+@test "the forged name is journaled" {
+    apply_a_forged_unit_name
+    assert_equal "$(journal_field apps-name-refused '.name' | head -n 1)" "$forged"
+}
+
+@test "the refusal names the sink it was refused at" {
+    apply_a_forged_unit_name
+    assert_equal "$(journal_field apps-name-refused '.sink' | head -n 1)" remove-departed-unit
+}
+
+@test "the forged name never reaches a unit command" {
+    apply_a_forged_unit_name
+    refute grep -qF -- "$forged" "$log/actions"
+}
+
+# The revert cannot restore a unit whose name this deploy would never write, so it
+# says so and keeps the record instead of claiming the revision is back.
+@test "the incomplete revert is journaled as such" {
+    apply_a_forged_unit_name
+    assert_equal "$(journal_field apps-revert-failed '.reason' | tail -n 1)" restore-incomplete
+}
+
+@test "an incomplete revert keeps the crash record" {
+    apply_a_forged_unit_name
+    assert [ -s "$state_dir/apply.json" ]
+}
+
+# --- 14. only this deploy's own work trees are removed ----------------------
+# The path a sweep or a revert removes is named by `apply.json`, which an operator
+# can edit, and by a glob over the work directory. The shape is checked on the
+# canonical path: a symlink out of the tree, a name that is not a commit, and a
+# traversal that resolves elsewhere all survive.
+sweep_foreign_work_trees() {
+    fixture
+    run_apply "$c_v1"
+    outside=$work/outside
+    mkdir -p "$outside/render.prev" "$state_dir/work/apps-notacommit"
+    printf 'keep\n' >"$outside/render.prev/plan.json"
+    printf 'keep\n' >"$state_dir/work/apps-notacommit/keep"
+    ln -s "$outside" "$state_dir/work/apps-$c_changed"
+    touch -h -d '3 days ago' "$state_dir/work/apps-notacommit" "$state_dir/work/apps-$c_changed"
+    run_sweep
+}
+
+@test "the sweep survives the trees it refuses" {
+    sweep_foreign_work_trees
+    assert_equal "$rc" 0
+}
+
+@test "a symlinked work tree is not followed out of the work directory" {
+    sweep_foreign_work_trees
+    assert [ -d "$outside/render.prev" ]
+}
+
+@test "the refused symlink itself stays" {
+    sweep_foreign_work_trees
+    assert [ -L "$state_dir/work/apps-$c_changed" ]
+}
+
+@test "a directory that is not a commit tree stays" {
+    sweep_foreign_work_trees
+    assert [ -d "$state_dir/work/apps-notacommit" ]
+}
+
+@test "the sweep removes nothing it refused" {
+    sweep_foreign_work_trees
+    assert_equal "$(journal_field apps-work-swept '.removed')" 0
+}
+
+@test "the sweep journals the trees it refused" {
+    sweep_foreign_work_trees
+    assert_equal "$(journal_field apps-work-kept '.dir' | wc -l)" 2
+}
+
+# The same check behind a traversal in the record: apply.json names a path that
+# resolves outside the work directory, and the revert's own cleanup refuses it
+# even after it has restored everything else.
+revert_a_traversal_record() {
+    sweep_foreign_work_trees
+    traversal=$work/state/work/../../outside
+    jq -nc --arg work "$traversal" \
+        '{schema:1,phase:"installing",commit:"'"$c_v2"'",work:$work,
+          previousUnits:[],intendedUnits:[],previousPlan:false,previousState:false,
+          previousSecrets:{},intendedSecrets:[],startedAt:"2026-11-21T00:00:00Z"}' | apply_write
+    run_revert
+}
+
+@test "a traversal in apply.json removes nothing outside the work directory" {
+    revert_a_traversal_record
+    assert [ -f "$outside/render.prev/plan.json" ]
+}
+
+# --- 15. a revert refuses a state document of another schema ----------------
+# The saved state.json is what a revert puts back, and it comes from a snapshot of
+# whatever revision was running: a document of another schema is not this
+# library's truth, so the revert refuses it, journals, pages and keeps its record
+# rather than silently rewriting what the host is recorded as running.
+revert_a_foreign_schema_state() {
+    fixture
+    run_apply "$c_v1"
+    stage_interrupted "$c_v2" "$trees/$c_v2/homelab-apps-$c_v2"
+    state_staged=$(sha "$state_dir/state.json")
+    jq -c '.schema = 2' "$state_dir/work/apps-$c_v2/render.prev/state.json" |
+        atomic_write "$state_dir/work/apps-$c_v2/render.prev/state.json"
+    : >"$log/notify-urls"
+    run_revert
+}
+
+@test "a revert refuses a state document of another schema" {
+    revert_a_foreign_schema_state
+    assert_equal "$rc" 1
+}
+
+@test "the refused restore leaves the state alone" {
+    revert_a_foreign_schema_state
+    assert_equal "$(sha "$state_dir/state.json")" "$state_staged"
+}
+
+@test "the refused restore is journaled with its reason" {
+    revert_a_foreign_schema_state
+    assert_equal "$(journal_field apps-revert-failed '.reason' | head -n 1)" state-schema-mismatch
+}
+
+@test "the refused restore pages the deploy check" {
+    revert_a_foreign_schema_state
+    assert_equal "$(tail -n 1 "$log/notify-urls")" "$ping_url/fail"
+}
+
+@test "the refused revert keeps the record" {
+    revert_a_foreign_schema_state
+    assert [ -s "$state_dir/apply.json" ]
+}
+
+# --- 16. state.json keeps a top-level key it does not know -------------------
+# state.json has three writers -- the library's state_record_verified, the apps
+# apply's state_apps_write and the revert restore -- and four readers. A field a
+# newer writer added must survive a round trip through each, or a downgrade
+# silently drops it while the readers still expect it.
+apply_through_an_unknown_key() {
+    fixture
+    run_apply "$c_v1"
+    jq -c '.future = {added: "by-a-newer-writer"}' "$state_dir/state.json" |
+        atomic_write "$state_dir/state.json"
+    run_apply "$c_v2"
+    kept_rc=$rc
+    kept_after_apply=$(jq -r '.future.added' "$state_dir/state.json")
+    set_secrets "$secrets_v1b"
+    export FAKE_SYSTEMCTL_FAIL_ONCE='restart alpha.service'
+    run_apply "$c_v1"
+    unset FAKE_SYSTEMCTL_FAIL_ONCE
+}
+
+@test "the apply after the unknown key succeeds" {
+    apply_through_an_unknown_key
+    assert_equal "$kept_rc" 0
+}
+
+@test "the apps writer and state_record_verified keep an unknown top-level key" {
+    apply_through_an_unknown_key
+    assert_equal "$kept_after_apply" by-a-newer-writer
+}
+
+@test "the failing apply reverts" {
+    apply_through_an_unknown_key
+    assert_equal "$rc" 5
+}
+
+@test "the revert restore keeps an unknown top-level key" {
+    apply_through_an_unknown_key
+    assert_equal "$(jq -r '.future.added' "$state_dir/state.json")" by-a-newer-writer
+}
+
+# An immutable image root is not a place an apply writes: `df /` there is its own
+# 8 MB size, always 0 available, and treating that as a full disk refused every
+# apply on a host whose /var had 63G free.
+apply_on_a_root() { # <filesystem type> [<mount options>]
+    fixture
+    printf '/ 0\n' >"$FAKE_DF_MAP"
+    printf '/ %s\n' "$1" >"$FAKE_FSTYPE_MAP"
+    if [[ -n ${2:-} ]]; then export FAKE_MOUNT_OPTS=$2; fi
+    export APPS_FREE_ROOT_PATH=/ APPS_FREE_VAR_PATH=/
+    run_apply "$c_v1"
+    unset FAKE_MOUNT_OPTS
+}
+
+@test "an immutable root is not a space floor" {
+    apply_on_a_root composefs
+    refute grep -q 'below the' <<<"$out"
+}
+
+# On this host `findmnt` reports `overlay` for the composefs root; it is not a
+# writable disk and must not refuse an apply.
+@test "an overlay root is not a space floor" {
+    apply_on_a_root overlay
+    refute grep -q 'below the' <<<"$out"
+}
+
+# A writable overlay is an ordinary disk; the zero-free floor still applies.
+@test "a writable overlay root still refuses the apply" {
+    apply_on_a_root overlay rw
+    assert grep -q 'below the' <<<"$out"
+}
+
+# The same zero free on an ordinary root is still refused.
+@test "a full ordinary root refuses the apply" {
+    apply_on_a_root ext4
+    assert_equal "$rc" 4
+}
+
+@test "the refusal names the space floor" {
+    apply_on_a_root ext4
+    assert grep -q 'below the' <<<"$out"
 }
