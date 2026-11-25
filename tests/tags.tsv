@@ -6,4 +6,11 @@
 all	tests/tags.sh tests/tags.tsv tests/tags.bats tests/helpers.bash tests/parity.sh .githooks/*
 none	*.md docs/* .github/* .gitignore CODEOWNERS
 core/storage-layout	tests/core/storage-layout.bats scripts/storage-layout.sh scripts/init-zpool.sh units/systemd/smortress-zpool.service
+core/check	tests/core/check.bats scripts/legacy/* scripts/deploy-state.sh scripts/deploy-cli.sh image/rootfs/usr/libexec/* image/rootfs/usr/share/smortress/secrets.manifest units/systemd/smortress-deploy* units/systemd/smortress-boot-gate.service docs/core/server-image.md docs/core/t0-gate.md docs/manual-steps.md
+core/operator-access	tests/core/operator-access.bats scripts/operator-access.sh docs/manual-steps.md
+core/apps-egress	tests/core/apps-egress.bats units/systemd/smortress-apps-deny.service units/systemd/smortress-apps-egress.service image/rootfs/etc/nftables/smortress-apps*.nft image/Containerfile
+core/apps-user	tests/core/apps-user.bats scripts/apps-user.sh units/systemd/smortress-apps-user.service units/systemd/smortress-apps-quota.service units/systemd/smortress-apps-egress.service image/rootfs/etc/sysusers.d/smortress-apps.conf image/rootfs/etc/tmpfiles.d/smortress.conf image/rootfs/usr/share/smortress/apps-policy.json image/rootfs/etc/nftables/smortress-apps.nft
+core/restic-drill	tests/core/restic-drill.bats scripts/restic-plane-common.sh scripts/smortress-restic-restore-drill.sh
+core/agent-drill	tests/core/agent-drill.bats scripts/agent-runtime-drill.sh
+core/tailscale-serve	tests/core/tailscale-serve.bats scripts/tailscale-serve.sh scripts/apps-schema.py
 tags	tests/tags.bats
