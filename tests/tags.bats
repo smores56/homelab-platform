@@ -59,11 +59,11 @@ suites() {  # every suite path under tests/, one per line
 }
 
 @test "a path a row claims selects that row's suite" {
-    # The table is shared: the layout suite proves the table itself, and the
-    # restic plane derives every snapshot path from it.
+    # The table is shared: six suites read it, so the row for one of them must
+    # not have to enumerate the others. Membership, not an exact list.
     run sh "$tags_sh" scripts/storage-layout.sh
-    assert_output "tests/core/storage-layout.bats
-tests/core/restic-plane.bats"
+    assert_output --partial "tests/core/storage-layout.bats"
+    assert_output --partial "tests/core/restic-plane.bats"
 }
 
 @test "a path several rows claim selects all of them" {
@@ -102,6 +102,5 @@ tests/core/storage-layout.bats"
     mkdir -p "$repo/scripts"
     cp "$repo_root/scripts/storage-layout.sh" "$repo/scripts/"
     run sh -c "cd '$repo' && sh tests/tags.sh --changed --base HEAD"
-    assert_output "tests/core/storage-layout.bats
-tests/core/restic-plane.bats"
+    assert_output --partial "tests/core/storage-layout.bats"
 }

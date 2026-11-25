@@ -5,7 +5,7 @@
 # The harness decides what runs, so a change to it changes any result: `all`.
 all	tests/tags.sh tests/tags.tsv tests/tags.bats tests/helpers.bash tests/parity.sh .githooks/*
 none	*.md docs/* .github/* .gitignore CODEOWNERS
-core/app-quadlets	tests/core/app-quadlets.bats units/quadlet/* units/systemd/* image/* scripts/app-images.sh
+core/app-quadlets	tests/core/app-quadlets.bats units/quadlet/* units/systemd/* image/* scripts/app-images.sh scripts/storage-layout.sh
 core/storage-layout	tests/core/storage-layout.bats scripts/storage-layout.sh scripts/init-zpool.sh units/systemd/smortress-zpool.service
 core/check	tests/core/check.bats scripts/legacy/* scripts/deploy-state.sh scripts/deploy-cli.sh image/rootfs/usr/libexec/* image/rootfs/usr/share/smortress/secrets.manifest units/systemd/smortress-deploy* units/systemd/smortress-boot-gate.service docs/core/server-image.md docs/core/t0-gate.md docs/manual-steps.md
 core/operator-access	tests/core/operator-access.bats scripts/operator-access.sh docs/manual-steps.md
@@ -14,15 +14,12 @@ core/apps-user	tests/core/apps-user.bats scripts/apps-user.sh units/systemd/smor
 core/restic-drill	tests/core/restic-drill.bats scripts/restic-plane-common.sh scripts/smortress-restic-restore-drill.sh
 core/agent-drill	tests/core/agent-drill.bats scripts/agent-runtime-drill.sh
 core/tailscale-serve	tests/core/tailscale-serve.bats scripts/tailscale-serve.sh scripts/apps-schema.py
-deploy/state	tests/deploy/state.bats scripts/deploy-state.sh scripts/deploy-drain.sh scripts/deploy-platform.sh scripts/deploy-apps.sh units/systemd/smortress-deploy.service units/systemd/smortress-boot-gate.service
+deploy/state	tests/deploy/state.bats scripts/deploy-state.sh scripts/deploy-drain.sh scripts/deploy-platform.sh scripts/deploy-apps.sh units/systemd/smortress-deploy.service units/systemd/smortress-boot-gate.service scripts/storage-layout.sh
 deploy/atomic	tests/deploy/atomic.bats scripts/deploy-state.sh image/rootfs/usr/libexec/deploy-verify.py image/rootfs/usr/libexec/deploy-receiver.py
 deploy/receiver	tests/deploy/receiver.bats scripts/deploy-state.sh image/rootfs/usr/libexec/deploy-receiver.py
 core/restic-plane	tests/core/restic-plane.bats scripts/smortress-restic-* scripts/restic-plane-common.sh scripts/storage-layout.sh scripts/sops-decrypt.sh scripts/smortress-secrets-seed.sh units/systemd/smortress-restic-* units/systemd/var-lib-restic-*.mount image/Containerfile image/rootfs/usr/share/smortress/secrets.manifest
 deploy/apps	tests/deploy/apps.bats scripts/deploy-apps.sh scripts/deploy/apps/* scripts/lib/log.sh scripts/apps-schema.py scripts/deploy-state.sh scripts/deploy-drain.sh scripts/smortress-boot-gate.sh
-core/restic-plane	tests/core/restic-plane.bats scripts/smortress-restic-* scripts/restic-plane-common.sh scripts/storage-layout.sh
-||||||| f25271f
-core/restic-plane	tests/core/restic-plane.bats scripts/smortress-restic-* scripts/restic-plane-common.sh scripts/storage-layout.sh
 tags	tests/tags.bats
 core/agent-jobs	tests/core/agent-jobs.bats scripts/agent-job.sh scripts/agent-job-personal.sh scripts/agent-job-general.sh scripts/agent-job-provision.sh scripts/app-images.sh image/rootfs/etc/sysusers.d/smortress-agent-shell.conf image/rootfs/etc/tmpfiles.d/smortress-agent-shell.conf image/rootfs/etc/nftables/smortress-agent-jobs.nft units/systemd/smortress-agent-job-provision.service image/rootfs/etc/smortress/agent/job-image docs/agent-jobs.md image/Containerfile units/quadlet/* units/systemd/*
-core/agent-recovery	tests/core/agent-recovery.bats scripts/restic-plane-common.sh scripts/smortress-restic-backup.sh scripts/smortress-restic-verify.sh scripts/smortress-restic-restore-drill.sh units/systemd/smortress-restic-* units/systemd/smortress-agent-*.service units/quadlet/agent-*.container
-core/smortress-restic-progress	tests/core/smortress-restic-progress.bats scripts/smortress-restic-progress.sh scripts/restic-plane-common.sh
+core/agent-recovery	tests/core/agent-recovery.bats scripts/restic-plane-common.sh scripts/smortress-restic-backup.sh scripts/smortress-restic-verify.sh scripts/smortress-restic-restore-drill.sh units/systemd/smortress-restic-* units/systemd/smortress-agent-*.service units/quadlet/agent-*.container scripts/storage-layout.sh
+core/smortress-restic-progress	tests/core/smortress-restic-progress.bats scripts/smortress-restic-progress.sh scripts/restic-plane-common.sh scripts/storage-layout.sh
