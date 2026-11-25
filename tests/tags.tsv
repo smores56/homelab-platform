@@ -5,6 +5,7 @@
 # The harness decides what runs, so a change to it changes any result: `all`.
 all	tests/tags.sh tests/tags.tsv tests/tags.bats tests/helpers.bash tests/parity.sh .githooks/*
 none	*.md docs/* .github/* .gitignore CODEOWNERS
+core/app-quadlets	tests/core/app-quadlets.bats units/quadlet/* units/systemd/* image/* scripts/app-images.sh
 core/storage-layout	tests/core/storage-layout.bats scripts/storage-layout.sh scripts/init-zpool.sh units/systemd/smortress-zpool.service
 core/check	tests/core/check.bats scripts/legacy/* scripts/deploy-state.sh scripts/deploy-cli.sh image/rootfs/usr/libexec/* image/rootfs/usr/share/smortress/secrets.manifest units/systemd/smortress-deploy* units/systemd/smortress-boot-gate.service docs/core/server-image.md docs/core/t0-gate.md docs/manual-steps.md
 core/operator-access	tests/core/operator-access.bats scripts/operator-access.sh docs/manual-steps.md

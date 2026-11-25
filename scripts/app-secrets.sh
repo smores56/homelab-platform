@@ -13,7 +13,7 @@ podman_bin=${PODMAN_BIN:-podman}
 # Secret name == ciphertext name without the .yaml suffix. Only secrets that a
 # Quadlet declares are listed here; an unlisted file is a manifest mistake, not
 # something to publish.
-# One line on purpose: tests/core/app-quadlets.sh reads the names from the
+# One line on purpose: tests/core/app-quadlets.bats reads the names from the
 # `readonly names=(` line to prove every declared secret has a decrypted source.
 readonly names=(immich-db-password opdshelf-admin-password agent-local-api-key agent-general-api-key agent-hosted-key agent-facade-personal-token agent-facade-general-token simplefin-access-url tmail-bridge-password brave-sync-seed)
 

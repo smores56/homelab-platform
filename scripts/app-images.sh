@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Pinned application images for the smortress Quadlets (SDLC #708, T5).
 #
-# Sourced by scripts/mirror-app-images.sh and tests/core/app-quadlets.sh; never
+# Sourced by scripts/mirror-app-images.sh and tests/core/app-quadlets.bats; never
 # run on its own. The table is the only place an application version is decided.
 #
 # Nothing here may name an upstream registry: the runtime default-reject policy
