@@ -304,6 +304,16 @@ image_document_names() { # <unit file>
     grep -qF -- "$(basename "$1")" docs/core/server-image.md
 }
 
+# The drain applies the apps tenant through `systemctl --user --machine=apps@.host`,
+# and that path needs systemd-machined. On 2026-11-25 the socket was active, the
+# service was not, and every drain died at "Transport endpoint is not connected"
+# until an operator started it by hand; the queue held every image behind it.
+deploy_unit_starts_machined() {
+    grep -qx 'Wants=systemd-machined.service' units/systemd/smortress-deploy.service &&
+        grep -qx 'After=systemd-machined.service' units/systemd/smortress-deploy.service
+}
+register "the drain starts systemd-machined, which the apps apply needs" deploy_unit_starts_machined
+
 # A deploy unit that ships without a line in the image document is a service an
 # operator meets for the first time during an incident.
 for unit in units/systemd/smortress-deploy* units/systemd/smortress-boot-gate.service; do
