@@ -1,16 +1,16 @@
 # The tailnet name service's scheduled probe (design #834, task #848).
 #
-# `assistant.sammohr.dev` and `agent.sammohr.dev` answer on a Service VIP through
-# a Caddy on loopback, and every hop of that path breaks on its own: the `A`
-# record, the host's advertisement of the Service, Serve's forward, the
-# certificate's renewal, the UI's own login route. None of it is visible to a
-# repository check, and a broken name is a person locked out of their UI, so the
-# probe runs against the real path on a schedule
+# Each application answers on a Service name of its own, and every hop of that
+# path breaks on its own: the Service's VIP, the host's advertisement of it,
+# Serve's forward, the certificate Tailscale mints, the answer the application
+# itself gives. None of it is visible to a repository check, and a broken name is
+# a person locked out of their UI, so the probe runs against the real path on a
+# schedule
 # (`scripts/verify-tailnet-names.sh` says what each probe means).
 #
 # CI is also the only place a genuine non-owner client exists: the runner joins
-# as `tag:deploy`, which the policy grants the one Service port
-# (`tofu/tailscale.tf`) and nothing else, so the probe proves the name works for
+# as `tag:deploy`, which the policy grants one port on each of the six Services
+# (`tofu/tailscale.tf`) and nothing else, so the probe proves the names work for
 # a node that is not the owner's laptop. The join is the deploy path's, unchanged:
 # the same OAuth client, the same tag, the same pinned action.
 #

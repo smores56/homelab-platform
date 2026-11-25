@@ -21,8 +21,9 @@ whole of the served surface:
 Every name is grey cloud on purpose: Cloudflare must not sit in the media path,
 TLS-ALPN-01 needs the name to resolve to the box that answers it, and a proxied
 record over a tailnet address has no origin Cloudflare could reach. The `A`
-record for `agent` and `assistant` is the same VIP because Caddy on the host
-routes by SNI behind one Service (design #834).
+record for `agent` and `assistant` is the same VIP because one Service owns it
+(design #834); the host no longer answers either name, and both records go with
+that Service.
 
 The apex keeps its mail records — `MX`, the `SPF` `TXT`, the domain-verification
 `TXT`s. None of them is declared here and SDLC #833 did not touch them.

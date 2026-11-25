@@ -24,13 +24,11 @@
 # The deploy receiver gets one raw TCP forward (8484) rather than an HTTPS route:
 # the caller is a curl in a CI job that joins the tailnet for this one request.
 #
-# The agent UI is published as a Service VIP (design #834) instead of a host port:
-# `svc:agent-ui` is an address the tailnet owns, and this host advertises its one
-# endpoint on 443. The policy admits the owner to that service port, so the name
-# resolves to the VIP and no device address has to appear in DNS. OPDShelf is the
-# first application to leave the per-port scheme: `svc:opds` is a Service too, but
-# advertised over HTTPS, so Tailscale terminates TLS and provisions the certificate
-# for the name; its 8443 host route stays as the rollback.
+# The applications are published as Services (design #834) rather than as host
+# ports alone: OPDShelf was the first to leave the per-port scheme, because the
+# name belongs to the application instead of to a port on the host. Each Service
+# is advertised over HTTPS, so Tailscale terminates TLS and provisions the
+# certificate for the name, and the host routes stay declared as the rollback.
 set -euo pipefail
 
 tailscale_bin=${TAILSCALE_BIN:-tailscale}
@@ -154,21 +152,11 @@ if ! "$tailscale_bin" serve --bg --https=443 --set-path=/wallpapers "$wallpapers
   fail "could not serve $wallpapers on https/443/wallpapers"
 fi
 
-# The agent UI's Service VIP (design #834), the last of the core declarations.
-# Tailscale assigns the Service its address; this host's advertisement is what
-# makes it answer, on the one port the policy grants. Declared after every other
-# core route, so a Service the tailnet does not have yet costs the UI alone, and
-# before the status read and the tenant prune, which never touch a Service.
-if ! "$tailscale_bin" serve --bg --service=svc:agent-ui --tcp=443 tcp://127.0.0.1:9443; then
-  fail "could not advertise the agent UI Service on svc:agent-ui tcp/443"
-fi
-
 # OPDShelf's own Service, the first application off the per-port scheme: the name
 # belongs to the application rather than to a port on the host, and Tailscale
-# terminates TLS and provisions the certificate for that name, which the `--tcp`
-# forward above cannot do. Declared here, with the agent UI, so a Service the
-# tailnet does not have yet costs this route alone. The 8443 host route stays as
-# the rollback until every client has moved.
+# terminates TLS and provisions the certificate for that name. Declared after the
+# host routes, so a Service the tailnet does not have yet costs this route alone.
+# The 8443 host route stays as the rollback until every client has moved.
 if ! "$tailscale_bin" serve --bg --service=svc:opds --https=443 http://127.0.0.1:8083; then
   fail "could not advertise the OPDShelf Service on svc:opds https/443"
 fi

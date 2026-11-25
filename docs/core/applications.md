@@ -561,8 +561,8 @@ mapping file.
 | Personal agent gateway | `127.0.0.1:18001` | `https://smortress.<tailnet>.ts.net/apps/agent-local/v1` |
 | General agent gateway | `127.0.0.1:18002` | `https://smortress.<tailnet>.ts.net/apps/agent-general/v1` |
 | Hosted proxy | `127.0.0.1:18003` | none, on purpose: a tailnet path would let any device spend the provider key |
-| Personal web UI | `127.0.0.1:18006` | `https://assistant.<tailnet>.ts.net/`, `https://smortress.<tailnet>.ts.net:8444/` and, tailnet-only, `https://assistant.sammohr.dev/` |
-| General web UI | `127.0.0.1:18007` | `https://agent.<tailnet>.ts.net/`, `https://smortress.<tailnet>.ts.net:8445/` and, tailnet-only, `https://agent.sammohr.dev/` |
+| Personal web UI | `127.0.0.1:18006` | `https://assistant.<tailnet>.ts.net/` and `https://smortress.<tailnet>.ts.net:8444/` |
+| General web UI | `127.0.0.1:18007` | `https://agent.<tailnet>.ts.net/` and `https://smortress.<tailnet>.ts.net:8445/` |
 | Source facades | nothing published | none: each gateway reaches its own facade by container name, and no device outside the deployment has any reason to |
 
 The two agent paths are a second table in `scripts/tailscale-serve.sh`
@@ -574,16 +574,16 @@ entries in `core_routes` (8444 and 8445) instead. A tenant
 plan that claims either path is refused whole, and the stale-route pruning skips
 both, so a run without a plan cannot delete them.
 
-The two UIs also answer by a `sammohr.dev` name on 443, with a publicly trusted
-certificate (design #834): `https://assistant.sammohr.dev/` is the personal one and
-`https://agent.sammohr.dev/` the general one. One Tailscale Service,
-`svc:agent-ui`, owns one VIP; `tofu/dns.tf` publishes a grey-cloud `A` record per
-name at that VIP, Serve forwards the Service's `tcp:443` to Caddy on loopback, and
-Caddy routes by SNI with a DNS-01 certificate per name. Nothing new is public: the
-VIP is in `100.64.0.0/10`, so the names resolve anywhere and route only on the
-tailnet. The ACL grants `svc:agent-ui:443` to two sources — `group:owner` and
-`tag:deploy` — and either grant covers both names, because a grant names the
-service and the port, never the name. The second is the scheduled probe, below.
+The two UIs answer on a Service each, like every other application behind the
+tailnet name service (design #834): `svc:assistant` and `svc:agent` are advertised
+over HTTPS, so Tailscale terminates TLS and mints the certificate for the name.
+The `sammohr.dev` aliases the host's own terminator used to answer are gone with
+it: `tofu/dns.tf` still publishes a grey-cloud `A` record per alias at the
+`svc:agent-ui` VIP, and the ACL still grants that service port to `group:owner`
+and `tag:deploy`, but nothing on the host answers those names any more, and that
+layer is retired next. Nothing there was ever public: the VIP is in
+`100.64.0.0/10`, so the names resolve anywhere and route only on the tailnet. The
+second grant is the scheduled probe, below.
 
 The `:8444` and `:8445` Serve routes stay declared, and they are two things at
 once. They are the rollback: both answer the same two UIs on the host's own name
@@ -596,13 +596,15 @@ are also the no-cost fallback: nothing is provisioned for them, one line each in
 `scripts/verify-tailnet-names.sh` is the probe on that path (task #848), and
 `.github/workflows/verify-tailnet-names.yml` runs it daily from a CI node that
 joins as `tag:deploy` — the one non-owner client there is. It asserts what a user
-would notice rather than a status code: each name resolves into the tailnet, both
-resolve to the same VIP, the chain verifies against the public roots with the name
-in it, the certificate is not within 14 days of expiry, and `GET /` is the UI's
-login redirect (`login?next=/`) rather than a 200 from something else. A stopped
-Caddy answers 502 or refuses, a drained Service times out, and both are red. The
-result pages through Healthchecks via the `NAMES_PING_URL` secret; the operator
-commands are in `docs/manual-steps.md`.
+would notice rather than a status code: each name resolves into the tailnet on a
+VIP of its own and no two names share one, the chain verifies against the public
+roots with the name in it, the certificate is not within 14 days of expiry, and
+`GET /` answers the status class the application owns -- 2xx for Immich and the
+Syncthing GUI, 3xx for the three that redirect a stranger to a login, 4xx for the
+catalogue -- rather than a 502 or a 200 from something else. A stopped
+application answers 502 or refuses, a drained Service times out, and both are
+red. The result pages through Healthchecks via the `NAMES_PING_URL` secret; the
+operator commands are in `docs/manual-steps.md`.
 
 Historical: `agent.sammohr.dev` was a proxied CNAME to the dead cluster tunnel,
 and Cloudflare refuses two records at one name, so the two applies could not

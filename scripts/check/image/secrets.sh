@@ -506,7 +506,6 @@ declare -A unlisted_why=(
   [zfs-ready@state-syncthing-config.service]='mount probe for state/syncthing-config: a storage-plane fault must not roll the platform digest back'
   [zfs-ready@state-opdshelf.service]='mount probe for state/opdshelf: a storage-plane fault must not roll the platform digest back'
   [zfs-ready@state-navidrome.service]='mount probe for state/navidrome: a storage-plane fault must not roll the platform digest back'
-  [zfs-ready@state-caddy.service]='mount probe for state/caddy: a storage-plane fault must not roll the platform digest back'
   [zfs-ready@state-agent-local.service]='mount probe for state/agent-local: a storage-plane fault must not roll the platform digest back'
   [zfs-ready@state-agent-general.service]='mount probe for state/agent-general: a storage-plane fault must not roll the platform digest back'
   [zfs-ready@state-agent-model.service]='mount probe for state/agent-model: a storage-plane fault must not roll the platform digest back'
