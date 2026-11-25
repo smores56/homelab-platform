@@ -32,21 +32,8 @@ command -v python3 >/dev/null || {
   exit 1
 }
 
-pass=0
-fail=0
-ok() {
-  pass=$((pass + 1))
-  printf 'ok   %s\n' "$1"
-}
-bad() {
-  fail=$((fail + 1))
-  printf 'FAIL %s\n' "$1" >&2
-  [[ -n ${2:-} ]] && printf '     %s\n' "${2//$'\n'/$'\n'     }" >&2
-  return 0
-}
-check_eq() { # got want label
-  if [[ $1 == "$2" ]]; then ok "$3"; else bad "$3" "want '$2', got '$1'"; fi
-}
+# shellcheck source=tests/deploy/lib.sh
+source "$root/tests/deploy/lib.sh"
 check_same() { # target payload label
   if cmp -s "$1" "$2"; then ok "$3"; else bad "$3" "$1 differs from $(basename -- "$2")"; fi
 }
@@ -177,5 +164,4 @@ for impl in state verify receiver; do
   chmod 0700 "$locked"
 done
 
-printf '\n%d passed, %d failed\n' "$pass" "$fail"
-((fail == 0))
+finish

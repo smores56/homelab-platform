@@ -44,38 +44,8 @@ for tool in jq timeout python3 tar sha256sum; do
   }
 done
 
-pass=0
-fail=0
-ok() {
-  pass=$((pass + 1))
-  printf 'ok   %s\n' "$1"
-}
-bad() {
-  fail=$((fail + 1))
-  printf 'FAIL %s\n' "$1" >&2
-  [[ -n ${2:-} ]] && printf '     %s\n' "${2//$'\n'/$'\n'     }" >&2
-  return 0
-}
-check_eq() { # got want label
-  if [[ $1 == "$2" ]]; then ok "$3"; else bad "$3" "want '$2', got '$1'"; fi
-}
-check_json() { # doc filter want label
-  local got
-  got=$(jq -r "$2" <<<"$1" 2>/dev/null)
-  check_eq "$got" "$3" "$4"
-}
-check_file() { # path label
-  if [[ -s $1 ]]; then ok "$2"; else bad "$2" "missing or empty: $1"; fi
-}
-check_no_file() { # path label
-  if [[ -e $1 ]]; then bad "$2" "$(cat "$1" 2>/dev/null)"; else ok "$2"; fi
-}
-check_grep() { # file pattern label
-  if grep -qF -- "$2" "$1" 2>/dev/null; then ok "$3"; else bad "$3" "no '$2' in $1"; fi
-}
-check_no_grep() { # file pattern label
-  if grep -qF -- "$2" "$1" 2>/dev/null; then bad "$3" "$(grep -F -- "$2" "$1")"; else ok "$3"; fi
-}
+# shellcheck source=tests/deploy/lib.sh
+source "$root/tests/deploy/lib.sh"
 sha() { sha256sum <"$1" | cut -d' ' -f1; }
 json_list() {
   if (($# == 0)); then
@@ -132,37 +102,9 @@ ping_url=https://hc.invalid/ping/abc
 # --- the fakes ---------------------------------------------------------------
 # `curl` is both the codeload fetch and the deploy ping: an --output names a tar
 # this suite published, anything else is a notification URL.
-cat >"$bin/curl" <<'EOF'
-#!/usr/bin/env bash
-printf '%s\n' "$*" >>"$FAKE_LOG/curl-argv"
-out= url=
-while (($#)); do
-  case $1 in
-    --output) out=$2; shift 2 ;;
-    # The deploy hands the ping URL over as a config on stdin so it never appears
-    # in argv; `-` is that config's file name.
-    --config) shift 2 ;;
-    --connect-timeout | --retry | --max-time) shift 2 ;;
-    -*) shift ;;
-    *) url=$1; shift ;;
-  esac
-done
-if [[ -n $out ]]; then
-  name=$(basename -- "$url")
-  src=$FAKE_FETCH_DIR/$name.tar.gz
-  [[ -f $src ]] || {
-    printf 'fake-curl: no %s\n' "$src" >&2
-    exit 22
-  }
-  cp -- "$src" "$out"
-  exit 0
-fi
-if [[ -z $url ]]; then
-  url=$(sed -n 's/^url = "\(.*\)"$/\1/p' | head -n 1)
-fi
-printf '%s\n' "$url" >>"$FAKE_LOG/notify-urls"
-exit "${FAKE_CURL_EXIT:-0}"
-EOF
+install_fake_curl "$bin"
+export FAKE_CURL_LOG=$FAKE_LOG/curl-argv
+export FAKE_PING_LOG=$FAKE_LOG/notify-urls
 
 cat >"$bin/sops" <<'EOF'
 #!/usr/bin/env bash
@@ -524,9 +466,6 @@ run_drain() {
 run_gate() {
   out=$(timeout 60 bash "$gate" 2>&1)
   rc=$?
-}
-journal_field() { # <event> <jq path>
-  jq -r "select(.event==\"$1\") | $2" "$state_dir/journal.jsonl" 2>/dev/null
 }
 line_of() { # <file> <pattern>
   grep -nF -- "$2" "$1" 2>/dev/null | head -n 1 | cut -d: -f1
@@ -1339,5 +1278,4 @@ else
 fi
 
 
-printf '\n%d passed, %d failed\n' "$pass" "$fail"
-((fail == 0))
+finish

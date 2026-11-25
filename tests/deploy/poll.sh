@@ -35,27 +35,8 @@ for tool in jq curl python3; do
   }
 done
 
-pass=0
-fail=0
-ok() {
-  pass=$((pass + 1))
-  printf 'ok   %s\n' "$1"
-}
-bad() {
-  fail=$((fail + 1))
-  printf 'FAIL %s\n' "$1" >&2
-  [[ -n ${2:-} ]] && printf '     %s\n' "${2//$'\n'/$'\n'     }" >&2
-  return 0
-}
-check_eq() { # got want label
-  if [[ $1 == "$2" ]]; then ok "$3"; else bad "$3" "want '$2', got '$1'"; fi
-}
-check_empty() { # got label
-  if [[ -z $1 ]]; then ok "$2"; else bad "$2" "$1"; fi
-}
-check_file() { # path label
-  if [[ -s $1 ]]; then ok "$2"; else bad "$2" "missing or empty: $1"; fi
-}
+# shellcheck source=tests/deploy/lib.sh
+source "$root/tests/deploy/lib.sh"
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
@@ -68,55 +49,18 @@ log=$work/log
 pings=$work/pings
 mkdir -p "$bin" "$api" "$queue"
 
-# Stand-in for curl: the API answers from $FAKE_API_DIR, keyed by the request
-# path, and every Healthchecks ping is recorded instead of sent. `--fail` and
-# `--fail-with-body` exit 22 on a 4xx/5xx, as the real one does, and a status of
-# `network` is a connect failure (exit 7).
-cat >"$bin/curl" <<'EOF'
-#!/usr/bin/env bash
-set -uo pipefail
-printf '%s\n' "$*" >>"${FAKE_LOG:?}"
-fail=0
-out=/dev/stdout
-write_out=
-url=
-while (($#)); do
-  case $1 in
-    --output) out=$2; shift 2 ;;
-    --write-out) write_out=$2; shift 2 ;;
-    --fail | --fail-with-body) fail=1; shift ;;
-    --config) shift 2 ;;
-    -H | --header | --max-time | --data-binary | -d | --retry) shift 2 ;;
-    -*) shift ;;
-    *) url=$1; shift ;;
-  esac
-done
-# deploy_notify hands the ping URL over as a config on stdin, never in argv.
-if [[ -z $url ]]; then
-  url=$(sed -n 's/^url = "\(.*\)"$/\1/p' | head -n 1)
-fi
-status=200
-body='{}'
-case $url in
-  *api.test*)
-    status=$(cat "$FAKE_API_STATUS" 2>/dev/null) || status=200
-    [[ $status == network ]] && exit 7
-    rel=${url#*api.test/}
-    if [[ -s $FAKE_API_DIR/${rel//\//_}.json ]]; then body=$(cat "$FAKE_API_DIR/${rel//\//_}.json"); fi ;;
-  *) printf '%s\n' "$url" >>"${FAKE_PING_LOG:?}" ;;
-esac
-[[ -n $write_out ]] && printf '%s' "$status"
-if [[ $out == /dev/stdout ]]; then printf '%s' "$body"; else printf '%s' "$body" >"$out"; fi
-if ((fail)) && ((status >= 400)); then exit 22; fi
-exit 0
-EOF
-chmod +x "$bin/curl"
+# The API is answered from the fixture directory, keyed by the request path,
+# and every Healthchecks ping is recorded instead of sent.
+install_fake_curl "$bin"
+export FAKE_CURL_LOG=$log
+export FAKE_ENDPOINT_MATCH='*api.test*'
+export FAKE_ENDPOINT_STATUS_FILE=$work/api-status
+export FAKE_ENDPOINT_BASE='api.test/'
+export FAKE_ENDPOINT_BODY_DIR=$api
+export FAKE_PING_LOG=$pings
 
 export PATH="$bin:$PATH"
-export FAKE_LOG=$log
-export FAKE_API_DIR=$api
 export FAKE_API_STATUS=$work/api-status
-export FAKE_PING_LOG=$pings
 export DEPLOY_STATE_DIR=$state
 export DEPLOY_LOCK_FILE=$work/deploy.lock
 export DEPLOY_PING_SECRET=$work/deploy-ping-url.yaml
@@ -138,9 +82,6 @@ seed_state() { # repo commit -- merges, so both repositories can be seeded
   jq --arg repo "$1" --arg commit "$2" \
     '.repos = ((.repos // {}) | .[$repo] = {commit: $commit})' <<<"$current" \
     >"$state/state.json"
-}
-journal_events() { # event -> count
-  grep -c "\"event\":\"$1\"" "$state/journal.jsonl" 2>/dev/null || true
 }
 queue_entries() {
   find "$queue" -maxdepth 1 -type f -name '*.json' | wc -l | tr -d ' '
@@ -402,5 +343,4 @@ else
   bad "the image enables the poll timer"
 fi
 
-printf '\n%d passed, %d failed\n' "$pass" "$fail"
-((fail == 0))
+finish

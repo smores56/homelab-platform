@@ -30,26 +30,8 @@ for tool in jq python3 timeout; do
   }
 done
 
-pass=0
-fail=0
-ok() {
-  pass=$((pass + 1))
-  printf 'ok   %s\n' "$1"
-}
-bad() {
-  fail=$((fail + 1))
-  printf 'FAIL %s\n' "$1" >&2
-  [[ -n ${2:-} ]] && printf '     %s\n' "${2//$'\n'/$'\n'     }" >&2
-  return 0
-}
-check_eq() { # got want label
-  if [[ $1 == "$2" ]]; then ok "$3"; else bad "$3" "want '$2', got '$1'"; fi
-}
-check_json() { # doc filter want label
-  local got
-  got=$(jq -r "$2" <<<"$1" 2>/dev/null)
-  check_eq "$got" "$3" "$4"
-}
+# shellcheck source=tests/deploy/lib.sh
+source "$root/tests/deploy/lib.sh"
 
 work=$(mktemp -d)
 server_pid=
@@ -725,5 +707,4 @@ fi
 check_eq "$(queue_count)" 1 "an apps entry that changed nothing stays queued"
 check_eq "$(jq -r 'select(.event=="deferred") | .reason' "$state_dir/journal.jsonl" | tail -n1)" \
   apps-apply-exit-5 "the apps failure is journaled as a deferral"
-printf '\n%d passed, %d failed\n' "$pass" "$fail"
-((fail == 0))
+finish
