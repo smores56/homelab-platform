@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# bats file_tags=core
 # Offline checks for the apps tenant user (SDLC #726, T7 of #701).
 #
 # The tenant is one unprivileged account whose id nobody names. This proves the
@@ -176,9 +177,9 @@ done
 @test "a second run adds no duplicate range" {
     provision
     provision
-    lines=$(grep -c '^apps:' "$subuid" || true)
-    [[ $lines == 1 ]] || cat "$subuid" >&2
-    assert_equal "$lines" 1
+    count=$(grep -c '^apps:' "$subuid" || true)
+    [[ $count == 1 ]] || cat "$subuid" >&2
+    assert_equal "$count" 1
 }
 
 # A root provisioner must never write into the tenant-owned home: it would

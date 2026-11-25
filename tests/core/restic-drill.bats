@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# bats file_tags=core
 # Offline checks for the restore-drill guardrails (SDLC #706, T3). Run by bats.
 #
 # A drill streams a whole unit into one directory. The root filesystem is 100

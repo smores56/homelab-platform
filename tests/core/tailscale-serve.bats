@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# bats file_tags=core
 # Offline checks for the Serve route generator (SDLC #726, T7 of #701). Run by
 # bats, one scenario per test.
 #
@@ -462,7 +463,7 @@ core_run() { reset_case; drive; }
     last_other_route=$(grep -nE -- 'serve --bg' "$log" | grep -vF -- 'svc:terminal' |
         cut -d: -f1 | sort -n | tail -n1 || true)
     if [[ -z $terminal_line || -z $last_other_route ]] || ((last_other_route >= terminal_line)); then
-        printf 'terminal at %q, last other route at %q\\n' "$terminal_line" "$last_other_route" >&2
+        printf 'terminal at %q, last other route at %q\n' "$terminal_line" "$last_other_route" >&2
         return 1
     fi
 }

@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# bats file_tags=core
 # The probe texts are matched as literals, so `$1` must stay unexpanded here.
 # shellcheck disable=SC2016
 # Offline checks for the agent runtime drill (SDLC #716, T6 of #702), run by bats.
@@ -78,18 +79,23 @@ done
 
 # Every invocation that touches the host needs root, and says so.
 if ((EUID == 0)); then
-    printf 'skip the unprivileged refusal checks: this test is running as root\n'
+    # Registered as skips so a root run never looks like a proof that the drill
+    # refuses to probe without root.
+    for invocation in 'mounts' 'credentials' 'restore agent-local'; do
+        register_skip "$invocation refuses to run unprivileged" 'the suite is running as root'
+        register_skip "$invocation names the missing privilege" 'the suite is running as root'
+    done
 else
     unprivileged_refuses() { # <invocation...>
         rc=0
-        # shellcheck disable=SC2086  # the invocation is a word list on purpose
+        # shellcheck disable=SC2086,SC2048  # the invocation is a word list on purpose
         out=$("$script" $* 2>&1) || rc=$?
         [[ $rc -ne 0 ]]
     }
 
     unprivileged_names_privilege() { # <invocation...>
         rc=0
-        # shellcheck disable=SC2086  # the invocation is a word list on purpose
+        # shellcheck disable=SC2086,SC2048  # the invocation is a word list on purpose
         out=$("$script" $* 2>&1) || rc=$?
         grep -qiE 'root|sudo' <<<"$out"
     }

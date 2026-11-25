@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# bats file_tags=core
 # Offline checks for the apps-tenant egress policy (SDLC #726, T7 of #701).
 #
 # `egress = "internet"` is a public network, not the host's networks. A
@@ -323,4 +324,13 @@ if command -v nft >/dev/null 2>&1 && unshare -rn true 2>/dev/null &&
         register "$file loads twice without error" nft_loads_twice "$file"
     done
     register 'the allow-list replaces the deny table instead of stacking on it' nft_swaps
+else
+    # Reported as skipped, not omitted: a host that cannot parse the rules must
+    # not look like one that proved they are safe.
+    why='no unprivileged network namespaces or no apps account'
+    for file in "$rules" "$deny"; do
+        register_skip "nft parses $file" "$why"
+        register_skip "$file loads twice without error" "$why"
+    done
+    register_skip 'the allow-list replaces the deny table instead of stacking on it' "$why"
 fi
