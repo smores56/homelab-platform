@@ -86,11 +86,14 @@ contributes its `urls` rows only. The raw layer is `docs/raw-replicas.md`.
 
 Search does not have to scan. With `--index-root DIR` (`AGENT_FACADE_INDEX_ROOT`,
 `/index` in the personal container) each adapter keeps a derived SQLite FTS5 index
-at `DIR/<source>/<generation>.sqlite` and queries it instead of walking the
-projections. It is built lazily, once per adapter, on the first search that can
-use it, and it is disposable: a published generation is immutable, so the file is
-named after the generation, a new generation is a new file, and the source's other
-generation files are pruned after the build. The tokenizer is `trigram`, so a hit
+at `DIR/<source>/<generation>.sqlite` and answers from it instead of projecting
+the generation. The file carries the projection it was built from, so a search
+over an existing file projects nothing -- a facade restart beside a warm
+`/index` answers the first query in the same time as a warm one. Only a
+generation with no file pays one projection and writes the file; every search
+after that is a query. It is disposable: a published generation is immutable, so
+the file is named after the generation, a new generation is a new file, and the
+source's other generation files are pruned after the build. The tokenizer is `trigram`, so a hit
 is a substring hit -- `orld` finds `Hello world`, which is why it is not the word
 tokenizer memory uses. Case folding is SQLite's rather than Python's
 `casefold()`, so text a word reaches only through a compatibility character (`ﬁ`

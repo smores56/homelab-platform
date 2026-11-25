@@ -279,8 +279,12 @@ class ReplicaAdapter:
     rebuild. A ``RefreshingReplica`` is checked on each read/search (bounded by
     its own TTL) and the caches are dropped when it moves forward.
 
-    ``index_root`` adds the derived full-text index (``source_index``): searches
-    over words a trigram can match use it, and everything else keeps scanning.
+    ``index_root`` adds the derived full-text index (``source_index``): a search
+    whose words a trigram can match is answered from that file, which carries the
+    projection it was built from, so a facade that restarts next to an existing
+    index searches without projecting the generation at all. Only a generation
+    with no file pays one projection (and writes the file); everything a trigram
+    cannot match keeps scanning.
     """
 
     def __init__(
@@ -342,11 +346,20 @@ class ReplicaAdapter:
         index = self._source_index() if indexable else None
         if index is not None:
             try:
-                ids = index.search(words, limit)
+                rows = index.rows(words, limit)
             except source_index.SourceIndexUnavailable:
                 return self._scan(words, limit)
-            found = (self._hit(record_id, words) for record_id in ids)
-            return tuple(hit for hit in found if hit is not None)
+            # The row is the projection the file was built from, so the hit is
+            # answered here: projecting the generation to re-derive it is the
+            # cost this path exists to avoid.
+            return tuple(
+                sources.SearchHit(
+                    id=record_id,
+                    title=title,
+                    snippet=contracts.snippet(f"{title}\n{body}", words[0]),
+                )
+                for record_id, title, body in rows
+            )
         return self._scan(words, limit)
 
     def _scan(self, words: tuple[str, ...], limit: int) -> tuple[sources.SearchHit, ...]:
@@ -369,23 +382,6 @@ class ReplicaAdapter:
                 break
         return tuple(hits)
 
-    def _hit(self, record_id: str, words: tuple[str, ...]) -> sources.SearchHit | None:
-        """One hit from the projection the index was built from.
-
-        The index is derived, so an id it lists that this projection no longer
-        produces is dropped rather than raised: the caller gets fewer hits, never
-        a failure.
-        """
-
-        record = self._built().get(record_id)
-        if record is None:
-            return None
-        return sources.SearchHit(
-            id=record.id,
-            title=record.title,
-            snippet=contracts.snippet(f"{record.title}\n{record.body}", words[0]),
-        )
-
     def _source_index(self) -> source_index.SourceIndex | None:
         """The derived index, built at most once per adapter; None if there is none."""
 
@@ -398,7 +394,12 @@ class ReplicaAdapter:
             index = source_index.SourceIndex(
                 self.index_root, self.name, self.replica.generation_id
             )
-            index.build(self._built())
+            # The file is named after an immutable generation and checked by its
+            # meta row, so one that is already here is the answer. Building it
+            # again would project every record to write the same bytes -- the
+            # minutes-long first search after a facade restart.
+            if not index.published():
+                index.build(self._built())
         except source_index.SourceIndexUnavailable:
             # An unwritable root, a foreign schema, a full disk: the scan answers.
             return None

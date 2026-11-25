@@ -54,6 +54,12 @@ _CREATE_META = "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
 _INSERT_INDEX = "INSERT INTO records (record_id, title, body) VALUES (?, ?, ?)"
 _INSERT_META = "INSERT INTO meta (key, value) VALUES (?, ?)"
 _MATCH = "SELECT record_id FROM records WHERE records MATCH ? ORDER BY rank, record_id LIMIT ?"
+#: A hit is answered from the file: the title and body are the projection that
+#: built it, so a search never has to project the generation again.
+_MATCH_ROWS = (
+    "SELECT record_id, title, body FROM records "
+    "WHERE records MATCH ? ORDER BY rank, record_id LIMIT ?"
+)
 
 
 class SourceIndexUnavailable(Exception):
@@ -146,6 +152,16 @@ class SourceIndex:
         generation, so the rows are already the answer set.
         """
 
+        return tuple(row[0] for row in self.rows(words, limit))
+
+    def rows(self, words: Sequence[str], limit: int) -> tuple[tuple[str, str, str], ...]:
+        """``(record_id, title, body)`` for the matching records, best first.
+
+        The row carries the projection the file was built from, so a caller can
+        answer a hit without projecting the generation: that pass is the cost this
+        file exists to avoid.
+        """
+
         if limit < 1:
             raise ValidationError("limit must be at least 1")
         if not words:
@@ -155,12 +171,22 @@ class SourceIndex:
         expression = contracts.search_expression(" ".join(words))
         connection = self._connect()
         try:
-            rows = connection.execute(_MATCH, (expression, limit)).fetchall()
+            rows = connection.execute(_MATCH_ROWS, (expression, limit)).fetchall()
         except sqlite3.Error as error:
             raise SourceIndexUnavailable(
                 f"source index for {self.source_id!r} could not be queried: {error}"
             ) from error
-        return tuple(str(row[0]) for row in rows)
+        return tuple((str(row[0]), str(row[1]), str(row[2])) for row in rows)
+
+    def published(self) -> bool:
+        """Whether this generation's file is already here at this schema version.
+
+        A caller that only needs to search asks this first: ``build`` rewrites the
+        file from a projection, and a file that is already the answer makes that
+        pass pure cost.
+        """
+
+        return self._published()
 
     def close(self) -> None:
         if self._connection is not None:
