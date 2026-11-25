@@ -58,7 +58,9 @@ ctrl panel offers no cloud-init and no API to declare one.
 
    `subject` must be `photos.sammohr.dev` and `notAfter` the new window; from
    outside, `scripts/verify-public-edge.sh` and `scripts/verify-caa.sh` confirm
-   the same two things. The re-issue needs the public name to resolve to this
+   the same two things.
+
+   If finalize fails with `urn:ietf:params:acme:error:unauthorized - authorizations for these identifiers not found`, the account's reused authorization has gone stale on Let's Encrypt's side. Rotate the ACME account: stop Caddy, move `/var/lib/caddy/.local/share/caddy/acme` aside, start Caddy so it registers a fresh account, and let it obtain. CAA names the CA, not an account, so the replacement is authorized immediately; the old account key can be deleted once the certificate is renewed. The re-issue needs the public name to resolve to this
    box: before the cutover the order fails and Caddy keeps retrying, which is why
    this step sits on the cutover's side of the line.
 
