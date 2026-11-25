@@ -2,7 +2,7 @@
 # Shared vocabulary for the smortress Restic plane (SDLC #706, T3).
 #
 # Sourced by smortress-restic-{backup,verify,init,restore-drill}; never run on
-# its own. Every knob is environment-overridable so tests/core/restic-plane.sh
+# its own. Every knob is environment-overridable so tests/core/restic-plane.bats
 # can drive this exact code against stubs. Production sets none of them: the
 # defaults are the host paths, and a wrong override is a wrong host path, not a
 # way to skip a check.
@@ -81,7 +81,7 @@ attempts_first=${RESTIC_ATTEMPTS_FIRST:-1}
 
 # Freshness and expiry budgets are derived in max_age_for and run_expiry_for
 # below: schedule + every bounded retry + grace. keep-in-sync with
-# docs/core/restic-plane.md and the numbers asserted by tests/core/restic-plane.sh.
+# docs/core/restic-plane.md and the numbers asserted by tests/core/restic-plane.bats.
 
 say() { printf '%s\n' "$*"; }
 warn() { printf '%s: %s\n' "${0##*/}" "$*" >&2; }

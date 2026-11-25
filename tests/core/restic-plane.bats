@@ -2,16 +2,20 @@
 # Offline checks for the Restic plane (SDLC #706, T3): fail-closed freshness and
 # the deploy gate's local query, the backup driver's exit codes, stale-staging
 # reconciliation, the readiness and mount gates, the retention filter,
-# first-upload sizing, and progress publication.
+# first-upload sizing, progress publication, repository init, the sops-decrypt
+# format column and the ciphertext seed, and the unit ordering that keeps a
+# backup off a dataset that is not ready yet.
 #
 # The host half — real disks, real repositories, real Healthchecks — is in
 # docs/manual-steps.md section 38. This proves the half that does not need root
 # or a network. restic, zfs, curl and sops are stubs; the command lines and the
-# durable state are real. tests/core/restic-plane.sh still holds the init and
-# sops sections until they convert (#934, #924).
+# durable state are real.
 load ../helpers
 
 driver=scripts/smortress-restic-backup.sh
+init=scripts/smortress-restic-init.sh
+decrypt=scripts/sops-decrypt.sh
+seeder=scripts/smortress-secrets-seed.sh
 
 # bats sources this file, and runs setup_file, inside a function, so the storage
 # table's `declare -A` arrays are local to it and gone by the test body. The
@@ -179,6 +183,24 @@ for a in "$@"; do url=$a; done
 printf '%s\n' "$url" >>"$STUB_LOG/curl-urls"
 exit "${STUB_CURL_EXIT:-0}"
 STUB
+
+    # The secret pipeline's decrypt: a fixed plaintext per bundle, except that
+    # STUB_SOPS_PLAINTEXT makes it emit a document of the caller's choosing, which
+    # is how the two-key value case is reached.
+    cat >"$fx/bin/sops" <<'STUB'
+#!/usr/bin/env bash
+if [[ -n ${STUB_SOPS_PLAINTEXT:-} ]]; then
+  printf '%s\n' "$STUB_SOPS_PLAINTEXT"
+  exit 0
+fi
+file=""
+for a in "$@"; do file=$a; done
+if [[ $file == *restic-password.yaml ]]; then
+  printf 'password: hunter2\n'
+else
+  printf 'canary: sops-decrypt-ok\n'
+fi
+STUB
     chmod 0755 "$fx/bin"/*
 
     # The harness builds its stub tree from the real storage table: the verifier
@@ -220,7 +242,7 @@ setup() {
     export STUB_LOG=$log REPO_ROOT=$PWD
     export PATH="$fx/bin:$PATH"
     export RESTIC_BIN=$fx/bin/restic ZFS_BIN=$fx/bin/zfs ZFS_READY_BIN=$fx/bin/zfs-ready \
-        CURL_BIN=$fx/bin/curl
+        CURL_BIN=$fx/bin/curl SOPS_BIN=$fx/bin/sops
     export RESTIC_BASE=$repos RESTIC_STATE_ROOT=$work/state \
         STORAGE_LAYOUT=$PWD/scripts/storage-layout.sh
     export RESTIC_PROGRESS_ROOT=$work/progress
@@ -1057,6 +1079,423 @@ stale_recorded_path_set() {
     export STUB_SNAPSHOTS_JSON
     drive scripts/smortress-restic-verify.sh --local --json
     assert_equal "$(jq -r '.ssd.units.music.fresh' <<<"$out")" false
+}
+
+# --- 6. repository init --------------------------------------------------
+# A repository is created once. init has to tell an existing repository from an
+# absent one (restic exits 10) from a directory that holds files and is not a
+# repository, and it must refuse a local backend whose disk is not mounted:
+# a repository written under an unmounted mountpoint looks like a backup
+# destination and is not one.
+#
+# The init checks create and delete repositories, so each test builds its own
+# root and mountinfo: this file's fixture is shared by every sibling test under
+# --jobs, and a half-built repository is exactly what they must not see.
+init_fixture() {
+    repos=$work/repos
+    install -d -m 0755 "$repos/ssd" "$repos/hdd"
+    printf '36 25 8:1 / %s/ssd rw,relatime - ext4 /dev/sdb1 rw\n37 25 8:2 / %s/hdd rw,relatime - ext4 /dev/sda1 rw\n' \
+        "$repos" "$repos" >"$work/mountinfo"
+    export RESTIC_BASE=$repos
+}
+
+init_existing_repository() {
+    init_fixture
+    install -d -m 0755 "$repos/ssd/restic"
+    drive STUB_CAT_EXIT=0 "$init" ssd
+}
+
+init_missing_repository() {
+    init_fixture
+    drive STUB_CAT_EXIT=10 "$init" ssd
+}
+
+init_unmounted_mountpoint() {
+    init_fixture
+    sed -i "\|$repos/ssd|d" "$work/mountinfo"
+    drive STUB_CAT_EXIT=10 "$init" ssd
+}
+
+init_non_repository_directory() {
+    init_fixture
+    install -d -m 0755 "$repos/ssd/restic"
+    printf 'not a repo\n' >"$repos/ssd/restic/stray"
+    drive STUB_CAT_EXIT=10 "$init" ssd
+}
+
+@test "an existing repository is accepted" {
+    init_existing_repository
+    assert_equal "$rc" 0
+}
+
+@test "an existing repository is never re-initialised" {
+    init_existing_repository
+    refute_logged '^init' "$log/restic"
+}
+
+@test "a missing repository is initialised" {
+    init_missing_repository
+    assert_equal "$rc" 0
+}
+
+@test "init runs against the mounted repository path" {
+    init_missing_repository
+    assert_logged '-r .*/repos/ssd/restic init' "$log/restic"
+}
+
+@test "init refuses an unmounted mountpoint" {
+    init_unmounted_mountpoint
+    assert_not_equal "$rc" 0
+}
+
+@test "nothing is initialised on the root filesystem" {
+    init_unmounted_mountpoint
+    refute_logged '^init' "$log/restic"
+}
+
+@test "init refuses a non-empty non-repository directory" {
+    init_non_repository_directory
+    assert_not_equal "$rc" 0
+}
+
+# --- 7. sops-decrypt format column ---------------------------------------
+# The decrypt writes /run from a manifest whose last column decides how a
+# secret is written: `value` takes the one scalar (what a restic password file
+# must be), `yaml` keeps the document verbatim. The fixture is the age identity,
+# the ciphertext set and that manifest, per test because every scenario breaks
+# one of them.
+sops_fixture() {
+    dec=$work/sops
+    install -d -m 0700 "$dec/src" "$dec/dst"
+    printf 'AGE-SECRET-KEY-STUB\n' >"$dec/age"
+    printf 'canary: sops-decrypt-ok\n' >"$dec/src/canary.yaml"
+    printf 'password: hunter2\n' >"$dec/src/restic-password.yaml"
+    me=$(id -un)
+    mg=$(id -gn)
+    cat >"$dec/manifest" <<EOF
+canary.yaml           $me $mg 0600
+restic-password.yaml  $me $mg 0600 value
+EOF
+    export SMORTRESS_SECRETS_SRC=$dec/src SMORTRESS_SECRETS_DST=$dec/dst \
+        SMORTRESS_SECRETS_MANIFEST=$dec/manifest SMORTRESS_AGE_KEY=$dec/age
+}
+
+decrypt_listed_set() {
+    sops_fixture
+    drive "$decrypt"
+}
+
+decrypt_without_identity() {
+    sops_fixture
+    mv "$dec/age" "$dec/age.missing"
+    drive "$decrypt"
+}
+
+decrypt_multi_key_value() {
+    sops_fixture
+    export STUB_SOPS_PLAINTEXT=$'first: one\nsecond: two\n'
+    drive "$decrypt"
+}
+
+decrypt_unlisted_ciphertext() {
+    sops_fixture
+    printf 'extra.yaml\n' >"$dec/src/extra.yaml"
+    drive "$decrypt"
+}
+
+@test "sops-decrypt writes a value secret" {
+    decrypt_listed_set
+    assert_equal "$rc" 0
+}
+
+@test "format=value writes only the password" {
+    decrypt_listed_set
+    assert_equal "$(cat "$dec/dst/restic-password.yaml")" "hunter2"
+}
+
+@test "format=yaml stays verbatim" {
+    decrypt_listed_set
+    assert_equal "$(cat "$dec/dst/canary.yaml")" "canary: sops-decrypt-ok"
+}
+
+@test "a missing age identity fails closed" {
+    decrypt_without_identity
+    assert_not_equal "$rc" 0
+}
+
+@test "a multi-key secret cannot be written as value" {
+    decrypt_multi_key_value
+    assert_not_equal "$rc" 0
+}
+
+@test "an unlisted ciphertext still fails closed" {
+    decrypt_unlisted_ciphertext
+    assert_not_equal "$rc" 0
+}
+
+# --- 7b. the ciphertext seed that makes /var authoritative ----------------
+# The decrypt reads /var now, and the image's baked set is only the seed for a
+# host that has none. Nothing may overwrite a host copy: that is where a rotation
+# lands, and reinstating the baked value would silently undo it.
+#
+# Both manifest paths are pointed into the work dir: the seed rewrites the host
+# manifest, and a harness run must never touch the machine's /etc.
+seed_fixture() {
+    seed=$work/seed
+    install -d -m 0700 "$seed/baked"
+    printf 'canary: baked\n' >"$seed/baked/canary.yaml"
+    printf 'password: baked\n' >"$seed/baked/restic-password.yaml"
+    export SMORTRESS_SECRETS_BAKED=$seed/baked SMORTRESS_SECRETS_SRC=$seed/host \
+        SMORTRESS_SECRETS_IMAGE_MANIFEST=$seed/image.manifest \
+        SMORTRESS_SECRETS_MANIFEST=$seed/host.manifest
+}
+
+seed_run() { drive "$seeder"; }
+
+seeded_host() {
+    seed_fixture
+    seed_run
+}
+
+seeded_then_rotated() {
+    seeded_host
+    printf 'canary: rotated\n' >"$seed/host/canary.yaml"
+    seed_run
+}
+
+# A secret the image added after the host's copy existed: the manifest names it,
+# so leaving it out fails the decrypt's set check for every consumer.
+seeded_after_image_addition() {
+    seeded_then_rotated
+    rm -f "$seed/host/restic-password.yaml"
+    seed_run
+}
+
+seeded_from_nothing() {
+    seed_fixture
+    rm -f "$seed/baked"/*.yaml
+    seed_run
+}
+
+@test "the seed copies the baked ciphertext" {
+    seeded_host
+    assert_equal "$rc" 0
+}
+
+@test "the ciphertext lands" {
+    seeded_host
+    assert_equal "$(cat "$seed/host/canary.yaml" 2>/dev/null)" "canary: baked"
+}
+
+@test "the ciphertext is root-only" {
+    seeded_host
+    assert_equal "$(stat -c %a "$seed/host/canary.yaml" 2>/dev/null)" 600
+}
+
+@test "the host directory is root-only" {
+    seeded_host
+    assert_equal "$(stat -c %a "$seed/host" 2>/dev/null)" 700
+}
+
+@test "a host copy is never overwritten" {
+    seeded_then_rotated
+    assert_equal "$(cat "$seed/host/canary.yaml")" "canary: rotated"
+}
+
+@test "a missing ciphertext is seeded" {
+    seeded_after_image_addition
+    assert_equal "$rc" 0
+}
+
+@test "the newly added secret lands" {
+    seeded_after_image_addition
+    assert_equal "$(cat "$seed/host/restic-password.yaml" 2>/dev/null)" "password: baked"
+}
+
+@test "the existing rotation is still untouched" {
+    seeded_after_image_addition
+    assert_equal "$(cat "$seed/host/canary.yaml")" "canary: rotated"
+}
+
+@test "nothing baked is not an error" {
+    seeded_from_nothing
+    assert_equal "$rc" 0
+}
+
+@test "nothing baked copies nothing" {
+    seeded_from_nothing
+    if [[ -e $seed/host/canary.yaml ]]; then
+        fail "the seed copied a ciphertext with nothing baked: $(cat "$seed/host/canary.yaml")"
+    fi
+}
+
+# --- 7c. the manifest the image owns --------------------------------------
+# The manifest is metadata (name, owner, group, mode, format), never a secret, so
+# the image is authoritative for it. bootc merges /etc once per deployment and
+# keeps whatever the host already had, so on 2026-11-22 the image added two lines
+# and an existing host never saw them: the seed copied both ciphertexts, /etc
+# still listed the old set, and every consumer died on "ciphertext set and
+# manifest disagree" until an operator appended the lines by hand. The seed now
+# replaces the host copy from the image on every run, so the case below is a boot
+# and nothing else.
+#
+# The age identity is §7's, and the last assertions decrypt what the seed left
+# behind through the same sops stub, so one fixture carries the chain.
+refresh_fixture() {
+    dec=$work/sops
+    install -d -m 0700 "$dec"
+    printf 'AGE-SECRET-KEY-STUB\n' >"$dec/age"
+    me=$(id -un)
+    mg=$(id -gn)
+    refresh=$work/refresh
+    install -d -m 0700 "$refresh/host"
+    install -d -m 0755 "$refresh/image" "$refresh/image/secrets"
+    printf 'canary: baked\n' >"$refresh/image/secrets/canary.yaml"
+    printf 'token: baked\n' >"$refresh/image/secrets/new-token.yaml"
+    cat >"$refresh/image/secrets.manifest" <<EOF
+canary.yaml      $me $mg 0600
+new-token.yaml   $me $mg 0600 value
+EOF
+    # A host that predates the new image: the manifest it booted with, and one of
+    # the two ciphertexts already rotated in place under it.
+    printf 'canary.yaml  %s %s 0600\n' "$me" "$mg" >"$refresh/host/secrets.manifest"
+    printf 'canary: rotated\n' >"$refresh/host/canary.yaml"
+    export SMORTRESS_SECRETS_BAKED=$refresh/image/secrets \
+        SMORTRESS_SECRETS_SRC=$refresh/host \
+        SMORTRESS_SECRETS_IMAGE_MANIFEST=$refresh/image/secrets.manifest \
+        SMORTRESS_SECRETS_MANIFEST=$refresh/host/secrets.manifest
+}
+
+refresh_seeded() {
+    refresh_fixture
+    drive "$seeder"
+}
+
+refresh_decrypted() {
+    refresh_seeded
+    drive SMORTRESS_SECRETS_SRC="$refresh/host" SMORTRESS_SECRETS_DST="$refresh/run" \
+        SMORTRESS_SECRETS_MANIFEST="$refresh/host/secrets.manifest" \
+        SMORTRESS_AGE_KEY="$dec/age" "$decrypt"
+}
+
+# A second boot of the same image is a no-op, not a rewrite: the inode survives.
+refresh_reseeded() {
+    refresh_seeded
+    manifest_inode=$(stat -c %i "$refresh/host/secrets.manifest")
+    drive "$seeder"
+}
+
+# An image that carries no manifest -- the release that drops the baked set, or a
+# rollback to one that only ever had /etc -- must leave the host copy alone: the
+# seed is not allowed to delete the only manifest a booting host has.
+refresh_without_image_manifest() {
+    refresh_fixture
+    mv "$refresh/image/secrets.manifest" "$refresh/image/secrets.manifest.off"
+    printf 'canary.yaml  %s %s 0600\n' "$me" "$mg" >"$refresh/host/secrets.manifest"
+    drive "$seeder"
+}
+
+@test "the seed applies the image manifest over the host's stale copy" {
+    refresh_seeded
+    assert_equal "$rc" 0
+}
+
+@test "the host manifest becomes the image's, not the one bootc preserved" {
+    refresh_seeded
+    if ! cmp -s "$refresh/image/secrets.manifest" "$refresh/host/secrets.manifest"; then
+        fail "the host manifest is not the image's: $(cat "$refresh/host/secrets.manifest")"
+    fi
+}
+
+@test "the replaced manifest stays readable metadata, not a secret" {
+    refresh_seeded
+    assert_equal "$(stat -c %a "$refresh/host/secrets.manifest" 2>/dev/null)" 644
+}
+
+# The mixed rotation the incident hit: one entry the host already rotated and one
+# the image added. The manifest refresh must not touch the first, must seed the
+# second, and the set has to match afterwards or every consumer fails.
+@test "a rotated ciphertext survives the manifest refresh" {
+    refresh_seeded
+    assert_equal "$(cat "$refresh/host/canary.yaml")" "canary: rotated"
+}
+
+@test "the ciphertext the new manifest line names is seeded" {
+    refresh_seeded
+    assert_equal "$(cat "$refresh/host/new-token.yaml" 2>/dev/null)" "token: baked"
+}
+
+@test "the decrypt succeeds on a host that only ran the seed" {
+    refresh_decrypted
+    assert_equal "$rc" 0
+}
+
+@test "the newly seeded secret decrypts as the manifest's value" {
+    refresh_decrypted
+    assert_equal "$(cat "$refresh/run/new-token.yaml" 2>/dev/null)" "sops-decrypt-ok"
+}
+
+@test "the rotated ciphertext decrypts too" {
+    refresh_decrypted
+    if [[ ! -s $refresh/run/canary.yaml ]]; then
+        fail "the rotated ciphertext did not decrypt"
+    fi
+}
+
+@test "a second seed run is not an error" {
+    refresh_reseeded
+    assert_equal "$rc" 0
+}
+
+@test "an unchanged manifest is not rewritten" {
+    refresh_reseeded
+    assert_equal "$(stat -c %i "$refresh/host/secrets.manifest")" "$manifest_inode"
+}
+
+@test "an image without a manifest is not an error" {
+    refresh_without_image_manifest
+    assert_equal "$rc" 0
+}
+
+@test "an image without a manifest leaves the host copy alone" {
+    refresh_without_image_manifest
+    assert_equal "$(cat "$refresh/host/secrets.manifest")" "canary.yaml  $me $mg 0600"
+}
+
+# --- 8. units cannot start before the dataset is ready ------------------
+# The ordering is one check per dataset in the storage table, so the table is
+# read here, where bats sources this file, and not inside a test body.
+# shellcheck source=/dev/null
+source scripts/storage-layout.sh
+
+backup_service=units/systemd/smortress-restic-backup@.service
+
+ordered_after_zfs_ready() { # instance
+    grep -q "zfs-ready@$1.service" "$backup_service" ||
+        fail "$backup_service does not order after zfs-ready@$1.service"
+}
+
+for _key in "${dataset_order[@]}"; do
+    _instance=$(readiness_instance "$_key")
+    register "the backup driver is ordered after zfs-ready@$_instance" \
+        ordered_after_zfs_ready "$_instance"
+done
+unset _key _instance
+
+image_enables_unit() { # unit
+    grep -q "$1" image/Containerfile || fail "image/Containerfile does not enable $1"
+}
+
+for _unit in var-lib-restic-ssd.mount var-lib-restic-hdd.mount \
+    smortress-restic-init.service smortress-restic-backup-ssd.timer \
+    smortress-restic-backup-hdd.timer smortress-restic-backup-r2.timer \
+    smortress-restic-verify.timer; do
+    register "the image enables $_unit" image_enables_unit "$_unit"
+done
+unset _unit
+
+@test "retention keeps 14 daily, 8 weekly, 12 monthly" {
+    assert_logged '--keep-daily 14 --keep-weekly 8 --keep-monthly 12' "$driver"
 }
 
 # --- 9. first-upload sizing ---------------------------------------------
