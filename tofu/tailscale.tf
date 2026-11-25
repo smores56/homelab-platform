@@ -23,10 +23,10 @@ locals {
   # The plan's whole authority (design #841). `policy_file:read` reads,
   # validates and previews the policy, which is every Tailscale call a plan
   # makes; `devices:core:read` and `devices:posture_attributes:read` are the
-  # pair the API requires beside it; `services:read` refreshes
-  # `tailscale_service.agent_ui`. Asking for exactly these is what keeps a plan
-  # from minting a token that could save a policy, delete a device or rewrite a
-  # Service, and a client granted less fails the plan at configure time.
+  # pair the API requires beside it; `services:read` refreshes the Service
+  # resources. Asking for exactly these is what keeps a plan from minting a token
+  # that could save a policy, delete a device or rewrite a Service, and a client
+  # granted less fails the plan at configure time.
   tailscale_plan_scopes = [
     "policy_file:read",
     "devices:core:read",
@@ -106,9 +106,11 @@ locals {
 
     # A Service VIP is an address the tailnet owns rather than one a device
     # holds, so it cannot be named as an `acl` destination: that form is a host's
-    # port, and the VIP is no host. A grant names the service instead, and exactly
-    # two sources reach its one port (design #834): the owner, and the CI probe
-    # (#848), which is worth nothing unless it is not the owner.
+    # port, and the VIP is no host. A grant names the service instead. The agent
+    # UI's one port is reached by exactly two sources (design #834): the owner,
+    # and the CI probe (#848), which is worth nothing unless it is not the owner.
+    # OPDShelf's is owner-only: the catalogue is the owner's, and nothing else has
+    # asked for it.
     grants = [
       {
         src = ["group:owner"]
@@ -126,6 +128,15 @@ locals {
         dst = ["svc:agent-ui"]
         ip  = ["443"]
       },
+      {
+        # OPDShelf's Service, the first application off the per-port scheme. The
+        # port is the same 443 and the destination is a different service, so this
+        # grant widens nothing the UI's grants already admitted: a Service VIP is
+        # its own address, and the owner is the only client.
+        src = ["group:owner"]
+        dst = ["svc:opds"]
+        ip  = ["443"]
+      },
     ]
 
     # The advertisement is the host's own, so it approves itself: without an
@@ -134,6 +145,7 @@ locals {
     autoApprovers = {
       services = {
         "svc:agent-ui" = ["tag:smortress"]
+        "svc:opds"     = ["tag:smortress"]
       }
     }
 
@@ -171,7 +183,7 @@ locals {
     tests = [
       {
         src    = var.tailscale_login
-        accept = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:vps:22", "svc:agent-ui:443"]
+        accept = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:vps:22", "svc:agent-ui:443", "svc:opds:443"]
       },
       {
         # The owner reaches the edge login, never the edge's upstream ports and
@@ -182,7 +194,7 @@ locals {
       },
       {
         src  = "tag:untrusted"
-        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8446", "tag:smortress:8447", "tag:vps:22", "svc:agent-ui:443"]
+        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8446", "tag:smortress:8447", "tag:vps:22", "svc:agent-ui:443", "svc:opds:443"]
       },
       {
         # The edge reaches the two Serve ports and nothing else: no sshd, no
@@ -192,7 +204,7 @@ locals {
       },
       {
         src  = "tag:vps"
-        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8484", "svc:agent-ui:443"]
+        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8484", "svc:agent-ui:443", "svc:opds:443"]
       },
       {
         # The deploy node reaches the receiver and the names probe reaches the UI
@@ -236,7 +248,7 @@ resource "tailscale_acl" "this" {
   # names a tag no device carries and a service the tailnet does not have, and
   # the validator refuses it: the route would close in the same apply that opens
   # it.
-  depends_on = [tailscale_device_tags.smortress, tailscale_service.agent_ui]
+  depends_on = [tailscale_device_tags.smortress, tailscale_service.agent_ui, tailscale_service.opds]
 
   # This resource is the whole policy, not a patch: the provider refuses to
   # replace a policy it did not write unless that is said out loud, and the
@@ -257,5 +269,19 @@ resource "tailscale_service" "agent_ui" {
   count = var.tailnet == "" ? 0 : 1
 
   name  = "svc:agent-ui"
+  ports = ["tcp:443"]
+}
+
+# OPDShelf's own Service: the first application off the per-port scheme. A Service
+# gives the application a name of its own instead of a second port on the host's,
+# and Tailscale terminates TLS there and issues the certificate for that name, so
+# `https://opds.<tailnet>.ts.net/` is a URL the catalogue owns. This is also the
+# experiment that proves Tailscale issues a certificate for a Service FQDN; the
+# host's 8443 route (scripts/tailscale-serve.sh) stays as the rollback until it
+# has. Owner-only: the ACL grants nothing but `group:owner` to it.
+resource "tailscale_service" "opds" {
+  count = var.tailnet == "" ? 0 : 1
+
+  name  = "svc:opds"
   ports = ["tcp:443"]
 }
