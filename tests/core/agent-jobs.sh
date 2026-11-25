@@ -180,6 +180,9 @@ fi
 # Podman's status rather than head's.
 job_build_podman_argv general probe-3 'echo hello; exit 3'
 install -d "$work/run/probe-3.d"
+# The helper groups the script for the runner; a test has no runner account, so
+# any real group the current user belongs to proves the same code path.
+job_group=$(id -gn)
 job_write_runner_script "$work/run/probe-3.d" "$work/run/probe-3.d/out"
 script=$(cat "$work/run/probe-3.d/job.sh")
 if grep -qx 'set -o pipefail' <<<"$script" &&
@@ -190,10 +193,23 @@ if grep -qx 'set -o pipefail' <<<"$script" &&
 else
   bad 'the runner script caps its own output and keeps the command one argument' "$script"
 fi
-if [[ $(stat -c %a "$work/run/probe-3.d/job.sh") == 555 ]]; then
-  ok 'the runner script is executable and not writable by the runner'
+if [[ $(stat -c %a "$work/run/probe-3.d/job.sh") == 550 ]] &&
+  [[ $(stat -c %G "$work/run/probe-3.d/job.sh") == "$job_group" ]]; then
+  ok 'the runner script is readable and executable by the runner group only'
 else
-  bad 'the runner script is executable and not writable by the runner'
+  bad 'the runner script is readable and executable by the runner group only' \
+    "$(stat -c '%a %U:%G' "$work/run/probe-3.d/job.sh")"
+fi
+
+# The job root must be reachable by a runner uid. /run/smortress is not: it is
+# 0700 root to keep the bridge socket unreachable, and a script under it fails
+# the exec with status 203.
+if grep -q '^readonly JOB_DEFAULT_ROOT=/run/smortress-agent-job$' "$core" &&
+  grep -qx 'd /run/smortress-agent-job 0711 root root -' "$tmpfiles"; then
+  ok "the job root is outside /run/smortress and traverse-only"
+else
+  bad "the job root is outside /run/smortress and traverse-only" \
+    "$(grep -h 'JOB_DEFAULT_ROOT=\|agent-job 0711' "$core" "$tmpfiles")"
 fi
 
 # A file at the cap is reported as-is; one byte past it is truncated and named.
