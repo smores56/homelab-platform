@@ -20,7 +20,7 @@
 # A container restart destroys the namespace this helper joined, which ends the
 # netns-side listener; the unit then restarts and resolves the new pid.
 #
-# Every knob is environment-overridable so tests/apps/ingress.sh can drive this
+# Every knob is environment-overridable so tests/apps/ingress.bats can drive this
 # exact code against stubs. Production sets none of them: the defaults are the
 # host paths, and a wrong override is a wrong host path, not a way to skip a
 # check.
