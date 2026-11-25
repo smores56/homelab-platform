@@ -2,19 +2,18 @@
 # The Unix socket the general facade reaches the shell dispatcher through (SDLC
 # #859, T17 of #702). It serves one tool, `shell.run`, and one class. The personal
 # class has the same program in smortress-agent-shell-bridge-personal.service:
-# two units, so each class's class constant and socket path are literals here and
+# one unit per class, so each class constant and socket path is a literal and
 # neither class can be assembled from a request.
 #
 # Why a socket and not a port: the reachability control here is the filesystem.
 # /run/smortress/agent-shell-general is a tmpfiles directory, 0710 root:1000,
 # under the root 0700 /run/smortress, so no host uid can traverse it; the one
-# exception is
-# the socket file itself -- 0660, chowned to the facade container's group and in
-# a directory mounted into that container alone. The personal facade mounts only
-# its own class's directory, so it cannot reach this socket even though both
-# containers share uid 1000. The gateway, the model server and the web UI have no
-# path to it: they would need a group bit on an inode they
-# cannot even open, and nothing publishes an address they could dial instead. A
+# exception is the socket file itself -- 0660, chowned to the facade container's
+# group and in a directory mounted into that container alone. The personal facade
+# mounts only its own class's directory, so it cannot reach this socket even
+# though both containers share uid 1000. The gateway, the model server and the
+# web UI have no path to it: they would need a group bit on an inode they cannot
+# even open, and nothing publishes an address they could dial instead. A
 # TCP listener would be a second way in with no consumer, would need its own
 # authentication, and would exist on every interface the host has.
 #
