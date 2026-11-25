@@ -8,8 +8,9 @@
 # without a tailnet: the fixed core routes, the two core paths, the wallpaper
 # library as static files under `/wallpapers`, one route per app, pruning of an
 # app that left the plan without touching the static route or a core path, the
-# retirement of a host port the script no longer declares, a refused claim on a
-# core path, and a refusal to build a route from a plan that names a foreign path
+# retirement of a host port the script no longer declares, the clearing of a
+# Service no declaration makes, a refused claim on a core path, and a refusal to
+# build a route from a plan that names a foreign path
 # or port. The Service VIP endpoints are counted the same way: each is a core
 # declaration, and the fake logs one and records the other.
 #
@@ -53,7 +54,10 @@ trap 'rm -rf "$work"' EXIT
 # trailing slash Serve adds itself. A `--service`
 # declaration belongs to the Service VIP and not to the host, so it lands in
 # `Services` keyed `<service>:<port>`: recorded as a host handler it would take
-# that port's root path, which on 443 is Immich's.
+# that port's root path, which on 443 is Immich's. `serve clear <service>` is the
+# other half -- it retires the whole Service, so the fake drops every entry that
+# holds that name, whether the key carries the handler's port or not, which is the
+# one thing an `off` cannot do.
 cat >"$work/tailscale" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -67,6 +71,20 @@ case $1 in
                 cat "$FAKE_STATUS" ;;
             reset)
                 printf '{}\n' >"$FAKE_STATUS" ;;
+            clear)
+                # `serve clear <service>` removes all config for one Service. The
+                # key may be the bare name or the name with its port, so both go.
+                [[ ${FAKE_FAIL_CLEAR:-} == 1 ]] && exit 1
+                service=${2:-}
+                if [[ -z $service ]]; then
+                    echo "fake tailscale: clear without a service: $*" >&2
+                    exit 2
+                fi
+                jq --arg name "$service" '
+                    .Services //= {}
+                    | .Services |= with_entries(select((.key | sub(":[0-9]+$"; "")) != $name))' \
+                    "$FAKE_STATUS" >"$FAKE_STATUS.next"
+                mv "$FAKE_STATUS.next" "$FAKE_STATUS" ;;
             *)
                 # A declaration ends in a target; `off` removes that path. A
                 # `--tcp` forward is not a Web handler: Serve records it under
@@ -515,6 +533,77 @@ if grep -qE -- '--set-path=/apps/.* off$' "$log"; then
     bad 'a failed port removal stops the further prunes' "$(grep -E -- ' off$' "$log")"
 else
     ok 'a failed port removal stops the further prunes'
+fi
+
+# --- a Service no declaration makes is cleared -------------------------------
+#
+# The same decay in the other map, and the one the tailnet actually carried:
+# `svc:agent-ui` was deleted from the tailnet (its Service and VIP are gone with
+# the host Caddy), but its handler still answered
+# `tcp://agent-ui.<tailnet>.ts.net:443` pointing at 127.0.0.1:9443, where nothing
+# listens. A host port is retired by `off`; a whole Service is `clear`, and a
+# handler no declaration makes must not survive a run.
+reset_case
+jq '.Services["svc:agent-ui"] = {"Proxy": "http://127.0.0.1:9443"}' "$status" \
+    >"$work/s" && mv "$work/s" "$status"
+run
+eq "$?" 0 'a Service the script no longer declares does not fail the run'
+eq "$(grep -cF -- 'serve clear svc:agent-ui' "$log")" 1 \
+    'a stale Service is cleared exactly once'
+eq "$(grep -cE -- 'serve clear' "$log")" 1 \
+    'a run clears the one stale Service and nothing else'
+if jq -e '.Services // {} | has("svc:agent-ui") | not' "$status" >/dev/null 2>&1; then
+    ok 'the stale Service leaves the Serve config, so nothing answers its name'
+else
+    bad 'the stale Service leaves the Serve config, so nothing answers its name' \
+        "$(jq -r '.Services // {} | keys | join(" ")' "$status" 2>/dev/null)"
+fi
+eq "$(service_served svc:opds:443)" 'http://127.0.0.1:8083' \
+    'clearing a stale Service leaves the declared ones in place'
+
+# The index the reconcile reads is the declarations' index: a `--service=` block
+# added to the script without its entry here would be cleared on the next run, and
+# an entry with no declaration would pin a route nothing makes. Both are read out
+# of the script rather than repeated, so this is the assertion that fails when a
+# seventh Service is declared.
+declared_services=$(sed -n 's/^declared_services=(\(.*\))$/\1/p' "$script" |
+    tr -s ' ' '\n' | grep -v '^$' | sort | paste -sd' ' -)
+if [[ -z $declared_services ]]; then
+    bad 'declared_services is readable' "$script"
+else
+    ok 'declared_services is readable'
+fi
+eq "$(grep -oE -- '--service=svc:[A-Za-z0-9._-]+' "$script" | sed 's/^--service=//' |
+    sort -u | paste -sd' ' -)" "$declared_services" \
+    'declared_services names exactly the Services the script declares'
+declared_service_re=$(tr ' ' '\n' <<<"$declared_services" | paste -sd'|' -)
+if grep -qE -- "serve clear ($declared_service_re)$" "$log"; then
+    bad 'a Service the script declares is never cleared' \
+        "$(grep -E -- 'serve clear' "$log")"
+else
+    ok 'a Service the script declares is never cleared'
+fi
+
+# A Service Tailscale refuses to clear is reported and stops the further prunes,
+# like a port that will not go: the run fails rather than leaving the rest of the
+# config half-reconciled in silence.
+reset_case
+jq '.Services["svc:agent-ui"] = {"Proxy": "http://127.0.0.1:9443"}' "$status" \
+    >"$work/s" && mv "$work/s" "$status"
+if FAKE_FAIL_CLEAR=1 run; then
+    bad 'a Service Serve refuses to clear fails the run'
+else
+    ok 'a Service Serve refuses to clear fails the run'
+fi
+if grep -qF -- 'could not clear the stale Service svc:agent-ui' "$work/stderr"; then
+    ok 'the failure names the Service it could not clear'
+else
+    bad 'the failure names the Service it could not clear' "$(cat "$work/stderr")"
+fi
+if grep -qE -- '--set-path=/apps/.* off$' "$log"; then
+    bad 'a failed Service clear stops the further prunes' "$(grep -E -- ' off$' "$log")"
+else
+    ok 'a failed Service clear stops the further prunes'
 fi
 
 # --- a missing plan prunes every app route -----------------------------------

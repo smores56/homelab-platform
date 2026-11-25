@@ -109,6 +109,14 @@ check "stale-route pruning only considers tenant handlers" \
 # Services -- is turned off here or it lingers for good.
 check "a port that left core_routes is turned off on the next run" \
   has 'serve --https="$port" off' "$serve_script"
+# The same for the other map: a Service whose declaration is gone keeps its handler
+# until something clears it, and `svc:agent-ui` answered a Caddy that no longer
+# exists long after its Service left the tailnet. A host `off` cannot retire a
+# Service, so the pin is on `clear` and on the index it is compared with.
+check "a Service that left the declarations is cleared on the next run" \
+  has 'serve clear "$name"' "$serve_script"
+check "the Services reconcile reads the declared index" \
+  has 'declared_services=(' "$serve_script"
 if grep -qE -- '--set-path=/wallpapers[^ ]* .*off' "$serve_script"; then
   bad "pruning never removes the wallpaper route"
 else

@@ -205,9 +205,9 @@ status=$("$tailscale_bin" serve status --json) || {
 # Every https port in the status is stale unless core_routes names it. 443 is
 # exempt: that is the tenant root, where the two gateways and the wallpaper tree
 # live, and it never retires by dropping an entry. Only `Web` is read: `TCP` is the
-# receiver's forward and `Services` are the per-app names, and neither is a host
-# port. Same guard as the `/apps/` prune below -- a plan that did not verify leaves
-# the pruning to a run that can read it.
+# receiver's forward and `Services` are the per-app names, which the loop below
+# reconciles and neither of which is a host port. Same guard as the `/apps/` prune
+# below -- a plan that did not verify leaves the pruning to a run that can read it.
 while IFS= read -r port; do
   $plan_ok || break
   [[ -n $port ]] || continue
@@ -220,6 +220,36 @@ while IFS= read -r port; do
   fi
 done < <(
   jq -r '[.Web // {} | keys[] | split(":") | last | select(test("^[0-9]+$"))] | unique[]' \
+    <<<"$status" 2>/dev/null || true
+)
+
+# The same decay in the other map: a Service handler is answered for as long as
+# tailscaled's config names it, and a Service the tailnet no longer has leaves
+# nothing that could refuse the handler. `svc:agent-ui` is the proof -- the Service
+# was deleted and its handler kept pointing at a Caddy that no longer exists -- so a
+# name the declarations above do not make is cleared on the next run.
+#
+# This list is the declarations' index, not a second declaration: every `--service=`
+# above is named here once, and tests/core/tailscale-serve.sh fails when a
+# declaration and this list disagree. `clear` removes the whole Service, which is
+# what a retired name needs; the per-path `off` above would leave it behind.
+#
+# 443 is the handler's port and not part of the name: `.Services` keys the entry
+# `svc:agent` and other recordings of it `svc:agent:443`, so a key is reduced to the
+# name it holds before it is compared. Only `Services` is read here -- the host
+# ports are the loop above, and the receiver's forward is `TCP`.
+declared_services=(svc:opds svc:immich svc:navidrome svc:assistant svc:agent svc:sync)
+while IFS= read -r name; do
+  $plan_ok || break
+  [[ -n $name ]] || continue
+  [[ " ${declared_services[*]} " == *" $name "* ]] && continue
+  if ! "$tailscale_bin" serve clear "$name"; then
+    echo "tailscale-serve: could not clear the stale Service $name" >&2
+    plan_ok=false
+    break
+  fi
+done < <(
+  jq -r '[.Services // {} | keys[] | sub(":[0-9]+$"; "")] | unique[]' \
     <<<"$status" 2>/dev/null || true
 )
 

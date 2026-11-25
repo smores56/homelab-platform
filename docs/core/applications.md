@@ -574,7 +574,9 @@ entries in `core_routes` (8444 and 8445) instead. A tenant
 plan that claims either path is refused whole, and the stale-route pruning skips
 both, so a run without a plan cannot delete them. A port dropped from `core_routes`
 is turned off on the next run of that script, because Serve keeps answering a
-handler that nothing declares any more.
+handler that nothing declares any more -- and a Service dropped from the script's
+`--service=` declarations is cleared on that run for the same reason, so a name no
+declaration makes stops advertising itself.
 
 The two UIs answer on a Service each, like every other application behind the
 tailnet name service (design #834): `svc:assistant` and `svc:agent` are advertised
