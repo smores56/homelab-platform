@@ -19,6 +19,13 @@ deploy/atomic	tests/deploy/atomic.bats scripts/deploy-state.sh image/rootfs/usr/
 deploy/receiver	tests/deploy/receiver.bats scripts/deploy-state.sh image/rootfs/usr/libexec/deploy-receiver.py
 core/restic-plane	tests/core/restic-plane.bats scripts/smortress-restic-* scripts/restic-plane-common.sh scripts/storage-layout.sh scripts/sops-decrypt.sh scripts/smortress-secrets-seed.sh units/systemd/smortress-restic-* units/systemd/var-lib-restic-*.mount image/Containerfile image/rootfs/usr/share/smortress/secrets.manifest
 deploy/apps	tests/deploy/apps.bats scripts/deploy-apps.sh scripts/deploy/apps/* scripts/lib/log.sh scripts/apps-schema.py scripts/deploy-state.sh scripts/deploy-drain.sh scripts/smortress-boot-gate.sh
+deploy/apps-health	tests/deploy/apps-health.bats scripts/smortress-apps-health.sh scripts/deploy-state.sh
+deploy/boot	tests/deploy/boot.bats scripts/deploy-platform.sh scripts/smortress-boot-gate.sh scripts/deploy-state.sh image/rootfs/usr/lib/bootupd/grub2-static/configs.d/*.cfg image/rootfs/etc/systemd/system.conf.d/*.conf
+deploy/heartbeat	tests/deploy/heartbeat.bats scripts/deploy-heartbeat.sh scripts/deploy-state.sh units/systemd/smortress-deploy-heartbeat.* image/Containerfile
+deploy/notify	tests/deploy/notify.bats .github/workflows/publish-server-image.yml .github/workflows/ci.yml scripts/check-action-pins.sh scripts/check-pr-secret-boundary.sh
+deploy/platform	tests/deploy/platform.bats scripts/deploy-platform.sh scripts/deploy-cli.sh scripts/deploy-state.sh tests/deploy/fake-curl.sh
+deploy/poll	tests/deploy/poll.bats scripts/deploy-poll.sh scripts/deploy-state.sh image/rootfs/usr/libexec/deploy-verify.py units/systemd/smortress-deploy-poll.* image/Containerfile
+deploy/verify	tests/deploy/verify.bats image/rootfs/usr/libexec/deploy-verify.py scripts/deploy-state.sh scripts/deploy-drain.sh
 tags	tests/tags.bats
 core/agent-jobs	tests/core/agent-jobs.bats scripts/agent-job.sh scripts/agent-job-personal.sh scripts/agent-job-general.sh scripts/agent-job-provision.sh scripts/app-images.sh image/rootfs/etc/sysusers.d/smortress-agent-shell.conf image/rootfs/etc/tmpfiles.d/smortress-agent-shell.conf image/rootfs/etc/nftables/smortress-agent-jobs.nft units/systemd/smortress-agent-job-provision.service image/rootfs/etc/smortress/agent/job-image docs/agent-jobs.md image/Containerfile units/quadlet/* units/systemd/*
 core/agent-recovery	tests/core/agent-recovery.bats scripts/restic-plane-common.sh scripts/smortress-restic-backup.sh scripts/smortress-restic-verify.sh scripts/smortress-restic-restore-drill.sh units/systemd/smortress-restic-* units/systemd/smortress-agent-*.service units/quadlet/agent-*.container scripts/storage-layout.sh
