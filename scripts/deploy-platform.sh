@@ -87,14 +87,39 @@ layout=$(deploy_resolve "${STORAGE_LAYOUT:-}" storage-layout "$self_dir/storage-
 # shellcheck source=/dev/null
 source "$layout"
 
-# The gate's own budget, and the bounds inside it. A backup is capped at 1800 s
-# and waits at most 900 s for a unit lock the hourly driver holds; maintenance is
-# never run from here, because a gate that waited for a prune would hold every
-# deploy behind it for hours.
-gate_budget=${DEPLOY_GATE_BUDGET:-3600}
+# The per-attempt deadlines a unit is backed up under are the plane's, not a
+# second table. Asked through a subshell: sourcing restic-plane-common here would
+# redefine the deploy state library's `journal_append` and `state_write`, and
+# those are the gate's durable record.
+plane_lib=$(deploy_resolve "${RESTIC_PLANE_COMMON:-}" restic-plane-common \
+  "$self_dir/restic-plane-common.sh")
+[[ -r $plane_lib ]] || {
+  printf 'deploy-platform: no restic plane library at %s\n' "$plane_lib" >&2
+  exit 1
+}
+plane_var() { # <name>
+  bash -c 'source "$1"; printf "%s\n" "${!2-}"' _ "$plane_lib" "$1"
+}
+plane_deadline() { # <backend> <unit>
+  bash -c 'source "$1"; job_deadline "$2" "$3"' _ "$plane_lib" "$1" "$2"
+}
+plane_long_deadline=$(plane_var deadline_local_long)
+plane_kill_after=$(plane_var kill_after)
+if [[ ! $plane_long_deadline =~ ^[0-9]+$ || ! $plane_kill_after =~ ^[0-9]+$ ]]; then
+  printf 'deploy-platform: %s has no deadline model\n' "$plane_lib" >&2
+  exit 1
+fi
+
+# The gate's own budget, and the bounds inside it. A backup gets its unit's
+# deadline plus the kill-after the runner adds, so a unit that legitimately needs
+# hours (`agent-local`, 14400 s locally) is not cut at a flat 1800 s. The budget
+# is that longest local backup, one wait for a unit lock the hourly driver holds,
+# and the two verifications around it. Maintenance is never run from here,
+# because a gate that waited for a prune would hold every deploy behind it.
 gate_verify_timeout=${DEPLOY_GATE_VERIFY_TIMEOUT:-900}
-gate_backup_timeout=${DEPLOY_GATE_BACKUP_TIMEOUT:-1800}
 gate_lock_wait=${DEPLOY_GATE_LOCK_WAIT:-900}
+gate_backup_cap=${DEPLOY_GATE_BACKUP_TIMEOUT:-}
+gate_budget=${DEPLOY_GATE_BUDGET:-$((gate_lock_wait + plane_long_deadline + plane_kill_after + 2 * gate_verify_timeout + 300))}
 gate_deadline=0
 
 
@@ -167,7 +192,19 @@ bounded() { # <cap> <command...>
 gate_query() { bounded "$gate_verify_timeout" "$verify_bin" --local --json; }
 
 gate_backup() { # <backend> <unit>
-  RESTIC_LOCK_WAIT=$gate_lock_wait bounded "$gate_backup_timeout" \
+  local bound deadline
+  # The unit's own deadline, not a flat cap: `bounded` still trims it to what is
+  # left of the gate's budget, and an explicit DEPLOY_GATE_BACKUP_TIMEOUT wins.
+  bound=$gate_backup_cap
+  if [[ -z $bound ]]; then
+    deadline=$(plane_deadline "$backend" "$unit")
+    [[ $deadline =~ ^[0-9]+$ ]] || {
+      warn "$backend/$unit: no deadline from $plane_lib"
+      return 1
+    }
+    bound=$((deadline + plane_kill_after))
+  fi
+  RESTIC_LOCK_WAIT=$gate_lock_wait bounded "$bound" \
     "$backup_bin" "$backend" --unit "$unit" --no-maintenance
 }
 

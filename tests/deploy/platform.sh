@@ -109,6 +109,23 @@ jq --arg b "$backend" --arg u "$unit" \
   "$STUB_VERIFY_DOC" >"$STUB_VERIFY_DOC.tmp" && mv "$STUB_VERIFY_DOC.tmp" "$STUB_VERIFY_DOC"
 EOF
 
+# Every external command the gate starts runs under `timeout`. Recording the
+# bound it is handed is the only way to assert which deadline a unit got.
+real_timeout=$(command -v timeout)
+export REAL_TIMEOUT=$real_timeout
+cat >"$bin/timeout" <<'EOF'
+#!/usr/bin/env bash
+bound=""
+for a in "$@"; do
+  case $a in
+    --signal=*|--kill-after=*|--foreground|--preserve-status|--verbose) ;;
+    *) bound=$a; break ;;
+  esac
+done
+printf '%s|%s\n' "$bound" "$*" >>"$STUB_LOG/timeouts"
+exec "$REAL_TIMEOUT" "$@"
+EOF
+
 # deploy_notify hands the URL over as a curl config on stdin, never in argv; the
 # fake reads it from there when no argument names one.
 install_fake_curl "$bin"
@@ -281,6 +298,24 @@ if [[ -s $log/curl-urls ]]; then
 else
   ok "no notification is sent without a ping secret"
 fi
+
+# --- 5b. a backup is bounded by the unit's own deadline ---------------------
+# A unit that legitimately needs hours must not be cut at a flat 1800 s: the
+# gate hands each backup the deadline the plane gives that unit.
+reset_gate
+seed_doc true true "$(fresh_without books)"
+jq -c '.ssd.units["agent-local"].fresh = false
+  | .hdd.units["agent-local"].fresh = false' "$STUB_VERIFY_DOC" >"$STUB_VERIFY_DOC.tmp" &&
+  mv "$STUB_VERIFY_DOC.tmp" "$STUB_VERIFY_DOC"
+: >"$log/timeouts"
+out=$(RESTIC_DEADLINE_LOCAL_LONG=40 bash "$platform" prepare \
+  --commit "$commit" --digests "$digests" 2>&1)
+rc=$?
+check_eq "$rc" 0 "the gate is green after backing up both units"
+check_match "$(cat "$log/timeouts")" '^1860\|.*--unit books' \
+  "an ordinary unit keeps the 1800 s deadline"
+check_match "$(cat "$log/timeouts")" '^100\|.*--unit agent-local' \
+  "agent-local gets its long local deadline"
 
 # --- 6. an infrastructure failure leaves no hold ----------------------------
 reset_gate
