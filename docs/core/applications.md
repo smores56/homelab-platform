@@ -563,6 +563,7 @@ mapping file.
 | Hosted proxy | `127.0.0.1:18003` | none, on purpose: a tailnet path would let any device spend the provider key |
 | Personal web UI | `127.0.0.1:18006` | `https://assistant.<tailnet>.ts.net/` and `https://smortress.<tailnet>.ts.net:8444/` |
 | General web UI | `127.0.0.1:18007` | `https://agent.<tailnet>.ts.net/` and `https://smortress.<tailnet>.ts.net:8445/` |
+| zellij web terminal | `127.0.0.1:8082` | `https://terminal.<tailnet>.ts.net/` |
 | Source facades | nothing published | none: each gateway reaches its own facade by container name, and no device outside the deployment has any reason to |
 
 The two agent paths are a second table in `scripts/tailscale-serve.sh`

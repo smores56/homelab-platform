@@ -1612,6 +1612,63 @@ The ACL apply and the enrollment key, the tailnet-only sshd prove-out, retiring
 Tailscale SSH, and the YubiKey sudo credential and its drills are
 `docs/core/server-image.md`, "Access: the tailnet policy, sshd, and sudo".
 
+### The web terminal
+
+`https://terminal.<tailnet>.ts.net/` is zellij's own web client, the only terminal
+that needs neither an SSH key nor an agent. `smortress-zellij-web.service` runs the
+server on `127.0.0.1:8082`, Serve terminates TLS for `svc:terminal`, and the
+sessions live in `/run/zellij` -- the socket directory an SSH login resolves -- so a
+session started over SSH attaches from a browser and a browser-started session is
+visible over SSH. The unit creates `main` at every boot, and no host port, proxy or
+container is added.
+
+One read-write login token, printed once, is the whole credential: store it in the
+password manager, never in this repository, and mint it with the unit's
+environment so it lands in the directory the server reads.
+
+```sh
+sudo -u smores env ZELLIJ_SOCKET_DIR=/run/zellij \
+  /var/home/smores/.local/share/mise/shims/zellij web --create-token
+sudo -u smores env ZELLIJ_SOCKET_DIR=/run/zellij \
+  /var/home/smores/.local/share/mise/shims/zellij web --list-tokens
+```
+
+Zellij 0.46 names every token `token_N` (`--create-token` cannot be combined with
+`--token-name`), and a token does not expire, so rotation is a revoke and a mint:
+
+```sh
+sudo -u smores env ZELLIJ_SOCKET_DIR=/run/zellij \
+  /var/home/smores/.local/share/mise/shims/zellij web --revoke-token token_1
+```
+
+The host-local proof is the server, the session list and the Service, in that
+order. `zellij web --status` is not the probe: it exits 0 whether the server is
+running or not.
+
+```sh
+systemctl is-active smortress-zellij-web.service
+curl -fsS http://127.0.0.1:8082/info/version
+sudo -u smores env ZELLIJ_SOCKET_DIR=/run/zellij \
+  /var/home/smores/.local/share/mise/shims/zellij list-sessions   # main
+tailscale serve status --json | jq '.Services["svc:terminal:443"]'
+```
+
+From a tailnet device, the login page, the token login and attaching to `main` are
+the rest of the proof; attaching to the same session from two devices is allowed
+and both clients type.
+
+Four residual risks are known and accepted, and none of them is a defect to
+report. **The sudo ticket is shared**: `timestamp_type=tty` keys it to the pane's
+pty, every client of a pane shares that pty, and the ticket lasts 30 minutes
+(`image/rootfs/etc/sudoers.d/10-human-gate`), so a token holder can run `sudo -n`
+in a pane where the owner escalated inside the window. **A browser-created pane
+has password sudo only**: the hardware touch needs the key's device, and a browser
+has no agent to forward. **The token is the boundary**: no expiry, no rate limit,
+no lockout, and the login write is synchronous and unauthenticated -- reachable
+only from an owner device. **Sessions outlive the front end**: `KillMode=process`
+is what keeps a browser reconnect from ending the work, so a unit stop leaves the
+session daemons running and the next start runs beside them.
+
 ## Decommission evidence
 
 ### Retire the Cloudflare SSH route
