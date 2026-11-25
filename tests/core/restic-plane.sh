@@ -953,7 +953,34 @@ eq "$(state_json ssd-photos '.last_attempt.result')" success \
 run RESTIC_DEADLINE_LOCAL=2 scripts/smortress-restic-backup.sh ssd --unit photos --no-maintenance
 eq "$(state_json ssd-photos '.last_attempt.reason')" timeout \
   "a slow routine run keeps the tighter deadline"
+
+# The agent's local state outgrew the hourly window, so that unit alone gets the
+# long local bound: a slow increment of it succeeds while every other unit still
+# keeps the tight one.
+reset_state
+export STUB_BACKUP_EXIT=0 STUB_BACKUP_ID="slowagent" STUB_VERIFIED_ID="slowagentv"
+run scripts/smortress-restic-backup.sh ssd --unit agent-local --no-maintenance
+run scripts/smortress-restic-backup.sh ssd --unit photos --no-maintenance
+: >"$log/restic"
+export STUB_BACKUP_SLEEP=3
+run RESTIC_DEADLINE_LOCAL=2 RESTIC_DEADLINE_LOCAL_LONG=15 \
+  scripts/smortress-restic-backup.sh ssd --unit agent-local --no-maintenance
+eq "$(state_json ssd-agent-local '.last_attempt.result')" success \
+  "agent-local's routine run gets the long local deadline"
+run RESTIC_DEADLINE_LOCAL=2 RESTIC_DEADLINE_LOCAL_LONG=15 \
+  scripts/smortress-restic-backup.sh ssd --unit photos --no-maintenance
+eq "$(state_json ssd-photos '.last_attempt.reason')" timeout \
+  "the other units keep the hourly deadline"
 unset STUB_BACKUP_SLEEP
+
+# The freshness and expiry budgets are derived from the deadline the unit
+# actually gets, so the long attempt is not called stale while it is still legal.
+budgets=$(RESTIC_ATTEMPTS=2 RESTIC_RETRY_SLEEP_LOCAL=60 \
+  RESTIC_DEADLINE_LOCAL=1800 RESTIC_DEADLINE_LOCAL_LONG=14400 bash -c '
+  source scripts/restic-plane-common.sh
+  printf "%s %s %s\n" "$(max_age_for ssd agent-local)" \
+    "$(run_expiry_for ssd agent-local)" "$(max_age_for ssd photos)"')
+eq "$budgets" "33600 29520 8400" "agent-local's budgets follow its deadline"
 
 printf '\n%d checks, %d failed\n' "$pass" "$fail"
 ((fail == 0))

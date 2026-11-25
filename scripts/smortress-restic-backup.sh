@@ -500,7 +500,7 @@ main() {
       deadline=$(job_deadline_first "$backend")
       job_attempts=$attempts_first
     else
-      deadline=$(job_deadline "$backend")
+      deadline=$(job_deadline "$backend" "$unit")
       job_attempts=$attempts
     fi
     sleep_time=$(job_retry_sleep "$backend")
