@@ -183,6 +183,12 @@ EnvironmentFile=/etc/caddy/edge.env
 EOF
 systemctl daemon-reload
 caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null
+# Caddy's home is /var/lib/caddy and its certificates live under it. The packaged
+# unit runs as the `caddy` user, which cannot create its own home, so a box whose
+# state directory went missing starts, answers the TLS handshake with an internal
+# error and fails every order with `mkdir /var/lib/caddy: permission denied`.
+# Creating it here is idempotent and makes the restart below able to serve.
+install -d -o caddy -g caddy -m 0750 /var/lib/caddy
 # The packaged unit serves a hello page on 80 until this file replaces its
 # config, so an operator masking it during provisioning is normal; unmask before
 # the enable, or the box's only public listener never comes back.

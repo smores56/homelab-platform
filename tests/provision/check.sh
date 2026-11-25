@@ -79,6 +79,12 @@ check "the edge declares no plain HTTP site" no_plain_http_site
 # healthy box.
 check "the verify anchors its plain-HTTP check to a site address" \
   has "grep -qE '^http://'" "$edge/verify.sh"
+# Caddy's home cannot be created by the caddy user, and a missing one costs every
+# certificate: the bootstrap makes it and the verify proves it is writable.
+check "the bootstrap creates Caddy's storage directory for its user" \
+  has 'install -d -o caddy -g caddy -m 0750 /var/lib/caddy' "$edge/bootstrap.sh"
+check "the verify proves Caddy can write its storage directory" \
+  has 'runuser -u caddy -- test -w /var/lib/caddy' "$edge/verify.sh"
 # The upstreams are variables now, so the Caddyfile names no host and no port at
 # all: this pin is what keeps a literal 443 from being typed back in, and the
 # derivation below is what keeps the target off the host's own address.

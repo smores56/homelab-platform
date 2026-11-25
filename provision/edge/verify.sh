@@ -84,6 +84,11 @@ check_not "no site proxies 443" grep -qF ':443' /etc/caddy/Caddyfile
 # starts with `http://`, which is a listener with no TLS at all.
 check_not "no site answers plain HTTP" grep -qE '^http://' /etc/caddy/Caddyfile
 eq "$(stat -c '%a' /etc/caddy/edge.env)" 640 "the Caddy environment file is root-readable only"
+# Without a writable home Caddy cannot store or load a certificate, and the
+# failure is a TLS handshake error on every name rather than a log line anyone
+# reads: prove the one directory the orders live in.
+check "Caddy's storage directory is writable by its user" \
+  runuser -u caddy -- test -w /var/lib/caddy
 
 for unit in caddy nftables tailscaled unattended-upgrades; do
   check "$unit is enabled" systemctl is-enabled --quiet "$unit"
