@@ -48,10 +48,15 @@ SNIPPET_CHARS = 160
 #: the same bound and refuses a longer line before it parses it.
 MAX_COMMAND_CHARS = 32768
 
-#: Source names, record ids, and memory keys are one path segment: lowercase
-#: alphanumerics plus ``-`` and ``_``, never a dot, so an id can never address a
-#: file outside the deployment's own directories.
+#: Source names and memory keys are one path segment: alphanumerics plus ``-``
+#: and ``_``, never a dot, so a key can never address a file outside the
+#: deployment's own directories.
 _IDENTIFIER = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9_-]*\Z")
+#: A record id is not a filename: it names a record inside a source, and the
+#: source's own adapter turns it into a path. ``repos`` ids carry ``::`` and
+#: ``/``; ``books`` ids carry spaces and non-ASCII authors. So this bound is
+#: "bounded, control-free text", and the adapter is what validates segments.
+MAX_RECORD_ID_CHARS = 1024
 #: FTS5 words are extracted, never passed through: MATCH syntax is an operator
 #: language, and a caller must not be able to hand the index a query it parses.
 _QUERY_WORD = re.compile(r"\w+", re.UNICODE)
@@ -170,7 +175,7 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
         _schema(
             {
                 "source": {"type": "string", "maxLength": MAX_SOURCE_CHARS},
-                "id": {"type": "string", "maxLength": MAX_ID_CHARS},
+                "id": {"type": "string", "maxLength": MAX_RECORD_ID_CHARS},
             },
             ("source", "id"),
         ),
@@ -325,6 +330,16 @@ def _identifier(value: Any, name: str, max_chars: int) -> str:
     return text
 
 
+def _record_id(value: Any, name: str, max_chars: int) -> str:
+    text = _text(value, name, max_chars)
+    if text != text.strip():
+        raise ValidationError(f"{name} may not start or end with whitespace")
+    for character in text:
+        if ord(character) < 32 or ord(character) == 127:
+            raise ValidationError(f"{name} contains a control character")
+    return text
+
+
 def _limit(value: Any, name: str) -> int:
     if value is None:
         return DEFAULT_SEARCH_LIMIT
@@ -397,7 +412,7 @@ def _parse_source_read(arguments: Mapping[str, Any], max_bytes: int) -> SourceRe
     _fields(arguments, ("source", "id"))
     return SourceRead(
         source=_identifier(arguments["source"], "source", MAX_SOURCE_CHARS),
-        id=_identifier(arguments["id"], "id", MAX_ID_CHARS),
+        id=_record_id(arguments["id"], "id", MAX_RECORD_ID_CHARS),
     )
 
 

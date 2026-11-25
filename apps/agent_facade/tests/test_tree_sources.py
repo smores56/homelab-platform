@@ -206,6 +206,14 @@ class BooksTreeTests(unittest.TestCase):
                 )
         self.assertEqual(self.books.search("le guin dune", 5), ())
 
+    def test_a_non_ascii_author_and_title_are_one_component_each(self) -> None:
+        publish_book(
+            self.root, author="Émile Zola", title="Germinal", description="Une mine."
+        )
+        record = self.books.read("books::Émile Zola/Germinal")
+        self.assertEqual(record.title, "Germinal")
+        self.assertIn("Émile Zola", record.body)
+
     def test_an_unparseable_opf_is_skipped_by_search_and_unavailable_on_read(self) -> None:
         broken = self.root / "Broken" / "Author"
         broken.mkdir(parents=True)
