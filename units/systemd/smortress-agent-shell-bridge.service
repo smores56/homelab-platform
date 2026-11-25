@@ -1,13 +1,19 @@
 [Unit]
 # The Unix socket the general facade reaches the shell dispatcher through (SDLC
-# #859, T17 of #702). It serves one tool, `shell.run`, and one class.
+# #859, T17 of #702). It serves one tool, `shell.run`, and one class. The personal
+# class has the same program in smortress-agent-shell-bridge-personal.service:
+# two units, so each class's class constant and socket path are literals here and
+# neither class can be assembled from a request.
 #
 # Why a socket and not a port: the reachability control here is the filesystem.
-# /run/smortress/agent-shell is a tmpfiles directory, 0710 root:1000, under the
-# root 0700 /run/smortress, so no host uid can traverse it; the one exception is
+# /run/smortress/agent-shell-general is a tmpfiles directory, 0710 root:1000,
+# under the root 0700 /run/smortress, so no host uid can traverse it; the one
+# exception is
 # the socket file itself -- 0660, chowned to the facade container's group and in
-# a directory mounted into that container alone. The gateway, the model server
-# and the web UI have no path to it: they would need a group bit on an inode they
+# a directory mounted into that container alone. The personal facade mounts only
+# its own class's directory, so it cannot reach this socket even though both
+# containers share uid 1000. The gateway, the model server and the web UI have no
+# path to it: they would need a group bit on an inode they
 # cannot even open, and nothing publishes an address they could dial instead. A
 # TCP listener would be a second way in with no consumer, would need its own
 # authentication, and would exist on every interface the host has.
@@ -22,7 +28,7 @@
 # transient systemd unit per job. So this service is root, and the queue it can
 # absorb is deliberately four connections: beyond that a caller is refused
 # rather than made to wait behind a 300 s job.
-Description=Agent shell bridge: one Unix socket from the general facade to the job dispatcher
+Description=Agent shell bridge, general class: one Unix socket from the general facade to the job dispatcher
 
 # The dispatcher refuses to launch until the runners are provisioned (subuid
 # ranges, the /var/srv/git ACL, the egress table), so the bridge starts after that
@@ -39,7 +45,7 @@ After=smortress-selinux-agent-shell.service
 Type=simple
 # 1000 is the facade container's User=1000:1000; the socket's group is the whole
 # of "who may connect", so it is that gid and nothing broader.
-ExecStart=/usr/libexec/agent-shell-bridge --class general --socket /run/smortress/agent-shell/general.sock --socket-group 1000
+ExecStart=/usr/libexec/agent-shell-bridge --class general --socket /run/smortress/agent-shell-general/general.sock --socket-group 1000
 # The directory comes from image/rootfs/etc/tmpfiles.d/smortress-agent-shell.conf
 # and the bridge refuses to serve if it is not 0710 without group/other write: a
 # directory it created could only be as private as its own default, and this is

@@ -530,12 +530,15 @@ recovery unit of its own -- its records restore with `agent-local` or
 `agent-general`, which is exactly what those units name -- and the SQLite FTS index
 beside them is derived, so a restore that loses it costs one rebuild.
 
-The general facade is also the only one with a shell: `smortress-agent-shell-bridge`
-serves `shell.run` over a Unix socket that only that container mounts
-(`docs/agent-jobs.md`). The personal facade is started without `--shell-socket`, so
-it has no such tool at all; both gateways, the model server and both web UIs have
-no path to the socket, since the directory is a tmpfiles 0710 under a root 0700
-parent, mounted into one container and published nowhere.
+Both facades have a shell, and it is class-fixed: `smortress-agent-shell-bridge`
+serves `shell.run` for the general class and
+`smortress-agent-shell-bridge-personal` for the personal one, each over a Unix
+socket in its own directory (`docs/agent-jobs.md`). A facade mounts only its own
+class's directory, so the personal socket can only run a job with no route and no
+host mount and the general socket a job with the one general tree — the mount is
+the separation, not a check. Both gateways, the model server and both web UIs
+have no path to either socket, since each directory is a tmpfiles 0710 under a
+root 0700 parent, mounted into one container and published nowhere.
 
 The personal facade also writes `/index`, `state/agent-local/index`: its full-text
 index over the replica sources, one file per source and published generation. It
