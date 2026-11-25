@@ -79,7 +79,10 @@ eq "$(grep -E '^[a-z0-9.-]+[[:space:]]*\{' /etc/caddy/Caddyfile \
   'opds.sammohr.dev photos.sammohr.dev recovery.sammohr.dev ' \
   "Caddy serves exactly the three names"
 check_not "no site proxies 443" grep -qF ':443' /etc/caddy/Caddyfile
-check_not "no site answers plain HTTP" grep -qF 'http://' /etc/caddy/Caddyfile
+# Anchored: an `http://` *upstream* inside a TLS site is expected, because the
+# recovery guard listens on loopback. What must not exist is a site whose address
+# starts with `http://`, which is a listener with no TLS at all.
+check_not "no site answers plain HTTP" grep -qE '^http://' /etc/caddy/Caddyfile
 eq "$(stat -c '%a' /etc/caddy/edge.env)" 640 "the Caddy environment file is root-readable only"
 
 for unit in caddy nftables tailscaled unattended-upgrades; do

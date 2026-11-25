@@ -74,6 +74,11 @@ check "the edge has no admin API" has 'admin off' "$edge/Caddyfile"
 check "the edge proxies Immich to a Service upstream" has 'reverse_proxy {$IMMICH_UPSTREAM}' "$edge/Caddyfile"
 check "the edge proxies OPDShelf to a Service upstream" has 'reverse_proxy {$OPDS_UPSTREAM}' "$edge/Caddyfile"
 check "the edge declares no plain HTTP site" no_plain_http_site
+# The same question asked of the installed Caddyfile on the box: an unanchored
+# `http://` there would match the recovery guard's loopback upstream and fail a
+# healthy box.
+check "the verify anchors its plain-HTTP check to a site address" \
+  has "grep -qE '^http://'" "$edge/verify.sh"
 # The upstreams are variables now, so the Caddyfile names no host and no port at
 # all: this pin is what keeps a literal 443 from being typed back in, and the
 # derivation below is what keeps the target off the host's own address.
