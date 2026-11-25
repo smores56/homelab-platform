@@ -177,15 +177,21 @@ job_build_podman_argv() {
   )
 }
 
-# job_build_systemd_argv CLASS NAME COMMAND -> job_systemd_argv.
+# job_build_systemd_argv CLASS NAME COMMAND SCRIPT -> job_systemd_argv.
 #
 # The transient unit, not Podman, enforces the resource and wall-clock limits.
 # That keeps the limits enforceable without relying on delegated cgroup
 # controllers inside a rootless user manager, and it kills every process in the
 # job's cgroup on timeout. `Delegate=yes` lets Podman manage any nested cgroup
 # it wants; the limits above it still apply.
+#
+# No `--pipe`: that asks PID1 to hand the unit the dispatcher's own pipes, and on
+# this host every such start from a service domain is refused with "Failed to
+# start transient service unit: Connection reset by peer" while the identical
+# call from a login shell succeeds. The unit runs a per-job script that redirects
+# its own output to a file instead, so no descriptor of ours crosses into PID1.
 job_build_systemd_argv() {
-  local class=$1 name=$2 command=$3 runtime_dir=${4:-}
+  local class=$1 name=$2 command=$3 script=$4 runtime_dir=${5:-}
   job_build_podman_argv "$class" "$name" "$command"
   job_unit="smortress-agent-job-${class}-${name}"
   [[ -n $runtime_dir ]] || runtime_dir=$(job_runtime_dir_for "$job_user")
@@ -194,7 +200,6 @@ job_build_systemd_argv() {
     systemd-run
     --quiet
     --wait
-    --pipe
     --collect
     --unit="$job_unit"
     --uid="$job_user"
@@ -210,7 +215,7 @@ job_build_systemd_argv() {
     --setenv=XDG_RUNTIME_DIR="$job_runtime_dir"
     --setenv=PATH=/usr/bin:/bin
     --setenv=TZ=UTC
-    "${job_podman_argv[@]}"
+    "$script"
   )
 }
 
@@ -285,6 +290,46 @@ job_new_name() {
   printf '%s-%s-%s-%s\n' "$1" "$(date +%s)" "$$" "$RANDOM"
 }
 
+# job_job_dir NAME -> the one directory a job owns.
+#
+# Traversable but not listable or writable by the runner (0711, root): the runner
+# must reach its script and its output file, and must not be able to replace
+# either. Root removes the whole directory when the job exits.
+job_job_dir() {
+  printf '%s/%s.d\n' "$(job_run_root)" "$1"
+}
+
+# job_write_runner_script DIR OUT -> DIR/job.sh, the unit's whole ExecStart.
+#
+# The same `head -c` cap the dispatcher used to apply from outside, moved inside
+# the unit so the file it writes cannot outgrow the cap while nobody is looking,
+# and `pipefail` keeps Podman's status rather than head's. Each argv word is
+# quoted by the shell, so a word the caller typed stays one argument to Podman
+# and never becomes syntax.
+job_write_runner_script() {
+  local dir=$1 out=$2 argv
+  argv=$(printf '%q ' "${job_podman_argv[@]}")
+  {
+    printf '#!/bin/bash\n'
+    printf '# One job: its container, and its output capped where it is written.\n'
+    printf 'set -o pipefail\n'
+    printf '%s 2>&1 | head -c %s > %q\n' "$argv" "$((JOB_OUTPUT_CAP + 1))" "$out"
+  } >"$dir/job.sh"
+  chmod 0555 "$dir/job.sh"
+}
+
+# job_report_output FILE -> the job's output on stdout, capped and annotated.
+job_report_output() {
+  local out=$1 size
+  [[ -f $out ]] || return 0
+  size=$(wc -c <"$out")
+  if ((size > JOB_OUTPUT_CAP)); then
+    truncate -s "$JOB_OUTPUT_CAP" "$out"
+    printf 'agent-job: output truncated at %s bytes\n' "$JOB_OUTPUT_CAP" >&2
+  fi
+  cat "$out"
+}
+
 job_main() {
   local class=${1:-}
   shift || true
@@ -293,33 +338,31 @@ job_main() {
   ((EUID == 0)) || job_die "must run as root; the gateway calls its class entry point"
   (( $# == 1 )) || job_die "expected exactly one shell command argument"
   job_class_config "$class"
-  local status size
+  local status
   # The EXIT trap runs after this function returns, when its locals are gone, so
   # the names it uses are globals (and `set -u` would otherwise kill the exit).
   job_name=$(job_new_name "$class")
-  job_out=
+  job_dir=$(job_job_dir "$job_name")
+  job_out=$job_dir/out
   command=$1
-  job_build_systemd_argv "$class" "$job_name" "$command"
+  job_build_systemd_argv "$class" "$job_name" "$command" "$job_dir/job.sh"
   job_prepare_runtime
   job_ensure_egress
   job_check_workspace
   job_check_image
 
-  job_out=$(mktemp "$(job_run_root)/${job_name}.out.XXXXXX")
-  trap 'job_cleanup "$job_name"; rm -f "$job_out"' EXIT
+  install -d -m 0711 "$job_dir"
+  # The runner writes the output file itself; creating it here is what makes the
+  # redirect possible in a directory it cannot write.
+  install -m 0600 -o "$job_user" -g "$job_group" /dev/null "$job_out"
+  job_write_runner_script "$job_dir" "$job_out"
+  trap 'job_cleanup "$job_name"; rm -rf "$job_dir"' EXIT
 
   set +e
-  # One byte past the cap tells the dispatcher the output was truncated; the
-  # closed pipe also stops a job that prints forever.
-  "${job_systemd_argv[@]}" 2>&1 | head -c "$((JOB_OUTPUT_CAP + 1))" >"$job_out"
-  status=${PIPESTATUS[0]}
+  "${job_systemd_argv[@]}"
+  status=$?
   set -e
-  size=$(wc -c <"$job_out")
-  if ((size > JOB_OUTPUT_CAP)); then
-    truncate -s "$JOB_OUTPUT_CAP" "$job_out"
-    printf 'agent-job: output truncated at %s bytes\n' "$JOB_OUTPUT_CAP" >&2
-  fi
-  cat "$job_out"
+  job_report_output "$job_out"
   return "$status"
 }
 

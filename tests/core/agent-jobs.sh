@@ -123,13 +123,13 @@ job_class_config personal
 job_build_podman_argv personal probe-1 'echo hello'
 personal_argv=("${job_podman_argv[@]}")
 personal_systemd=()
-job_build_systemd_argv personal probe-1 'echo hello' /run/user/971
+job_build_systemd_argv personal probe-1 'echo hello' "$work/run/probe-1.d/job.sh" /run/user/971
 personal_systemd=("${job_systemd_argv[@]}")
 
 job_class_config general
 job_build_podman_argv general probe-2 'echo hello'
 general_argv=("${job_podman_argv[@]}")
-job_build_systemd_argv general probe-2 'echo hello' /run/user/970
+job_build_systemd_argv general probe-2 'echo hello' "$work/run/probe-2.d/job.sh" /run/user/970
 general_systemd=("${job_systemd_argv[@]}")
 
 # Rootless Podman only accepts a logind runtime directory; a private one fails in
@@ -159,6 +159,57 @@ if has --entrypoint=/bin/sh "${general_argv[@]}" &&
   ok 'both classes run the command through a shell, not the image entrypoint'
 else
   bad 'both classes run the command through a shell, not the image entrypoint'
+fi
+
+# PID1 must never be handed our descriptors: `--pipe` is refused for a unit
+# created by a service domain on this host, and a job that cannot start is worse
+# than a job whose output takes one more file.
+if has --pipe "${general_systemd[@]}" || has --pipe "${personal_systemd[@]}"; then
+  bad 'no class asks PID1 to carry its stdio' "${general_systemd[*]}"
+else
+  ok 'no class asks PID1 to carry its stdio'
+fi
+if [[ ${general_systemd[${#general_systemd[@]} - 1]} == "$work/run/probe-2.d/job.sh" &&
+  ${personal_systemd[${#personal_systemd[@]} - 1]} == "$work/run/probe-1.d/job.sh" ]]; then
+  ok 'each unit runs the per-job script, not the Podman argv'
+else
+  bad 'each unit runs the per-job script, not the Podman argv' "${general_systemd[*]: -1}"
+fi
+
+# The script is the whole capture contract: cap where the bytes are written, and
+# Podman's status rather than head's.
+job_build_podman_argv general probe-3 'echo hello; exit 3'
+install -d "$work/run/probe-3.d"
+job_write_runner_script "$work/run/probe-3.d" "$work/run/probe-3.d/out"
+script=$(cat "$work/run/probe-3.d/job.sh")
+if grep -qx 'set -o pipefail' <<<"$script" &&
+  grep -qF "| head -c $((JOB_OUTPUT_CAP + 1)) > $work/run/probe-3.d/out" <<<"$script" &&
+  grep -qF -- "--entrypoint=/bin/sh" <<<"$script" &&
+  grep -qF -- '-lc echo\ hello\;\ exit\ 3' <<<"$script"; then
+  ok 'the runner script caps its own output and keeps the command one argument'
+else
+  bad 'the runner script caps its own output and keeps the command one argument' "$script"
+fi
+if [[ $(stat -c %a "$work/run/probe-3.d/job.sh") == 555 ]]; then
+  ok 'the runner script is executable and not writable by the runner'
+else
+  bad 'the runner script is executable and not writable by the runner'
+fi
+
+# A file at the cap is reported as-is; one byte past it is truncated and named.
+printf 'ok' >"$work/short.out"
+if [[ $(job_report_output "$work/short.out" 2>&1) == ok ]]; then
+  ok 'short output is printed unchanged and unannotated'
+else
+  bad 'short output is printed unchanged and unannotated'
+fi
+head -c "$((JOB_OUTPUT_CAP + 1))" /dev/zero | tr '\0' 'x' >"$work/long.out"
+reported=$(job_report_output "$work/long.out" 2>"$work/long.err")
+if [[ ${#reported} -eq $JOB_OUTPUT_CAP ]] &&
+  grep -q 'output truncated' "$work/long.err"; then
+  ok 'output past the cap is truncated and reported'
+else
+  bad 'output past the cap is truncated and reported' "$(cat "$work/long.err")"
 fi
 
 # The containment every command gets, on both classes. No seccomp= flag: podman 6
