@@ -13,7 +13,7 @@ The migration runbook is `docs/switch.md`.
 | --- | --- |
 | `image/pins.env` | every external reference: the `FEDORA_VERSION` knob the base tag follows, and the NymVPN pin a refresh edits |
 | `image/Containerfile` | the derived image: one explicit package set, config copy, unit enables, `bootc container lint` |
-| `image/rootfs/` | files copied into `/`: greetd autologin, portal override, signature policy, the NymVPN unit and its polkit action, the `login` and `sudo` PAM stacks, and the FIDO2 mapping the `sudo` stack reads |
+| `image/rootfs/` | files copied into `/`: greetd autologin, portal override, signature policy, the NymVPN unit and its polkit action, the Tailscale operator unit, the `login` and `sudo` PAM stacks, and the FIDO2 mapping the `sudo` stack reads |
 | `image/cosign.pub` | the public half of the signing key shared with `homelab-platform` |
 | `scripts/refresh-pins.sh` | resolves the NymVPN release and prints the base tag's current digest; `--check` for the watcher, `--write` to move the NymVPN pin |
 | `scripts/build-image.sh` | local build; never pushes or signs |

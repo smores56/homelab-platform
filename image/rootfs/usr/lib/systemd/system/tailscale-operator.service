@@ -1,0 +1,22 @@
+# The Noctalia Tailnet widget drives the CLI as smores. Operator is a LocalAPI
+# preference, so it can only be persisted once the profile exists: before login
+# the daemon keeps it in memory, and the root-run first `tailscale up` clears
+# it. The state file is that boundary. The runbook's first join also passes
+# --operator=smores, so a fresh host does not wait for the next boot.
+[Unit]
+Description=Grant the desktop user Tailscale operator access
+Documentation=https://tailscale.com/kb/1228/operators
+After=tailscaled.service
+Wants=tailscaled.service
+ConditionPathExists=/var/lib/tailscale/tailscaled.state
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/tailscale set --operator=smores
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target

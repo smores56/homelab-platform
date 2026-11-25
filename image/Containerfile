@@ -91,7 +91,7 @@ RUN set -eux; \
       pam-u2f pamu2fcfg \
       fprintd fprintd-pam power-profiles-daemon thermald upower \
       libinput \
-      xdg-user-dirs gvfs udisks2 plymouth plymouth-system-theme \
+      xdg-user-dirs xdg-utils gvfs udisks2 plymouth plymouth-system-theme \
       dolphin ImageMagick jq \
       git tailscale firewalld \
       syncthing; \
@@ -171,6 +171,7 @@ RUN set -eux; \
       plymouth-quit.service \
       plymouth-quit-wait.service \
       tailscaled.service \
+      tailscale-operator.service \
       systemd-resolved.service \
       nym-vpnd.service \
       bootc-fetch-apply-updates.timer; \

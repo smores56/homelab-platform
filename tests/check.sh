@@ -215,6 +215,44 @@ else
   bad "syncthing is installed, enabled globally, and /var/srv/files is declared"
 fi
 
+# The Noctalia Tailnet widget runs the CLI as smores. Tailscale only persists
+# the operator preference once a profile exists: an ExecStartPost on
+# tailscaled runs before the first login, and the root-run first `tailscale up`
+# clears it. The state-file condition is the post-login boundary; the runbook
+# passes the same grant on a fresh join.
+unit=image/rootfs/usr/lib/systemd/system/tailscale-operator.service
+if grep -qx 'Type=oneshot' "$unit" 2>/dev/null \
+    && grep -qx 'ExecStart=/usr/bin/tailscale set --operator=smores' "$unit" \
+    && grep -qx 'ConditionPathExists=/var/lib/tailscale/tailscaled.state' "$unit" \
+    && grep -qx 'After=tailscaled.service' "$unit" \
+    && grep -qx 'Wants=tailscaled.service' "$unit" \
+    && grep -qx 'WantedBy=multi-user.target' "$unit" \
+    && ! grep -qE '^(Restart|PartOf)=' "$unit" \
+    && ! grep -rq 'ExecStartPost=.*tailscale set --operator' \
+        image/rootfs/usr/lib/systemd/system/tailscaled.service.d 2>/dev/null \
+    && grep -qE '^ +tailscale-operator\.service \\$' image/Containerfile; then
+  ok "the Tailscale operator grant is a state-gated oneshot, not a tailscaled hook"
+else
+  bad "the Tailscale operator grant is a state-gated oneshot, not a tailscaled hook"
+fi
+
+# xdg-utils supplies xdg-open for the admin console; xdg-user-dirs supplies
+# xdg-user-dir for the Taildrop folder. Relying on Brave's hard dependency
+# would drop xdg-utils if Brave ever leaves the image.
+if grep -qE '(^|[[:space:]])xdg-user-dirs([[:space:]]|$)' image/Containerfile \
+    && grep -qE '(^|[[:space:]])xdg-utils([[:space:]]|$)' image/Containerfile; then
+  ok "the image declares the Tailnet widget's xdg helpers"
+else
+  bad "the image declares the Tailnet widget's xdg helpers"
+fi
+
+if grep -qF 'sudo tailscale up --operator=smores' docs/switch.md \
+    && grep -qF 'sudo tailscale set --operator=smores' docs/manual-steps.md; then
+  ok "the runbook grants operator on first join and on an existing host"
+else
+  bad "the runbook grants operator on first join and on an existing host"
+fi
+
 # Chromium and every other PulseAudio client in the session link libpulse. With
 # no server they fall back to pipewire-alsa, which still plays but drops stream
 # restore, pactl and the PA interface; the fallback is a log line, not a

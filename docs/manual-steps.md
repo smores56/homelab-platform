@@ -253,7 +253,49 @@ Before relying on the gate, make sure a way to root exists that is not sudo:
 break-glass everywhere — a missing or broken key costs typing, not access — and
 the console is what covers a forgotten password.
 
-## 4. Join the Syncthing cluster
+## 4. Grant the Tailnet widget operator access
+
+Noctalia's Tailnet widget drives the Tailscale CLI as `smores`. The daemon
+refuses every write from a non-root user until that user is the operator, so a
+fresh join passes the grant in the command that creates the profile:
+
+```sh
+sudo tailscale up --operator=smores
+```
+
+On a host that is already joined, set it without `up`, which would re-apply the
+full preference set and reset options such as exit nodes and accepted routes:
+
+```sh
+sudo tailscale set --operator=smores
+```
+
+The image's `tailscale-operator.service` re-applies the same preference at
+boot when `/var/lib/tailscale/tailscaled.state` exists, which covers the first
+boot after an upgrade. It is a oneshot separate from `tailscaled.service`:
+before login Tailscale keeps the preference in memory only, and the root-run
+first `tailscale up` clears it, so a `tailscaled` start hook would not help. On
+a host that has never joined, use the `up --operator` line above; a green unit
+before the profile exists proves nothing.
+
+Verify the stored grant:
+
+```sh
+tailscale debug prefs | grep OperatorUser
+```
+
+That prints `"OperatorUser": "smores"` once the grant is persisted. It proves
+the stored preference, not the widget's write path; opening the panel and
+disconnecting is the end-to-end check. Without the grant the widget still shows
+status and peers, but connect, disconnect, exit nodes and the preference
+toggles are refused.
+
+Operator is Tailscale's whole LocalAPI write permission, not a narrow
+connect/disconnect grant: it also permits `tailscale serve`, `tailscale ssh`
+and preference changes without the FIDO2 sudo gate. That is deliberate for
+this single-user laptop, and it is why the grant belongs to `smores` alone.
+
+## 5. Join the Syncthing cluster
 
 The image ships the package and enables the user unit globally, so the service
 starts at the first login with nothing to type. It keeps the vault's second

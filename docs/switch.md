@@ -120,7 +120,7 @@ Then, in the session:
 | Screen share | start a call or `xdg-desktop-portal` test flow |
 | Polkit | a privileged app shows Noctalia's auth prompt |
 | Lock/idle | wait 10 minutes, or `noctalia msg session lock` |
-| Tailscale | `sudo tailscale up` once, then `tailscale status` |
+| Tailscale | `sudo tailscale up --operator=smores` on a fresh node; if it is already joined, `sudo tailscale set --operator=smores` (no prefs reset); then `tailscale status` |
 | NymVPN | `sudo nym-vpnc status` answers, `systemctl status nym-vpnd` is active; the daemon logs to `/var/log/nym-vpnd/nym-vpnd.log`, not the journal. A "DNS intercepted" warning with the tunnel down is worth a look at `resolvectl status` |
 | Firmware | `fwupdmgr get-updates` |
 
