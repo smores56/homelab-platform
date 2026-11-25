@@ -238,7 +238,7 @@ done < <(
 # `svc:agent` and other recordings of it `svc:agent:443`, so a key is reduced to the
 # name it holds before it is compared. Only `Services` is read here -- the host
 # ports are the loop above, and the receiver's forward is `TCP`.
-declared_services=(svc:opds svc:immich svc:navidrome svc:assistant svc:agent svc:sync)
+declared_services=(svc:opds svc:immich svc:navidrome svc:assistant svc:agent svc:sync svc:terminal)
 while IFS= read -r name; do
   $plan_ok || break
   [[ -n $name ]] || continue
