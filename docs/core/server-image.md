@@ -348,12 +348,16 @@ fail it identically.
 
 `deploy-platform prepare` runs the snapshot gate before anything is staged: one
 read-only `smortress-restic-verify --local --json` answers with a verdict per
-restore unit (newest snapshot for `host,paths`, its `verified` tag, a max age of
-8400 s), SSD first and the HDD when the SSD is absent, and a unit without a fresh
-verified snapshot is backed up directly with
-`smortress-restic-backup --unit <unit> --no-maintenance` (1800 s
-each, 900 s of waiting for the hourly driver's unit lock, 3600 s for the whole
-gate; maintenance is excluded so the gate never waits for a prune). If no local
+restore unit (newest snapshot for `host,paths`, its `verified` tag, that unit's
+max age — 8400 s, or 33600 s for `agent-local`), SSD first and the HDD when the
+SSD is absent, and a unit without a fresh verified snapshot is backed up directly
+with `smortress-restic-backup --unit <unit> --no-maintenance` (the unit's own
+per-attempt deadline plus the 60 s kill-after, so `agent-local` gets 14460 s and
+every other unit 1860 s; 900 s of waiting for the hourly driver's unit lock;
+17460 s for the whole gate — the longest local backup plus its lock wait and both
+verifications; maintenance is excluded so the gate never waits for a prune). A
+flat cap here would deadlock the queue on a unit that legitimately needs hours
+(issue #139). If no local
 repository can take the snapshot, or the budget runs out, the deploy **holds**:
 `held.json`, a `/fail` ping, a journal line, and nothing staged. Only
 `smortress-deploy release --force`, run by hand as root, releases it.
