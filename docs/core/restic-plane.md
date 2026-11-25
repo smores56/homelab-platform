@@ -514,7 +514,7 @@ startup; those remain #716's operator rows.
 
 ## Local proof
 
-`tests/core/restic-plane.sh` stubs restic,
+`tests/core/restic-plane.bats` stubs restic,
 zfs, curl and sops and asserts: exit-code handling for 0/1/3, the verified-tag
 gate, `pending_reap` for failed IDs, stale-staging reconciliation before
 creation, readiness and mount gates that prevent any backup, retention carrying
