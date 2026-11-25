@@ -63,4 +63,10 @@ formatter beyond `tofu fmt -check -recursive tofu`.
 
 `git config core.hooksPath .githooks` installs the pre-push gate, which runs
 `scripts/check-all.sh --changed`. Groups need the tools CI installs: on a
-fresh host run `scripts/install-ci-tools.sh ~/.local/bin` and put it on PATH.
+fresh host run `scripts/install-ci-tools.sh ~/.local/bin` and put it on PATH;
+it also fills `$XDG_DATA_HOME/bats` with the assertion libraries the `.bats`
+suites load.
+
+Behavioural suites are `.bats` files run by bats; a new one needs a row in
+`tests/tags.tsv` (the tag is its path under `tests/`), which `tests/tags.bats`
+holds to the tree.
