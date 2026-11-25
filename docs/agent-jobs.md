@@ -162,8 +162,17 @@ accounts; nothing names their ids. `smortress-agent-job-provision.service` runs
 1. add a non-overlapping subuid/subgid range to each runner (300000:65536 and
    400000:65536; an overlap is refused, never remapped);
 2. enable linger, which is what makes logind create and keep `/run/user/<uid>`;
-3. apply the general runner's ACL and default ACL on `/var/srv/git`;
-4. load the egress table before any job exists.
+3. pull the digest in `/etc/smortress/agent/job-image` as each runner, into that
+   runner's own rootless store;
+4. apply the general runner's ACL and default ACL on `/var/srv/git`;
+5. load the egress table before any job exists.
+
+Step 3 comes before step 5 because it has to: the personal runner is dropped
+outright by the table, so once that rule exists it could never fetch a digest a
+pin bump names, and every personal job would fail closed on `has not prepulled`.
+Pulling as the account rather than copying from root storage is what records the
+digest reference the dispatcher checks. A pin bump therefore needs no operator
+step beyond the reboot that carries it.
 
 The runtime directory is a prerequisite, not an implementation detail: handed a
 private directory under `/run/smortress`, rootless Podman fails in namespace setup
@@ -191,9 +200,8 @@ nothing here may be used to record or complete one.
 
 ## Operator steps
 
-See `docs/manual-steps.md#agent-shell-jobs` for prepulling the pinned image as each
-runner, verifying the units, and running each class's probe plus the cross-class
-refusals. `tests/core/agent-jobs.sh` covers the offline half: class-fixed entry
+See `docs/manual-steps.md#agent-shell-jobs` for verifying the units and running
+each class's probe plus the cross-class refusals. `tests/core/agent-jobs.sh` covers the offline half: class-fixed entry
 points, the mount/network split, the containment flags, the firewall ranges, the
 digest pin and the subuid overlap refusal; `tests/core/app-quadlets.sh` covers the
 transport wiring — two directories, two bridges, one facade mount each and neither

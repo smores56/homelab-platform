@@ -1308,8 +1308,12 @@ the `mmproj` projector are deliberately not used.
 
 `smortress-agent-job-provision.service` creates each shell runner's subuid range,
 the general runner's ACL on `/var/srv/git` and the uid-keyed egress table. The
-pinned job image must be prepulled once per runner; `--pull=never` makes a job on a
-host that skipped this fail closed. `docs/agent-jobs.md` is the shape.
+pinned job image is pulled as each runner by that unit, before the egress table is
+loaded — the personal runner has zero egress by rule, so afterwards it could not
+fetch a new digest at all. `--pull=never` makes a job on a host whose store lacks
+the digest fail closed with `has not prepulled`. The manual pull below is only for
+a pin change you want live without waiting for the reboot that carries it.
+`docs/agent-jobs.md` is the shape.
 
 ```sh
 sudo /usr/libexec/agent-job-provision --check

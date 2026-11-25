@@ -399,11 +399,22 @@ fi
 
 # --- provisioning --------------------------------------------------------------
 
-mkdir -p "$work/bin" "$work/subids" "$work/git"
-for stub in nft setfacl getfacl newuidmap newgidmap pasta podman; do
+mkdir -p "$work/bin" "$work/subids" "$work/git" "$work/state" "$work/run/970" "$work/run/971"
+for stub in setfacl getfacl newuidmap newgidmap pasta; do
   printf '#!/bin/sh\nexit 0\n' >"$work/bin/$stub"
   chmod 0755 "$work/bin/$stub"
 done
+# podman and nft record what they were asked, so the order the boot takes is
+# visible: the image a pin names must be in each runner's store before the egress
+# table that makes the personal runner unreachable exists.
+# The log path is baked in: the pull runs under `env -i`, so an environment
+# variable would be missing where the record is written.
+printf '#!/bin/sh\nprintf "podman %%s\\n" "$*" >>"%s"\nexit 0\n' "$work/provision.log" >"$work/bin/podman"
+printf '#!/bin/sh\nprintf "nft %%s\\n" "$*" >>"%s"\nexit 0\n' "$work/provision.log" >"$work/bin/nft"
+# runuser really drops to the runner; here it only strips the wrapper so the
+# stubbed podman runs as the caller.
+printf '#!/bin/sh\nshift 2\n[ "$1" = "--" ] && shift\nexec "$@"\n' >"$work/bin/runuser"
+chmod 0755 "$work/bin/podman" "$work/bin/nft" "$work/bin/runuser"
 # id maps the two runners to fixed uids so the runtime-directory check is real.
 printf '#!/bin/sh\ncase "$*" in\n  "-u agent-shell-personal") echo 971 ;;\n  "-u agent-shell-general") echo 970 ;;\n  *) exit 0 ;;\nesac\n' >"$work/bin/id"
 printf '#!/bin/sh\ncase "$1" in\n  show-user) printf "Linger=yes\\n" ;;\n  *) exit 0 ;;\nesac\n' >"$work/bin/loginctl"
@@ -417,13 +428,31 @@ run_provision() {
     AGENT_JOB_WORKSPACE=$work/git \
     AGENT_JOB_NFT_FILE=$root/$nft \
     AGENT_JOB_RUNTIME_BASE=$work/run \
+    AGENT_JOB_STATE_ROOT=$work/state \
+    AGENT_JOB_IMAGE_FILE=$root/image/rootfs/etc/smortress/agent/job-image \
+    AGENT_JOB_RUNUSER=$work/bin/runuser \
+    AGENT_JOB_PODMAN=$work/bin/podman \
     "$provision" "$@"
 }
 
+: >"$work/provision.log"
 if run_provision >/dev/null 2>&1; then
   ok 'provisioning succeeds with a fake host'
 else
   bad 'provisioning succeeds with a fake host'
+fi
+# The personal runner has zero egress by rule, so a digest a pin bump names can
+# only be fetched before that rule exists -- and both classes' jobs fail closed
+# until their own store has it. The order is the whole point.
+pulls=$(grep -c '^podman pull ' "$work/provision.log" 2>/dev/null || echo 0)
+last_pull=$(grep -n '^podman pull ' "$work/provision.log" 2>/dev/null | tail -1 | cut -d: -f1)
+first_nft=$(grep -n '^nft -f ' "$work/provision.log" 2>/dev/null | head -1 | cut -d: -f1)
+if [[ $pulls == 2 ]] && [[ -n $last_pull && -n $first_nft && $last_pull -lt $first_nft ]] &&
+  grep -q '@sha256:' "$work/provision.log"; then
+  ok 'provisioning pulls the pinned image for both runners before the egress table'
+else
+  bad 'provisioning pulls the pinned image for both runners before the egress table' \
+    "$(cat "$work/provision.log" 2>/dev/null)"
 fi
 if grep -qx 'agent-shell-personal:300000:65536' "$work/subids/subuid" &&
   grep -qx 'agent-shell-general:400000:65536' "$work/subids/subuid" &&
@@ -445,9 +474,15 @@ else
   ok 'provisioning refuses an overlapping subuid range'
 fi
 printf 'agent-shell-personal:300000:65536\n' >"$work/subids/check"
-if PATH=$work/bin:$PATH AGENT_JOB_SUBUID_FILE=$work/subids/check \
+: >"$work/provision.log"
+if PATH=$work/bin:$PATH \
+  AGENT_JOB_SUBUID_FILE=$work/subids/check \
   AGENT_JOB_SUBGID_FILE=$work/subids/check AGENT_JOB_WORKSPACE=$work/git \
   AGENT_JOB_NFT_FILE=$root/$nft AGENT_JOB_RUNTIME_BASE=$work/run \
+  AGENT_JOB_STATE_ROOT=$work/state \
+  AGENT_JOB_IMAGE_FILE=$root/image/rootfs/etc/smortress/agent/job-image \
+  AGENT_JOB_RUNUSER=$work/bin/runuser \
+  AGENT_JOB_PODMAN=$work/bin/podman \
   "$provision" --check >/dev/null 2>&1; then
   bad '--check succeeds on a host that has no allocation yet'
 else
@@ -457,6 +492,11 @@ if ! grep -q "agent-shell-general" "$work/subids/check"; then
   ok '--check writes nothing'
 else
   bad '--check writes nothing'
+fi
+if ! grep -q '^podman pull ' "$work/provision.log" 2>/dev/null; then
+  ok '--check does not pull the job image'
+else
+  bad '--check does not pull the job image' "$(cat "$work/provision.log" 2>/dev/null)"
 fi
 
 # --- the approval seam ---------------------------------------------------------

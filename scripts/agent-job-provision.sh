@@ -15,6 +15,10 @@
 #   * a logind session (linger) per runner. Rootless Podman refuses a runtime
 #     directory it did not get from logind -- "error opening namespace handles"
 #     -- so /run/user/<uid> must exist before a job can start.
+#   * the pinned job image in each runner's own store, pulled before the egress
+#     table is loaded. The personal runner has zero egress by rule, so once that
+#     rule exists it could never fetch a digest a pin bump names, and both
+#     classes fail closed on `has not prepulled` until their store has it.
 #
 # `--check` reports drift and writes nothing; the boot unit runs the apply mode.
 # The uid ranges are allocated here, not demanded from sysusers: a demanded id
@@ -44,6 +48,10 @@ workspace=${AGENT_JOB_WORKSPACE:-/var/srv/git}
 nft_file=${AGENT_JOB_NFT_FILE:-/etc/nftables/smortress-agent-jobs.nft}
 loginctl_bin=${AGENT_JOB_LOGINCTL:-loginctl}
 runtime_base=${AGENT_JOB_RUNTIME_BASE:-/run/user}
+state_root=${AGENT_JOB_STATE_ROOT:-/var/lib/agent-shell}
+job_image_file=${AGENT_JOB_IMAGE_FILE:-/etc/smortress/agent/job-image}
+podman_bin=${AGENT_JOB_PODMAN:-podman}
+runuser_bin=${AGENT_JOB_RUNUSER:-runuser}
 
 # 200000:65536 belongs to the apps tenant. The shell domains sit above it and do
 # not touch it; the overlap check below refuses any future collision regardless.
@@ -52,7 +60,7 @@ declare -A range_for=(
   [agent-shell-general]=${AGENT_JOB_SUBID_GENERAL:-400000:65536}
 )
 runners=(agent-shell-personal agent-shell-general)
-required_bins=${AGENT_JOB_REQUIRE_BINS-newuidmap newgidmap pasta nft setfacl loginctl}
+required_bins=${AGENT_JOB_REQUIRE_BINS-newuidmap newgidmap pasta podman nft setfacl loginctl}
 
 fail() {
   echo "agent-job-provision: $*" >&2
@@ -147,6 +155,47 @@ for runner in "${runners[@]}"; do
   "$loginctl_bin" enable-linger "$runner"
 done
 
+# wait_runtime_dir DIR -> the logind runtime directory, once it exists.
+#
+# linger was just enabled and logind creates the directory asynchronously; a
+# rootless Podman run handed any other runtime path fails in namespace setup
+# with "error opening namespace handles".
+wait_runtime_dir() {
+  local dir=$1 _
+  for _ in $(seq 1 20); do
+    [[ -d $dir ]] && return 0
+    sleep 0.5
+  done
+  return 1
+}
+
+# pull_job_image RUNNER -> the pinned job image in that runner's own store.
+#
+# This runs before the egress table is loaded, and that order is the point: the
+# personal runner is dropped outright by the table, so a digest a pin bump names
+# could never be fetched afterwards. Pulling as the account rather than copying
+# from root storage is what records the digest reference the dispatcher checks.
+pull_job_image() {
+  local runner=$1 image runtime_dir
+  [[ -r $job_image_file ]] || fail "$job_image_file is missing"
+  image=$(<"$job_image_file")
+  [[ $image =~ ^ghcr\.io/[A-Za-z0-9._/-]+@sha256:[0-9a-f]{64}$ ]] ||
+    fail "$job_image_file does not hold a pinned ghcr.io digest: '$image'"
+  runtime_dir=$runtime_base/$(id -u "$runner")
+  wait_runtime_dir "$runtime_dir" ||
+    fail "$runtime_dir did not appear for $runner; rootless Podman cannot run"
+  "$runuser_bin" -u "$runner" -- env -i \
+    HOME="$state_root/${runner#agent-shell-}" \
+    XDG_RUNTIME_DIR="$runtime_dir" \
+    PATH=/usr/bin:/bin \
+    "$podman_bin" pull "$image" >/dev/null ||
+    fail "$runner cannot pull the pinned job image $image"
+}
+
+for runner in "${runners[@]}"; do
+  pull_job_image "$runner"
+done
+
 [[ -r $nft_file ]] || fail "the egress ruleset $nft_file is missing"
 nft -f "$nft_file"
 
@@ -159,4 +208,4 @@ else
   echo "agent-job-provision: $workspace is absent; zfs-ready@raw-git has not run" >&2
 fi
 
-echo "agent-job-provision: runners have distinct subids, the general ACL and the egress table"
+echo "agent-job-provision: runners have distinct subids, the pinned image, the general ACL and the egress table"
