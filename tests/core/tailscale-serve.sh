@@ -340,7 +340,23 @@ eq "$(grep -cF -- 'serve --bg --service=svc:sync --https=443 http://127.0.0.1:83
     'the Syncthing GUI Service endpoint is declared exactly once, over https/443'
 eq "$(service_served svc:sync:443)" 'http://127.0.0.1:8384' \
     'svc:sync advertises the Syncthing GUI on its own port, not a host port'
-app_services='["svc:immich", "svc:navidrome", "svc:assistant", "svc:agent", "svc:sync"]'
+# The terminal is the last Service declared: `fail()` aborts the script, so a
+# terminal route that cannot be advertised must not cost any route after it.
+eq "$(grep -cF -- 'serve --bg --service=svc:terminal --https=443 http://127.0.0.1:8082' "$log")" 1 \
+    'the zellij web Service endpoint is declared exactly once, over https/443'
+eq "$(service_served svc:terminal:443)" 'http://127.0.0.1:8082' \
+    'svc:terminal advertises zellij web on its own port, not a host port'
+terminal_line=$(grep -nF -- '--service=svc:terminal' "$log" | cut -d: -f1 || true)
+last_other_service=$(grep -nE -- '--service=svc:' "$log" | grep -vF -- 'svc:terminal' |
+    cut -d: -f1 | sort -n | tail -n1 || true)
+if [[ -n $terminal_line && -n $last_other_service ]] &&
+    ((last_other_service < terminal_line && terminal_line < status_line)); then
+    ok 'svc:terminal is declared after every other Service and before the Serve status read'
+else
+    bad 'svc:terminal is declared after every other Service and before the Serve status read' \
+        "terminal at '$terminal_line', last other Service at '$last_other_service', status at '$status_line'"
+fi
+app_services='["svc:immich", "svc:navidrome", "svc:assistant", "svc:agent", "svc:sync", "svc:terminal"]'
 if jq -e --argjson names "$app_services" \
     '[.Services // {} | keys[] | select(. | endswith(":443")) | rtrimstr(":443")] as $served
      | ($names - $served) | length == 0' "$status" >/dev/null 2>&1; then
