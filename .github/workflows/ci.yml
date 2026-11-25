@@ -215,6 +215,10 @@ jobs:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           persist-credentials: false
+      - name: install the pinned test runner
+        run: |
+          scripts/install-ci-tools.sh "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
       - name: gates
         run: scripts/check-all.sh --only provision,core,apps,deploy
 
