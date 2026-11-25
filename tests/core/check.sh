@@ -140,6 +140,16 @@ else
   fail 'restic plane checks'
 fi
 
+# The progress command has its own harness: it renders the tree the backup
+# driver publishes with a stubbed systemctl, so the parsing, the idle and stale
+# states, and the no-root promise are exercised without a repository.
+checks=$((checks + 1))
+if tests/core/smortress-restic-progress.sh; then
+  pass 'restic progress checks'
+else
+  fail 'restic progress checks'
+fi
+
 # The agent recovery groups have their own harness: it breaks the tree eleven
 # ways (a dropped group, a general unit carrying personal data, a cross-authority
 # mount, a unit that mounts agent state without naming its side, a missing

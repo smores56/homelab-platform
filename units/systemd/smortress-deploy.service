@@ -61,6 +61,10 @@ Environment=APPS_FREE_ROOT_PATH=/var
 ProtectSystem=strict
 ReadWritePaths=/var/lib/homelab/deploy
 ReadWritePaths=/var/lib/homelab/restic
+# The gate backs a restore unit up before the reboot, and that run publishes
+# progress like any other. Without this the publish fails EROFS and the watch
+# tree lies about the deploy's own backup.
+ReadWritePaths=/var/lib/homelab/restic-progress
 ReadWritePaths=-/var/lib/restic/ssd
 ReadWritePaths=-/var/lib/restic/hdd
 # The stage (T4) is a `bootc switch` and a reboot. bootc's first write is not a

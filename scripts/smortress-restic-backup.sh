@@ -75,6 +75,7 @@ attempt_log=""
 attempt_err=""
 paths_json="[]"
 attempt_start=""
+attempt_epoch=""
 # Sized per unit inside the loop: a first upload and a routine increment are not
 # the same job. Empty until a unit is known.
 deadline=""
@@ -126,6 +127,8 @@ cleanup_staging() {
 # and the next invocation's reconciliation removes it by name.
 on_signal() {
   warn "$backend/${unit:-?}: terminated, cleaning up staging snapshots"
+  progress_end "$backend" "${unit:-}" "${attempt_epoch:-}"
+  [[ -n ${unit:-} ]] && rm -f "$(progress_file_for "$backend" "$unit")"
   cleanup_staging
   exit 143
 }
@@ -169,6 +172,10 @@ finish_attempt() {
       '.last_success = {end: $end, snapshot: $snap} | .final = {end: $end, snapshot: $snap} | .paths = $paths' \
       --arg end "$end" --arg snap "$snapshot" --argjson paths "$paths_json" || return 1
   fi
+  # The same record, minus the root-only tree around it: an operator watching the
+  # plane must not need sudo to see how the last run ended.
+  progress_write "$(progress_last_for "$backend" "$unit")" "$line" ||
+    warn "$backend/$unit: cannot publish the last result"
   return 0
 }
 
@@ -212,10 +219,21 @@ reap_pending() {
 
 attempt_locked() {
   local rc=0 sid="" reason=""
-  attempt_log=$(mktemp) || {
-    warn "$backend/$unit: cannot create a scratch file"
-    return 1
-  }
+  # The status stream is published, not scratch: the operator watches this file
+  # while restic uploads. Truncated per attempt, so a previous attempt's records
+  # can never be read as this one's, and removed with the attempt below.
+  attempt_log=$(progress_file_for "$backend" "$unit")
+  if ! install -d -m 0755 "$progress_root" 2>/dev/null ||
+    ! : >"$attempt_log" 2>/dev/null || ! chmod 0644 "$attempt_log" 2>/dev/null; then
+    # Watching is a convenience; the backup is the job. A tree that cannot be
+    # published falls back to the private scratch file this always used.
+    warn "$backend/$unit: cannot publish progress; using a private scratch file"
+    attempt_log=$(mktemp) || {
+      warn "$backend/$unit: cannot create a scratch file"
+      attempt_log=""
+      return 1
+    }
+  fi
   attempt_err=$(mktemp) || {
     warn "$backend/$unit: cannot create a scratch error file"
     rm -f "$attempt_log"
@@ -284,12 +302,26 @@ attempt_locked() {
     fi
   done
 
+  # Only status and summary records are published: error and verbose records
+  # carry the path of the file that failed or was being read, and the progress
+  # tree is world-readable. `current_files` is stripped for the same reason.
+  # --unbuffered matters: without it jq holds 4 KiB before writing, and the
+  # "live" stream would arrive in bursts tens of seconds apart.
   if restic_with_lock "$deadline" "$repo" backup \
     --host "$restic_host" --tag "unit:$unit" --tag "host:$restic_host" \
-    --one-file-system --json "${staging_paths[@]}" >"$attempt_log" 2>"$attempt_err"; then
+    --one-file-system --json "${staging_paths[@]}" 2>"$attempt_err" |
+    jq -c --unbuffered \
+      'select(.message_type == "status" or .message_type == "summary")
+       | del(.current_files)' >"$attempt_log"; then
     rc=0
   else
-    rc=$?
+    # The first stage is restic; a publish failure is reported as what it is
+    # instead of being read off jq's exit status.
+    rc=${PIPESTATUS[0]}
+    if ((rc == 0)); then
+      rc=1
+      warn "$backend/$unit: cannot publish progress; treating the attempt as failed"
+    fi
   fi
   sid=$(jq -r 'select(.message_type == "summary") | .snapshot_id // empty' \
     "$attempt_log" 2>/dev/null | tail -n1)
@@ -371,6 +403,14 @@ run_attempt() {
   }
 
   attempt_start=$start
+  attempt_epoch=$(now_epoch)
+  # Published before the lock is taken: while a run waits on another backend's
+  # lock, "waiting" is the truth the operator needs, not silence. The marker
+  # carries the window this attempt is legal for, so a watcher never calls a
+  # healthy long run abandoned.
+  progress_begin "$backend" "$unit" "$start" "$attempt_epoch" "$deadline" \
+    "$(jq -r '.last_attempt.n // 0' "$state" 2>/dev/null || printf 0)" "$expiry" ||
+    warn "$backend/$unit: cannot publish the running attempt"
   exec {lock_fd}>"$lock"
   if flock -w "$lock_wait" "$lock_fd"; then
     if ! attempt_locked; then rc=1; fi
@@ -473,7 +513,7 @@ main() {
     exit 1
   fi
 
-  local failed=0 unit job_ok attempt in_filter g job_attempts
+  local failed=0 unit job_ok attempt in_filter g job_attempts expiry
   for unit in "${units[@]}"; do
     if ((${#unit_filter[@]} > 0)); then
       in_filter=0
@@ -498,9 +538,11 @@ main() {
     if [[ $(jq -r '(.last_success == null) or (.repository != $r)' \
       --arg r "$repo" "$state" 2>/dev/null) == true ]]; then
       deadline=$(job_deadline_first "$backend")
+      expiry=$(marker_expiry_first_for "$backend")
       job_attempts=$attempts_first
     else
       deadline=$(job_deadline "$backend" "$unit")
+      expiry=$(marker_expiry_for "$backend" "$unit")
       job_attempts=$attempts
     fi
     sleep_time=$(job_retry_sleep "$backend")
@@ -516,6 +558,9 @@ main() {
       fi
     done
     if ((job_ok == 0)); then failed=1; fi
+    # No unit is running now: leaving the marker would read as a live backup
+    # that stopped emitting status records.
+    progress_end "$backend" "$unit" "$attempt_epoch"
   done
 
   if ((maintenance)); then

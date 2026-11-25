@@ -189,6 +189,63 @@ journal_for() { printf '%s/journal/%s-%s.jsonl\n' "$state_root" "$1" "$2"; }
 lock_for() { printf '%s/locks/%s-%s.lock\n' "$state_root" "$1" "$2"; }
 maintenance_stamp() { printf '%s/maintenance/%s.%s\n' "$state_root" "$1" "$2"; }
 
+# Progress publication. The durable state and the journals stay root-only;
+# watching a run is an operator read from the tailnet and must not need sudo, so
+# the driver publishes restic's own `--json` status records and each unit's last
+# result to a world-readable tree beside them. Nothing published here carries a
+# credential: a status record is byte and file counters for a path inside the
+# repository, and a result record is the same line the journal already holds.
+#
+# One marker per backend, not one for the plane: the hourly ssd and hdd units
+# fire at the same minute and run concurrently.
+progress_root=${RESTIC_PROGRESS_ROOT:-/var/lib/homelab/restic-progress}
+progress_file_for() { printf '%s/%s-%s.jsonl\n' "$progress_root" "$1" "$2"; }
+progress_current_for() { printf '%s/current-%s.json\n' "$progress_root" "$1"; }
+progress_last_for() { printf '%s/last/%s-%s.json\n' "$progress_root" "$1" "$2"; }
+
+# Atomic, world-readable write: a reader must never see half a record.
+progress_write() { # <file> <line>
+  local file=$1 line=$2 dir tmp
+  dir=$(dirname "$file")
+  install -d -m 0755 "$dir" || return 1
+  tmp=$(mktemp "$dir/.write.XXXXXX") || return 1
+  if ! printf '%s\n' "$line" >"$tmp"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  if ! chmod 0644 "$tmp" || ! mv -f "$tmp" "$file"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  return 0
+}
+
+progress_begin() { # <backend> <unit> <start> <epoch> <deadline> <attempt> <expiry>
+  progress_write "$(progress_current_for "$1")" "$(jq -cn \
+    --arg b "$1" --arg u "$2" --arg s "$3" --argjson e "$4" \
+    --argjson d "$5" --argjson n "$6" --argjson x "$7" \
+    '{backend: $b, unit: $u, start: $s, epoch: $e, deadline: $d,
+      attempt: $n, expiry: $x}')"
+}
+
+# Clear the marker only when it still names the run that wrote it: the hourly
+# driver and a manual single-unit run share the backend, and the one that
+# finishes first must not blank the other's live attempt.
+progress_end() { # <backend> [unit] [epoch]
+  local marker
+  marker=$(progress_current_for "$1")
+  [[ -r $marker ]] || return 0
+  if [[ -n ${2:-} ]] &&
+    [[ $(jq -r '.unit // ""' "$marker" 2>/dev/null) != "$2" ]]; then
+    return 0
+  fi
+  if [[ -n ${2:-} && -n ${3:-} ]] &&
+    [[ $(jq -r '.epoch // 0' "$marker" 2>/dev/null) != "$3" ]]; then
+    return 0
+  fi
+  rm -f "$marker"
+}
+
 ensure_state_dirs() {
   install -d -m 0700 "$state_root" "$state_root/state" "$state_root/journal" \
     "$state_root/locks" "$state_root/maintenance"
@@ -235,6 +292,18 @@ run_expiry_first_for() {
   deadline=$(job_deadline_first "$1")
   sleep_time=$(job_retry_sleep "$1")
   printf '%s\n' "$((attempts_first * (deadline + sleep_time) + grace))"
+}
+
+# A progress marker is written before the lock is taken and cleared after the
+# unit ends, so the window it is legal for spans the lock wait, every bounded
+# attempt, and the post-upload calls (cat, tag, snapshots) that each get a fresh
+# deadline. A watcher compares the marker's age with this, never with the
+# attempt deadline alone.
+marker_expiry_for() { # <backend> [unit]
+  printf '%s\n' "$((lock_wait + $(run_expiry_for "$1" "${2-}") + 3 * $(job_deadline "$1" "${2-}")))"
+}
+marker_expiry_first_for() { # <backend>
+  printf '%s\n' "$((lock_wait + $(run_expiry_first_for "$1") + 3 * $(job_deadline_first "$1")))"
 }
 
 # Fail-closed state writes. jq writes a sibling, the file is fsynced, then

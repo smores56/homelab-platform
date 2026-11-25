@@ -85,7 +85,18 @@ done
 case $cmd in
   backup)
     # A slow upload is the only way to prove which deadline a run was given.
-    [[ -n ${STUB_BACKUP_SLEEP:-} ]] && sleep "$STUB_BACKUP_SLEEP"
+    # With STUB_BACKUP_STATUS the slowness is spent emitting restic's own
+    # records once a second, so the harness can sample the published stream
+    # while the process is still running instead of after it exits.
+    if [[ -n ${STUB_BACKUP_STATUS:-} ]]; then
+      for ((i = ${STUB_BACKUP_SLEEP:-1}; i > 0; i--)); do
+        printf '{"message_type":"status","percent_done":0.25,"total_bytes":4000,"bytes_done":1000,"total_files":10,"files_done":2,"seconds_remaining":120,"current_files":["/var/lib/agent/local/secret.txt"]}\n'
+        printf '{"message_type":"error","error":{"message":"open /var/lib/agent/local/secret.txt: permission denied"},"item":"/var/lib/agent/local/secret.txt"}\n'
+        sleep 1
+      done
+    else
+      [[ -n ${STUB_BACKUP_SLEEP:-} ]] && sleep "$STUB_BACKUP_SLEEP"
+    fi
     [[ -n ${STUB_BACKUP_ID:-} ]] &&
       printf '{"message_type":"summary","snapshot_id":"%s","tree_id":"%s"}\n' \
         "$STUB_BACKUP_ID" "${STUB_BACKUP_TREE:-tree1}"
@@ -187,6 +198,7 @@ export STUB_LOG=$log REPO_ROOT=$PWD
 export PATH="$bin:$PATH"
 export RESTIC_BIN=$bin/restic ZFS_BIN=$bin/zfs ZFS_READY_BIN=$bin/zfs-ready CURL_BIN=$bin/curl
 export RESTIC_BASE=$repos RESTIC_STATE_ROOT=$state STORAGE_LAYOUT=$PWD/scripts/storage-layout.sh
+export RESTIC_PROGRESS_ROOT=$work/progress
 # The driver refuses to run without a cache it can create; the unit supplies one
 # via CacheDirectory, so the harness supplies its own instead of relying on
 # /var/cache being writable (it is not on a CI runner).
@@ -202,7 +214,8 @@ reset_state() {
   install -d -m 0700 "$state"
   : >"$log/restic"; : >"$log/zfs"; : >"$log/curl-urls"; : >"$log/ready"
   : >"$log/snapshots"
-  unset STUB_BACKUP_EXIT STUB_BACKUP_ID STUB_BACKUP_SLEEP STUB_TAG_EXIT STUB_ZFS_LIST_EXIT \
+  rm -rf "$work/progress"
+  unset STUB_BACKUP_EXIT STUB_BACKUP_ID STUB_BACKUP_SLEEP STUB_BACKUP_STATUS STUB_TAG_EXIT STUB_ZFS_LIST_EXIT \
     STUB_ZFS_DESTROY_FAIL_LATE STUB_ZFS_STDERR \
     STUB_SNAPSHOTS_JSON STUB_SNAPSHOTS_EXIT STUB_READY_EXIT STUB_CAT_EXIT \
     STUB_MAINT_EXIT STUB_INIT_EXIT STUB_CURL_EXIT RESTIC_HEALTHCHECK_URL
@@ -981,6 +994,55 @@ budgets=$(RESTIC_ATTEMPTS=2 RESTIC_RETRY_SLEEP_LOCAL=60 \
   printf "%s %s %s\n" "$(max_age_for ssd agent-local)" \
     "$(run_expiry_for ssd agent-local)" "$(max_age_for ssd photos)"')
 eq "$budgets" "33600 29520 8400" "agent-local's budgets follow its deadline"
+
+# --- 9. progress publication ---------------------------------------------
+# Watching a run is read-only and belongs to the operator, so the driver
+# publishes restic's own status records and each unit's last result to a
+# world-readable tree beside the durable state, which stays root-only.
+reset_state
+export STUB_BACKUP_ID="live1" STUB_VERIFIED_ID="live1v" STUB_BACKUP_STATUS=1 STUB_BACKUP_SLEEP=4
+(
+  scripts/smortress-restic-backup.sh ssd --unit photos --no-maintenance >/dev/null 2>&1
+) &
+live_pid=$!
+# Sample the stream while restic is still uploading, keyed on the record
+# itself: the file existing is not proof the status arrived yet.
+sampled='' marker_mode='' stream_mode=''
+for _ in $(seq 100); do
+  sampled=$(jq -c 'select(.percent_done == 0.25)' "$work/progress/ssd-photos.jsonl" 2>/dev/null | tail -n1)
+  if [[ -n $sampled && -r $work/progress/current-ssd.json ]]; then
+    marker_mode=$(stat -c %a "$work/progress/current-ssd.json" 2>/dev/null)
+    stream_mode=$(stat -c %a "$work/progress/ssd-photos.jsonl" 2>/dev/null)
+    break
+  fi
+  sleep 0.1
+done
+eq "$(jq -r '.backend + "/" + .unit' "$work/progress/current-ssd.json" 2>/dev/null)" ssd/photos \
+  "a running unit is published as current"
+eq "$(jq -r '.percent_done' <<<"$sampled")" 0.25 \
+  "restic's status records reach the progress tree"
+eq "$marker_mode" 644 "the current marker is world-readable"
+eq "$stream_mode" 644 "the status stream is world-readable"
+if [[ $sampled == *secret.txt* ]]; then
+  bad "the world-readable stream does not name the files being read" "$sampled"
+else
+  ok "the world-readable stream does not name the files being read"
+fi
+if [[ $sampled != *'"message_type":"error"'* ]]; then
+  ok "error records, which name the failing file, are not published"
+else
+  bad "error records, which name the failing file, are not published" "$sampled"
+fi
+wait "$live_pid"
+if [[ -e $work/progress/current-ssd.json ]]; then
+  bad "current is cleared after the run" "$(cat "$work/progress/current-ssd.json")"
+else
+  ok "current is cleared after the run"
+fi
+eq "$(jq -r '.result' "$work/progress/last/ssd-photos.json" 2>/dev/null)" success \
+  "the last result is published for a reader without root"
+eq "$(stat -c %a "$work/progress/last/ssd-photos.json" 2>/dev/null)" 644 \
+  "the last result is world-readable"
 
 printf '\n%d checks, %d failed\n' "$pass" "$fail"
 ((fail == 0))

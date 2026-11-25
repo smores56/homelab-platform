@@ -205,6 +205,60 @@ invocation reconciles it. Reconciliation happens *after* the lock is acquired
 and destroys only `<dataset>@<backend>` for its own unit — never another job's
 snapshot.
 
+## Watching a run
+
+`smortress-restic-progress` reads the run; it never drives it.
+
+```sh
+smortress-restic-progress                  # redraw until interrupted
+smortress-restic-progress --once           # one frame, for a log or a paste
+smortress-restic-progress --all            # every unit's last result
+smortress-restic-progress --backend r2 --interval 2
+```
+
+One screen, per destination: the timer's own next run (an inactive timer is
+shown as having none, because a plane that stopped being scheduled looks exactly
+like a plane with nothing due), the unit in flight with restic's `--json`
+progress — percent, transferred bytes, files, rate and ETA — and, when nothing
+is running, the last result per unit. Restic's `seconds_remaining` is
+authoritative but reads 0 while it scans and again at the end; the watcher
+derives a rate from successive records and an ETA from that.
+
+The backup driver publishes what a reader needs to a tree the operator account
+can read, so watching needs no sudo and no restic query of its own:
+
+| Path | Contents | Mode |
+| --- | --- | --- |
+| `current-<backend>.json` | the unit in flight: start, epoch, deadline, attempt, legal window | `0644` |
+| `<backend>-<unit>.jsonl` | restic's `--json` status and summary records for the attempt in flight | `0644` |
+| `last/<backend>-<unit>.json` | the same line the journal recorded when the unit ended | `0644` |
+
+That tree is `/var/lib/homelab/restic-progress` by default
+(`RESTIC_PROGRESS_ROOT`), a sibling of the `0700` state tree that stays
+root-only. One marker per backend, not one for the plane: the hourly `ssd` and
+`hdd` units fire at the same minute and run concurrently, and a manual
+single-unit run shares the backend; a driver clears the marker only when it still
+names the run that wrote it, so the one that finishes first cannot blank the
+other's live attempt.
+
+The marker and the status stream exist only while an attempt is running. The
+marker carries the window its attempt is legal for — the lock wait, every
+bounded attempt and the post-upload `cat`/`tag`/`snapshots` calls, each of which
+gets a fresh deadline — and a marker past that window is a run that died without
+clearing it: the watcher calls it stale instead of showing a backup that stopped
+moving as live. A TERM removes both the marker and the stream; after a SIGKILL
+the next attempt truncates the stream and the marker expires on its own.
+
+Nothing published here carries a credential. A status record is reduced to byte
+and file counters: `current_files` is dropped and only `status`/`summary`
+records are kept, because restic's error and verbose records name the file that
+failed or was being read, and this tree is world-readable. A result record is
+the journal line verbatim, so it names the unit's staging paths and its
+repository URL — the same data the public recovery-group manifest already
+carries (`deploy/data-plane/config/recovery-groups.json`). The restic password
+and the R2 key pair never leave the root-only state tree and the decrypted
+secrets.
+
 ## Retention
 
 Retention runs repository-wide, once per backend per day, after that backend's
