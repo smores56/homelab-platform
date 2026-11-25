@@ -794,8 +794,8 @@ has 'a test proves the edge reaches only the two Serve ports' \
   'accept[[:space:]]*=[[:space:]]*\["tag:smortress:8446", "tag:smortress:8447"\]'
 has 'a test proves a tagged device reaches none of them' \
   'deny[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8446", "tag:smortress:8447", "tag:vps:22", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443"\]'
-has 'a test proves the edge does not reach the Services' \
-  'deny[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8484", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443"\]'
+has 'a test proves the edge does not reach the other Services' \
+  'deny[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8484", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443"\]'
 
 # The agent UI's Service is gone (design #834's first Service): it fronted the
 # `sammohr.dev` aliases through a Caddy that no longer exists, and the two
@@ -855,28 +855,37 @@ for dst in svc:immich svc:navidrome svc:assistant svc:agent svc:sync; do
 done
 has 'the auto-approver is declared under services' 'autoApprovers[[:space:]]*=[[:space:]]*\{'
 # The destination is the service and the port, never the name, so a source needs
-# one grant per Service it reaches. Twelve grants are the whole admitted set --
+# one grant per Service it reaches. Fourteen grants are the whole admitted set --
 # the owner's on each of the six Services (#834: the catalogue's, the four core
-# apps' and the Syncthing GUI's) and the CI names probe's on the same six (#848)
-# -- so a thirteenth, a second port on any, or a grant the probe does not read,
-# is a widening nobody decided.
+# apps' and the Syncthing GUI's), the CI names probe's on the same six (#848) and
+# the public edge's on the two it proxies (#725) -- so a fifteenth, a second port
+# on any, or a grant no test below reads, is a widening nobody decided.
 grants=$(awk '/^    grants = \[/ { f = 1 } f { print } f && /^    \]/ { exit }' "$work/code.tf")
 if [[ -z $grants ]]; then
   bad "the grants list is declared"
 else
   ok "the grants list is declared"
-  eq "$(grep -cE '^        src = ' <<<"$grants")" "12" 'the Services are granted to exactly twelve sources'
+  eq "$(grep -cE '^        src = ' <<<"$grants")" "14" 'the Services are granted to exactly fourteen sources'
   eq "$(grep -cF 'src = ["group:owner"]' <<<"$grants")" "6" 'the owner reaches all six Services'
   eq "$(grep -cF 'src = ["tag:deploy"]' <<<"$grants")" "6" 'the names probe reaches the six Service names'
-  eq "$(grep -cF 'ip  = ["443"]' <<<"$grants")" "12" 'every grant names the one Service port'
+  eq "$(grep -cF 'src = ["tag:vps"]' <<<"$grants")" "2" 'the public edge reaches the two it proxies'
+  eq "$(grep -cF 'ip  = ["443"]' <<<"$grants")" "14" 'every grant names the one Service port'
 fi
 # No test names the retired Service at all: a destination a grant no longer
 # admits has to leave the deny lists with it, or the policy save refuses a test
 # for something no rule admits.
 hasnt 'no test names the retired Service port' 'svc:agent-ui:443'
-# OPDShelf and the four core apps carry the probe: two accepts (the owner's and
-# tag:deploy's) and the same two denies.
-for dst in svc:opds svc:immich svc:navidrome svc:assistant svc:agent svc:sync; do
+# The catalogue and Immich keep their grant to the edge, which is why the edge's
+# deny test stops naming them: two accepts (the owner's and tag:deploy's) and
+# one deny, for the device in no group. A grants entry is not a test entry, so
+# the edge's own grant appears nowhere here.
+for dst in svc:opds svc:immich; do
+  eq "$(grep -cF -- "\"$dst:443\"" "$work/code.tf")" "3" \
+    "the $dst Service port is two accepts and one deny in the tests"
+done
+# The four the edge does not proxy carry only the owner and the probe: two
+# accepts and the same two denies.
+for dst in svc:navidrome svc:assistant svc:agent svc:sync; do
   eq "$(grep -cF -- "\"$dst:443\"" "$work/code.tf")" "4" \
     "the $dst Service port is two accepts and two denies in the tests"
 done

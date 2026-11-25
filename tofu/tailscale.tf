@@ -195,6 +195,24 @@ locals {
         dst = ["svc:opds"]
         ip  = ["443"]
       },
+      {
+        # The public edge (design #725) on its way off the host's 8446/8447: the
+        # VPS resolves the two names the applications own and proxies to them, so
+        # it needs a grant apiece, on the same 443 and narrower than the two host
+        # ports it replaces -- each VIP terminates at one application, where 8446
+        # and 8447 were Serve handlers on the host's own address. The host-port
+        # grants stay until the edge is running this config, which is why both
+        # forms are admitted at once: dropping them first would take photos and
+        # the catalogue down for the length of one bootstrap.
+        src = ["tag:vps"]
+        dst = ["svc:immich"]
+        ip  = ["443"]
+      },
+      {
+        src = ["tag:vps"]
+        dst = ["svc:opds"]
+        ip  = ["443"]
+      },
     ]
 
     # The advertisement is the host's own, so it approves itself: without an
@@ -259,14 +277,16 @@ locals {
         deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8446", "tag:smortress:8447", "tag:vps:22", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443"]
       },
       {
-        # The edge reaches the two Serve ports and nothing else: no sshd, no
-        # agent gateway, no Syncthing, no deploy receiver, no Service VIP.
+        # The edge reaches the two Serve ports and nothing else on the host: no
+        # sshd, no agent gateway, no Syncthing, no deploy receiver. The two
+        # Service names it is granted are not host ports and cannot be named
+        # here; they leave the deny list below instead.
         src    = "tag:vps"
         accept = ["tag:smortress:8446", "tag:smortress:8447"]
       },
       {
         src  = "tag:vps"
-        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8484", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443"]
+        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8484", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443"]
       },
       {
         # The deploy node reaches the receiver and, through the grants above, one
