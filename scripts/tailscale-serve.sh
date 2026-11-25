@@ -196,6 +196,34 @@ status=$("$tailscale_bin" serve status --json) || {
   status='{}'
 }
 
+# A host port this version stops declaring has to leave tailscaled, not just this
+# file: Serve answers a handler for as long as its config names it, and nothing in
+# tailscaled knows a newer script retired the route. So deleting an entry from
+# core_routes above is enough to retire it on the next run -- without this loop the
+# handler outlived the declaration, and the public edge's 8446 and 8447 would have
+# kept answering long after the edge moved onto Service names.
+#
+# Every https port in the status is stale unless core_routes names it. 443 is
+# exempt: that is the tenant root, where the two gateways and the wallpaper tree
+# live, and it never retires by dropping an entry. Only `Web` is read: `TCP` is the
+# receiver's forward and `Services` are the per-app names, and neither is a host
+# port. Same guard as the `/apps/` prune below -- a plan that did not verify leaves
+# the pruning to a run that can read it.
+while IFS= read -r port; do
+  $plan_ok || break
+  [[ -n $port ]] || continue
+  [[ $port == 443 ]] && continue
+  [[ -n ${core_routes[$port]+x} ]] && continue
+  if ! "$tailscale_bin" serve --https="$port" off; then
+    echo "tailscale-serve: could not turn off the stale route https/$port" >&2
+    plan_ok=false
+    break
+  fi
+done < <(
+  jq -r '[.Web // {} | keys[] | split(":") | last | select(test("^[0-9]+$"))] | unique[]' \
+    <<<"$status" 2>/dev/null || true
+)
+
 # An app that left the plan, or the whole tenant, leaves no route behind. Only
 # `/apps/` handlers on 443 are ours: the root paths belong to the core apps,
 # `/apps/agent-local` and `/apps/agent-general` belong to the core gateways, and

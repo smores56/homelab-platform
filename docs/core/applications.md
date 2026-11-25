@@ -572,7 +572,9 @@ way -- a web UI emits absolute asset and link URLs, so a path prefix on 443 woul
 send the browser to the tailnet root, which is Immich -- and they get two more
 entries in `core_routes` (8444 and 8445) instead. A tenant
 plan that claims either path is refused whole, and the stale-route pruning skips
-both, so a run without a plan cannot delete them.
+both, so a run without a plan cannot delete them. A port dropped from `core_routes`
+is turned off on the next run of that script, because Serve keeps answering a
+handler that nothing declares any more.
 
 The two UIs answer on a Service each, like every other application behind the
 tailnet name service (design #834): `svc:assistant` and `svc:agent` are advertised

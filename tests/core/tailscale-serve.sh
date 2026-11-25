@@ -7,10 +7,11 @@
 # at the loopback port the renderer assigned. This proves the declaration half
 # without a tailnet: the fixed core routes, the two core paths, the wallpaper
 # library as static files under `/wallpapers`, one route per app, pruning of an
-# app that left the plan without touching the static route or a core path, a
-# refused claim on a core path, and a refusal to build a route from a plan that
-# names a foreign path or port. The Service VIP endpoints are counted the same
-# way: each is a core declaration, and the fake logs one and records the other.
+# app that left the plan without touching the static route or a core path, the
+# retirement of a host port the script no longer declares, a refused claim on a
+# core path, and a refusal to build a route from a plan that names a foreign path
+# or port. The Service VIP endpoints are counted the same way: each is a core
+# declaration, and the fake logs one and records the other.
 #
 #   tests/core/tailscale-serve.sh
 set -uo pipefail
@@ -44,10 +45,12 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
 # The fake tailscale records argv and answers `serve status --json` from a file
-# the case sets up. `off` is a removal, so the status it prints afterwards is
-# the file rewritten without that handler. A target that is an absolute path is
-# Serve's static-file form and lands in `Path`, exactly as the real one does, and
-# a directory mount gains the trailing slash Serve adds itself. A `--service`
+# the case sets up. `off` is a removal, so the status it prints afterwards is the
+# file rewritten without that handler -- or, with no `--set-path`, without that
+# port at all, because `serve --https=<port> off` retires the port and not one
+# path on it. A target that is an absolute path is Serve's static-file form and
+# lands in `Path`, exactly as the real one does, and a directory mount gains the
+# trailing slash Serve adds itself. A `--service`
 # declaration belongs to the Service VIP and not to the host, so it lands in
 # `Services` keyed `<service>:<port>`: recorded as a host handler it would take
 # that port's root path, which on 443 is Immich's.
@@ -107,6 +110,15 @@ case $1 in
                     jq --arg key "$tcp" --arg target "${target#tcp://}" '
                         .TCP //= {} | .TCP[$key] = {"TCPForward": $target}' \
                         "$FAKE_STATUS" >"$FAKE_STATUS.next"
+                    mv "$FAKE_STATUS.next" "$FAKE_STATUS"
+                    exit 0
+                fi
+                if [[ $target == off && -z $path && -z $tcp ]]; then
+                    # `serve --https=<port> off` retires the port itself, not one
+                    # handler on it: tailscaled drops the Web entry and the port
+                    # stops answering. A `--set-path=` off is the branch below.
+                    [[ ${FAKE_FAIL_OFF:-} == 1 ]] && exit 1
+                    jq --arg key "host:$port" 'del(.Web[$key])' "$FAKE_STATUS" >"$FAKE_STATUS.next"
                     mv "$FAKE_STATUS.next" "$FAKE_STATUS"
                     exit 0
                 fi
@@ -410,6 +422,80 @@ if grep -E -- ' off$' "$log" | grep -qv -- '--set-path=/apps/'; then
     bad 'pruning only removes /apps/ handlers' "$(grep -E -- ' off$' "$log")"
 else
     ok 'pruning only removes /apps/ handlers'
+fi
+
+# --- a host port that left core_routes is turned off -------------------------
+#
+# The script is declarative for the routes it declares, but tailscaled's state is
+# not: a handler whose declaration is gone keeps answering until something turns
+# it off. The edge's 8446 and 8447 are the case that matters -- they exist for the
+# public edge alone and must not outlive it -- so a Web port nobody declares is
+# retired on the next run, while every port still in core_routes, 443, the
+# receiver's TCP forward and the per-app Services are left alone.
+
+reset_case
+jq '.Web["host:9999"] = {"Handlers": {"/": {"Proxy": "http://127.0.0.1:2283"}}}' "$status" \
+    >"$work/s" && mv "$work/s" "$status"
+run
+eq "$?" 0 'a port the script no longer declares does not fail the run'
+eq "$(grep -cF -- 'serve --https=9999 off' "$log")" 1 \
+    'a stale https port is turned off exactly once'
+if jq -e '.Web | has("host:9999") | not' "$status" >/dev/null 2>&1; then
+    ok 'the stale port leaves the Serve config, so nothing answers it'
+else
+    bad 'the stale port leaves the Serve config, so nothing answers it' \
+        "$(jq -r '.Web | keys | join(" ")' "$status" 2>/dev/null)"
+fi
+# The declared ports are read out of the script rather than repeated here, so the
+# assertion keeps up when an entry leaves core_routes -- which is the edit this
+# reconcile exists to make safe.
+declared_ports=$(sed -n '/^declare -A core_routes=(/,/^)/p' "$script" |
+    grep -oE '\[[0-9]+\]' | tr -dc '0-9\n' | paste -sd'|' -)
+if [[ -z $declared_ports ]]; then
+    bad 'core_routes is readable' "$script"
+else
+    ok 'core_routes is readable'
+fi
+if grep -qE -- "--https=($declared_ports) off$" "$log"; then
+    bad 'a port core_routes still declares is never turned off' \
+        "$(grep -E -- " off$" "$log")"
+else
+    ok 'a port core_routes still declares is never turned off'
+fi
+if grep -qE -- '--https=443 off$' "$log"; then
+    bad '443 is never turned off' "$(grep -E -- " off$" "$log")"
+else
+    ok '443 is never turned off'
+fi
+eq "$(tcp_forward)" 127.0.0.1:8484 'the reconcile leaves the receiver forward in place'
+eq "$(service_served svc:opds:443)" 'http://127.0.0.1:8083' \
+    'the reconcile leaves the Service endpoints in place'
+if grep -E -- ' off$' "$log" | grep -qE -- '(--tcp=|--service=)'; then
+    bad 'the reconcile turns off Web ports only' "$(grep -E -- ' off$' "$log")"
+else
+    ok 'the reconcile turns off Web ports only'
+fi
+
+# A port Tailscale refuses to turn off is reported and stops the prunes, like a
+# stale `/apps/` route that will not go: the run fails rather than leaving the
+# rest of the config half-reconciled without saying so.
+reset_case
+jq '.Web["host:9999"] = {"Handlers": {"/": {"Proxy": "http://127.0.0.1:2283"}}}' "$status" \
+    >"$work/s" && mv "$work/s" "$status"
+if FAKE_FAIL_OFF=1 run; then
+    bad 'a port Serve refuses to turn off fails the run'
+else
+    ok 'a port Serve refuses to turn off fails the run'
+fi
+if grep -qF -- 'could not turn off the stale route https/9999' "$work/stderr"; then
+    ok 'the failure names the port it could not retire'
+else
+    bad 'the failure names the port it could not retire' "$(cat "$work/stderr")"
+fi
+if grep -qE -- '--set-path=/apps/.* off$' "$log"; then
+    bad 'a failed port removal stops the further prunes' "$(grep -E -- ' off$' "$log")"
+else
+    ok 'a failed port removal stops the further prunes'
 fi
 
 # --- a missing plan prunes every app route -----------------------------------

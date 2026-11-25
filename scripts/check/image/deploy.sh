@@ -103,6 +103,12 @@ check "Serve forwards the deploy receiver's loopback port" \
 check "the wallpaper library is the dataset mount point" has 'WALLPAPERS_DIR:-/srv/wallpapers' "$serve_script"
 check "stale-route pruning only considers tenant handlers" \
   has 'select(startswith("/apps/"))' "$serve_script"
+# Declarative in this script is not declarative in tailscaled: a handler keeps
+# answering after the declaration that made it is gone, so a port that a later
+# version stops declaring -- the edge's 8446 and 8447 once it is Service-only --
+# is turned off here or it lingers for good.
+check "a port that left core_routes is turned off on the next run" \
+  has 'serve --https="$port" off' "$serve_script"
 if grep -qE -- '--set-path=/wallpapers[^ ]* .*off' "$serve_script"; then
   bad "pruning never removes the wallpaper route"
 else
