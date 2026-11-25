@@ -269,7 +269,7 @@ Stop and read the state; do not continue and do not improvise a workaround.
 - **P4 or P5 fails.** Rewrite `disk` and re-render, or restore the signing key from
   the kit and re-publish before pinning a digest.
 - **The render shows `keyFile` or a second LUKS device.** Fix
-  `ignition/smortress.bu`, re-run `tests/core/ignition-boundary.sh`.
+  `ignition/smortress.bu`, re-run `bats tests/image/ignition-boundary.bats`.
 - **No `p4`, or `blkid` exits 0 on `luks-root`.** Re-run the install; `wipefs -a`
   the target from the live media first if it fails again.
 - **No `/etc/ucore-autorebase/unverified` marker.** The unsigned rebase never ran,
