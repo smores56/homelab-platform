@@ -87,10 +87,11 @@ locals {
       },
       {
         # The deploy receiver (design #798) and the names probe (#848). A CI job
-        # carries tag:deploy for the length of one run and may reach exactly two
-        # destinations: the receiver's tailnet-served TCP forward on loopback and,
-        # through the grant below, the UI Service's one port. Every other port on
-        # the host stays owner-only, and the deny test below keeps it that way.
+        # carries tag:deploy for the length of one run and may reach the
+        # receiver's tailnet-served TCP forward on loopback and, through the
+        # grants below, one port on each of the six Services the probe reads.
+        # Every other port on the host stays owner-only, and the deny test below
+        # keeps it that way.
         action = "accept"
         src    = ["tag:deploy"]
         dst    = ["tag:smortress:8484"]
@@ -106,26 +107,26 @@ locals {
 
     # A Service VIP is an address the tailnet owns rather than one a device
     # holds, so it cannot be named as an `acl` destination: that form is a host's
-    # port, and the VIP is no host. A grant names the service instead. The agent
-    # UI's one port is reached by exactly two sources (design #834): the owner,
-    # and the CI probe (#848), which is worth nothing unless it is not the owner.
-    # OPDShelf's is owner-only, and so is each of the core apps that follow it
-    # off the per-port scheme, the Syncthing GUI included: the catalogue and the
+    # port, and the VIP is no host. A grant names the service instead. The owner
+    # reaches all seven Services (design #834); the CI names probe (#848) reaches
+    # the six that carry the applications' own names, each by its own grant on
+    # 443 -- Immich, Navidrome, the personal UI, the general UI, the Syncthing GUI
+    # and the catalogue -- which is worth nothing unless the prober is not the
+    # owner. The agent UI keeps an owner-only grant: it fronts the two
+    # `sammohr.dev` aliases through Caddy, and that whole layer is retired next,
+    # so the probe stops reading it here rather than depending on it. OPDShelf's
+    # grant is the catalogue's, the Syncthing GUI's is the GUI's: the
     # applications are the owner's, and nothing else has asked for them.
+    #
+    # Six destinations for CI instead of one is the narrower surface, not the
+    # wider one: each granted VIP is a Service that terminates at exactly one
+    # application on one port, so the admitted set can be read off this list. The
+    # Service it replaces fronted everything behind one Caddy, and any route that
+    # proxy grew was reachable from CI with no policy change at all; a seventh
+    # application now needs a seventh grant and a line in the tests below.
     grants = [
       {
         src = ["group:owner"]
-        dst = ["svc:agent-ui"]
-        ip  = ["443"]
-      },
-      {
-        # The names probe, from `.github/workflows/verify-tailnet-names.yml`: a
-        # node carrying tag:deploy for the length of one run resolves both names,
-        # verifies the certificate and follows the UI's login redirect. It is the
-        # one non-owner client, so it is also the only way the names are proven to
-        # work for anyone but the owner. Nothing else grows with it: the deny test
-        # for tag:deploy minus this destination is what keeps it a probe.
-        src = ["tag:deploy"]
         dst = ["svc:agent-ui"]
         ip  = ["443"]
       },
@@ -164,6 +165,44 @@ locals {
         # The Syncthing GUI's, owner-only for the same reason.
         src = ["group:owner"]
         dst = ["svc:sync"]
+        ip  = ["443"]
+      },
+      {
+        # The names probe, from `.github/workflows/verify-tailnet-names.yml`: a
+        # node carrying tag:deploy for the length of one run resolves the six
+        # names, verifies each certificate and reads each application's status
+        # class. It is the one non-owner client, so it is also the only way the
+        # names are proven to work for anyone but the owner. One grant per
+        # Service, because the probe reads six VIPs and a grant is one
+        # source/destination pair; the deny test for tag:deploy is what keeps it
+        # a probe.
+        src = ["tag:deploy"]
+        dst = ["svc:immich"]
+        ip  = ["443"]
+      },
+      {
+        src = ["tag:deploy"]
+        dst = ["svc:navidrome"]
+        ip  = ["443"]
+      },
+      {
+        src = ["tag:deploy"]
+        dst = ["svc:assistant"]
+        ip  = ["443"]
+      },
+      {
+        src = ["tag:deploy"]
+        dst = ["svc:agent"]
+        ip  = ["443"]
+      },
+      {
+        src = ["tag:deploy"]
+        dst = ["svc:sync"]
+        ip  = ["443"]
+      },
+      {
+        src = ["tag:deploy"]
+        dst = ["svc:opds"]
         ip  = ["443"]
       },
     ]
@@ -241,17 +280,18 @@ locals {
         deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8484", "svc:agent-ui:443", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443"]
       },
       {
-        # The deploy node reaches the receiver and the names probe reaches the UI
-        # Service; those two are the whole admitted set for the tag. A third
-        # destination has to be added here or this list fails the policy save.
+        # The deploy node reaches the receiver and, through the grants above, one
+        # port on each of the six Services the names probe reads; those seven are
+        # the whole admitted set for the tag. Another destination has to be added
+        # here or this list fails the policy save.
         src    = "tag:deploy"
-        accept = ["tag:smortress:8484", "svc:agent-ui:443"]
+        accept = ["tag:smortress:8484", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443", "svc:opds:443"]
       },
       {
-        # Everything else stays closed to tag:deploy, the Service port included
-        # only through the grant above: a deny test may not name a destination a
-        # grant admits, so `svc:agent-ui:443` moved out of this list in #848. The
-        # remaining entries are every other destination any rule admits.
+        # Everything else stays closed to tag:deploy. A deny test may not name a
+        # destination a grant admits, so no Service destination appears here: all
+        # seven are admitted to some source, six of them to this tag. The
+        # remaining entries are every host port and edge login any rule admits.
         src  = "tag:deploy"
         deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8446", "tag:smortress:8447", "tag:vps:22"]
       },

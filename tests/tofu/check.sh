@@ -812,8 +812,8 @@ has 'the policy admits the edge to the two Serve ports' '"tag:smortress:8446", "
 has 'the policy admits the owner to the edge' '"tag:vps:22"'
 has 'the policy admits the deploy receiver' '"tag:smortress:8484"'
 has 'the deploy tag is owned by the owner group' '"tag:deploy"[[:space:]]*=[[:space:]]*\["group:owner"\]'
-has 'a test proves the deploy node reaches the receiver and the names probe its port' \
-  'accept[[:space:]]*=[[:space:]]*\["tag:smortress:8484", "svc:agent-ui:443"\]'
+has 'a test proves the deploy node reaches the receiver and the six Service names' \
+  'accept[[:space:]]*=[[:space:]]*\["tag:smortress:8484", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443", "svc:opds:443"\]'
 has 'a test proves the deploy node reaches no other host port' \
   'deny[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8446", "tag:smortress:8447", "tag:vps:22"\]'
 has 'the policy carries tests' 'tests[[:space:]]*=[[:space:]]*\['
@@ -898,34 +898,33 @@ for dst in svc:immich svc:navidrome svc:assistant svc:agent svc:sync; do
   has "the host auto-approves $dst" "\"$dst\"[[:space:]]*=[[:space:]]*\\[\"tag:smortress\"\\]"
 done
 has 'the auto-approver is declared under services' 'autoApprovers[[:space:]]*=[[:space:]]*\{'
-# Both UI names ride one Service, so one grant per admitted source covers them:
-# the destination is the service and the port, never the name. Eight grants are
-# the whole admitted set -- the owner's on each of the seven Services (#834, the
-# catalogue's, the four core apps' and the Syncthing GUI's) and the CI names
-# probe's on the UI (#848) -- so a ninth, a second port on any, or a probe grant
-# on an application Service, is a widening nobody decided.
+# The destination is the service and the port, never the name, so a source needs
+# one grant per Service it reaches. Thirteen grants are the whole admitted set --
+# the owner's on each of the seven Services (#834, the catalogue's, the four core
+# apps' and the Syncthing GUI's) and the CI names probe's on the six that carry
+# the applications' own names (#848, the UI's Service excluded: it fronts the
+# retired `sammohr.dev` aliases) -- so a fourteenth, a second port on any, or a
+# grant the probe does not read, is a widening nobody decided.
 grants=$(awk '/^    grants = \[/ { f = 1 } f { print } f && /^    \]/ { exit }' "$work/code.tf")
 if [[ -z $grants ]]; then
   bad "the grants list is declared"
 else
   ok "the grants list is declared"
-  eq "$(grep -cE '^        src = ' <<<"$grants")" "8" 'the Services are granted to exactly eight sources'
+  eq "$(grep -cE '^        src = ' <<<"$grants")" "13" 'the Services are granted to exactly thirteen sources'
   eq "$(grep -cF 'src = ["group:owner"]' <<<"$grants")" "7" 'the owner reaches all seven Services'
-  if grep -qF 'src = ["tag:deploy"]' <<<"$grants"; then ok 'the names probe is the eighth'; else bad 'the names probe is the eighth'; fi
-  eq "$(grep -cF 'ip  = ["443"]' <<<"$grants")" "8" 'every grant names the one Service port'
+  eq "$(grep -cF 'src = ["tag:deploy"]' <<<"$grants")" "6" 'the names probe reaches the six Service names'
+  eq "$(grep -cF 'ip  = ["443"]' <<<"$grants")" "13" 'every grant names the one Service port'
 fi
-# Two accepts and two denies per Service: the owner and (for the UI) the probe
-# reach the port, the edge (tag:vps) and a device in no group (tag:untrusted) do
-# not. A further entry would be a destination no other test keeps out.
-eq "$(grep -cF -- '"svc:agent-ui:443"' "$work/code.tf")" "4" \
-  "the UI Service port is two accepts and two denies in the tests"
-# OPDShelf, the four core apps and the Syncthing GUI have no probe: one accept
-# each, the owner's, and the same two denies.
-eq "$(grep -cF -- '"svc:opds:443"' "$work/code.tf")" "3" \
-  "the OPDShelf Service port is one accept and two denies in the tests"
-for dst in svc:immich svc:navidrome svc:assistant svc:agent svc:sync; do
-  eq "$(grep -cF -- "\"$dst:443\"" "$work/code.tf")" "3" \
-    "the $dst Service port is one accept and two denies in the tests"
+# The UI's Service lost the probe (#848 moved to the six names and it keeps an
+# owner grant): one accept and two denies now. A further entry would be a
+# destination no other test keeps out.
+eq "$(grep -cF -- '"svc:agent-ui:443"' "$work/code.tf")" "3" \
+  "the UI Service port is one accept and two denies in the tests"
+# OPDShelf and the four core apps carry the probe: two accepts (the owner's and
+# tag:deploy's) and the same two denies.
+for dst in svc:opds svc:immich svc:navidrome svc:assistant svc:agent svc:sync; do
+  eq "$(grep -cF -- "\"$dst:443\"" "$work/code.tf")" "4" \
+    "the $dst Service port is two accepts and two denies in the tests"
 done
 # The provider is declared with an explicit scope list (design #841 T1): a plan
 # asks its read-only client for exactly the four read scopes, so the token it

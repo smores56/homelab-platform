@@ -706,18 +706,43 @@ done
 
 The OAuth client is the tailnet client carrying `tag:deploy`: scopes `auth_keys`
 write and `devices` write, tags `tag:deploy`, nothing else, and the ACL admits that
-tag on `tag:smortress:8484` (the receiver) and `svc:agent-ui:443` (the daily names
-probe, below) and nowhere else. A compromised notify job can therefore re-tag the
+tag on `tag:smortress:8484` (the receiver) and on port 443 of each of the six
+Services behind the application names (the daily names probe, below) and nowhere
+else. A compromised notify job can therefore re-tag the
 smortress device itself; that write cannot be separated from `auth_keys`, and a
 static auth key in the Environment would never expire.
 
 ### Create the tailnet names check
 
-`verify-tailnet-names.yml` runs daily and proves `assistant.sammohr.dev` and
-`agent.sammohr.dev` still work for a node that is not the owner's laptop
-(`docs/core/applications.md`, the tailnet name service). It pages through a
-Healthchecks check of its own: a daily period with a six-hour grace, because the
-probe answers once a day and one late run should not page.
+`verify-tailnet-names.yml` runs daily and proves the six tailnet Service names
+still work for a node that is not the owner's laptop (`docs/core/applications.md`,
+the tailnet name service): `immich.<tailnet>.ts.net`,
+`navidrome.<tailnet>.ts.net`, `assistant.<tailnet>.ts.net`,
+`agent.<tailnet>.ts.net`, `sync.<tailnet>.ts.net` and `opds.<tailnet>.ts.net`,
+each behind a Service of its own. The probe derives the suffix from its own node
+(`tailscale status --json`, `.Self.DNSName`), so a renamed tailnet needs no edit,
+and `TAILNET_NAMES_SUFFIX` states it outright for a node with no `tailscale`
+binary. It pages through a Healthchecks check of its own: a daily period with a
+six-hour grace, because the probe answers once a day and one late run should not
+page.
+
+Every name is four claims. It resolves into `100.64.0.0/10`, and **all six
+addresses are distinct**: one Service owns one VIP, so a name answering on
+another Service's address, on the retired `svc:agent-ui` one or on the device
+itself fails. Its certificate chains to a public root with that exact name in it
+and is not within `TAILNET_NAMES_MIN_DAYS` (14) of expiry. And `GET /` answers
+the status class the application owns -- 2xx Immich and the Syncthing GUI, 3xx
+Navidrome and the two agent UIs, 4xx the OPDShelf catalogue. A class and not a
+code, so a login redirect spelled differently does not page, while a drained
+Service (no route at all) and a stopped application (502) both fall outside it.
+
+CI is the only node that is not the owner's, so the probe's `tag:deploy` grants
+are what make it a proof for anyone else: one grant on port 443 per Service, six
+in all, with the policy's tests pinning that set (`tofu/tailscale.tf`). Wider in
+count and narrower in reach than the single Service it replaces: each granted VIP
+terminates at one application on one port, where the old one fronted everything
+through one Caddy whose routes grew without a policy change, and the only host
+port `tag:deploy` reaches is the deploy receiver's own 8484.
 
 Create the check in the project with a `1 day` period and a `6 hour` grace, then
 copy its ping URL into the environment:

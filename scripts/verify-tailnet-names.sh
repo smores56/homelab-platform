@@ -1,29 +1,39 @@
 #!/usr/bin/env bash
-# Prove the tailnet name service (design #834) still works, before a person
-# finds out that it does not.
+# Prove the six tailnet Service names still work, before a person finds out that
+# they do not.
 #
-# `assistant.sammohr.dev` and `agent.sammohr.dev` are five promises stacked on
-# one another: a grey-cloud `A` record pointing at the Service VIP
-# (`tofu/dns.tf`), a Service the host still advertises
-# (`scripts/tailscale-serve.sh`), Serve's forward to Caddy on loopback, a DNS-01
-# certificate Caddy renews, and a web UI behind all of it. Each breaks on its own
-# and a 200 proves none of them, so every probe below is one of the claims:
+# Each application answers on a name of its own -- `immich`, `navidrome`,
+# `assistant`, `agent`, `sync` and `opds`, as `<app>.<tailnet>.ts.net` -- behind
+# its own Tailscale Service (`tofu/tailscale.tf`). The `sammohr.dev` aliases that
+# rode one Service and one Caddy are being retired, so this probe watches the
+# names that outlive them. Four promises stack on one another per name: a Service
+# the host still advertises (`scripts/tailscale-serve.sh`), Serve's forward to
+# the application on loopback, a certificate Tailscale mints for that exact name,
+# and the application behind all of it. Each breaks on its own and a 200 proves
+# none of them, so every probe below is one of the claims:
 #
-#   - each name resolves, and to the one Service VIP. With
-#     TAILNET_NAMES_EXPECT_VIP unset both names must land on the *same*
-#     100.64.0.0/10 address: one Service owns one VIP, so two addresses would
-#     mean one name answers through something else -- the wildcard, a stale edge
-#     record, a second Service.
+#   - the name resolves, and into the tailnet's own range. Each Service owns its
+#     own VIP, so the addresses must also be pairwise distinct: one address
+#     answering two names means one of them is not talking to its own Service --
+#     a stale record, another Service's VIP, the retired agent-ui one, or the
+#     device itself. Six names, six addresses, or this fails.
 #   - the chain verifies against the public roots with the name in it. The VIP is
-#     not publicly routable, so this is Caddy's DNS-01 certificate and not
-#     something the tailnet minted.
+#     not publicly routable, and Tailscale issues the certificate for the Service
+#     FQDN, so a name answered by something else presents a certificate that does
+#     not carry it and fails here.
 #   - that certificate is not within TAILNET_NAMES_MIN_DAYS of expiry.
-#   - the UI answers as the UI: `GET /` is a 3xx whose `Location` is the login
-#     route, with `/` as the page to return to. A bare 200 says nothing, and the
-#     two ways this path breaks do not even share a status: with Caddy stopped the
-#     forward refuses the connection or Serve answers 502, and with the Service
-#     drained there is no route at all, so the request times out. The redirect is
-#     what proves a UI is behind the name.
+#   - the application answers `GET /` with the status class it owns: 2xx for
+#     Immich and the Syncthing GUI, which serve a page, 3xx for the three that
+#     redirect a stranger to a login, 4xx for OPDShelf, whose catalogue refuses an
+#     unauthenticated reader. A class, not a code, because the redirect an
+#     application spells is its own business; a 502 from a stopped Serve rule, the
+#     timeout a drained Service leaves and a 200 from whatever else holds the port
+#     all fall outside it.
+#
+# The tailnet suffix is derived from this node's own FQDN (`tailscale status
+# --json`, `.Self.DNSName`), so a renamed tailnet needs no edit here and no
+# checkout has to know the name; TAILNET_NAMES_SUFFIX states it outright, for a
+# node with no `tailscale` binary and for the tests.
 #
 # Exit 0 only when every probe passes. `.github/workflows/verify-tailnet-names.yml`
 # runs it on a schedule from a `tag:deploy` node, which is the only place a
@@ -33,21 +43,31 @@
 #   scripts/verify-tailnet-names.sh
 #
 # Knobs: TAILNET_NAMES_TIMEOUT (10 s), TAILNET_NAMES_MIN_DAYS (14),
-# TAILNET_NAMES_EXPECT_VIP, TAILNET_NAMES_CAFILE, CURL_BIN, OPENSSL_BIN and
-# GETENT_BIN (tests/tailnet-names/check.sh drives the same code).
+# TAILNET_NAMES_SUFFIX, TAILNET_NAMES_CAFILE, TAILSCALE_BIN, CURL_BIN,
+# OPENSSL_BIN and GETENT_BIN (tests/tailnet-names/check.sh drives the same code).
 set -uo pipefail
 
-names=(assistant.sammohr.dev agent.sammohr.dev)
-# The redirect both UIs answer with, read off the live names on 2026-11-23:
-# `GET /` is 302 and `Location: login?next=/`. Relative and without a leading
-# slash, because that is what the application emits.
-login_location='login?next=/'
+# <app> -> the status class its `GET /` answers with, read off the live Services
+# on 2026-11-25. Three UIs redirect, two serve, the catalogue refuses: the class
+# is what the application promises a stranger, and an exact code would turn a
+# login spelling change into a pager.
+declare -A want=(
+  [immich]=2
+  [navidrome]=3
+  [assistant]=3
+  [agent]=3
+  [sync]=2
+  [opds]=4
+)
+# The report's order, not an assertion of its own.
+apps=(immich navidrome assistant agent sync opds)
 tailnet_range='100.64.0.0/10'
 
 timeout_s=${TAILNET_NAMES_TIMEOUT:-10}
 min_days=${TAILNET_NAMES_MIN_DAYS:-14}
-expect_vip=${TAILNET_NAMES_EXPECT_VIP:-}
+suffix=${TAILNET_NAMES_SUFFIX:-}
 cafile=${TAILNET_NAMES_CAFILE:-/etc/ssl/certs/ca-certificates.crt}
+tailscale_bin=${TAILSCALE_BIN:-tailscale}
 curl_bin=${CURL_BIN:-curl}
 openssl_bin=${OPENSSL_BIN:-openssl}
 getent_bin=${GETENT_BIN:-getent}
@@ -72,12 +92,40 @@ for tool in "$getent_bin" "$curl_bin" "$openssl_bin"; do
   }
 done
 
+if [[ -z $suffix ]]; then
+  command -v "$tailscale_bin" >/dev/null 2>&1 || {
+    printf 'verify-tailnet-names: %s is not installed, and TAILNET_NAMES_SUFFIX is unset\n' \
+      "$tailscale_bin" >&2
+    exit 2
+  }
+  # `.Self.DNSName` is this node's own FQDN with a trailing dot; every peer
+  # carries one too, so the anchor matters. The first label is the device, so
+  # what is left is the tailnet's suffix, and the dot goes with it: the names
+  # below are built as `<app>.<suffix>`, and a trailing dot on the suffix would
+  # make every one of them a name that does not resolve.
+  status=$("$tailscale_bin" status --json 2>/dev/null)
+  dns=$(printf '%s' "${status#*\"Self\":}" |
+    grep -o '"DNSName":[[:space:]]*"[^"]*"' | head -n 1 | cut -d'"' -f4)
+  if [[ -z $dns ]]; then
+    printf 'verify-tailnet-names: %s status reported no .Self.DNSName; set TAILNET_NAMES_SUFFIX\n' \
+      "$tailscale_bin" >&2
+    exit 2
+  fi
+  suffix=${dns#*.}
+fi
+suffix=${suffix%.}
+if [[ $suffix != *.* ]]; then
+  printf "verify-tailnet-names: '%s' is not a tailnet suffix like <tailnet>.ts.net\n" \
+    "$suffix" >&2
+  exit 2
+fi
+
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
 # <name> -> every address the resolver answers with, one per line. `ahostsv4`
-# because the records are `A`: a name answered only over IPv6 cannot reach a
-# Service VIP that has none.
+# because a Service VIP is IPv4-only: a name answered only over IPv6 cannot
+# reach one.
 addresses() {
   "$getent_bin" ahostsv4 "$1" 2>/dev/null | awk '{print $1}' | sort -u
 }
@@ -90,7 +138,9 @@ in_tailnet() {
 }
 
 declare -A vip=()
-for name in "${names[@]}"; do
+for app in "${apps[@]}"; do
+  name=$app.$suffix
+
   mapfile -t addrs < <(addresses "$name")
   if ((${#addrs[@]} == 0)); then
     bad "$name resolves" "no A record for $name"
@@ -102,15 +152,7 @@ for name in "${names[@]}"; do
   fi
   vip[$name]=${addrs[0]}
 
-  if [[ -n $expect_vip ]]; then
-    # The pinned form, for an operator who knows the VIP: it catches a Service
-    # whose address changed underneath an unchanged record.
-    if [[ ${vip[$name]} == "$expect_vip" ]]; then
-      ok "$name resolves to the Service VIP (${vip[$name]})"
-    else
-      bad "$name resolves to the Service VIP" "got '${vip[$name]}' want '$expect_vip'"
-    fi
-  elif in_tailnet "${vip[$name]}"; then
+  if in_tailnet "${vip[$name]}"; then
     ok "$name resolves into the tailnet (${vip[$name]})"
   else
     bad "$name resolves into the tailnet" \
@@ -136,33 +178,34 @@ for name in "${names[@]}"; do
       "the certificate expires within $min_days days, or s_client returned nothing"
   fi
 
-  code=$("$curl_bin" --silent --show-error --output "$work/body" \
-    --dump-header "$work/hdr" --max-time "$timeout_s" \
-    --write-out '%{http_code}' "https://$name/" 2>/dev/null)
+  # The body is discarded: what the name promises a stranger is a status class,
+  # and downloading an application's first page proves nothing more.
+  code=$("$curl_bin" --silent --show-error --output /dev/null \
+    --max-time "$timeout_s" --write-out '%{http_code}' "https://$name/" 2>/dev/null)
   rc=$?
-  location=$({ tr -d '\r' <"$work/hdr"; } 2>/dev/null \
-    | sed -n 's/^[Ll]ocation:[[:space:]]*//p' | tail -n 1)
-  if [[ $code =~ ^3[0-9][0-9]$ && $location =~ ^/?login\?next=/ ]]; then
-    ok "$name answers the UI login redirect ('$location')"
+  if [[ $code =~ ^${want[$app]}[0-9][0-9]$ ]]; then
+    ok "$name answers the ${want[$app]}xx class ('$code')"
   else
-    bad "$name answers the UI login redirect ('$login_location')" \
-      "got '$code' with location '${location:-none}' (curl exit $rc)"
+    bad "$name answers the ${want[$app]}xx class" \
+      "got '$code' (curl exit $rc) -- the name did not reach the application, or the application did not answer as itself"
   fi
 done
 
-# One Service, one VIP. With no VIP given, the property that ties the two names
-# to that one Service is that they agree, and only a second record could split
-# them. Skipped when TAILNET_NAMES_EXPECT_VIP pins the address: the per-name
-# lines above already made the stronger statement.
-if [[ -z $expect_vip ]]; then
-  if ((${#vip[@]} != ${#names[@]})); then
-    bad "both names resolve to the same tailnet address" \
-      "only ${#vip[@]} of ${#names[@]} names resolved"
-  elif [[ $(printf '%s\n' "${vip[@]}" | sort -u | wc -l) == 1 ]]; then
-    ok "both names resolve to the same tailnet address (${vip[${names[0]}]})"
+# Six Services, six VIPs. The per-name legs above place each address in the
+# tailnet; this is the property that ties a name to *its own* Service, because
+# nothing else would notice two names sharing one VIP: two Services are two
+# advertisements, and a name that answers on another's address is a record
+# pointing at the wrong place.
+if ((${#vip[@]} != ${#apps[@]})); then
+  bad "all six names resolve to distinct tailnet addresses" \
+    "only ${#vip[@]} of ${#apps[@]} names resolved"
+else
+  distinct=$(printf '%s\n' "${vip[@]}" | sort -u | wc -l)
+  if ((${#apps[@]} == distinct)); then
+    ok "all six names resolve to distinct tailnet addresses"
   else
-    bad "both names resolve to the same tailnet address" \
-      "$(for n in "${names[@]}"; do printf '%s=%s ' "$n" "${vip[$n]}"; done)"
+    bad "all six names resolve to distinct tailnet addresses" \
+      "$(for app in "${apps[@]}"; do printf '%s=%s ' "$app.$suffix" "${vip[$app.$suffix]}"; done)"
   fi
 fi
 
