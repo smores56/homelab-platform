@@ -110,19 +110,22 @@ the hash on the installer media.
 
 `secrets/cloudflare.yaml` is the single source for every Cloudflare credential:
 the zone pair (`platform-zone-rw-api-token`, `platform-zone-ro-api-token`), the
-state pair (`homelab-tofu-state-rw-*`, `homelab-tofu-state-ro-*`), the backup
-pair (`restic-backup-rw-*`, `restic-backup-ro-*`), and the ACME token
-(`tailnet-dns-api-token`). Each R2 token is an access-key id and secret. The
-state pair is scoped to `homelab-tofu-state` alone and is deliberately **not**
-the backup pair: state decides what the next apply does, so a backup credential
-must not be able to rewrite it.
+state pair (`homelab-tofu-state-rw-*`, `homelab-tofu-state-ro-*`) and the backup
+pair (`restic-backup-rw-*`, `restic-backup-ro-*`). Each R2 token is an access-key
+id and secret. The state pair is scoped to `homelab-tofu-state` alone and is
+deliberately **not** the backup pair: state decides what the next apply does, so
+a backup credential must not be able to rewrite it.
 
 GitHub environments, the host and the edge are sinks, never sources. The
 `cloudflare` and `cloudflare-plan` environment secrets are set from this file.
 The boot R2 pair is derived from `restic-backup-rw-*` into `secrets/boot.json`
-key `r2`, and the name service's DNS-01 token from `tailnet-dns-api-token` into
-key `acme.token`, both by `scripts/cloudflare-derive.sh`; never hand-edit either
-object. The backup write pair reaches the data-plane host through
+key `r2` by `scripts/cloudflare-derive.sh`; never hand-edit that object. The
+`acme.token` key and its `cloudflare-acme-token.yaml` output are gone with the
+Caddy that answered DNS-01 for the `*.sammohr.dev` aliases: every application
+now gets its certificate from Tailscale on a Service name, so the zone's ACME
+orders are the public edge's alone. `tailnet-dns-api-token` may stay in the
+source file until the operator revokes it; nothing reads it any more. The backup
+write pair reaches the data-plane host through
 `unpack-host-secrets.py --cloudflare`, and the backup read pair is installed in
 `/etc/backrest/env` on the edge.
 
