@@ -148,6 +148,13 @@ locals {
         ip  = ["443"]
       },
       {
+        # The zellij web terminal's, owner-only for the same reason: the tailnet
+        # is the first gate and the login token the second (#954).
+        src = ["group:owner"]
+        dst = ["svc:terminal"]
+        ip  = ["443"]
+      },
+      {
         # The names probe, from `.github/workflows/verify-tailnet-names.yml`: a
         # node carrying tag:deploy for the length of one run resolves the six
         # names, verifies each certificate and reads each application's status
@@ -216,6 +223,7 @@ locals {
         "svc:assistant" = ["tag:smortress"]
         "svc:agent"     = ["tag:smortress"]
         "svc:sync"      = ["tag:smortress"]
+        "svc:terminal"  = ["tag:smortress"]
       }
     }
 
@@ -253,7 +261,7 @@ locals {
     tests = [
       {
         src    = var.tailscale_login
-        accept = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:vps:22", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443"]
+        accept = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:vps:22", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443", "svc:terminal:443"]
       },
       {
         # The owner reaches the edge login, never the deploy receiver: 8484
@@ -263,7 +271,7 @@ locals {
       },
       {
         src  = "tag:untrusted"
-        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:vps:22", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443"]
+        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:vps:22", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443", "svc:terminal:443"]
       },
       {
         # The edge reaches no host port at all. Its two destinations are Service
@@ -271,7 +279,7 @@ locals {
         # `acl` or in a test, so this deny of every other host port and edge login is
         # the whole guard: a rule that gave the tag a port would fail here.
         src  = "tag:vps"
-        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8484", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443"]
+        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8484", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443", "svc:terminal:443"]
       },
       {
         # The deploy node reaches the receiver and, through the grants above, one
@@ -316,7 +324,7 @@ resource "tailscale_acl" "this" {
   # names a tag no device carries and a service the tailnet does not have, and
   # the validator refuses it: the route would close in the same apply that opens
   # it.
-  depends_on = [tailscale_device_tags.smortress, tailscale_service.opds, tailscale_service.immich, tailscale_service.navidrome, tailscale_service.assistant, tailscale_service.agent, tailscale_service.sync]
+  depends_on = [tailscale_device_tags.smortress, tailscale_service.opds, tailscale_service.immich, tailscale_service.navidrome, tailscale_service.assistant, tailscale_service.agent, tailscale_service.sync, tailscale_service.terminal]
 
   # This resource is the whole policy, not a patch: the provider refuses to
   # replace a policy it did not write unless that is said out loud, and the
@@ -386,5 +394,16 @@ resource "tailscale_service" "sync" {
   count = var.tailnet == "" ? 0 : 1
 
   name  = "svc:sync"
+  ports = ["tcp:443"]
+}
+
+# The zellij web terminal, the same shape and the same reason: zellij binds
+# 127.0.0.1:8082 (units/systemd/smortress-zellij-web.service) and Serve terminates
+# TLS for the Service name, so `https://terminal.<tailnet>.ts.net/` is the URL the
+# terminal owns. Owner-only, and never probed: `tag:deploy` gets no grant.
+resource "tailscale_service" "terminal" {
+  count = var.tailnet == "" ? 0 : 1
+
+  name  = "svc:terminal"
   ports = ["tcp:443"]
 }
