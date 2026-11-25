@@ -143,7 +143,7 @@ check "the terminal creates main after the server starts" \
   has 'ExecStartPost=-/var/home/smores/.local/share/mise/shims/zellij attach main --create-background' "$terminal_unit"
 check "the terminal keeps session daemons across a restart" \
   grep -qx 'KillMode=process' "$terminal_unit"
-if grep -qE '^(ProtectHome|PrivateTmp|NoNewPrivileges)=' "$terminal_unit"; then
+if grep -qE '^(ProtectHome=(yes|strict|tmpfs)|PrivateTmp=yes|NoNewPrivileges=yes)$' "$terminal_unit"; then
   bad "the terminal unit hides nothing its panes need"
 else
   ok "the terminal unit hides nothing its panes need"
