@@ -201,7 +201,7 @@ nothing here may be used to record or complete one.
 ## Operator steps
 
 See `docs/manual-steps.md#agent-shell-jobs` for verifying the units and running
-each class's probe plus the cross-class refusals. `tests/core/agent-jobs.sh` covers the offline half: class-fixed entry
+each class's probe plus the cross-class refusals. `tests/core/agent-jobs.bats` covers the offline half: class-fixed entry
 points, the mount/network split, the containment flags, the firewall ranges, the
 digest pin and the subuid overlap refusal; `tests/core/app-quadlets.bats` covers the
 transport wiring — two directories, two bridges, one facade mount each and neither

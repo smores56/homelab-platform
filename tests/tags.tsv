@@ -19,3 +19,6 @@ deploy/atomic	tests/deploy/atomic.bats scripts/deploy-state.sh image/rootfs/usr/
 deploy/receiver	tests/deploy/receiver.bats scripts/deploy-state.sh image/rootfs/usr/libexec/deploy-receiver.py
 core/restic-plane	tests/core/restic-plane.bats scripts/smortress-restic-* scripts/restic-plane-common.sh scripts/storage-layout.sh
 tags	tests/tags.bats
+core/agent-jobs	tests/core/agent-jobs.bats scripts/agent-job.sh scripts/agent-job-personal.sh scripts/agent-job-general.sh scripts/agent-job-provision.sh scripts/app-images.sh image/rootfs/etc/sysusers.d/smortress-agent-shell.conf image/rootfs/etc/tmpfiles.d/smortress-agent-shell.conf image/rootfs/etc/nftables/smortress-agent-jobs.nft units/systemd/smortress-agent-job-provision.service image/rootfs/etc/smortress/agent/job-image docs/agent-jobs.md image/Containerfile units/quadlet/* units/systemd/*
+core/agent-recovery	tests/core/agent-recovery.bats scripts/restic-plane-common.sh scripts/smortress-restic-backup.sh scripts/smortress-restic-verify.sh scripts/smortress-restic-restore-drill.sh units/systemd/smortress-restic-* units/systemd/smortress-agent-*.service units/quadlet/agent-*.container
+core/smortress-restic-progress	tests/core/smortress-restic-progress.bats scripts/smortress-restic-progress.sh scripts/restic-plane-common.sh

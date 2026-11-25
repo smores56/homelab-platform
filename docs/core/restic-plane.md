@@ -89,7 +89,7 @@ them restore-united — one snapshot, one restore, no half deployment. It is als
 the boundary: no unit on either side mounts the other's dataset, and the general
 group restores exactly its own. Both are in every destination's run, retention and
 freshness check because they are entries in the same table as any other unit.
-`tests/core/agent-recovery.sh` asserts all of this, including against a tree
+`tests/core/agent-recovery.bats` asserts all of this, including against a tree
 broken on purpose.
 
 A job snapshots **every dataset in its unit** and passes all of their staging
@@ -530,7 +530,7 @@ units present with the right UUIDs, every restic unit enabled, the driver
 ordered after every readiness instance, and both tags on every retention
 command.
 
-`tests/core/agent-recovery.sh` covers the two agent groups: it runs the real
+`tests/core/agent-recovery.bats` covers the two agent groups: it runs the real
 driver against stubs and requires a successful snapshot of each group on `ssd`,
 `hdd` and `r2` with exactly its own dataset as the path; then it breaks the tree
 in eleven ways — a dropped group, a general unit carrying personal data, one

@@ -36,7 +36,7 @@
 # a future transport calls, and the dispatcher runs Podman itself.
 #
 # The privileged half is exercised on smortress (docs/manual-steps.md section 47).
-# tests/core/agent-jobs.sh drives the argument builders without root or Podman.
+# tests/core/agent-jobs.bats drives the argument builders without root or Podman.
 set -uo pipefail
 
 readonly JOB_DEFAULT_IMAGE_FILE=/etc/smortress/agent/job-image
@@ -374,7 +374,7 @@ job_main() {
   return "$status"
 }
 
-# Sourced by tests/core/agent-jobs.sh to drive the builders without root.
+# Sourced by tests/core/agent-jobs.bats to drive the builders without root.
 if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
   set -euo pipefail
   job_main "$@"
