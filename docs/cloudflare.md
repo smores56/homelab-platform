@@ -39,7 +39,7 @@ a typo publishes nothing while the config claims the name is served.
 | `photos.sammohr.dev` | edge VPS, Caddy → Serve 8446 | Immich's own account |
 | `opds.sammohr.dev` | edge VPS, Caddy → Serve 8447 | OPDShelf's own login |
 | `recovery.sammohr.dev` | edge VPS, Caddy → the Backrest guard on loopback | the reader's own password — the guard's 10-per-10-s budget is the only other control (`docs/core/backrest.md`) |
-| `agent.sammohr.dev`, `assistant.sammohr.dev` | the tailnet only: a VIP no public resolver reaches | the tailnet ACL (`tofu/tailscale.tf`) |
+| `agent.sammohr.dev`, `assistant.sammohr.dev`, `sync.sammohr.dev` | the tailnet only: a VIP no public resolver reaches | the tailnet ACL (`tofu/tailscale.tf`) |
 
 Every name in the table answers its own origin: nothing left in the zone is
 gated, proxied or tunnelled, so there is no edge policy to consult when one of

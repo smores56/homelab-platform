@@ -3,10 +3,12 @@
 #
 # The probe needs a tailnet node and a live Service VIP to say anything, so what
 # is tested here is its contract: it fails when a name does not resolve, when a
-# name resolves somewhere that is not the tailnet, when the two names disagree
-# about the VIP, when the chain or the name in it is wrong, when a certificate is
-# close to expiry, and when the UI answers with anything but its login redirect
-# -- a 200, a 502 from a stopped Caddy, or the timeout a drained Service leaves.
+# name resolves somewhere that is not the tailnet, when the names disagree about
+# the VIP, when the chain or the name in it is wrong, when a certificate is close
+# to expiry, and when a UI answers with anything but its own signature -- the
+# agent UIs' login redirect, or the vault GUI's health body with Syncthing's id
+# header. A 200, a 502 from a stopped Caddy and the timeout a drained Service
+# leaves are the three ways that path ends without a UI behind it.
 #
 #   tests/tailnet-names/check.sh
 set -uo pipefail
@@ -75,16 +77,34 @@ while (($#)); do
     esac
     shift
 done
+device_id='GUXA3W5-6UO6CBF-JTWHWB5-2NJMYQW-SMDB4HS-HBEDK3M-VDLCPX2-PCITFQB'
 code=302
 location='login?next=/'
-: >"$body"
+body_text=''
+id=''
 case ${STUB_MODE:-} in
     down) code=502; location='' ;;
     drained) printf '000'; exit 28 ;;
     nosig) code=200; location='' ;;
 esac
+# The vault GUI is identified by a body and a header, so its modes are 200s the
+# redirect check would have called healthy: `noid` answers the health route
+# without Syncthing's header, `nobod` answers it without the fixed body.
+case $url in
+    */rest/noauth/health)
+        case ${STUB_MODE:-} in
+            down) ;;  # Serve cannot make the forward, so the 502 stands
+            noid) code=200; body_text='{"status":"OK"}' ;;
+            nobod) code=200; id=$device_id ;;
+            *) code=200; body_text='{"status":"OK"}'; id=$device_id ;;
+        esac
+        ;;
+esac
+: >"$body"
+[[ -n $body_text ]] && printf '%s' "$body_text" >"$body"
 printf 'HTTP/1.1 %s\r\n' "$code" >"$hdr"
 [[ -n $location ]] && printf 'Location: %s\r\n' "$location" >>"$hdr"
+[[ -n $id ]] && printf 'X-Syncthing-Id: %s\r\n' "$id" >>"$hdr"
 printf '\r\n' >>"$hdr"
 printf '%s' "$code"
 EOF
@@ -130,12 +150,24 @@ run() {
         bash "$script" >"$work/out" 2>"$work/err"
 }
 
-# --- a healthy pair of names --------------------------------------------------
+# --- a healthy set of names ---------------------------------------------------
 
 run
-eq "$?" 0 'a healthy pair of names exits 0'
-eq "$(grep -c '^ok' "$work/out")" 9 'two names, four probes each and the shared VIP'
-eq "$(grep -c '^FAIL' "$work/out")" 0 'nothing fails on a healthy pair'
+eq "$?" 0 'a healthy set of names exits 0'
+eq "$(grep -c '^ok' "$work/out")" 13 'three names, four probes each and the shared VIP'
+eq "$(grep -c '^FAIL' "$work/out")" 0 'nothing fails on a healthy set'
+if grep -q '^ok   sync.sammohr.dev answers as Syncthing (' "$work/out"; then
+    ok 'the vault GUI is identified by its health body and device id'
+else
+    bad 'the vault GUI is identified by its health body and device id' "$(cat "$work/out")"
+fi
+# `/` is a 200 for the login page and for the app, so the vault GUI's probe has
+# to be the route that answers with a fixed body.
+if grep -qF -- 'https://sync.sammohr.dev/rest/noauth/health' "$work/curl.log"; then
+    ok 'the vault GUI is probed on its health route, not on /'
+else
+    bad 'the vault GUI is probed on its health route, not on /' "$(cat "$work/curl.log")"
+fi
 if grep -qE '^ahostsv4 assistant\.sammohr\.dev$' "$work/getent.log" &&
     grep -qE '^ahostsv4 agent\.sammohr\.dev$' "$work/getent.log"; then
     ok 'both names are resolved through the system resolver'
@@ -161,7 +193,7 @@ else
 fi
 # The stub keys on the URL, so a regression to plain HTTP or a hardcoded port
 # would still look healthy; the argv is the only witness.
-for name in assistant.sammohr.dev agent.sammohr.dev; do
+for name in assistant.sammohr.dev agent.sammohr.dev sync.sammohr.dev; do
     if grep -qF -- "https://$name/" "$work/curl.log"; then
         ok "the probe of $name uses https on the name"
     else
@@ -199,8 +231,8 @@ fi
 STUB_MODE=separate
 run
 eq "$?" 1 'two names on two addresses fail the run'
-if grep -qF 'FAIL both names resolve to the same tailnet address' "$work/out"; then
-    ok 'the failure names the split between the two names'
+if grep -qF 'FAIL every name resolves to the same tailnet address' "$work/out"; then
+    ok 'the failure names the split between the names'
 else
     bad 'the failure names the split between the two names' "$(cat "$work/out")"
 fi
@@ -209,7 +241,7 @@ STUB_MODE=
 TAILNET_NAMES_EXPECT_VIP=100.122.108.221
 run
 eq "$?" 0 'an expected VIP that matches exits 0'
-eq "$(grep -c '^ok' "$work/out")" 8 'the pinned VIP replaces the shared-address probe'
+eq "$(grep -c '^ok' "$work/out")" 12 'the pinned VIP replaces the shared-address probe'
 
 STUB_MODE=wrongvip
 run
@@ -287,6 +319,28 @@ if grep -qF "location 'none'" "$work/out"; then
     ok 'the failure reports the missing Location'
 else
     bad 'the failure reports the missing Location' "$(cat "$work/out")"
+fi
+
+# --- the vault GUI's signature ------------------------------------------------
+
+# The id header is Syncthing's own, so a 200 from the health route without it is
+# something else on the port -- Caddy's default handler, or a stale listener.
+STUB_MODE=noid
+run
+eq "$?" 1 'a health route with no device id fails the run'
+if grep -qF 'FAIL sync.sammohr.dev answers as Syncthing' "$work/out"; then
+    ok 'the failure names the vault GUI'
+else
+    bad 'the failure names the vault GUI' "$(cat "$work/out")"
+fi
+
+STUB_MODE=nobod
+run
+eq "$?" 1 'a health route with no fixed body fails the run'
+if grep -qF "body 'none'" "$work/out"; then
+    ok 'the failure reports the missing health body'
+else
+    bad 'the failure reports the missing health body' "$(cat "$work/out")"
 fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

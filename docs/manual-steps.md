@@ -713,8 +713,9 @@ static auth key in the Environment would never expire.
 
 ### Create the tailnet names check
 
-`verify-tailnet-names.yml` runs daily and proves `assistant.sammohr.dev` and
-`agent.sammohr.dev` still work for a node that is not the owner's laptop
+`verify-tailnet-names.yml` runs daily and proves `assistant.sammohr.dev`,
+`agent.sammohr.dev` and `sync.sammohr.dev` still work for a node that is not the
+owner's laptop
 (`docs/core/applications.md`, the tailnet name service). It pages through a
 Healthchecks check of its own: a daily period with a six-hour grace, because the
 probe answers once a day and one late run should not page.

@@ -56,7 +56,7 @@ resource "cloudflare_dns_record" "assistant" {
 }
 
 # The general UI's name (task #847) rides the same Service and VIP: Caddy routes
-# by SNI, so one address answers both names and the record differs only in the
+# by SNI, so one address answers every name and the record differs only in the
 # label. The zone publishes no wildcard any more (SDLC #833), so every name the
 # tailnet or the edge answers is a record of its own.
 #
@@ -75,6 +75,22 @@ resource "cloudflare_dns_record" "agent" {
   comment = "general agent UI Service VIP (design #834, task #847)"
 }
 
+# The vault GUI's name (task #899) is the third one on that Service. It is a name
+# rather than a port because of Syncthing itself: the GUI binds loopback and
+# rejects any other Host, and a name behind Caddy's Host rewrite is the way to
+# reach it with that guard still enabled.
+resource "cloudflare_dns_record" "sync" {
+  count = var.tailnet == "" ? 0 : 1
+
+  zone_id = data.cloudflare_zone.this.zone_id
+  name    = "sync.${var.domain}"
+  type    = "A"
+  content = tailscale_service.agent_ui[0].addrs[0]
+  proxied = false
+  ttl     = 300
+  comment = "vault GUI Service VIP (design #897, task #899)"
+}
+
 # The zone's CAA policy (design #842 T4) names a CA, never an ACME account. A
 # value may carry `accounturi=`, but that string is compared literally against
 # the account in the CSR, so it authorizes exactly one account on one directory:
@@ -85,9 +101,9 @@ resource "cloudflare_dns_record" "agent" {
 # same issuer, and this policy already admits it.
 #
 # These two records authorize the unproxied names Caddy orders for
-# (`photos`/`opds`/`recovery` here, `assistant`/`agent` on smortress): grey-cloud
-# records reach the origin directly, so Let's Encrypt reads this set. A wildcard
-# order is not authorized by `issue`, hence the second tag.
+# (`photos`/`opds`/`recovery` here, `assistant`/`agent`/`sync` on smortress):
+# grey-cloud records reach the origin directly, so Let's Encrypt reads this set.
+# A wildcard order is not authorized by `issue`, hence the second tag.
 #
 # The proxied names answer from Cloudflare's edge, where the certificate is
 # Cloudflare's to order. With Universal SSL the zone's answer also carries the

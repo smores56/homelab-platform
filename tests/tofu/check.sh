@@ -271,10 +271,10 @@ fi
 # cloud with an explicit TTL: a proxied record over a tailnet address has no
 # origin Cloudflare can reach.
 #
-# Both names (task #847) are that record with a different label, because Caddy
-# routes by SNI behind one Service. The per-name loop is what keeps that
+# Every name (tasks #847 and #899) is that record with a different label, because
+# Caddy routes by SNI behind one Service. The per-name loop is what keeps that
 # property: a second address, a proxied record or an ungated one fails here.
-for name in assistant agent; do
+for name in assistant agent sync; do
   dns=$(extract "cloudflare_dns_record.$name")
   if [[ -z $dns ]]; then
     bad "$name DNS record exists"
@@ -300,10 +300,10 @@ for name in assistant agent; do
     bad "$name DNS is gated on var.tailnet"
   fi
 done
-# One VIP answers both names, which is what lets one grant and one set of deny
+# One VIP answers every name, which is what lets one grant and one set of deny
 # tests cover them. A record of its own would need its own destination.
-eq "$(grep -c 'content = tailscale_service.agent_ui\[0\].addrs\[0\]' "$work/code.tf")" "2" \
-  "both names answer with the one Service VIP"
+eq "$(grep -c 'content = tailscale_service.agent_ui\[0\].addrs\[0\]' "$work/code.tf")" "3" \
+  "every name answers with the one Service VIP"
 
 # The SSH tunnel is gone (design #767 T6): no `ssh` DNS record, no tunnel ingress
 # and no `ssh_tunnel_id` to gate them on. An id that came back would plan a route

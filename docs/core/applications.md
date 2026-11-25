@@ -552,7 +552,7 @@ mapping file.
 | --- | --- | --- |
 | Immich | `127.0.0.1:2283` | `https://smortress.<tailnet>.ts.net/` and, for the edge only, `https://smortress.<tailnet>.ts.net:8446/` |
 | OPDShelf | `127.0.0.1:8083` | `https://smortress.<tailnet>.ts.net:8443/` and, for the edge only, `https://smortress.<tailnet>.ts.net:8447/` |
-| Syncthing GUI | `127.0.0.1:8384` | `https://smortress.<tailnet>.ts.net:10000/` |
+| Syncthing GUI | `127.0.0.1:8384` | `https://smortress.<tailnet>.ts.net:10000/` and, tailnet-only, `https://sync.sammohr.dev/` |
 | Navidrome | `127.0.0.1:4533` | `https://smortress.<tailnet>.ts.net:8448/` |
 | Wallpapers | `/srv/wallpapers` (static files) | `https://smortress.<tailnet>.ts.net/wallpapers/` |
 | Personal agent gateway | `127.0.0.1:18001` | `https://smortress.<tailnet>.ts.net/apps/agent-local/v1` |
@@ -571,15 +571,18 @@ entries in `core_routes` (8444 and 8445) instead. A tenant
 plan that claims either path is refused whole, and the stale-route pruning skips
 both, so a run without a plan cannot delete them.
 
-The two UIs also answer by a `sammohr.dev` name on 443, with a publicly trusted
-certificate (design #834): `https://assistant.sammohr.dev/` is the personal one and
-`https://agent.sammohr.dev/` the general one. One Tailscale Service,
-`svc:agent-ui`, owns one VIP; `tofu/dns.tf` publishes a grey-cloud `A` record per
-name at that VIP, Serve forwards the Service's `tcp:443` to Caddy on loopback, and
-Caddy routes by SNI with a DNS-01 certificate per name. Nothing new is public: the
+The UIs also answer by a `sammohr.dev` name on 443, with a publicly trusted
+certificate (design #834): `https://assistant.sammohr.dev/` is the personal one,
+`https://agent.sammohr.dev/` the general one, and `https://sync.sammohr.dev/` the
+Syncthing GUI (design #897). One Tailscale Service, `svc:agent-ui`, owns one VIP;
+`tofu/dns.tf` publishes a grey-cloud `A` record per name at that VIP, Serve
+forwards the Service's `tcp:443` to Caddy on loopback, and Caddy routes by SNI
+with a DNS-01 certificate per name. The vault GUI's site is the one that rewrites
+`Host`: Syncthing's GUI refuses any other value, and the rewrite is what lets that
+check stay enabled instead of being skipped. Nothing new is public: the
 VIP is in `100.64.0.0/10`, so the names resolve anywhere and route only on the
 tailnet. The ACL grants `svc:agent-ui:443` to two sources — `group:owner` and
-`tag:deploy` — and either grant covers both names, because a grant names the
+`tag:deploy` — and either grant covers every name, because a grant names the
 service and the port, never the name. The second is the scheduled probe, below.
 
 The `:8444` and `:8445` Serve routes stay declared, and they are two things at
@@ -593,13 +596,15 @@ are also the no-cost fallback: nothing is provisioned for them, one line each in
 `scripts/verify-tailnet-names.sh` is the probe on that path (task #848), and
 `.github/workflows/verify-tailnet-names.yml` runs it daily from a CI node that
 joins as `tag:deploy` — the one non-owner client there is. It asserts what a user
-would notice rather than a status code: each name resolves into the tailnet, both
-resolve to the same VIP, the chain verifies against the public roots with the name
-in it, the certificate is not within 14 days of expiry, and `GET /` is the UI's
-login redirect (`login?next=/`) rather than a 200 from something else. A stopped
-Caddy answers 502 or refuses, a drained Service times out, and both are red. The
-result pages through Healthchecks via the `NAMES_PING_URL` secret; the operator
-commands are in `docs/manual-steps.md`.
+would notice rather than a status code: each name resolves into the tailnet, all
+of them resolve to the same VIP, the chain verifies against the public roots with
+the name in it, the certificate is not within 14 days of expiry, and the GUI
+answers as itself rather than as a bare 200 from something else — the agent UIs by
+redirecting `GET /` to `login?next=/`, the vault GUI by answering
+`/rest/noauth/health` with a fixed body and Syncthing's device id header. A
+stopped Caddy answers 502 or refuses, a drained Service times out, and both are
+red. The result pages through Healthchecks via the `NAMES_PING_URL` secret; the
+operator commands are in `docs/manual-steps.md`.
 
 Historical: `agent.sammohr.dev` was a proxied CNAME to the dead cluster tunnel,
 and Cloudflare refuses two records at one name, so the two applies could not
