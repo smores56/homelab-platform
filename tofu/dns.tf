@@ -1,4 +1,5 @@
-# The public edge (design #725): grey-cloud address records, one IPv4 each,
+# The public edge (design #725): grey-cloud address records, one IPv4 each.
+# (Admission proof for the read-only pre-merge plan; SDLC #841 T5.)
 # pointing at the VPS that terminates TLS for them. Grey cloud on purpose:
 # Cloudflare must not sit in the media path, and TLS-ALPN-01 needs the name to
 # answer directly. An explicit TTL rather than `ttl = 1`, which is the
