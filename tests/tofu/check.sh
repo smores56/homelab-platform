@@ -266,44 +266,13 @@ else
   fi
 fi
 
-# The agent UI's Service VIP (design #834) is the one address that Tailscale
-# computes. A specific record overrides `*.<zone>`, so each name has to be grey
-# cloud with an explicit TTL: a proxied record over a tailnet address has no
-# origin Cloudflare can reach.
-#
-# Both names (task #847) are that record with a different label, because Caddy
-# routes by SNI behind one Service. The per-name loop is what keeps that
-# property: a second address, a proxied record or an ungated one fails here.
-for name in assistant agent; do
-  dns=$(extract "cloudflare_dns_record.$name")
-  if [[ -z $dns ]]; then
-    bad "$name DNS record exists"
-    continue
-  fi
-  ok "$name DNS record exists"
-  if grep -qF "name    = \"$name.\${var.domain}\"" <<<"$dns"; then
-    ok "$name DNS publishes $name.<zone>"
-  else
-    bad "$name DNS publishes $name.<zone>"
-  fi
-  if grep -qF 'type    = "A"' <<<"$dns"; then ok "$name DNS is an address record"; else bad "$name DNS is an address record"; fi
-  if grep -qF 'content = tailscale_service.agent_ui[0].addrs[0]' <<<"$dns"; then
-    ok "$name DNS points at the Service's computed address"
-  else
-    bad "$name DNS points at the Service's computed address"
-  fi
-  if grep -qF 'proxied = false' <<<"$dns"; then ok "$name DNS is grey cloud"; else bad "$name DNS is grey cloud"; fi
-  if grep -qE 'ttl[[:space:]]*=[[:space:]]*300' <<<"$dns"; then ok "$name DNS carries an explicit TTL"; else bad "$name DNS carries an explicit TTL"; fi
-  if grep -qE 'count[[:space:]]*=[[:space:]]*var\.tailnet == "" \? 0 : 1' <<<"$dns"; then
-    ok "$name DNS is gated on var.tailnet"
-  else
-    bad "$name DNS is gated on var.tailnet"
-  fi
-done
-# One VIP answers both names, which is what lets one grant and one set of deny
-# tests cover them. A record of its own would need its own destination.
-eq "$(grep -c 'content = tailscale_service.agent_ui\[0\].addrs\[0\]' "$work/code.tf")" "2" \
-  "both names answer with the one Service VIP"
+# The two agent names the host's own Caddy answered (`assistant.<zone>` and
+# `agent.<zone>`) went with that terminator and its Service: each application
+# now answers on `<app>.<tailnet>.ts.net` through a Service of its own, and the
+# zone publishes nothing for a tailnet VIP any more.
+absent cloudflare_dns_record.assistant 'no assistant A record is declared'
+absent cloudflare_dns_record.agent 'no agent A record is declared'
+hasnt 'no record points at a Service VIP' 'tailscale_service\.[a-z_]+\[0\]\.addrs'
 
 # The SSH tunnel is gone (design #767 T6): no `ssh` DNS record, no tunnel ingress
 # and no `ssh_tunnel_id` to gate them on. An id that came back would plan a route
@@ -802,7 +771,7 @@ has 'the policy admits Syncthing' '"tag:smortress:22000"'
 has 'the device is resolved by hostname' 'hostname[[:space:]]*=[[:space:]]*"smortress"'
 has 'the device carries the tag declaratively' 'resource "tailscale_device_tags" "smortress"'
 has 'the device tag and the Services exist before the policy names them' \
-  'depends_on[[:space:]]*=[[:space:]]*\[tailscale_device_tags\.smortress, tailscale_service\.agent_ui, tailscale_service\.opds, tailscale_service\.immich, tailscale_service\.navidrome, tailscale_service\.assistant, tailscale_service\.agent, tailscale_service\.sync\]'
+  'depends_on[[:space:]]*=[[:space:]]*\[tailscale_device_tags\.smortress, tailscale_service\.opds, tailscale_service\.immich, tailscale_service\.navidrome, tailscale_service\.assistant, tailscale_service\.agent, tailscale_service\.sync\]'
 has 'the policy keeps the owner in one group' '"group:owner"[[:space:]]*=[[:space:]]*\[var\.tailscale_login\]'
 has 'the tailnet login is its own variable' 'variable "tailscale_login"'
 has 'the tests name the tailnet login, not the Access email' 'src[[:space:]]*=[[:space:]]*var\.tailscale_login'
@@ -818,35 +787,24 @@ has 'a test proves the deploy node reaches no other host port' \
   'deny[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8446", "tag:smortress:8447", "tag:vps:22"\]'
 has 'the policy carries tests' 'tests[[:space:]]*=[[:space:]]*\['
 has 'a test proves every admitted port reaches the owner' \
-  'accept[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:vps:22", "svc:agent-ui:443", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443"\]'
+  'accept[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:vps:22", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443"\]'
 has 'a test proves the owner does not reach the edge ports' \
   'deny[[:space:]]*=[[:space:]]*\["tag:smortress:8446", "tag:smortress:8447", "tag:smortress:8484"\]'
 has 'a test proves the edge reaches only the two Serve ports' \
   'accept[[:space:]]*=[[:space:]]*\["tag:smortress:8446", "tag:smortress:8447"\]'
 has 'a test proves a tagged device reaches none of them' \
-  'deny[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8446", "tag:smortress:8447", "tag:vps:22", "svc:agent-ui:443", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443"\]'
+  'deny[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8446", "tag:smortress:8447", "tag:vps:22", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443"\]'
 has 'a test proves the edge does not reach the Services' \
-  'deny[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8484", "svc:agent-ui:443", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443"\]'
+  'deny[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8484", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443"\]'
 
-# The agent UI's Service VIP (design #834). Tailscale owns the address, so it is
-# a grant destination and a test destination, never an `acl`: a grant names the
-# service and the port, and the auto-approver is what lets the host advertise it
-# without the owner approving each advertisement by hand.
-has 'the agent UI is a tailscale_service' 'resource "tailscale_service" "agent_ui"'
+# The agent UI's Service is gone (design #834's first Service): it fronted the
+# `sammohr.dev` aliases through a Caddy that no longer exists, and the two
+# applications had Services of their own before it was retired. A Service left
+# behind would be a VIP with nothing advertised on it, and a policy that still
+# named it would admit a destination no host answers.
+absent tailscale_service.agent_ui 'the agent UI Service is retired'
+hasnt 'no grant reaches the retired Service' 'svc:agent-ui'
 has 'OPDShelf is a tailscale_service of its own' 'resource "tailscale_service" "opds"'
-service_block=$(extract tailscale_service.agent_ui)
-if [[ -z $service_block ]]; then
-  bad "the agent UI Service exists"
-else
-  ok "the agent UI Service exists"
-  if grep -qF 'name  = "svc:agent-ui"' <<<"$service_block"; then ok "the Service is svc:agent-ui"; else bad "the Service is svc:agent-ui"; fi
-  if grep -qF 'ports = ["tcp:443"]' <<<"$service_block"; then ok "the Service advertises tcp:443"; else bad "the Service advertises tcp:443"; fi
-  if grep -qE 'count[[:space:]]*=[[:space:]]*var\.tailnet == "" \? 0 : 1' <<<"$service_block"; then
-    ok "the Service is gated on var.tailnet"
-  else
-    bad "the Service is gated on var.tailnet"
-  fi
-fi
 # The first application off the per-port scheme carries the same shape as the UI's
 # Service: one gated Service on the tailnet's own address, the same 443, and an
 # auto-approver so the host's advertisement needs no hand approval.
@@ -885,41 +843,37 @@ for spec in 'immich:Immich' 'navidrome:Navidrome' \
     fi
   fi
 done
-has 'the policy grants the owner the Service' 'dst[[:space:]]*=[[:space:]]*\["svc:agent-ui"\]'
 has 'the policy grants the owner the OPDShelf Service' 'dst[[:space:]]*=[[:space:]]*\["svc:opds"\]'
 for dst in svc:immich svc:navidrome svc:assistant svc:agent svc:sync; do
   has "the policy grants the owner $dst" "dst[[:space:]]*=[[:space:]]*\\[\"$dst\"\\]"
 done
 has 'the grant names the one service port' 'ip[[:space:]]*=[[:space:]]*\["443"\]'
 has 'the grant source is the owner group' 'grants[[:space:]]*=[[:space:]]*\['
-has 'the host auto-approves the Service' '"svc:agent-ui"[[:space:]]*=[[:space:]]*\["tag:smortress"\]'
 has 'the host auto-approves the OPDShelf Service' '"svc:opds"[[:space:]]*=[[:space:]]*\["tag:smortress"\]'
 for dst in svc:immich svc:navidrome svc:assistant svc:agent svc:sync; do
   has "the host auto-approves $dst" "\"$dst\"[[:space:]]*=[[:space:]]*\\[\"tag:smortress\"\\]"
 done
 has 'the auto-approver is declared under services' 'autoApprovers[[:space:]]*=[[:space:]]*\{'
 # The destination is the service and the port, never the name, so a source needs
-# one grant per Service it reaches. Thirteen grants are the whole admitted set --
-# the owner's on each of the seven Services (#834, the catalogue's, the four core
-# apps' and the Syncthing GUI's) and the CI names probe's on the six that carry
-# the applications' own names (#848, the UI's Service excluded: it fronts the
-# retired `sammohr.dev` aliases) -- so a fourteenth, a second port on any, or a
-# grant the probe does not read, is a widening nobody decided.
+# one grant per Service it reaches. Twelve grants are the whole admitted set --
+# the owner's on each of the six Services (#834: the catalogue's, the four core
+# apps' and the Syncthing GUI's) and the CI names probe's on the same six (#848)
+# -- so a thirteenth, a second port on any, or a grant the probe does not read,
+# is a widening nobody decided.
 grants=$(awk '/^    grants = \[/ { f = 1 } f { print } f && /^    \]/ { exit }' "$work/code.tf")
 if [[ -z $grants ]]; then
   bad "the grants list is declared"
 else
   ok "the grants list is declared"
-  eq "$(grep -cE '^        src = ' <<<"$grants")" "13" 'the Services are granted to exactly thirteen sources'
-  eq "$(grep -cF 'src = ["group:owner"]' <<<"$grants")" "7" 'the owner reaches all seven Services'
+  eq "$(grep -cE '^        src = ' <<<"$grants")" "12" 'the Services are granted to exactly twelve sources'
+  eq "$(grep -cF 'src = ["group:owner"]' <<<"$grants")" "6" 'the owner reaches all six Services'
   eq "$(grep -cF 'src = ["tag:deploy"]' <<<"$grants")" "6" 'the names probe reaches the six Service names'
-  eq "$(grep -cF 'ip  = ["443"]' <<<"$grants")" "13" 'every grant names the one Service port'
+  eq "$(grep -cF 'ip  = ["443"]' <<<"$grants")" "12" 'every grant names the one Service port'
 fi
-# The UI's Service lost the probe (#848 moved to the six names and it keeps an
-# owner grant): one accept and two denies now. A further entry would be a
-# destination no other test keeps out.
-eq "$(grep -cF -- '"svc:agent-ui:443"' "$work/code.tf")" "3" \
-  "the UI Service port is one accept and two denies in the tests"
+# No test names the retired Service at all: a destination a grant no longer
+# admits has to leave the deny lists with it, or the policy save refuses a test
+# for something no rule admits.
+hasnt 'no test names the retired Service port' 'svc:agent-ui:443'
 # OPDShelf and the four core apps carry the probe: two accepts (the owner's and
 # tag:deploy's) and the same two denies.
 for dst in svc:opds svc:immich svc:navidrome svc:assistant svc:agent svc:sync; do

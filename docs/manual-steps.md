@@ -381,7 +381,7 @@ the read-only half of its pair -- and no tags:
 | `policy_file:read` | reads, validates and previews the policy: every Tailscale call `tofu plan` makes |
 | `devices:core:read` | required by the API beside `policy_file:read`, and resolves `data.tailscale_device.smortress` |
 | `devices:posture_attributes:read` | the other half of that required pair |
-| `services:read` | refreshes `tailscale_service.agent_ui` |
+| `services:read` | refreshes the six `tailscale_service` resources (the catalogue, the four core apps' and the Syncthing GUI's) |
 
 ```sh
 read -rsp 'plan OAuth client ID: ' PLAN_CLIENT_ID
@@ -1274,10 +1274,10 @@ each deployment's own password, read from its bundle at the key the index names:
 sops -d --extract '["ui"]["personal_password"]' secrets/agents.json
 ```
 
-The same two UIs answer at `https://assistant.sammohr.dev/` and
-`https://agent.sammohr.dev/` once the zone has applied the `A` records that point
-them at the Service VIP. That is a second apply, after #833's destroy of the old
-`agent` CNAME (PR #120), because Cloudflare refuses two records at one name.
+The same two UIs also answer at `https://assistant.<tailnet>.ts.net/` and
+`https://agent.<tailnet>.ts.net/` through their own Services, which is the only
+publicly trusted name either has: the `*.sammohr.dev` aliases, their `A` records
+and the Caddy that answered them are retired.
 
 The first-run wizard is disabled, so `Missing imports: run_agent` is expected;
 the facades are the tool surface.

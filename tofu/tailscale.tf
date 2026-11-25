@@ -107,29 +107,19 @@ locals {
 
     # A Service VIP is an address the tailnet owns rather than one a device
     # holds, so it cannot be named as an `acl` destination: that form is a host's
-    # port, and the VIP is no host. A grant names the service instead. The owner
-    # reaches all seven Services (design #834); the CI names probe (#848) reaches
-    # the six that carry the applications' own names, each by its own grant on
-    # 443 -- Immich, Navidrome, the personal UI, the general UI, the Syncthing GUI
-    # and the catalogue -- which is worth nothing unless the prober is not the
-    # owner. The agent UI keeps an owner-only grant: it fronts the two
-    # `sammohr.dev` aliases through Caddy, and that whole layer is retired next,
-    # so the probe stops reading it here rather than depending on it. OPDShelf's
-    # grant is the catalogue's, the Syncthing GUI's is the GUI's: the
-    # applications are the owner's, and nothing else has asked for them.
+    # port, and the VIP is no host. A grant names the service instead, and the
+    # owner reaches all six Services (design #834). The CI names probe (#848)
+    # holds a second grant on each of the same six, which is worth nothing unless
+    # the prober is not the owner; nothing else has asked for any of them.
     #
-    # Six destinations for CI instead of one is the narrower surface, not the
-    # wider one: each granted VIP is a Service that terminates at exactly one
-    # application on one port, so the admitted set can be read off this list. The
-    # Service it replaces fronted everything behind one Caddy, and any route that
-    # proxy grew was reachable from CI with no policy change at all; a seventh
-    # application now needs a seventh grant and a line in the tests below.
+    # One grant per application instead of one fronting all of them is the
+    # narrower surface, not the wider one: each granted VIP is a Service that
+    # terminates at exactly one application on one port, so the admitted set can
+    # be read off this list. The Service that fronted the `sammohr.dev` aliases
+    # carried everything behind one Caddy, and any route that proxy grew was
+    # reachable from CI with no policy change at all; a seventh application now
+    # needs a seventh grant and a line in the tests below.
     grants = [
-      {
-        src = ["group:owner"]
-        dst = ["svc:agent-ui"]
-        ip  = ["443"]
-      },
       {
         # OPDShelf's Service, the first application off the per-port scheme. The
         # port is the same 443 and the destination is a different service, so this
@@ -212,7 +202,6 @@ locals {
     # and the VIP stays dark until someone notices.
     autoApprovers = {
       services = {
-        "svc:agent-ui"  = ["tag:smortress"]
         "svc:opds"      = ["tag:smortress"]
         "svc:immich"    = ["tag:smortress"]
         "svc:navidrome" = ["tag:smortress"]
@@ -256,7 +245,7 @@ locals {
     tests = [
       {
         src    = var.tailscale_login
-        accept = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:vps:22", "svc:agent-ui:443", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443"]
+        accept = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:vps:22", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443"]
       },
       {
         # The owner reaches the edge login, never the edge's upstream ports and
@@ -267,7 +256,7 @@ locals {
       },
       {
         src  = "tag:untrusted"
-        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8446", "tag:smortress:8447", "tag:vps:22", "svc:agent-ui:443", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443"]
+        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8446", "tag:smortress:8447", "tag:vps:22", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443"]
       },
       {
         # The edge reaches the two Serve ports and nothing else: no sshd, no
@@ -277,7 +266,7 @@ locals {
       },
       {
         src  = "tag:vps"
-        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8484", "svc:agent-ui:443", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443"]
+        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8484", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443"]
       },
       {
         # The deploy node reaches the receiver and, through the grants above, one
@@ -322,7 +311,7 @@ resource "tailscale_acl" "this" {
   # names a tag no device carries and a service the tailnet does not have, and
   # the validator refuses it: the route would close in the same apply that opens
   # it.
-  depends_on = [tailscale_device_tags.smortress, tailscale_service.agent_ui, tailscale_service.opds, tailscale_service.immich, tailscale_service.navidrome, tailscale_service.assistant, tailscale_service.agent, tailscale_service.sync]
+  depends_on = [tailscale_device_tags.smortress, tailscale_service.opds, tailscale_service.immich, tailscale_service.navidrome, tailscale_service.assistant, tailscale_service.agent, tailscale_service.sync]
 
   # This resource is the whole policy, not a patch: the provider refuses to
   # replace a policy it did not write unless that is said out loud, and the
@@ -331,19 +320,6 @@ resource "tailscale_acl" "this" {
   overwrite_existing_content = true
 
   acl = jsonencode(local.tailnet_policy)
-}
-
-# The agent UI's Service VIP (design #834). Tailscale assigns the address when
-# the Service is created -- `addrs` is the API's, not the host's -- and the host
-# advertisement (scripts/tailscale-serve.sh) is what makes that address answer.
-# The policy admits the owner to its one port, so the name resolves on the tailnet
-# without any device's own address appearing in DNS; tofu/dns.tf reads `addrs`
-# rather than being told the address.
-resource "tailscale_service" "agent_ui" {
-  count = var.tailnet == "" ? 0 : 1
-
-  name  = "svc:agent-ui"
-  ports = ["tcp:443"]
 }
 
 # OPDShelf's own Service: the first application off the per-port scheme. A Service
@@ -381,8 +357,8 @@ resource "tailscale_service" "navidrome" {
   ports = ["tcp:443"]
 }
 
-# The personal web UI, 127.0.0.1:18006 behind Caddy on 8444. Its `sammohr.dev`
-# name keeps riding `svc:agent-ui`: this Service only publishes the tailnet name.
+# The personal web UI on 127.0.0.1:18006. The `sammohr.dev` alias Caddy used to
+# answer for it is gone with that terminator; this Service is the name it owns.
 resource "tailscale_service" "assistant" {
   count = var.tailnet == "" ? 0 : 1
 

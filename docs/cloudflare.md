@@ -15,15 +15,14 @@ whole of the served surface:
 | Record | Type | Points at | Cloud |
 | --- | --- | --- | --- |
 | `photos`, `opds`, `recovery` | `A` | `var.edge_ipv4`, the edge VPS (`docs/core/public-edge.md`) | grey, TTL 300 |
-| `agent`, `assistant` | `A` | the agent UI Service's tailnet VIP (`tailscale_service.agent_ui`) | grey, TTL 300 |
 | apex, tags `issue` and `issuewild` | `CAA` | the pinned ACME account (`## CAA`) | n/a |
 
 Every name is grey cloud on purpose: Cloudflare must not sit in the media path,
 TLS-ALPN-01 needs the name to resolve to the box that answers it, and a proxied
-record over a tailnet address has no origin Cloudflare could reach. The `A`
-record for `agent` and `assistant` is the same VIP because one Service owns it
-(design #834); the host no longer answers either name, and both records go with
-that Service.
+record has no origin Cloudflare could reach. `agent` and `assistant` used to have
+an `A` record apiece pointing at the agent UI Service's tailnet VIP (design #834);
+that Service, its Caddy and both records are gone, and each application now
+answers on `<app>.<tailnet>.ts.net` through a Service of its own.
 
 The apex keeps its mail records — `MX`, the `SPF` `TXT`, the domain-verification
 `TXT`s. None of them is declared here and SDLC #833 did not touch them.
@@ -40,7 +39,6 @@ a typo publishes nothing while the config claims the name is served.
 | `photos.sammohr.dev` | edge VPS, Caddy → Serve 8446 | Immich's own account |
 | `opds.sammohr.dev` | edge VPS, Caddy → Serve 8447 | OPDShelf's own login |
 | `recovery.sammohr.dev` | edge VPS, Caddy → the Backrest guard on loopback | the reader's own password — the guard's 10-per-10-s budget is the only other control (`docs/core/backrest.md`) |
-| `agent.sammohr.dev`, `assistant.sammohr.dev` | the tailnet only: a VIP no public resolver reaches | the tailnet ACL (`tofu/tailscale.tf`) |
 
 Every name in the table answers its own origin: nothing left in the zone is
 gated, proxied or tunnelled, so there is no edge policy to consult when one of

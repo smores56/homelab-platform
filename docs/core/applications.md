@@ -577,21 +577,16 @@ both, so a run without a plan cannot delete them.
 The two UIs answer on a Service each, like every other application behind the
 tailnet name service (design #834): `svc:assistant` and `svc:agent` are advertised
 over HTTPS, so Tailscale terminates TLS and mints the certificate for the name.
-The `sammohr.dev` aliases the host's own terminator used to answer are gone with
-it: `tofu/dns.tf` still publishes a grey-cloud `A` record per alias at the
-`svc:agent-ui` VIP, and the ACL still grants that service port to `group:owner`
-and `tag:deploy`, but nothing on the host answers those names any more, and that
-layer is retired next. Nothing there was ever public: the VIP is in
-`100.64.0.0/10`, so the names resolve anywhere and route only on the tailnet. The
-second grant is the scheduled probe, below.
+The `*.sammohr.dev` aliases the host's own Caddy answered are gone with that
+terminator: no zone record names either UI, the agent UI Service and its VIP are
+deleted, and nothing on the host answers those names. The VIPs these Services own
+are in `100.64.0.0/10`, so the names resolve anywhere and route only on the
+tailnet. Each is granted to the owner and to the scheduled probe, below.
 
-The `:8444` and `:8445` Serve routes stay declared, and they are two things at
-once. They are the rollback: both answer the same two UIs on the host's own name
-whether the `sammohr.dev` names do or not, so a certificate fault, a withdrawn
-record or a Service the tailnet dropped costs the nicer URL and not the UI. They
-are also the no-cost fallback: nothing is provisioned for them, one line each in
-`scripts/tailscale-serve.sh`, so retiring the names entirely means deleting two
-`dns.tf` records and the Service and leaving Serve alone.
+The `:8444` and `:8445` Serve routes stay declared as the rollback: both answer
+the same two UIs on the host's own name, so a certificate fault or a Service the
+tailnet dropped costs the named URL and not the UI. Nothing is provisioned for
+them, one line each in `scripts/tailscale-serve.sh`.
 
 `scripts/verify-tailnet-names.sh` is the probe on that path (task #848), and
 `.github/workflows/verify-tailnet-names.yml` runs it daily from a CI node that

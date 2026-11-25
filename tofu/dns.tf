@@ -34,47 +34,6 @@ resource "cloudflare_dns_record" "edge" {
   }
 }
 
-# The agent UI's Service VIP (design #834) is an address Tailscale computes, so
-# the record is one name rather than a set. A record here wins over any other
-# name's, which is the point: this name answers with the VIP while the zone's
-# other names are the edge's. Grey cloud and an explicit TTL for the same reason
-# as the edge records: Tailscale answers, not Cloudflare, and a proxied record
-# would look for an origin Cloudflare cannot reach.
-#
-# Gated with the Service itself, so a checkout that only manages the zone plans
-# no record pointing at an address that does not exist yet.
-resource "cloudflare_dns_record" "assistant" {
-  count = var.tailnet == "" ? 0 : 1
-
-  zone_id = data.cloudflare_zone.this.zone_id
-  name    = "assistant.${var.domain}"
-  type    = "A"
-  content = tailscale_service.agent_ui[0].addrs[0]
-  proxied = false
-  ttl     = 300
-  comment = "agent UI Service VIP (design #834)"
-}
-
-# The general UI's name (task #847) rides the same Service and VIP: Caddy routes
-# by SNI, so one address answers both names and the record differs only in the
-# label. The zone publishes no wildcard any more (SDLC #833), so every name the
-# tailnet or the edge answers is a record of its own.
-#
-# PR #120's apply removed the proxied cluster CNAME this name replaced: Cloudflare
-# refuses two records at one name and OpenTofu cannot order a destroy before a
-# create, so the two could not share a plan. The rest of that retirement is #833's.
-resource "cloudflare_dns_record" "agent" {
-  count = var.tailnet == "" ? 0 : 1
-
-  zone_id = data.cloudflare_zone.this.zone_id
-  name    = "agent.${var.domain}"
-  type    = "A"
-  content = tailscale_service.agent_ui[0].addrs[0]
-  proxied = false
-  ttl     = 300
-  comment = "general agent UI Service VIP (design #834, task #847)"
-}
-
 # The zone's CAA policy (design #842 T4) names a CA, never an ACME account. A
 # value may carry `accounturi=`, but that string is compared literally against
 # the account in the CSR, so it authorizes exactly one account on one directory:
@@ -84,10 +43,11 @@ resource "cloudflare_dns_record" "agent" {
 # survives a rebuild: the new account orders from the same directory and the
 # same issuer, and this policy already admits it.
 #
-# These two records authorize the unproxied names Caddy orders for
-# (`photos`/`opds`/`recovery` here, `assistant`/`agent` on smortress): grey-cloud
-# records reach the origin directly, so Let's Encrypt reads this set. A wildcard
-# order is not authorized by `issue`, hence the second tag.
+# These two records authorize the unproxied names the edge's Caddy orders for
+# (`photos`/`opds`/`recovery`): grey-cloud records reach the origin directly, so
+# Let's Encrypt reads this set. A wildcard order is not authorized by `issue`,
+# hence the second tag. The two agent names the host's own Caddy answered are
+# gone with it, so this policy no longer has a tailnet-side order to admit.
 #
 # The proxied names answer from Cloudflare's edge, where the certificate is
 # Cloudflare's to order. With Universal SSL the zone's answer also carries the
