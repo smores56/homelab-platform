@@ -83,7 +83,9 @@ pub hdd-photos "{\"schema\":2,\"attempt\":2,\"result\":\"failure\",\"exit\":124,
 pub ssd-photos "{\"schema\":2,\"attempt\":2,\"result\":\"failure\",\"exit\":124,\"reason\":\"timeout\",\"snapshot\":null,\"start\":\"$(stamp $((now - 3600)))\",\"end\":\"$(stamp $((now - 3000)))\",\"backend\":\"ssd\",\"unit\":\"photos\"}"
 
 export PATH="$bin:$PATH" RESTIC_PROGRESS_ROOT=$progress
-STUB_NEXT="$(date -u -d @$((now + 600)) '+%a %Y-%m-%d %H:%M:%S UTC')"
+# 1 h 30 s, not a round 10 min: the renderer truncates to whole minutes, and a
+# delta that lands on a minute boundary is 9m59s by the time it is parsed.
+STUB_NEXT="$(date -u -d @$((now + 3630)) '+%a %Y-%m-%d %H:%M:%S UTC')"
 export STUB_NEXT
 
 out=$("$script" --once 2>&1)
@@ -95,7 +97,7 @@ has "$out" '2.0KiB' 'the transferred byte count is rendered'
 has "$out" '5/10 files' 'the file count is rendered'
 has "$out" 'eta' 'an estimate is rendered'
 has "$out" 'inactive' 'a timer that is not scheduled is not hidden'
-has "$out" '10m' 'the next run is rendered as a countdown'
+has "$out" '1h00m' 'the next run is rendered as a countdown'
 has "$out" 'timeout' 'a failed unit from the last run is reported'
 
 if [[ $out == *'[#'* ]]; then ok 'a progress bar is drawn'; else bad 'a progress bar is drawn' "$out"; fi
