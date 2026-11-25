@@ -50,7 +50,7 @@ scripts/check-all.sh --list              # the groups and their commands
 scripts/install-ci-tools.sh ~/.local/bin # the pinned binaries the gate and tofu group need
 tests/tofu/check.sh                      # Cloudflare config shape, no credentials
 tests/data-plane/check.sh                # data-plane unit tests, no host
-tests/core/check.sh                      # core gate, apps tenant, Restic plane and deploy docs
+tests/core/*.bats                      # core gate, apps tenant and deploy docs (bats)
 tests/deploy/*.sh                        # deploy receiver, verification, gates, apps apply, notification
 scripts/render-recovery-groups.py --check # the recovery manifest matches its source
 ```

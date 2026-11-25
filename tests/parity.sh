@@ -40,12 +40,14 @@ git worktree add -q --detach "$work/tree" "$base"
 old_rc=0 new_rc=0
 (cd "$work/tree" && bash "$old") >"$work/old.log" 2>&1 || old_rc=$?
 bats "$new" >"$work/new.log" 2>&1 || new_rc=$?
-names() {  # names <log>: the assertion texts, without the runner's prefix
-  grep '^ok' "$1" | sed -E 's/^ok +([0-9]+ +)?//' | sort
-}
-old_ok=$(names "$work/old.log" | wc -l)
-new_ok=$(names "$work/new.log" | wc -l)
-diff -u <(names "$work/old.log") <(names "$work/new.log") >"$work/names.diff" || true
+# The shell suites print `ok   <text>`; bats prints `ok <n> <text>`. Each gets
+# its own normalizer so an assertion text that itself starts with a number
+# survives.
+old_names() { grep '^ok' "$1" | sed -E 's/^ok +//' | sort; }
+new_names() { grep '^ok' "$1" | sed -E 's/^ok +[0-9]+ +//' | sort; }
+old_ok=$(old_names "$work/old.log" | wc -l)
+new_ok=$(new_names "$work/new.log" | wc -l)
+diff -u <(old_names "$work/old.log") <(new_names "$work/new.log") >"$work/names.diff" || true
 
 printf 'parity: %s shell %s ok (exit %s), bats %s ok (exit %s)\n' \
   "$name" "$old_ok" "$old_rc" "$new_ok" "$new_rc"

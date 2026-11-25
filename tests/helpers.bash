@@ -18,3 +18,21 @@ bats_load_library bats-assert
 
 # The suites exercise scripts that expect the checkout as their cwd.
 cd "$repo_root" || return 1
+
+# assert_contains <haystack> <needle>: for output a suite captured itself
+# (assert_output reads only `$output`, which `run` fills).
+assert_contains() {
+    if [[ $1 != *"$2"* ]]; then
+        printf 'missing %q in:\n%s\n' "$2" "$1" >&2
+        return 1
+    fi
+}
+
+# register <description> <command...>: a @test a suite generates in a loop —
+# bats only understands a literal `@test`. The tag is the file's own path under
+# tests/, because a test registered this way is not covered by `# bats
+# file_tags` and --filter-tags would otherwise never select it.
+register() {
+    tag=${BATS_TEST_FILENAME##*/tests/}
+    bats_test_function --tags "${tag%.bats}" --description "$1" -- "${@:2}"
+}
