@@ -279,5 +279,46 @@ class RenderingTestCase(unittest.TestCase):
                     contracts.search_expression(query)
 
 
+class SourceReadIdTests(unittest.TestCase):
+    """A record id belongs to its source, not to the path-segment rule.
+
+    ``repos`` ids carry ``::`` and ``/`` and ``books`` ids carry spaces and
+    non-ASCII authors, so the adapter validates its own segments; the typed layer
+    only bounds what a caller may send. A memory key and a source name keep the
+    one-segment rule, because those *are* filenames and table keys.
+    """
+
+    def test_a_tree_record_id_is_accepted(self) -> None:
+        for source, record in (
+            ("repos", "repos::github.com/smores56/homelab-platform::README.md"),
+            ("repos", "repos::github.com/smores56/dotfiles::global/locks/pyproject.toml"),
+            ("books", "books::Ursula K. Le Guin/The Dispossessed"),
+            ("books", "books::Émile Zola/Germinal"),
+        ):
+            with self.subTest(record=record):
+                operation = contracts.parse_call(
+                    "sources.read", {"source": source, "id": record}
+                )
+                self.assertEqual(operation.id, record)
+
+    def test_a_record_id_with_a_control_character_is_refused(self) -> None:
+        for record in ("repos::a\x00b", "repos::a\tb", "repos::a\nb"):
+            with self.subTest(record=record), self.assertRaises(ValidationError):
+                contracts.parse_call("sources.read", {"source": "repos", "id": record})
+
+    def test_a_record_id_over_the_cap_is_refused(self) -> None:
+        with self.assertRaises(ValidationError):
+            contracts.parse_call("sources.read", {"source": "repos", "id": "a" * 2000})
+
+    def test_a_record_id_may_not_be_padded_with_whitespace(self) -> None:
+        with self.assertRaises(ValidationError):
+            contracts.parse_call("sources.read", {"source": "repos", "id": " repos::a"})
+
+    def test_a_memory_key_is_still_one_segment(self) -> None:
+        for key in ("a/b", "a b", "..", ".hidden"):
+            with self.subTest(key=key), self.assertRaises(ValidationError):
+                contracts.parse_call("memory.read", {"key": key})
+
+
 if __name__ == "__main__":
     unittest.main()

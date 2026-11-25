@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import hashlib
 import os
-import re
 import subprocess
 import time
 import xml.etree.ElementTree as ElementTree
@@ -56,9 +55,11 @@ MAX_OPF_BYTES = 1024 * 1024
 GIT_TIMEOUT_SECONDS = 10.0
 OPF_METADATA = "metadata.opf"
 
-#: A repo name is ``<host>/<owner>/<repo>``, three path segments, each one that
-#: cannot escape a directory. A book id is ``<author>/<title>``, two segments.
-_SEGMENT = re.compile(r"^[A-Za-z0-9._-][A-Za-z0-9._+ -]*$")
+#: A repo name is ``<host>/<owner>/<repo>`` and a book id ``<author>/<title>``:
+#: path components, each one that cannot escape its root. The rule is structural
+#: rather than an ASCII allowlist, because an author folder is not ASCII.
+MAX_SEGMENT_CHARS = 255
+MAX_RECORD_ID_CHARS = 1024
 
 
 class InvalidRecordId(ValidationError):
@@ -78,8 +79,13 @@ def _segment(name: str, what: str) -> str:
 
     if not name or name in {".", ".."} or "/" in name or "\x00" in name:
         raise InvalidRecordId(f"{what} {name!r} is not one path component")
-    if not _SEGMENT.match(name):
-        raise InvalidRecordId(f"{what} {name!r} carries characters a tree name cannot")
+    if len(name) > MAX_SEGMENT_CHARS:
+        raise InvalidRecordId(f"{what} {name!r} is longer than a path component")
+    if name != name.strip():
+        raise InvalidRecordId(f"{what} {name!r} is padded with whitespace")
+    for character in name:
+        if ord(character) < 32 or ord(character) == 127:
+            raise InvalidRecordId(f"{what} {name!r} carries a control character")
     return name
 
 
@@ -90,7 +96,9 @@ def _path_segments(path: str) -> tuple[str, ...]:
         raise InvalidRecordId(f"path {path!r} is not a relative repository path")
     if ".." in path:
         raise InvalidRecordId(f"path {path!r} may not step up a directory")
-    return tuple(path.split("/"))
+    if len(path) > MAX_RECORD_ID_CHARS:
+        raise InvalidRecordId(f"path {path!r} is longer than a record id may be")
+    return tuple(_segment(segment, "path segment") for segment in path.split("/"))
 
 
 def _git(git_dir: Path, *arguments: str, timeout: float) -> subprocess.CompletedProcess[bytes]:
