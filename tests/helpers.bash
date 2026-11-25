@@ -19,33 +19,11 @@ bats_load_library bats-assert
 # The suites exercise scripts that expect the checkout as their cwd.
 cd "$repo_root" || return 1
 
-# assert_contains <haystack> <needle>: for output a suite captured itself
-# (assert_output reads only `$output`, which `run` fills).
-assert_contains() {
-    if [[ $1 != *"$2"* ]]; then
-        printf 'missing %q in:\n%s\n' "$2" "$1" >&2
-        return 1
-    fi
-}
-
 # register <description> <command...>: a @test a suite generates in a loop —
-# bats only understands a literal `@test`. The tag is the suite's area (its
-# directory under tests/), matching the file's `# bats file_tags=` line, which
-# does not cover a test registered this way. bats resolves the description with
-# `eval`, so it must stay a literal or a value from the tree, never plan or
-# tenant data.
+# bats only understands a literal `@test`. The tag is the file's own path under
+# tests/, because a test registered this way is not covered by `# bats
+# file_tags` and --filter-tags would otherwise never select it.
 register() {
     tag=${BATS_TEST_FILENAME##*/tests/}
-    tag=${tag%%/*}
-    case $BATS_TEST_FILENAME in */tests/*/*) ;; *) tag=harness ;; esac
-    bats_test_function --tags "$tag" --description "$1" -- "${@:2}"
+    bats_test_function --tags "${tag%.bats}" --description "$1" -- "${@:2}"
 }
-
-# bats identifies a test by its command and arguments, so both must be unique:
-# the description travels as an argument for that reason.
-bats_skip() { skip "$2"; }
-
-# register_skip <description> <reason>: a test this host cannot run. It is
-# reported as skipped rather than omitted, so a closed host gate is visible and
-# never mistaken for a proof.
-register_skip() { register "$1" bats_skip "$1" "$2"; }
