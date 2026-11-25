@@ -71,9 +71,12 @@ check "the edge serves photos" has 'photos.sammohr.dev {' "$edge/Caddyfile"
 check "the edge serves opds" has 'opds.sammohr.dev {' "$edge/Caddyfile"
 check "the edge refuses HTTP-01" has 'disable_http_challenge' "$edge/Caddyfile"
 check "the edge has no admin API" has 'admin off' "$edge/Caddyfile"
-check "the edge proxies Immich on its own Serve port" has 'https://{$SMORTRESS_FQDN}:8446' "$edge/Caddyfile"
-check "the edge proxies OPDShelf on its own Serve port" has 'https://{$SMORTRESS_FQDN}:8447' "$edge/Caddyfile"
+check "the edge proxies Immich to a Service upstream" has 'reverse_proxy {$IMMICH_UPSTREAM}' "$edge/Caddyfile"
+check "the edge proxies OPDShelf to a Service upstream" has 'reverse_proxy {$OPDS_UPSTREAM}' "$edge/Caddyfile"
 check "the edge declares no plain HTTP site" no_plain_http_site
+# The upstreams are variables now, so the Caddyfile names no host and no port at
+# all: this pin is what keeps a literal 443 from being typed back in, and the
+# derivation below is what keeps the target off the host's own address.
 check "the edge never proxies 443" lacks ':443' "$edge/Caddyfile"
 check "the edge serves exactly the three names" sites_are_three
 check "the edge firewall drops by default" has 'policy drop' "$edge/nftables.conf"
@@ -98,6 +101,20 @@ check "the verify proves the node carries the edge tag" has 'tag:vps' "$edge/ver
 check "the verify proves the tailnet name" has 'startswith("smoresnet.")' "$edge/verify.sh"
 check "the repository login key is one ed25519 line" one_login_key
 check "the verify proves nothing listens on 80" has 'sport = :80' "$edge/verify.sh"
+# The upstream half of the edge is two Tailscale Services, so what the bootstrap
+# must derive and what the verify must probe are pinned here: a Service name is
+# `<service>.<tailnet>.ts.net`, and the tailnet domain is the one SMORTRESS_FQDN
+# already carries, never a second name typed into either file.
+check "the bootstrap derives the Immich upstream from the tailnet domain" has 'IMMICH_UPSTREAM=https://immich.$tailnet_domain' "$edge/bootstrap.sh"
+check "the bootstrap derives the OPDShelf upstream from the tailnet domain" has 'OPDS_UPSTREAM=https://opds.$tailnet_domain' "$edge/bootstrap.sh"
+check "the bootstrap refuses a hostname with no tailnet domain" has 'has no tailnet domain' "$edge/bootstrap.sh"
+# The host's own name and 443 must stay out of the upstream list: a Service is a
+# different address, and that one also carries the agent paths and /wallpapers.
+check "the bootstrap never points an upstream at the host's own name" lacks '_UPSTREAM=https://$SMORTRESS_FQDN' "$edge/bootstrap.sh"
+check "the bootstrap writes the Immich upstream to the Caddy environment" has 'IMMICH_UPSTREAM=$IMMICH_UPSTREAM' "$edge/bootstrap.sh"
+check "the bootstrap writes the OPDShelf upstream to the Caddy environment" has 'OPDS_UPSTREAM=$OPDS_UPSTREAM' "$edge/bootstrap.sh"
+check "the verify probes the Service names on 443" has '-connect "$immich_name:443"' "$edge/verify.sh"
+check "the verify refuses an environment file without the upstreams" has 'has no IMMICH_UPSTREAM' "$edge/verify.sh"
 
 if command -v shellcheck >/dev/null 2>&1; then
   # has/lacks are invoked through check(), and the grep patterns are literal.

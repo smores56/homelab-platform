@@ -15,11 +15,14 @@
 	auto_https disable_redirects
 }
 
-# The public names. Each proxies to its own upstream on smortress, never to
-# 443: 443 also carries the agent gateway APIs and /wallpapers, and none of
-# these names may publish them. The upstream certificate is the tailnet's own
-# *.ts.net certificate, so Caddy verifies it against the public roots and
-# relays bytes; it terminates nothing for the host.
+# The public names. Each proxies to its own Tailscale Service on smortress
+# (`svc:immich`, `svc:opds`), never to the host's own name or 443: there, 443
+# also carries the agent gateway APIs and /wallpapers, and none of these names
+# may publish them. A Service answers on `<service>.<tailnet>.ts.net` with a
+# Let's Encrypt certificate of that name, so Caddy verifies it against the same
+# public roots and relays bytes; it terminates nothing for the host. The names
+# come from the environment, derived in bootstrap.sh, so no tailnet domain is
+# hardcoded here.
 photos.sammohr.dev {
 	tls {
 		issuer acme {
@@ -27,7 +30,7 @@ photos.sammohr.dev {
 		}
 	}
 	encode zstd gzip
-	reverse_proxy https://{$SMORTRESS_FQDN}:8446
+	reverse_proxy {$IMMICH_UPSTREAM}
 }
 
 opds.sammohr.dev {
@@ -37,13 +40,13 @@ opds.sammohr.dev {
 		}
 	}
 	encode zstd gzip
-	reverse_proxy https://{$SMORTRESS_FQDN}:8447
+	reverse_proxy {$OPDS_UPSTREAM}
 }
 
 # The recovery reader (#725 T2). Unlike the two above it proxies to a process on
 # this box, not to smortress: Backrest reads R2 directly, and the guard in front
 # of it is what keeps the admin RPCs and the repository password off the public
-# surface. No Serve port is involved.
+# surface. No tailnet upstream is involved.
 recovery.sammohr.dev {
 	tls {
 		issuer acme {

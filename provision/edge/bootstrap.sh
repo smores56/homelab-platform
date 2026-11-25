@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Provision the public edge (design #725): a RackNerd KVM VPS joined to the
-# tailnet as tag:vps that terminates TLS for photos and opds and proxies to the
-# two dedicated Serve ports on smortress. Caddy is the only public listener.
+# tailnet as tag:vps that terminates TLS for photos and opds and proxies to each
+# application's Tailscale Service on smortress. Caddy is the only public
+# listener.
 #
 # RackNerd's ctrl panel has no cloud-init, no API and no snapshots, so this
 # script is the whole provisioning step. Run it from the panel's HTML5 console on
@@ -24,6 +25,20 @@ say() { printf 'edge: %s\n' "$*"; }
 [[ $EUID -eq 0 ]] || die "run as root; the console session on the template is"
 : "${SMORTRESS_FQDN:?set SMORTRESS_FQDN to the MagicDNS name of smortress (smortress.<tailnet>.ts.net)}"
 : "${EDGE_ACME_EMAIL:?set EDGE_ACME_EMAIL for ACME expiry notices}"
+
+# Each application answers on a Tailscale Service of its own (`svc:immich`,
+# `svc:opds`), so the upstream is `<service>.<tailnet>.ts.net` and never the
+# host's own name: the host's 443 also carries the agent gateway APIs and
+# /wallpapers, and a Service publishes one application with no path prefix.
+# The tailnet domain is derived, not hardcoded: the first label of
+# SMORTRESS_FQDN is the host and the rest is the tailnet.
+tailnet_domain=${SMORTRESS_FQDN#*.}
+# A suffix with no dot is not a tailnet name, and an upstream built from it would
+# be a 502 that looks like the application is down.
+[[ $tailnet_domain == *.* ]] \
+  || die "SMORTRESS_FQDN '$SMORTRESS_FQDN' has no tailnet domain (want smortress.<tailnet>.ts.net)"
+IMMICH_UPSTREAM=https://immich.$tailnet_domain
+OPDS_UPSTREAM=https://opds.$tailnet_domain
 
 here=$(cd -- "$(dirname -- "$0")" && pwd)
 # shellcheck source=/dev/null
@@ -140,9 +155,10 @@ else
     --hostname=smoresnet --accept-routes=false
 fi
 
-# Caddy: the two names, no admin API, no port 80. The environment file carries
-# the two values the Caddyfile substitutes; caddy.service reads it through a
-# drop-in because the package ships no EnvironmentFile of its own.
+# Caddy: the two proxies, no admin API, no port 80. The environment file carries
+# the Service upstreams the Caddyfile substitutes, plus the host name and ACME
+# contact verify.sh reads; caddy.service reads it through a drop-in because the
+# package ships no EnvironmentFile of its own.
 # The directory has to be traversable by the caddy user, which the environment
 # file's own 0640 root:caddy does not make it: a 0750 root:root directory locks
 # the service out of the Caddyfile it is told to read.
@@ -154,6 +170,8 @@ install -m 0644 "$here/Caddyfile" /etc/caddy/Caddyfile
   cat >/etc/caddy/edge.env <<EOF
 SMORTRESS_FQDN=$SMORTRESS_FQDN
 EDGE_ACME_EMAIL=$EDGE_ACME_EMAIL
+IMMICH_UPSTREAM=$IMMICH_UPSTREAM
+OPDS_UPSTREAM=$OPDS_UPSTREAM
 EOF
 )
 chgrp caddy /etc/caddy/edge.env

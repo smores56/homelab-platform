@@ -42,8 +42,8 @@ eq() {
   exit 1
 }
 
-# The upstream name lives in the Caddy environment file; the checks below need
-# the same value Caddy proxies to, not a copy typed here.
+# The upstream names live in the Caddy environment file; the checks below need
+# the same values Caddy proxies to, not a copy typed here.
 [[ -r /etc/caddy/edge.env ]] || {
   printf 'edge: /etc/caddy/edge.env is missing\n' >&2
   exit 1
@@ -52,6 +52,10 @@ set -a
 # shellcheck source=/dev/null
 . /etc/caddy/edge.env
 set +a
+# A Service upstream that is missing is a box provisioned before the edge moved
+# to the Service names, and Caddy would refuse the config outright.
+: "${IMMICH_UPSTREAM:?/etc/caddy/edge.env has no IMMICH_UPSTREAM}"
+: "${OPDS_UPSTREAM:?/etc/caddy/edge.env has no OPDS_UPSTREAM}"
 
 # The config on disk is the config that will load.
 check "the installed Caddyfile validates" \
@@ -59,6 +63,12 @@ check "the installed Caddyfile validates" \
 check "Caddy serves photos.sammohr.dev" grep -qxF 'photos.sammohr.dev {' /etc/caddy/Caddyfile
 check "Caddy serves opds.sammohr.dev" grep -qxF 'opds.sammohr.dev {' /etc/caddy/Caddyfile
 check "Caddy serves recovery.sammohr.dev" grep -qxF 'recovery.sammohr.dev {' /etc/caddy/Caddyfile
+# The two public proxies take their target from the environment, so the value
+# proven below is the one Caddy actually uses.
+check "Caddy proxies Immich to the Service upstream" \
+  grep -qF "reverse_proxy {\$IMMICH_UPSTREAM}" /etc/caddy/Caddyfile
+check "Caddy proxies OPDShelf to the Service upstream" \
+  grep -qF "reverse_proxy {\$OPDS_UPSTREAM}" /etc/caddy/Caddyfile
 check "Caddy never answers HTTP-01" grep -qF 'disable_http_challenge' /etc/caddy/Caddyfile
 check "Caddy has no admin API" grep -qF 'admin off' /etc/caddy/Caddyfile
 # Exactly the three site blocks the design publishes, never a fourth: a site
@@ -120,20 +130,26 @@ direct_path() {
 check "the path to smortress is direct" direct_path
 
 # The upstream half is a property of the pair, not of this box, and until the
-# image that declares Serve 8446/8447 is on smortress it cannot pass. It is
-# therefore opt-in and explicit: EXPECT_UPSTREAM=1 is the gate before a cutover,
-# and an ordinary bootstrap run does not pretend to have proven it.
+# image that advertises `svc:immich` and `svc:opds` is on smortress it cannot
+# pass. It is therefore opt-in and explicit: EXPECT_UPSTREAM=1 is the gate before
+# a cutover, and an ordinary bootstrap run does not pretend to have proven it.
 if [[ ${EXPECT_UPSTREAM:-0} == 1 ]]; then
-    # The upstream is the tailnet's own certificate on Serve's dedicated ports.
-    # Caddy verifies that chain against the public roots, so a chain that does not
-    # verify here would be a 502 on every public request, not a warning.
-    upstream_cert=$(openssl s_client -connect "$SMORTRESS_FQDN:8446" \
-      -servername "$SMORTRESS_FQDN" -verify_return_error </dev/null 2>&1 || true)
-    check "the upstream certificate verifies" grep -qF 'Verify return code: 0 (ok)' <<<"$upstream_cert"
-    check "Serve fronts Immich on 8446" curl -sS -o /dev/null --max-time 10 \
-      "https://$SMORTRESS_FQDN:8446/"
-    check "Serve fronts OPDShelf on 8447" curl -sS -o /dev/null --max-time 10 \
-      "https://$SMORTRESS_FQDN:8447/"
+    # Each Service terminates TLS for its own `<service>.<tailnet>.ts.net` name,
+    # so the chain opened here is the one Caddy verifies on every public request:
+    # a chain that does not verify is a 502, not a warning. The host's own name
+    # is a different address and stays unreachable on 443.
+    immich_name=${IMMICH_UPSTREAM#https://}
+    opds_name=${OPDS_UPSTREAM#https://}
+    upstream_cert=$(openssl s_client -connect "$immich_name:443" \
+      -servername "$immich_name" -verify_return_error </dev/null 2>&1 || true)
+    check "the Immich Service certificate verifies" grep -qF 'Verify return code: 0 (ok)' <<<"$upstream_cert"
+    upstream_cert=$(openssl s_client -connect "$opds_name:443" \
+      -servername "$opds_name" -verify_return_error </dev/null 2>&1 || true)
+    check "the OPDShelf Service certificate verifies" grep -qF 'Verify return code: 0 (ok)' <<<"$upstream_cert"
+    check "svc:immich fronts Immich" curl -sS -o /dev/null --max-time 10 \
+      "$IMMICH_UPSTREAM/"
+    check "svc:opds fronts OPDShelf" curl -sS -o /dev/null --max-time 10 \
+      "$OPDS_UPSTREAM/"
     check_not "the edge cannot reach the host on 443" curl -sS -o /dev/null --max-time 5 \
       "https://$SMORTRESS_FQDN:443/"
 else

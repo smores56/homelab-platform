@@ -9,7 +9,7 @@ ctrl panel offers no cloud-init and no API to declare one.
 | File | Purpose |
 | --- | --- |
 | `bootstrap.sh` | the whole provisioning step: packages, tailnet join, firewall, Caddy, unattended upgrades, then `verify.sh` |
-| `Caddyfile` | the three names, TLS-ALPN-01 only: two proxy to Serve ports 8446/8447, the third to the box's own Backrest |
+| `Caddyfile` | the three names, TLS-ALPN-01 only: two proxy to the `svc:immich` and `svc:opds` Services, the third to the box's own Backrest |
 | `nftables.conf` | second firewall layer: 443 and 41641 public, 22 on the tailnet only |
 | `05-edge-hardening.conf` | sshd drop-in; sshd keeps the first value, so `05-` beats cloud-init's `50-` |
 | `verify.sh` | on-box proof of the design's shape; run it after any hand change |
@@ -30,8 +30,9 @@ ctrl panel offers no cloud-init and no API to declare one.
    SSH key must already be in `/root/.ssh/authorized_keys`; the template takes
    it from the order form, and the bootstrap leaves key auth as the only way in.
 4. Reconnect over the tailnet (`ssh root@smoresnet`) and run `verify.sh`. Its upstream half (the two
-   Serve ports and the 443 refusal) is gated on `EXPECT_UPSTREAM=1`: run that
-   once the image that declares 8446/8447 is on smortress, and before cutover.
+   Service names on 443 and the host-443 refusal) is gated on
+   `EXPECT_UPSTREAM=1`: run that once the image that advertises `svc:immich` and
+   `svc:opds` is on smortress, and before cutover.
 
 5. After the cutover, run `scripts/verify-public-edge.sh` from a host with
    public resolution: it is the only check that sees the VPS. Then confirm the

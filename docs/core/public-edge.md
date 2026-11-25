@@ -5,7 +5,7 @@ The box that serves `photos.sammohr.dev`, `opds.sammohr.dev` and
 (SDLC #833 retired every Access application and tunnel). It exists so the media
 names can leave Cloudflare's data path: the atoms of the design are a tagged
 tailnet node, Caddy on 443 with a Let's Encrypt certificate, and a tailnet ACL
-that admits two ports and nothing else.
+that admits two Services and nothing else.
 
 Operator commands live in `docs/manual-steps.md#public-edge-vps`; this document is
 the shape, the failure modes and the rebuild.
@@ -36,7 +36,7 @@ Tailscale are OS infrastructure on a box whose only application is a TLS proxy.
 
 | Piece | Declared in | Purpose |
 | --- | --- | --- |
-| Caddy | `provision/edge/Caddyfile` | TLS for the three names: `photos` and `opds` proxy to Serve ports 8446/8447 on smortress, `recovery` to the Backrest guard on loopback |
+| Caddy | `provision/edge/Caddyfile` | TLS for the three names: `photos` and `opds` proxy to the `svc:immich` and `svc:opds` Tailscale Services, `recovery` to the Backrest guard on loopback |
 | nftables | `provision/edge/nftables.conf` | 443 and udp/41641 public, 22 on `tailscale0` only |
 | sshd | `provision/edge/05-edge-hardening.conf` + `authorized_keys` | keys only, no password, no root password login; `05-` so it beats cloud-init's `50-cloud-init.conf` |
 | tailscale | `provision/edge/bootstrap.sh` | joins once as `tag:vps` with hostname `smoresnet` (the panel name, the OS name and the tailnet name are one word), tags set key expiry off; the bootstrap realigns an existing node's name |
@@ -50,19 +50,30 @@ browser-only rule list that no diff or CI can see.
 `udp/41641` is open so the tailnet keeps a direct WireGuard path to smortress;
 without it every proxied byte is relayed through DERP and Immich uploads crawl.
 
-### Why two Serve ports and not 443
+### Why a Service per application and not the host's 443
 
-Serve's 443 carries Immich's root **and** `/apps/agent-local`,
-`/apps/agent-general` and `/wallpapers/` (`scripts/tailscale-serve.sh`). A
-tailnet ACL is port-scoped and cannot say "this path only", so proxying the
-public names to 443 would publish the agent gateway APIs and the wallpaper
-index. `photos` proxies to 8446 and `opds` to 8447, and the ACL
-(`tofu/tailscale.tf`) admits `tag:vps -> tag:smortress:8446,8447` with deny
-tests for every other port.
+Serve's 443 on the host's own name carries Immich's root **and**
+`/apps/agent-local`, `/apps/agent-general` and `/wallpapers/`
+(`scripts/tailscale-serve.sh`). A tailnet ACL is port-scoped and cannot say "this
+path only", so proxying the public names there would publish the agent gateway
+APIs and the wallpaper index.
 
-`recovery` involves no Serve port at all: Backrest runs on this box and Caddy
-proxies to its guard on `127.0.0.1:9898`, so the tailnet carries no recovery
-traffic and the ACL needs no rule for it.
+Each application is advertised on a Service of its own instead — `svc:immich`
+and `svc:opds`, `serve --service=... --https=443` — so Tailscale terminates TLS
+for `<service>.<tailnet>.ts.net` and a Service publishes exactly one application
+with no path prefix. `photos` proxies to `https://immich.<tailnet>.ts.net` and
+`opds` to `https://opds.<tailnet>.ts.net`, the ACL (`tofu/tailscale.tf`) admits
+`tag:vps -> svc:immich:443, svc:opds:443` with deny tests for everything else,
+and the host's own 443 stays out of reach of this box.
+
+Neither name is hardcoded: the bootstrap strips the first label off
+`SMORTRESS_FQDN` to get the tailnet domain, refuses a value with no dot, and
+writes `IMMICH_UPSTREAM` and `OPDS_UPSTREAM` to `/etc/caddy/edge.env`, which is
+what the Caddyfile names and what `verify.sh` probes.
+
+`recovery` involves no tailnet upstream at all: Backrest runs on this box and
+Caddy proxies to its guard on `127.0.0.1:9898`, so the tailnet carries no
+recovery traffic and the ACL needs no rule for it.
 
 ### Certificates
 
@@ -79,8 +90,8 @@ challenge failed (`Cannot negotiate ALPN protocol "acme-tls/1"`). Caddy keeps
 retrying, and the first successful order is seconds after the record appears —
 which is why a new box, or a `edge_ipv4` change, is followed by a wait rather
 than a config edit. The on-box proof that does not need public DNS is `verify.sh`
-with `EXPECT_UPSTREAM=1`: firewall, both Serve origins answering, and this box
-unable to reach smortress's 443 at all.
+with `EXPECT_UPSTREAM=1`: firewall, both Service names answering on 443, and
+this box unable to reach the host's own 443 at all.
 
 The ACME account key and the certificates live in Caddy's data directory
 (`/var/lib/caddy/.local/share/caddy`). Losing them costs only a re-issue; keep
@@ -140,7 +151,7 @@ photo allowance, and a null-route would then take both roles down at once.
 
 | Symptom | Cause | Action |
 | --- | --- | --- |
-| 502 with a valid certificate | tailnet down, smortress down, or Serve 8446/8447 not declared | `provision/edge/verify.sh`; `tailscale status` on both ends; `systemctl status smortress-tailscale-serve` |
+| 502 with a valid certificate | tailnet down, smortress down, or `svc:immich`/`svc:opds` not advertised | `provision/edge/verify.sh`; `tailscale status` on both ends; `systemctl status smortress-tailscale-serve` |
 | certificate expired | ctrl firewall blocks 443, clock wrong, or ACME account refused | `journalctl -u caddy`; `timedatectl`; check the panel rule list |
 | every name dead, tailnet fine | panel null-route, suspension, or host down | ctrl panel; reboot; console |
 | new IP after rebuild | a replacement VPS, not an OS reinstall | update `edge_ipv4`, apply, re-run the probe |
@@ -198,8 +209,8 @@ Both halves are outside the repository's own checks, and
 `.github/workflows/verify-public-edge.yml` runs them daily:
 
 - `provision/edge/verify.sh` on the box: firewall shape, sshd, no port 80,
-  Caddy listening, tailnet up with `tag:vps`; and with `EXPECT_UPSTREAM=1`, the
-  upstream certificate, both Serve ports and the 443 refusal.
+  Caddy listening, tailnet up with `tag:vps`; and with `EXPECT_UPSTREAM=1`, both
+  upstream certificates, both Service names and the 443 refusal.
 - `scripts/verify-public-edge.sh` from anywhere, after the cutover: all three
   names over valid TLS with life above 14 days, and each path answering as its own
   application — Immich's HTML shell, OPDShelf's 401 challenge, Backrest's own
@@ -222,7 +233,7 @@ Both halves are outside the repository's own checks, and
 
 The edge is a RackNerd 4 GB KVM VPS with one IPv4 and no IPv6. It runs Caddy for
 `photos.sammohr.dev` and `opds.sammohr.dev`, joins the tailnet as `tag:vps`, and
-proxies to Serve ports 8446 and 8447. Shape and failure modes:
+proxies to the `svc:immich` and `svc:opds` Services. Shape and failure modes:
 `docs/core/public-edge.md`. Nothing here can be done by repo code, and the cutover
 waits for the retirement gate and the origin-parity comparison, not for the box.
 
@@ -275,10 +286,10 @@ waits for the retirement gate and the origin-parity comparison, not for the box.
    ssh root@smoresnet EXPECT_UPSTREAM=1 /root/edge/verify.sh
    ```
 
-   Expect the previous routes unchanged plus 8446 → `http://127.0.0.1:2283` and 8447
-   → `http://127.0.0.1:8083`, and a green upstream run: the firewall shape, both
-   Serve ports answering, the upstream certificate verifying, and this box unable to
-   reach smortress on 443.
+   Expect the previous routes unchanged plus `svc:immich` → `http://127.0.0.1:2283`
+   and `svc:opds` → `http://127.0.0.1:8083`, and a green upstream run: the firewall
+   shape, both Service names answering on 443, both upstream certificates
+   verifying, and this box unable to reach the host's own 443.
 7. **The names.** The cutover is done, so this step is the address only: record
    30 days of `photos` + `opds` transfer from before the cutover against the ctrl
    panel's graph now, and stop to size the plan if the traffic is a meaningful

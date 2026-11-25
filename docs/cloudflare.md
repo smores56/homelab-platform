@@ -28,16 +28,16 @@ The apex keeps its mail records — `MX`, the `SPF` `TXT`, the domain-verificati
 `TXT`s. None of them is declared here and SDLC #833 did not touch them.
 
 `local.edge_hosts` in `tofu/cluster.tf` is the set the edge serves, and
-`edge_only_hosts` the subset whose origin is the box itself rather than a Serve
-port (`recovery`). `tofu/dns.tf` asserts the second is a subset of the first, so
+`edge_only_hosts` the subset whose origin is the box itself rather than a tailnet
+upstream (`recovery`). `tofu/dns.tf` asserts the second is a subset of the first, so
 a typo publishes nothing while the config claims the name is served.
 
 ### What is served, and by whom
 
 | Hostname | Answers from | Login |
 | --- | --- | --- |
-| `photos.sammohr.dev` | edge VPS, Caddy → Serve 8446 | Immich's own account |
-| `opds.sammohr.dev` | edge VPS, Caddy → Serve 8447 | OPDShelf's own login |
+| `photos.sammohr.dev` | edge VPS, Caddy → `svc:immich` | Immich's own account |
+| `opds.sammohr.dev` | edge VPS, Caddy → `svc:opds` | OPDShelf's own login |
 | `recovery.sammohr.dev` | edge VPS, Caddy → the Backrest guard on loopback | the reader's own password — the guard's 10-per-10-s budget is the only other control (`docs/core/backrest.md`) |
 
 Every name in the table answers its own origin: nothing left in the zone is

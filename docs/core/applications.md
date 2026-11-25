@@ -553,8 +553,8 @@ mapping file.
 
 | Application | Direct listener | Tailnet URL |
 | --- | --- | --- |
-| Immich | `127.0.0.1:2283` | `https://immich.<tailnet>.ts.net/`, `https://smortress.<tailnet>.ts.net/` and, for the edge only, `https://smortress.<tailnet>.ts.net:8446/` |
-| OPDShelf | `127.0.0.1:8083` | `https://opds.<tailnet>.ts.net/`, `https://smortress.<tailnet>.ts.net:8443/` and, for the edge only, `https://smortress.<tailnet>.ts.net:8447/` |
+| Immich | `127.0.0.1:2283` | `https://immich.<tailnet>.ts.net/` (the `svc:immich` Service, which is also the edge's upstream) and `https://smortress.<tailnet>.ts.net/` |
+| OPDShelf | `127.0.0.1:8083` | `https://opds.<tailnet>.ts.net/` (the `svc:opds` Service, which is also the edge's upstream) and `https://smortress.<tailnet>.ts.net:8443/` |
 | Syncthing GUI | `127.0.0.1:8384` | `https://sync.<tailnet>.ts.net/` and `https://smortress.<tailnet>.ts.net:10000/` |
 | Navidrome | `127.0.0.1:4533` | `https://navidrome.<tailnet>.ts.net/` and `https://smortress.<tailnet>.ts.net:8448/` |
 | Wallpapers | `/srv/wallpapers` (static files) | `https://smortress.<tailnet>.ts.net/wallpapers/` |
@@ -610,10 +610,10 @@ Access deny then: refused, not served. Both the ingress map and the wildcard are
 retired (SDLC #833), so the record is now one apply of `tofu/dns.tf` with
 nothing left to order against it.
 
-The two edge ports are a third kind: not for people, but for `tag:vps` only
-(`tofu/tailscale.tf`), because the public names proxy to a dedicated port each
-and never to 443 — 443 also carries the agent paths and `/wallpapers`
-(`docs/core/public-edge.md`).
+`svc:immich` and `svc:opds` are a third kind: not for people, but for `tag:vps`
+only (`tofu/tailscale.tf`), because the public names proxy to one application
+each and never to the host's own 443 — there, 443 also carries the agent paths
+and `/wallpapers` (`docs/core/public-edge.md`).
 
 `smortress-tailscale-serve.service` re-declares every route at every boot.
 Serve state lives in tailscaled's state file, which is not a dataset and
