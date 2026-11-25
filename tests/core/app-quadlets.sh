@@ -1136,7 +1136,7 @@ done
 #      read-only source mount and the writable replica tree.
 local_collectors=(
   "notes|units/systemd/smortress-agent-collect-notes.service|units/systemd/smortress-agent-collect-notes.timer|/srv/files/vault"
-  "tasks|units/systemd/smortress-agent-collect-tasks.service|units/systemd/smortress-agent-collect-tasks.timer|/srv/files/todo"
+  "tasks|units/systemd/smortress-agent-collect-tasks.service|units/systemd/smortress-agent-collect-tasks.timer|/srv/files/notes"
 )
 for local_case in "${local_collectors[@]}"; do
   IFS='|' read -r name local_unit local_timer source_dir <<<"$local_case"
