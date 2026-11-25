@@ -106,6 +106,14 @@ Every command gets:
   reads that file after the unit exits, truncates and reports `truncated` when
   the byte past the cap exists.
 
+The job's files live under `/run/smortress-agent-job`, itself `0711 root` and
+holding one `0750 root:<runner group>` directory per job, with a `0550` script
+and the runner's `0600` output file inside. It is not under
+`/run/smortress`: that tree is `0700 root` so no host uid can reach the bridge
+socket, and a unit that runs as a runner uid cannot traverse it either — systemd
+fails the exec and the job comes back with status `203`. The script is readable
+only by the runner's group because it carries the command the caller sent.
+
 The unit is started without `--pipe`. That option asks PID1 to hand the unit the
 dispatcher's own descriptors, and on this host every such start from a service
 domain is refused — `Failed to start transient service unit: Connection reset by

@@ -41,7 +41,11 @@ set -uo pipefail
 
 readonly JOB_DEFAULT_IMAGE_FILE=/etc/smortress/agent/job-image
 readonly JOB_DEFAULT_NFT_FILE=/etc/nftables/smortress-agent-jobs.nft
-readonly JOB_DEFAULT_ROOT=/run/smortress/agent-job
+# Not under /run/smortress: that directory is 0700 root to keep the bridge's
+# socket unreachable from a host uid, and a unit that runs as a runner uid cannot
+# traverse it -- systemd then fails the exec with status 203. This path exists
+# only for job files and is world-traversable, which is all a runner needs.
+readonly JOB_DEFAULT_ROOT=/run/smortress-agent-job
 readonly JOB_DEFAULT_STATE_ROOT=/var/lib/agent-shell
 readonly JOB_DEFAULT_WORKSPACE=/var/srv/git
 readonly JOB_WALL_SECONDS=${SMORTRESS_AGENT_JOB_WALL_SECONDS:-300}
@@ -251,7 +255,8 @@ job_prepare_runtime() {
     job_die "$runtime_dir is missing; run scripts/agent-job-provision.sh (loginctl enable-linger $job_user)"
   [[ $(stat -c %u "$runtime_dir") == "$(id -u "$job_user")" ]] ||
     job_die "$runtime_dir is not owned by $job_user; run scripts/agent-job-provision.sh"
-  install -d -m 0700 "$(job_run_root)"
+  # 0711: the runner traverses to its own job directory and cannot list the tree.
+  install -d -m 0711 "$(job_run_root)"
 }
 
 # Fail closed on the uid firewall before a job exists. The table is keyed by the
@@ -315,7 +320,10 @@ job_write_runner_script() {
     printf 'set -o pipefail\n'
     printf '%s 2>&1 | head -c %s > %q\n' "$argv" "$((JOB_OUTPUT_CAP + 1))" "$out"
   } >"$dir/job.sh"
-  chmod 0555 "$dir/job.sh"
+  # Readable only by the runner's group: the command is the caller's text, and
+  # another local account has no business reading which command ran.
+  chgrp "$job_group" "$dir/job.sh"
+  chmod 0550 "$dir/job.sh"
 }
 
 # job_report_output FILE -> the job's output on stdout, capped and annotated.
@@ -351,7 +359,7 @@ job_main() {
   job_check_workspace
   job_check_image
 
-  install -d -m 0711 "$job_dir"
+  install -d -m 0750 -g "$job_group" "$job_dir"
   # The runner writes the output file itself; creating it here is what makes the
   # redirect possible in a directory it cannot write.
   install -m 0600 -o "$job_user" -g "$job_group" /dev/null "$job_out"
