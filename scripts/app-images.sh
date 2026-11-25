@@ -48,7 +48,7 @@ app_images=(
   # d773 is the first build whose facade can bind the `notes` and `tasks`
   # replicas: the previous pin has their contracts and no projector, so the
   # personal quadlet's flags made the facade refuse to start.
-  'agent-runtime|built:images/agent-runtime/Containerfile|sha256:ad09b16bcd897a585acfc04fa8ade4938ff4cdafb93030f5e575d3fc9716db74'
+  'agent-runtime|built:images/agent-runtime/Containerfile|sha256:9a454a0888e667fa1744a23eb6fc8d7302e1f18b38a7cb58c4195837d108b975'
   # Built by this repository (SDLC #775), not mirrored: upstream's entrypoint
   # installs its Python dependencies from PyPI at container start, which a sealed
   # deployment can never do. The digest is the publish-agent-webui run for the
