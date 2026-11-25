@@ -105,6 +105,10 @@ plane_deadline() { # <backend> <unit>
 }
 plane_long_deadline=$(plane_var deadline_local_long)
 plane_kill_after=$(plane_var kill_after)
+if [[ ! $plane_long_deadline =~ ^[0-9]+$ || ! $plane_kill_after =~ ^[0-9]+$ ]]; then
+  printf 'deploy-platform: %s has no deadline model\n' "$plane_lib" >&2
+  exit 1
+fi
 
 # The gate's own budget, and the bounds inside it. A backup gets its unit's
 # deadline plus the kill-after the runner adds, so a unit that legitimately needs
@@ -188,11 +192,18 @@ bounded() { # <cap> <command...>
 gate_query() { bounded "$gate_verify_timeout" "$verify_bin" --local --json; }
 
 gate_backup() { # <backend> <unit>
-  local bound
+  local bound deadline
   # The unit's own deadline, not a flat cap: `bounded` still trims it to what is
   # left of the gate's budget, and an explicit DEPLOY_GATE_BACKUP_TIMEOUT wins.
-  bound=$(( $(plane_deadline "$backend" "$unit") + plane_kill_after ))
-  if [[ -n $gate_backup_cap ]]; then bound=$gate_backup_cap; fi
+  bound=$gate_backup_cap
+  if [[ -z $bound ]]; then
+    deadline=$(plane_deadline "$backend" "$unit")
+    [[ $deadline =~ ^[0-9]+$ ]] || {
+      warn "$backend/$unit: no deadline from $plane_lib"
+      return 1
+    }
+    bound=$((deadline + plane_kill_after))
+  fi
   RESTIC_LOCK_WAIT=$gate_lock_wait bounded "$bound" \
     "$backup_bin" "$backend" --unit "$unit" --no-maintenance
 }
