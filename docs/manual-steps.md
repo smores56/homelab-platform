@@ -415,8 +415,9 @@ environment; the write pair stays in `cloudflare` for the apply.
 
 No repository-level secrets: every workflow secret lives in an Environment, and the
 ones holding write or signing credentials allow `main` only. `cloudflare-plan` is
-the deliberate exception (read-only plan pair, `main` and `smores/*`, because the
-pre-merge plan runs on an owner-pushed branch). None allows an agent branch.
+the deliberate exception (read-only plan pair, `main`, `smores/*` and
+`refs/pull/*/merge`, because the pre-merge plan has to run on the PR's merge
+ref). None allows an agent branch.
 
 ```sh
 OWNER=$(cat ~/.config/smores56-agent/owner-token)
@@ -427,7 +428,7 @@ JSON
 GH_TOKEN="$OWNER" gh api -X POST \
   repos/smores56/homelab-platform/environments/server-image/deployment-branch-policies \
   -f name=main -f type=branch
-for p in main 'smores/*'; do
+for p in main 'smores/*' 'refs/pull/*/merge'; do
   GH_TOKEN="$OWNER" gh api -X POST \
     repos/smores56/homelab-platform/environments/cloudflare-plan/deployment-branch-policies \
     -f name="$p" -f type=branch
@@ -438,13 +439,16 @@ for e in cloudflare cloudflare-plan server-image; do
     "repos/smores56/homelab-platform/environments/$e/deployment-branch-policies" \
     --jq '[.branch_policies[].name] | join(",")'
 done
-# expect: cloudflare main / cloudflare-plan main,smores/* / server-image main
+# expect: cloudflare main / cloudflare-plan main,smores/*,refs/pull/*/merge / server-image main
 ```
 
 GitHub evaluates the policy before the job starts, so a branch outside the list gets
-no step and no secret; a `pull_request` run is evaluated as `refs/pull/<n>/merge`,
-which no policy matches, so `tofu-plan-pr.yml` is refused for every PR and the
-owner's `--admin` merge lands one. `deploy-notify` is a third main-only environment
+no step and no secret. A `pull_request` run is evaluated as `refs/pull/<n>/merge`,
+which `main` and `smores/*` cannot match (wildcards do not cross `/`); the third
+policy is the one that admits it. With it in place `tofu-plan-pr.yml` runs on every
+same-repo PR, and the credentials it reaches are the read-only pair above.
+The accepted residual is a PR that edits the guard itself: it runs before review,
+bounded by those read-only credentials and the guard's own allowlists. `deploy-notify` is a third main-only environment
 in both repositories ("Create the notify environment").
 
 ### The machine user and its scoped token

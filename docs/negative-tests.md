@@ -167,8 +167,8 @@ as `smores56`, the ruleset bypass, and every control looks unenforced.
 | `PUT` collaborator | refused | `404 Not Found` |
 | branch run, `server-image` | refused before steps | `Branch "agent/t0-probe-machine" is not allowed to deploy to server-image due to environment protection rules.` |
 | branch run, `cloudflare` | refused before steps | `Branch "agent/t0-probe-machine" is not allowed to deploy to cloudflare due to environment protection rules.` |
-| PR run, `cloudflare-plan` | refused before steps | `Branch "refs/pull/93/merge" is not allowed to deploy to cloudflare-plan due to environment protection rules.` |
-| PR run, `cloudflare-plan` from `smores/*` | should be allowed | refused: `Branch "refs/pull/94/merge" is not allowed to deploy to cloudflare-plan due to environment protection rules.` |
+| PR run, `cloudflare-plan` (before #841) | refused before steps | `Branch "refs/pull/93/merge" is not allowed to deploy to cloudflare-plan due to environment protection rules.` |
+| PR run, `cloudflare-plan` from `smores/*` (before #841) | refused before steps | `Branch "refs/pull/94/merge" is not allowed to deploy to cloudflare-plan due to environment protection rules.` |
 
 Run URLs: [44872248868](https://github.com/smores56/homelab-platform/actions/runs/44872248868)
 (server-image), [44872273360](https://github.com/smores56/homelab-platform/actions/runs/44872273360)
@@ -194,11 +194,13 @@ These are failures of the control, not of the probe:
   describes for every other branch is not present.
 - **Archived repositories are excluded.** GitHub refuses collaborator changes
   on all 60, so a private archived history is not readable by the machine user.
-- **The pre-merge plan is refused for every PR.** `cloudflare-plan` lists
-  `main` and `smores/*`, but a `pull_request` deployment ref is
-  `refs/pull/<n>/merge`, which matches neither (run `44872568178` on PR #94).
-  Allowing `refs/pull/*/merge` would admit agent and fork PRs to the read-only
-  plan; the alternative is to trigger the plan on `smores/*` pushes.
+- **The pre-merge plan's guards are self-policing.** `cloudflare-plan` now also
+  admits `refs/pull/*/merge` (#841), so a same-repo PR runs its head workflow
+  with the read-only plan pair. A PR that edits that workflow can remove its own
+  guard; the plan's credentials are read-only by scope and probed for 403, the
+  exec label is gone, and `tofu/` may add only the locked providers and local
+  modules. Closing the guard-editing path itself needs an environment required
+  reviewer, which #841 rejected for toil.
 - **`sdlc approve` has no author check.** It adds `status:approved` and a hash
   comment without comparing the comment author (`sdlc_issues.py:569-593` in
   `dotfiles`). A machine-user approval would be accepted; it was not executed.
@@ -206,8 +208,8 @@ These are failures of the control, not of the probe:
   only kill switch.
 
 The environment half is now correct: `cloudflare` and `server-image` allow
-`main` only, and `cloudflare-plan` allows `main` and `smores/*` (it had zero
-policies before 2026-11-21).
+`main` only, and `cloudflare-plan` allows `main`, `smores/*` and
+`refs/pull/*/merge` (#841).
 
 ## The tenant auto-merges an agent-authored app-only PR
 
