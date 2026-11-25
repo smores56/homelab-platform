@@ -63,9 +63,12 @@ Volume=/var/lib/agent/local/memory:/memory:z
 # memory and the gateway, so a cold restore carries the feed and its index.
 Volume=/var/lib/agent/local/replica:/replica:ro,z
 # The derived source index (apps/agent_facade/source_index.py): one SQLite file per
-# replica source and generation, rebuilt when a generation publishes a new one and
-# deleted with no consequence but the cost of the next build. It is not in the
-# memory tree because it answers for the replicas, not for what the agent wrote.
+# replica source and generation. An existing file is opened, never rebuilt: it
+# carries the projection it was built from, so a restarted facade searches it
+# without projecting the generation. A new generation has no file yet, so its
+# first search pays one projection and writes it; deleting the tree costs one
+# such build and nothing else. It is not in the memory tree because it answers
+# for the replicas, not for what the agent wrote.
 Volume=/var/lib/agent/local/index:/index:z
 # The personal bridge's directory, and nothing else is in it. No :ro: connect(2)
 # needs the write bit on the socket inode, and the mount is the permission.

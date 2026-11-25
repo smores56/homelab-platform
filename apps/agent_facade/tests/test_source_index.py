@@ -15,6 +15,7 @@ import unittest
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
+from unittest import mock
 
 from agent_facade import replica_sources, source_index, sources
 from data_plane.collectors.raw import collect_maildir
@@ -185,6 +186,50 @@ class FallbackTests(unittest.TestCase):
                 self.assertFalse((index_root / "mail").exists())
             finally:
                 os.chmod(index_root, 0o700)
+
+
+class ColdStartTests(unittest.TestCase):
+    """An existing file is opened, not rebuilt over the whole generation.
+
+    The file is named after an immutable generation and checked by its ``meta``
+    row, so an existing one for this generation is the answer already. Projecting
+    every record first is the same bytes written again, and for mail that pass is
+    minutes -- the 60 s first search seen live on smortress.
+    """
+
+    def test_a_published_index_answers_without_touching_the_generation(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            replica = _publish(root, "gen-0001", MESSAGES)
+            warm = _adapter(replica, root / "index")
+            expected = {hit.id: hit for hit in warm.search("boiler", 5)}
+            self.assertTrue(_file(root / "index", "gen-0001").is_file())
+
+            # A fresh adapter is what a facade restart has: no projection, no
+            # index handle, the same generation and the same file on disk.
+            cold = _adapter(replica, root / "index")
+            with mock.patch.object(
+                cold.replica, "entries", side_effect=AssertionError("listed the generation")
+            ), mock.patch.object(
+                cold.replica, "read", side_effect=AssertionError("read an object")
+            ):
+                hits = cold.search("boiler", 5)
+            self.assertEqual({hit.id: hit for hit in hits}, expected)
+
+    def test_a_generation_without_a_file_pays_one_build(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            replica = _publish(root, "gen-0001", MESSAGES)
+            _adapter(replica, root / "index").search("boiler", 5)
+
+            # The next generation has no file yet: one pass over it is the
+            # cheapest correct answer, and the file it publishes is what makes
+            # the search after that cheap.
+            second = _publish(root, "gen-0002", {"ddd": ("Boiler replaced", "A new boiler.")})
+            cold = _adapter(second, root / "index")
+            self.assertEqual(_ids(cold.search("boiler", 5)), {"mail::INBOX::ddd"})
+            self.assertTrue(_file(root / "index", "gen-0002").is_file())
+            self.assertFalse(_file(root / "index", "gen-0001").is_file())
 
 
 class IndexFileTests(unittest.TestCase):
