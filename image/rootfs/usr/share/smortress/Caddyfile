@@ -39,12 +39,12 @@ assistant.sammohr.dev:9443 {
 	reverse_proxy http://127.0.0.1:18006
 }
 
-# The general UI is the second name on the same Service and VIP. SNI picks the
-# site, so what a second name needs is a second site and nothing else: the port,
-# the bind, the provider and the ACME account are shared, and one Service with
-# one Serve endpoint already answers both because the certificate never leaves
-# this process. Only the target differs -- each deployment's UI is its own
-# container on its own loopback port.
+# The general UI is the second name on the same Service and VIP, and the vault
+# GUI below is a third. SNI picks the site, so what another name needs is another
+# site and nothing else: the port, the bind, the provider and the ACME account
+# are shared, and one Service with one Serve endpoint already answers all of them
+# because the certificate never leaves this process. Only the target differs --
+# each UI is its own container on its own loopback port.
 agent.sammohr.dev:9443 {
 	bind 127.0.0.1
 
@@ -53,4 +53,22 @@ agent.sammohr.dev:9443 {
 	}
 
 	reverse_proxy http://127.0.0.1:18007
+}
+
+# The vault GUI, which is why the Service stopped being agent-only. Syncthing
+# binds its GUI to loopback and rejects every request whose Host is not that
+# address, a guard that exists because the page embeds the API key. Rewriting
+# Host here keeps the guard on in both directions: `<insecureSkipHostcheck>`, the
+# alternative, disables it for the whole GUI and API, and was only ever the
+# interim way in before this name existed.
+sync.sammohr.dev:9443 {
+	bind 127.0.0.1
+
+	tls {
+		dns cloudflare {env.CF_API_TOKEN}
+	}
+
+	reverse_proxy http://127.0.0.1:8384 {
+		header_up Host 127.0.0.1:8384
+	}
 }

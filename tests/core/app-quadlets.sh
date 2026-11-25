@@ -1709,8 +1709,10 @@ fi
 #    because no public CA can reach a tailnet VIP and the edge's 443 is already
 #    spoken for. Each of those is a line in a file, so a moved port, a wildcard
 #    bind, a host network for some other reason or a missing provider fails here
-#    rather than at the first handshake. Both names share the Service, the VIP and
-#    the certificate, so what the second one adds is a site and a target.
+#    rather than at the first handshake. Every name shares the Service, the VIP
+#    and the certificate, so what another one adds is a site and a target, and
+#    the vault GUI adds a Host rewrite because Syncthing's own guard is what the
+#    name exists to satisfy.
 caddy_unit=units/quadlet/caddy.container
 caddyfile=image/rootfs/usr/share/smortress/Caddyfile
 serve_target=$(sed -n 's|.*--service=svc:agent-ui --tcp=[0-9]* tcp://127\.0\.0\.1:\([0-9]*\).*|\1|p' scripts/tailscale-serve.sh)
@@ -1729,7 +1731,7 @@ if [[ -f $caddyfile ]]; then
   site_block() { # <name> -> that site's block, header line included
     awk -v head="$1.sammohr.dev:${serve_target} {" '$0 == head { inblock = 1 } inblock { print } inblock && /^}/ { exit }' "$caddyfile"
   }
-  for name in assistant agent; do
+  for name in assistant agent sync; do
     block=$(site_block "$name")
     if [[ -z $block ]]; then
       bad "the $name site answers on the port Serve forwards to"
@@ -1744,16 +1746,27 @@ if [[ -f $caddyfile ]]; then
       fi
     done
   done
-  eq "$(grep -cE "^[a-z]+\.sammohr\.dev:${serve_target} \{" "$caddyfile")" 2 \
-    'there is one site per name and both sit on the port Serve forwards to'
-  # Each site's proxy target is its own UI's published port, derived rather than
-  # repeated: moving a UI has to fail these lines too.
+  eq "$(grep -cE "^[a-z]+\.sammohr\.dev:${serve_target} \{" "$caddyfile")" 3 \
+    'there is one site per name and they all sit on the port Serve forwards to'
+  # Each agent site's proxy target is its own UI's published port, derived rather
+  # than repeated: moving a UI has to fail these lines too.
   for pair in "assistant:agent-webui-personal" "agent:agent-webui-general"; do
     name=${pair%%:*}
     ui_port=$(sed -n 's/^PublishPort=127\.0\.0\.1:\([0-9]*\):.*/\1/p' "units/quadlet/${pair#*:}.container")
     eq "$(sed -n 's/^[[:space:]]*reverse_proxy http:\/\/127\.0\.0\.1:\([0-9]*\)$/\1/p' <<<"$(site_block "$name")")" \
       "$ui_port" "Caddy proxies $name.sammohr.dev to that UI's loopback port"
   done
+  # The vault GUI publishes nothing -- it runs in the host network namespace --
+  # so its target comes from the address the Quadlet binds the GUI to. The
+  # rewrite is the whole point of the site: Syncthing rejects any Host that is
+  # not its own loopback address, and satisfying it that way keeps the guard
+  # enabled instead of skipping it.
+  sync_block=$(site_block sync)
+  gui_port=$(sed -n 's/^Environment=STGUIADDRESS=127\.0\.0\.1:\([0-9]*\)$/\1/p' units/quadlet/syncthing.container)
+  eq "$(sed -n 's/^[[:space:]]*reverse_proxy http:\/\/127\.0\.0\.1:\([0-9]*\)[[:space:]]*{$/\1/p' <<<"$sync_block")" \
+    "$gui_port" 'Caddy proxies sync.sammohr.dev to the address Syncthing binds'
+  eq "$(sed -n 's/^[[:space:]]*header_up Host 127\.0\.0\.1:\([0-9]*\)$/\1/p' <<<"$sync_block")" \
+    "$gui_port" 'the sync site rewrites Host to that address, not to the name'
   for line in 'admin off' 'auto_https disable_redirects'; do
     if sed -n 's/^[[:space:]]*//p' "$caddyfile" | grep -qxF -- "$line"; then
       ok "the Caddyfile sets $line"
