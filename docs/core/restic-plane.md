@@ -61,6 +61,9 @@ Navidrome's database joined `music` after the unit had already run with
 stored chunks dedupe) and starts a new `host,paths` parent family. The old family
 keeps its 14/8/12 retention until the one-time `restic forget` in
 `docs/manual-steps.md` retires it after the first new-family snapshot verifies.
+Restic's `--path` filter keeps a snapshot that contains the path among others,
+so it cannot separate the two families: the steps pick the old family by its
+single-path set and forget those snapshots by ID.
 
 `state/agent-model` is the one dataset in **no** unit, and the table says so
 (`dataset_unrestored`): it holds the 4.7 GiB GGUF blob the personal model server
