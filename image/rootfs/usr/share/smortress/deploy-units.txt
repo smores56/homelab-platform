@@ -27,8 +27,9 @@
 #
 # The web terminal is absent because it is a session host, not a serving signal:
 # a dead zellij web server costs one browser tab while the sessions it started
-# keep running (KillMode=process), and its route is advertised by
-# smortress-tailscale-serve, which is checked through the apps prober instead.
+# keep running (KillMode=process). Its route is re-advertised at every boot by
+# smortress-tailscale-serve, which is absent here for the reason above, and no
+# prober reads svc:terminal -- the terminal is the one route without one.
 firewalld.service
 sops-decrypt.service
 tailscaled.service

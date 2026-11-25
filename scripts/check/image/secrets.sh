@@ -483,7 +483,7 @@ declare -A unlisted_why=(
   [smortress-selinux-agent-shell.service]='ConditionPathExists on the shell CIL module: without SELinux or that module it is skipped, not failed'
   [smortress-agent-mail-stream.service]='ConditionPathExists on the Tuta bridge cert: without the cert it is skipped, not failed, until the bridge is provisioned'
   [smortress-restic-init.service]='initialises the Restic repositories: a backup-plane fault must not roll the platform digest back'
-  [smortress-zellij-web.service]='a session host, not a serving signal: a dead web server costs a browser tab, and the routes it answers on are advertised by a unit in the list above'
+  [smortress-zellij-web.service]='a session host, not a serving signal: a dead web server costs a browser tab and nothing probes its route, while the sessions it already started keep running'
   # The two Restic repository mounts are enabled and long-running, and `nofail` is
   # what makes them the opposite of a serving signal: an absent or unpowered backup
   # disk is a red destination, not a failed host. The hourly verifier pings the
