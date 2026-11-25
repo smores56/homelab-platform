@@ -36,6 +36,13 @@ WorkingDirectory=/var/home/smores
 Environment=PATH=/var/home/smores/.local/share/mise/shims:/var/home/smores/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
 Environment=ZELLIJ_SOCKET_DIR=/run/zellij
 Environment=TERM=xterm-256color
+# The binary lives in the owner's home, and SELinux refuses an exec from `init_t`
+# into a user-writable file: a service whose `ExecStart` is `bin_t` is transitioned
+# to `unconfined_service_t` first, and this unit has nothing on a system path to go
+# through. Name the domain it needs, which is the one every system service here
+# runs in -- the host proved the failure: status=203/EXEC, "Unable to locate
+# executable ...: Permission denied" on a home path smores can run by hand.
+SELinuxContext=system_u:system_r:unconfined_service_t:s0
 # Preserved rather than removed on stop: the sessions keep running
 # (KillMode=process), and the socket directory is where a later SSH login finds
 # them. systemd creates it with this unit's user and group, mode 0700.

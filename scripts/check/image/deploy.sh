@@ -148,6 +148,8 @@ if grep -qE '^(ProtectHome=(yes|strict|tmpfs)|PrivateTmp=yes|NoNewPrivileges=yes
 else
   ok "the terminal unit hides nothing its panes need"
 fi
+check "the terminal names the SELinux domain a home binary needs" \
+  has 'SELinuxContext=system_u:system_r:unconfined_service_t:s0' "$terminal_unit"
 check "the terminal owns the socket directory as its runtime directory" \
   has 'RuntimeDirectory=zellij' "$terminal_unit"
 check "the terminal keeps the socket directory across a stop" \
