@@ -9,7 +9,7 @@ code no review in this repository saw.
 
 The allowlist is the committed lock file. A provider named in
 `.terraform.lock.hcl` is one the repository fetched and hashed on purpose, and
-`tests/tofu/check.sh` pins both of them, so the lock file is the reviewed set.
+`tests/tofu/check.bats` pins both of them, so the lock file is the reviewed set.
 Every `module` source must be a local path: there are none today, and a remote
 module is code from outside the repository.
 

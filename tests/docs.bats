@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 # bats file_tags=docs
-# The documentation reference check, run the way its check-all group runs it.
+# The documentation reference check, run the way its CI area runs it.
 #
 #   bats tests/docs.bats
 #

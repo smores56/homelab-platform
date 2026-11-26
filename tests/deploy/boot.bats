@@ -217,7 +217,7 @@ printf '%s\n' "${url:-}" >>"$FAKE_PING_LOG"
 exit 0
 STUB
 
-    # The apps revert is a separate program with its own suite (tests/deploy/apps.sh);
+    # The apps revert is a separate program with its own suite (tests/deploy/apps.bats);
     # here it stands in for the gate's call, removes the record the way a successful
     # revert does, and shares one ordering log with the health checks.
     cat >"$bin/deploy-apps" <<'STUB'

@@ -1445,5 +1445,5 @@ EOF
 }
 
 @test "ci.yml runs this check" {
-    grep -q 'check-all.sh --only tofu-check' .github/workflows/ci.yml
+    grep -qF -- '--filter-tags tofu' .github/workflows/ci.yml
 }

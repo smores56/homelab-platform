@@ -325,16 +325,16 @@ base_is_a_stream_tag() {
 # The quoted filters of a workflow's `paths:` blocks.
 workflow_filters() { sed -n '/^ *paths:/,/^ *[a-z-]*:$/p' "$1" | sed -n 's/^ *- "\(.*\)"$/\1/p'; }
 
-# The checker is only as good as the CI that runs it. The group that carries this
-# file is server-image (scripts/check-all.sh), and the workflow that runs that
-# group on a pull_request has to trigger on the tree this file reads -- a filter
-# that misses bootc/edge keeps publishing an image nobody checked.
+# The checker is only as good as the CI that runs it. The area that carries this
+# file is `image` (tests/image/, `# bats file_tags=image`), and the workflow that
+# runs that area on a pull_request has to trigger on the tree this file reads -- a
+# filter that misses bootc/edge keeps publishing an image nobody checked.
 pull_request_runs_this_checker() {
   local workflow filter path hit covered
   for workflow in "$repo"/.github/workflows/*.yml; do
     [[ -e $workflow ]] || continue
     grep -qE '^  pull_request:' "$workflow" || continue
-    grep -qE 'check-all\.sh --only [A-Za-z0-9_,-]*server-image' "$workflow" || continue
+    grep -qE -- "--filter-tags ['\"]?image['\"]?([[:space:]]|$)" "$workflow" || continue
     covered=1
     for path in bootc/edge/Containerfile bootc/edge/rootfs/usr/share/smoresnet/Caddyfile bootc/lib/pins.env; do
       hit=0

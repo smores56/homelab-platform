@@ -44,28 +44,28 @@
 ## Before you commit
 
 ```sh
-scripts/check-all.sh             # every group, in parallel
-scripts/check-all.sh --changed   # only the groups this branch touches
-scripts/check-all.sh --list      # the groups and their commands
+# every suite, tracked or not
+git ls-files -z --cached --others --exclude-standard \
+    'tests/*.bats' 'tests/*/*.bats' |
+    xargs -0 bats --jobs "$(nproc)" --no-parallelize-within-files
+# the suites this branch touches -- and what the pre-push hook runs
+tests/tags.sh --changed
 ```
 
-The driver is the source of truth: CI invokes it once per shard with
-`--only <group>`, and `tests/check-all/ci-parity.sh` fails when a group is
-neither called by a workflow nor declared local-only. `--changed` runs every
-group when a changed path no group claims, and `--check-claims` proves every
-tracked file is covered.
+`git config core.hooksPath .githooks` installs the pre-push hook, which runs the
+suites `tests/tags.sh --changed` prints.
+`tests/tags.tsv` maps changed paths to suites and is the only selector: a path
+no row claims selects every suite, so a new file cannot fall through to a green
+run that tested nothing. `tests/tags.bats` holds the table to the tree, and its
+area tests hold every suite's `# bats file_tags=` to a job in `ci.yml`, so a
+suite that no area job claims fails instead of running nowhere.
 
-`tests/check-all/check.sh` is the driver's own test. Run it with any
-`scripts/check-all.sh` change.
+The suites need the tools CI installs: on a fresh host run
+`scripts/install-ci-tools.sh ~/.local/bin` and put it on PATH; it also fills
+`$XDG_DATA_HOME/bats` with the assertion libraries the `.bats` suites load.
 
 Run the formatters only where the repository defines them; this repo has no
 formatter beyond `tofu fmt -check -recursive tofu`.
-
-`git config core.hooksPath .githooks` installs the pre-push gate, which runs
-`scripts/check-all.sh --changed`. Groups need the tools CI installs: on a
-fresh host run `scripts/install-ci-tools.sh ~/.local/bin` and put it on PATH;
-it also fills `$XDG_DATA_HOME/bats` with the assertion libraries the `.bats`
-suites load.
 
 Behavioural suites are `.bats` files run by bats; a new one needs a row in
 `tests/tags.tsv` (the tag is its path under `tests/`), which `tests/tags.bats`

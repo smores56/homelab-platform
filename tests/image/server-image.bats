@@ -1,8 +1,8 @@
 #!/usr/bin/env bats
 # bats file_tags=image
-# The `server-image` check-all group, as bats (SDLC #907, T13).
+# The `server-image` area checks, as bats (SDLC #907, T13).
 #
-# The group was a chain of commands in scripts/check-all.sh:
+# The group was a chain of commands in the old driver:
 #
 #   scripts/check-server-image.sh
 #   scripts/render-ignition.sh --synthetic --check

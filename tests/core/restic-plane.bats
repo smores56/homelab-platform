@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# bats file_tags=core
 # Offline checks for the Restic plane (SDLC #706, T3): fail-closed freshness and
 # the deploy gate's local query, the backup driver's exit codes, stale-staging
 # reconciliation, the readiness and mount gates, the retention filter,

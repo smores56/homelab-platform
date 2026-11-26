@@ -489,13 +489,26 @@ class BridgeSocketTest(unittest.TestCase):
             connection.sendall(b'{"command": "sleep 30"}\n')
             held.append(connection)
             self.addCleanup(connection.close)
-        # The four jobs are running in the dispatcher once its pid file names
-        # them; a queue behind them would make the fifth wait its turn.
-        time.sleep(0.5)
+        # The refusal is the signal: the four jobs are in flight once the
+        # bridge turns a fifth request away, which under load can take longer
+        # than a fixed pause. A reply instead of a refusal means the jobs had
+        # not started yet, so ask again; a closed socket is the same refusal,
+        # because the request never took a queue slot.
         began = time.monotonic()
-        reply = self.ask({"command": "ls"})
+        deadline = began + 10
+        while True:
+            try:
+                reply = self.ask({"command": "ls"})
+            except (BrokenPipeError, ConnectionResetError):
+                break
+            if reply.get("error", {}).get("code") == "unavailable":
+                break
+            self.assertLess(
+                time.monotonic(), deadline, f"no refusal, last reply {reply!r}"
+            )
+            time.sleep(0.05)
+        # Refused at once, not after waiting for one of the four to finish.
         self.assertLess(time.monotonic() - began, self.timeout_seconds)
-        self.assertEqual(reply["error"]["code"], "unavailable")
 
 
 if __name__ == "__main__":

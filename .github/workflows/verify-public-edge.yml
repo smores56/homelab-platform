@@ -9,8 +9,8 @@
 # (`scripts/verify-caa.sh`), because a record that forbids the issuing CA stops
 # renewal quietly.
 #
-# The scripts are called directly, not through `check-all.sh`'s `edge` group:
-# that group is local-only in `tests/check-all/ci-parity.sh` and drives the same
+# The scripts are called directly, not through the `edge` area job: that job
+# stubs what this workflow has for real, and drives the same
 # code through stubs, while these steps need the network the runner has.
 #
 # The Healthchecks ping is `EDGE_PING_URL` from the `deploy-notify`

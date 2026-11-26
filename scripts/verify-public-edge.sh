@@ -26,7 +26,7 @@
 #   scripts/verify-public-edge.sh
 #
 # Knobs: EDGE_TIMEOUT (10 s), EDGE_CERT_MIN_DAYS (14), EDGE_CAFILE, CURL_BIN
-# and OPENSSL_BIN (tests/edge/check.sh drives the same code).
+# and OPENSSL_BIN (tests/edge/check.bats drives the same code).
 set -uo pipefail
 
 photos=photos.sammohr.dev

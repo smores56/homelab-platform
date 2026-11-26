@@ -1,10 +1,21 @@
 #!/bin/sh
-# The local gate before any push: only the groups this branch touches.
+# The local gate before any push: the suites the changed paths select.
 # `git config core.hooksPath .githooks` enables it.
 set -eu
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
-# git exports these to a hook; several checks make fixture repositories.
+# git exports these to a hook; several suites make fixture repositories.
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
     GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_NAMESPACE \
     GIT_PREFIX GIT_QUARANTINE_PATH
-exec "$root/scripts/check-all.sh" --changed
+cd "$root" || exit 1
+# tests/tags.sh prints the suites a changed path selects, or nothing.
+selected=$(tests/tags.sh --changed) || exit 2
+[ -n "$selected" ] || exit 0
+# shellcheck disable=SC2086  # one path per line, deliberately unquoted
+# Across files, not within them: with every file asking the pool for its own
+# jobs the 572-test Quadlet suite starved while the rest finished (a 23s file
+# did not complete in fifteen minutes). 55 files take 334s this way. No
+# BATS_TEST_TIMEOUT: with --jobs, bats 1.14's watchdog leaves a `sleep 120`
+# child behind and the run stops making progress. A hung test is a hang, and
+# CI's own job timeout is what bounds it there.
+exec bats --jobs "${BATS_JOBS:-$(nproc)}" --no-parallelize-within-files $selected

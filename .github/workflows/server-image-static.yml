@@ -2,8 +2,8 @@
 # Runs on pull requests and holds no secret: the real build/sign job is
 # publish-server-image.yml (publish-edge-image.yml for the edge).
 #
-# The edge's checker, bootc/edge/tests/check.sh, runs in the same `server-image`
-# group: it is the same artifact class, the group already claims bootc/edge/*, and
+# The edge's checker, bootc/edge/tests/check.sh, runs in the same `image`
+# area: it is the same artifact class, the area already claims bootc/edge/*, and
 # a separate workflow would run this one a second time on every bootc/edge/**
 # pull request because both would trigger on that tree. The checker asserts this
 # wiring itself (its "a pull_request workflow runs this checker" row), so a filter
@@ -68,5 +68,5 @@ jobs:
           echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
       - name: server-image group
         # The group runs the static checks, both Ignition renders, and the
-        # boundary test. The command lives in scripts/check-all.sh.
-        run: scripts/check-all.sh --only server-image
+        # boundary test. The suites live under tests/image/.
+        run: git ls-files -z 'tests/*.bats' 'tests/*/*.bats' | xargs -0 bats --filter-tags 'image' --jobs "$(nproc)"

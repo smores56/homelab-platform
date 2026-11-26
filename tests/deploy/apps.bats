@@ -62,7 +62,7 @@ setup() {
 # `curl` is both the codeload fetch and the deploy ping: an --output names a tar
 # this suite published, anything else is a notification URL. It is the one fake
 # curl the deploy suites share (tests/deploy/fake-curl.sh), installed the way
-# install_fake_curl in tests/deploy/lib.sh does.
+# install_fake_curl in the old lib.sh did.
 install_fakes() { # <bin dir>
     local bin=$1 real_tar
     install -m 0755 "$repo_root/tests/deploy/fake-curl.sh" "$bin/curl"
@@ -518,7 +518,7 @@ json_list() {
     fi
     jq -nc '$ARGS.positional' --args -- "$@"
 }
-# tests/deploy/lib.sh's reader of the journal this library writes. The shell
+# tests/deploy/receiver.bats' reader of the journal this library writes. The shell
 # harness retires with the suites it was written for (#931), so this file carries
 # the one function of it that it still needs.
 journal_field() { # <event> <jq-path>
@@ -590,7 +590,7 @@ done
 # --- the assertions §1-§4 make through ---------------------------------------
 # bats gives a test one name, and §1-§4 are one test, so the text the shell suite
 # printed after `ok` rides along as the last argument of each assertion instead:
-# it is the same text tests/parity.sh diffs, it survives a failure message, and
+# it is the same text the conversion compared by name, it survives a failure message, and
 # none of the checks lose their name in the source.
 same() { # <actual> <expected> <text>
     [[ $1 == "$2" ]] || fail "$3: want '$2', got '$1'"
@@ -1543,7 +1543,7 @@ apply_with_a_failing_serve() {
     same "$(journal_field apply-reverted '.by')" boot-gate \
         "the gate journals the reverted apply"
     # The gate reads the booted digest even here, so a boot state.json does not
-    # name is noticed (tests/deploy/boot.sh owns that check); it must not switch
+    # name is noticed (tests/deploy/apps.bats owns that check); it must not switch
     # or roll back on a boot with no pending deployment.
     not_matching "$log/bootc-calls" '^(switch|rollback)' \
         "a boot with no pending deploy switches nothing"

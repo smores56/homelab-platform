@@ -29,15 +29,23 @@ assert_contains() {
 }
 
 # register <description> <command...>: a @test a suite generates in a loop —
-# bats only understands a literal `@test`. The tag is the suite's area (its
-# directory under tests/), matching the file's `# bats file_tags=` line, which
-# does not cover a test registered this way. bats resolves the description with
-# `eval`, so it must stay a literal or a value from the tree, never plan or
-# tenant data.
+# bats only understands a literal `@test`. The tag is read from the file's own
+# `# bats file_tags=` line, which does not cover a test registered this way, so
+# a suite's area is written once. bats resolves the description with `eval`, so
+# it must stay a literal or a value from the tree, never plan or tenant data.
+# The tag is derived from the path, not read from the file: every test of every
+# file sources this file and re-runs its registration loops, so a subprocess here
+# costs one fork per registered test (97 per app-quadlets test, which hung the
+# gate). tests/tags.bats holds this table to the `# bats file_tags=` lines.
 register() {
-    tag=${BATS_TEST_FILENAME##*/tests/}
-    tag=${tag%%/*}
-    case $BATS_TEST_FILENAME in */tests/*/*) ;; *) tag=harness ;; esac
+    case $BATS_TEST_FILENAME in
+        */tests/*/*.bats) tag=${BATS_TEST_FILENAME#*tests/}; tag=${tag%%/*} ;;
+        */tests/lint.bats | */tests/tags.bats) tag=lint ;;
+        */tests/docs.bats) tag=docs ;;
+        */tests/actionlint.bats) tag=actionlint ;;
+        */tests/tofu-fmt.bats) tag=tofu ;;
+        *) tag=lint ;;
+    esac
     bats_test_function --tags "$tag" --description "$1" -- "${@:2}"
 }
 

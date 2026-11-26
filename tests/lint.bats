@@ -45,21 +45,6 @@ load helpers
     assert_success
 }
 
-@test "every group is reachable from a workflow or explicitly local-only" {
-    # The check is #931's subject; it stays in the group table as it stands.
-    run tests/check-all/ci-parity.sh
-    assert_success
-}
-
-@test "the gate's own selection logic passes its self-test" {
-    # scripts/check-all.sh decides what a branch runs, and its table is claimed
-    # by `lint` like any other script. Before this, a driver change ran the
-    # linter and nothing else -- not even the test of the logic it changed
-    # (#168).
-    run tests/check-all/check.sh
-    assert_success
-}
-
 @test "the branch adds no whitespace errors" {
     run diff_check
     assert_success

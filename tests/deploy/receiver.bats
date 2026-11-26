@@ -29,9 +29,10 @@ apps_deployed=dddddddddddddddddddddddddddddddddddddddd
 # The listener is the subject of almost every scenario below and its nonce ring,
 # journal and queue are the state the later ones read, so one process serves the
 # whole file: setup_file starts it under $BATS_FILE_TMPDIR, teardown_file kills
-# it. bats runs a file's tests in order, and the old suite ran them in this order
-# against one listener. Every other listener (a capped one, an unwritable-queue
-# one, a bare-secret one) is started and killed by the single test that needs it.
+# it. Every other listener (a capped one, an unwritable-queue one, a bare-secret
+# one, and the two below that count journal lines) is started and killed by the
+# single test that needs it, because bats runs this file's cases concurrently
+# under --jobs and the shared listener's journal is written by every case.
 setup_file() {
     local work=$BATS_FILE_TMPDIR state=$BATS_FILE_TMPDIR/state
     local secrets=$BATS_FILE_TMPDIR/secrets port secret next
@@ -404,32 +405,49 @@ state_fixture() {
 }
 
 # --- admission: a refusal costs no lock and no disk write -------------------
+#
+# A listener with a state directory of its own, for the cases that count journal
+# lines: the file-scoped listener's journal is written by every case beside them.
+quiet_listener() { # -> quiet_base, quiet_state
+    quiet_state=$BATS_TEST_TMPDIR/quiet-state
+    mkdir -p "$quiet_state/queue" "$quiet_state/work"
+    chmod 0700 "$quiet_state" "$quiet_state/queue"
+    quiet_port=$(free_port)
+    start_listener "$quiet_state" "$secrets_dir" "$quiet_port" "$BATS_TEST_TMPDIR/quiet.log"
+    pids+=("$listener_pid")
+    wait_for "$quiet_port" 200 ||
+        fail "the quiet listener never answered: $(tail -n 5 "$BATS_TEST_TMPDIR/quiet.log")"
+    quiet_base=http://127.0.0.1:$quiet_port
+}
+
 # The lock serializes "nonce unseen -> queue it", so a request that will be
 # refused must never take it: one authenticated request is answered while twenty
 # unauthenticated ones are in flight, and none of the twenty appends a journal
 # line (each line is an fsync an unauthenticated caller could then ask for).
 @test "a valid request is answered while refusals are in flight" {
+    quiet_listener
     burst_pids=()
     for _ in $(seq 1 20); do
-        (post "$base" "$accepted" "${secret}wrong" >/dev/null 2>&1) &
+        (post "$quiet_base" "$accepted" "${secret}wrong" >/dev/null 2>&1) &
         burst_pids+=("$!")
     done
     request=$(body homelab-apps "$commit_ok" "$now" "$(nonce)")
-    code=$(post "$base" "$request" "$secret")
+    code=$(post "$quiet_base" "$request" "$secret")
     wait "${burst_pids[@]}" 2>/dev/null || true
     assert_equal "$code" 202
 }
 
 @test "a burst of refusals writes only the queued request's line" {
     local before new
-    before=$(journal_lines)
+    quiet_listener
+    before=$(wc -l <"$quiet_state/journal.jsonl" 2>/dev/null || echo 0)
     burst_pids=()
     for _ in $(seq 1 20); do
-        (post "$base" "$accepted" "${secret}wrong" >/dev/null 2>&1) &
+        (post "$quiet_base" "$accepted" "${secret}wrong" >/dev/null 2>&1) &
         burst_pids+=("$!")
     done
     request=$(body homelab-apps "$burst_only" "$now" "$(nonce)")
-    code=$(post "$base" "$request" "$secret")
+    code=$(post "$quiet_base" "$request" "$secret")
     wait "${burst_pids[@]}" 2>/dev/null || true
     guard "$code" 202 "the valid request was not queued"
     # One line for the request that was queued, nothing for the twenty that were
@@ -438,7 +456,7 @@ state_fixture() {
     # refusal that got journaled from an unrelated line: this test reported "1,
     # got 2" on CI and had no way to say which event it was (#156). The commit is
     # one no earlier test touches, so nothing else in this window can journal.
-    new=$(sed -n "$((before + 1)),\$p" "$state_dir/journal.jsonl" 2>/dev/null || true)
+    new=$(sed -n "$((before + 1)),\$p" "$quiet_state/journal.jsonl" 2>/dev/null || true)
     assert_equal "$(grep -c . <<<"$new" | tr -d ' ')" "1"
     assert_equal "$(jq -r '.event' <<<"$new")" "queue-enqueued"
     assert_equal "$(jq -r '.commit' <<<"$new")" "$burst_only"

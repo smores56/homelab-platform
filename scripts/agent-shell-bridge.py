@@ -352,6 +352,7 @@ def handle(
     uid, pid = peer
     status = "closed"
     length = 0
+    reply: Mapping[str, Any] | None = None
     try:
         connection.settimeout(REQUEST_READ_TIMEOUT_SECONDS)
         command = parse_command(read_request(connection))
@@ -360,20 +361,17 @@ def handle(
             outcome = run_job(dispatcher, command, timeout_seconds)
         except JobTimeout as error:
             status = "timeout"
-            answer(connection, {"error": {"code": "timeout", "status": 124, "message": str(error)}})
+            reply = {"error": {"code": "timeout", "status": 124, "message": str(error)}}
         else:
             status = str(outcome.status)
-            answer(
-                connection,
-                {
-                    "status": outcome.status,
-                    "output": outcome.output,
-                    "truncated": outcome.truncated,
-                },
-            )
+            reply = {
+                "status": outcome.status,
+                "output": outcome.output,
+                "truncated": outcome.truncated,
+            }
     except BadRequest as error:
         status = error.code
-        answer(connection, {"error": {"code": error.code, "message": str(error)}})
+        reply = {"error": {"code": error.code, "message": str(error)}}
     except OSError:
         # A client that vanished mid-exchange is its own problem; the job, if one
         # ran, was already bounded by the dispatcher.
@@ -381,24 +379,26 @@ def handle(
     except Exception:  # noqa: BLE001 - a crashed thread would answer nothing at all
         status = "failed"
         LOG.exception("peer uid=%d pid=%d: the request failed", uid, pid)
-        try:
-            answer(
-                connection,
-                {"error": {"code": "unavailable", "message": "the bridge could not serve the job"}},
-            )
-        except OSError:
-            pass
+        reply = {"error": {"code": "unavailable", "message": "the bridge could not serve the job"}}
     finally:
         release()
-        connection.close()
-        LOG.info(
-            "peer uid=%d pid=%d command_length=%d status=%s duration_ms=%d",
-            uid,
-            pid,
-            length,
-            status,
-            int((time.monotonic() - began) * 1000),
-        )
+    # The line lands before the reply, not after it: a bridge stopped the instant
+    # its answer arrives would otherwise take the handler's line down with the
+    # daemon thread, and a caller reading the log after a reply would see none.
+    LOG.info(
+        "peer uid=%d pid=%d command_length=%d status=%s duration_ms=%d",
+        uid,
+        pid,
+        length,
+        status,
+        int((time.monotonic() - began) * 1000),
+    )
+    if reply is not None:
+        try:
+            answer(connection, reply)
+        except OSError:
+            LOG.warning("peer uid=%d pid=%d: the connection failed", uid, pid)
+    connection.close()
 
 
 def serve(listener: socket.socket, *, dispatcher: str, timeout_seconds: float) -> None:

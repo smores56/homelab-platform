@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# bats file_tags=core
 # Offline checks for the application Quadlets (SDLC #708, T5).
 #
 # The host half — real containers, a real restore, a real tailnet — is in
@@ -22,7 +23,7 @@ load ../helpers
 # makes a check pass without reading anything, so each one names its own tables.
 #
 # `register` is a @test bats only understands as a loop: its description is the
-# text the shell suite printed after `ok `, which tests/parity.sh diffs. bats
+# text the shell suite printed after `ok `, which the conversion compared by name. bats
 # also refuses two tests with the same description and the same body, and this
 # suite registers one check over one item more than once -- one image in two
 # stages of a unit, one readiness instance for three volumes of a facade -- so
