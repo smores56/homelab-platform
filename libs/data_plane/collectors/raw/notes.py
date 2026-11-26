@@ -43,7 +43,7 @@ from .replica import (
 SOURCE_ID = "notes.markdown"
 
 
-def _heading(text: str, stem: str) -> str:
+def heading(text: str, stem: str) -> str:
     """The first ATX heading, else the file stem: a note always has a title."""
 
     for line in text.splitlines():
@@ -111,7 +111,7 @@ def collect_notes(
         except UnicodeDecodeError as exc:
             raise PublishError(f"{path} is not valid UTF-8") from exc
         digest = file_sha256(path)
-        heading = _heading(body, path.stem)
+        title = heading(body, path.stem)
         updated_at = _updated_at(path)
         object_id = f"notes::{quote(relative, safe='')}"
         state.put(
@@ -121,7 +121,7 @@ def collect_notes(
                     "note_id": object_id,
                     "revision": digest,
                     "path": relative,
-                    "heading": heading,
+                    "heading": title,
                     "tags": [],
                     "updated_at": updated_at,
                     "body": body,
@@ -131,7 +131,7 @@ def collect_notes(
                 "source_id": SOURCE_ID,
                 "captured_at": captured_at,
                 "path": relative,
-                "heading": heading,
+                "heading": title,
                 "tags": [],
                 "updated_at": updated_at,
                 "body_sha256": digest,

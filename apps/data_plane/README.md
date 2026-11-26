@@ -17,6 +17,11 @@ so the endpoint contracts can be exercised before a deployment exists.
 Backups are not a service: the host runs the `data_plane` CLI (`backup-run`,
 `backup-freshness`, ...) over one recursive ZFS snapshot instead.
 
+The notes source has a real adapter. `libs/data_plane/effects/` implements the
+broker's four calls over one confined vault, with descriptor-relative path
+handling, an atomic replace, and a target-keyed tombstone ledger. No unit selects
+it yet; until one does, the broker still answers from the fixture.
+
 Nothing here issues a secret, and no secret is stored in the repository. A
 secret is read once from a file named on the command line or in the
 environment, held in memory, and never logged.

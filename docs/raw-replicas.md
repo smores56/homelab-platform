@@ -413,6 +413,12 @@ new revision of the same note instead of a delete plus a create.
 secret; unchanged files keep their row and are not rewritten, so a run
 that changes one note costs one object.
 
+The write broker's file effect owner (`libs/data_plane/effects/notes.py`) may
+delete a note on a person's behalf, and records each one in
+`<vault>/.data-plane/tombstones.jsonl` before unlinking. The collector never
+collects that file — it holds no `.md` — and the absence marker above keeps its
+meaning: a pass that did not see a note says nothing about who removed it.
+
 ## Tasks
 
 `collect_tasks(entities_dir, state, *, captured_at=...)`

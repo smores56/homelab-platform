@@ -41,7 +41,7 @@ from .errors import (
     StaleError,
     ValidationError,
 )
-from .identity import LOCAL_PROFILE, IdentityIssuer, WorkloadClaims
+from .identity import LOCAL_PROFILE, IdentityIssuer, WorkloadClaims, canonical_json
 from .model import Authority, Capability, EffectClass, IntentState, SourceContract, Visibility
 
 Clock = Callable[[], float]
@@ -62,6 +62,12 @@ _SECRET_PATTERN = re.compile(
 )
 _MAX_ERROR_TEXT = 160
 _DEFAULT_INTENT_TTL = 900
+#: One write field is bounded. The value is already in the intent row, the
+#: operator's signed approval card and the effect log before any adapter sees
+#: it, so a limit enforced at apply time would be too late for the copies that
+#: matter. One constant for every source, like the media collector's object cap:
+#: raising it is a reviewed act, not a per-source setting.
+MAX_FIELD_BYTES = 1 << 20
 
 
 def _describe_exception(exc: BaseException) -> str:
@@ -573,6 +579,17 @@ class Broker:
             if authority.authority is Authority.HUMAN:
                 raise ValidationError(
                     f"field {change.field!r} is human-authoritative; an agent cannot write it"
+                )
+            try:
+                size = len(canonical_json(change.after))
+            except (TypeError, ValueError) as error:
+                raise ValidationError(
+                    f"field {change.field!r} is not JSON"
+                ) from error
+            if size > MAX_FIELD_BYTES:
+                raise ValidationError(
+                    f"field {change.field!r} is {size} bytes, over the"
+                    f" {MAX_FIELD_BYTES}-byte cap"
                 )
         capability = contract.capability(request.capability)
         if capability.effect in {EffectClass.CREATE, EffectClass.UPDATE}:
