@@ -25,9 +25,11 @@ apps_deployed=dddddddddddddddddddddddddddddddddddddddd
 # The listener is the subject of almost every scenario below and its nonce ring,
 # journal and queue are the state the later ones read, so one process serves the
 # whole file: setup_file starts it under $BATS_FILE_TMPDIR, teardown_file kills
-# it. bats runs a file's tests in order, and the old suite ran them in this order
-# against one listener. Every other listener (a capped one, an unwritable-queue
-# one, a bare-secret one) is started and killed by the single test that needs it.
+# it. That makes the cases share state, and bats runs a file's tests concurrently
+# under --jobs, so each case takes the file's lock first: files still run beside
+# each other, this file's cases take turns. Every other listener (a capped one,
+# an unwritable-queue one, a bare-secret one) is started and killed by the single
+# test that needs it.
 setup_file() {
     local work=$BATS_FILE_TMPDIR state=$BATS_FILE_TMPDIR/state
     local secrets=$BATS_FILE_TMPDIR/secrets port secret next
@@ -67,6 +69,9 @@ teardown_file() {
 }
 
 setup() {
+    # The file's lock: see the comment above setup_file.
+    exec 9>"$BATS_FILE_TMPDIR/serial.lock"
+    flock 9
     work=$BATS_FILE_TMPDIR
     state_dir=$work/state
     secrets_dir=$work/secrets
