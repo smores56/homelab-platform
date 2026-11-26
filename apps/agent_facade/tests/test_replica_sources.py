@@ -17,7 +17,9 @@ from agent_facade import replica_sources, sources
 from data_plane.collectors.raw import (
     collect_calendar,
     collect_maildir,
+    collect_music,
     collect_notes,
+    collect_photos,
     collect_simplefin,
     collect_tasks,
 )
@@ -150,6 +152,34 @@ def _task_id(line: str) -> str:
     """The id the task collector derives, so a case can name the object it published."""
 
     return f"tasks::{hashlib.sha256(line.encode('utf-8')).hexdigest()[:16]}"
+
+
+def _photos_generation(root: Path, junk: bytes | None = None) -> None:
+    library = root / "photos"
+    (library / "2026").mkdir(parents=True)
+    (library / "2026" / "harbour-sunset.jpg").write_bytes(b"\xff\xd8jpegbytes")
+    generation = StagingGeneration(
+        root / "replica-photos", "gen-0001", source_id="photos.library"
+    )
+    collect_photos(library, generation, captured_at=CAPTURED)
+    if junk is not None:
+        generation.put(
+            "photos::junk.jpg",
+            junk,
+            {"source_id": "photos.library", "captured_at": CAPTURED},
+        )
+    generation.commit_next(complete=True)
+
+
+def _music_generation(root: Path) -> None:
+    album = root / "music" / "Tori Amos" / "Little Earthquakes"
+    album.mkdir(parents=True)
+    (album / "01 - Crucify.flac").write_bytes(b"fLaCaudio")
+    generation = StagingGeneration(
+        root / "replica-music", "gen-0001", source_id="music.library"
+    )
+    collect_music(root / "music", generation, captured_at=CAPTURED)
+    generation.commit_next(complete=True)
 
 
 class MailReplicaTests(unittest.TestCase):
@@ -536,6 +566,63 @@ class DeploymentBindingTests(unittest.TestCase):
         # are the set of sources a replica flag can bind.
         bindable = set(replica_sources._PROJECTORS) | set(replica_sources.ROW_PROJECTORS)
         self.assertEqual([name for name in asked if name not in bindable], [])
+
+
+class MediaReplicaTests(unittest.TestCase):
+    def test_photos_project_the_title_and_the_path_into_search(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            _photos_generation(root)
+            photos = replica_sources.adapters_for(
+                sources.Visibility.PERSONAL, {"photos": root / "replica-photos"}
+            )["photos"]
+
+            photo_id = "photos::2026%2Fharbour-sunset.jpg"
+            record = photos.read(photo_id)
+            self.assertEqual(record.title, "harbour-sunset")
+            self.assertIn("2026/harbour-sunset.jpg", record.body)
+            self.assertIn("jpg", record.body)
+            self.assertEqual(record.provenance["captured_at"], CAPTURED)
+            self.assertEqual(record.provenance["source_id"], f"photos/{photo_id}")
+
+            self.assertEqual(
+                [hit.id for hit in photos.search("harbour sunset", 5)], [photo_id]
+            )
+            self.assertEqual(photos.search("kettle", 5), ())
+
+    def test_music_projects_the_title_artist_and_album_into_search(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            _music_generation(root)
+            music = replica_sources.adapters_for(
+                sources.Visibility.PERSONAL, {"music": root / "replica-music"}
+            )["music"]
+
+            track_id = "music::Tori%20Amos%2FLittle%20Earthquakes%2F01%20-%20Crucify.flac"
+            record = music.read(track_id)
+            self.assertEqual(record.title, "Crucify")
+            self.assertIn("Tori Amos", record.body)
+            self.assertIn("Little Earthquakes", record.body)
+
+            self.assertEqual([hit.id for hit in music.search("tori", 5)], [track_id])
+            self.assertEqual([hit.id for hit in music.search("earthquakes", 5)], [track_id])
+            self.assertEqual(music.search("crucify", 5)[0].title, "Crucify")
+            self.assertEqual(music.search("aurora", 5), ())
+
+    def test_a_media_object_the_projector_cannot_read_costs_only_itself(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            _photos_generation(root, junk=b"not json")
+            photos = replica_sources.adapters_for(
+                sources.Visibility.PERSONAL, {"photos": root / "replica-photos"}
+            )["photos"]
+
+            self.assertEqual(
+                [hit.id for hit in photos.search("harbour", 5)],
+                ["photos::2026%2Fharbour-sunset.jpg"],
+            )
+            with self.assertRaises(sources.SourceNotFound):
+                photos.read("photos::junk.jpg")
 
 
 if __name__ == "__main__":

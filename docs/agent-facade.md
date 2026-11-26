@@ -107,9 +107,11 @@ same rule as the memory index: query words are quoted and AND-joined by
 query stays literal.
 
 The personal Quadlet passes `--replica` for `mail`, `calendar`, `finance`, `brave`,
-`notes` and `tasks` and mounts the replica tree read-only. The other personal
-sources and the general deployment still serve fixtures until their
-collectors/adapters land.
+`notes`, `tasks`, `photos` and `music` and mounts the replica tree read-only.
+`photos` and `music` are answered from a metadata-only generation: the media bytes
+stay on their own datasets, so a search finds a file by its name, its folders,
+its format and its size rather than by reading it. `workspace` is the last
+personal source that still serves a fixture.
 
 ## Tool contract
 
