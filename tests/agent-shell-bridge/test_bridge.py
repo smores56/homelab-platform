@@ -23,6 +23,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -324,11 +325,24 @@ class BridgeSocketTest(unittest.TestCase):
                 pipe.close()
 
     def connect(self, timeout: float = 10.0) -> socket.socket:
-        connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        connection.settimeout(timeout)
-        connection.connect(str(self.socket_path))
-        self.addCleanup(connection.close)
-        return connection
+        # The socket file exists from bind(), and the harness records the chown
+        # that happens before listen(): a connect that wins that window is
+        # refused, not absent. There is no ready signal from the bridge process,
+        # so the connection itself is the poll.
+        deadline = time.monotonic() + timeout
+        while True:
+            connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            connection.settimeout(timeout)
+            try:
+                connection.connect(str(self.socket_path))
+            except ConnectionRefusedError:
+                connection.close()
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.02)
+                continue
+            self.addCleanup(connection.close)
+            return connection
 
     def ask(self, payload: object) -> dict:
         connection = self.connect()
@@ -371,6 +385,29 @@ class BridgeSocketTest(unittest.TestCase):
         self.assertTrue(stat.S_ISSOCK(self.socket_path.stat().st_mode))
         self.process = self.start()
         self.assertEqual(self.ask({"command": "ls"})["status"], 0)
+
+    def test_a_connect_is_polled_until_the_bridge_listens(self) -> None:
+        # bind() creates the file and the harness records the chown that runs
+        # before listen(), so a connect can be refused in that window. Waiting
+        # for the file alone made CI's client race the bridge on a loaded
+        # runner; the connect itself is the readiness signal.
+        late = self.directory / "late.sock"
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        listener.bind(str(late))
+        self.addCleanup(listener.close)
+        started = threading.Event()
+
+        def start_listening() -> None:
+            time.sleep(0.2)
+            listener.listen(4)
+            started.set()
+
+        thread = threading.Thread(target=start_listening, daemon=True)
+        thread.start()
+        self.socket_path = late
+        connection = self.connect()
+        connection.close()
+        self.assertTrue(started.is_set())
 
     # --- one command, one argument ------------------------------------------
 
