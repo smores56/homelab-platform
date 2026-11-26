@@ -48,7 +48,7 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 from ...errors import DataPlaneError, EpochError, PublishError, ValidationError
-from ..raw.mail import SOURCE_ID, UIDVALIDITY_OBJECT, _headers
+from ..raw.mail import SOURCE_ID, UIDVALIDITY_OBJECT, _headers, epoch_map
 from ..raw.replica import CollectReport, canonical_json
 from ..state import ReplicaState
 
@@ -159,21 +159,6 @@ def message_headers(raw: bytes) -> tuple[str, str]:
     """``(Message-ID, Date)`` from the stored bytes, as the Maildir collector reads them."""
 
     return _headers(raw)
-
-
-def _epochs(state: ReplicaState) -> dict[str, int]:
-    """The per-folder UIDVALIDITY the last committed pass recorded."""
-
-    row = state.get(UIDVALIDITY_OBJECT)
-    if row is None or not row["present"]:
-        return {}
-    try:
-        value = json.loads(state.read(UIDVALIDITY_OBJECT).decode("utf-8"))
-        if not isinstance(value, dict):
-            raise ValueError("not an object")
-        return {str(name): int(epoch) for name, epoch in value.items()}
-    except (ValueError, UnicodeDecodeError, TypeError) as exc:
-        raise PublishError("the replica's uidvalidity map is unreadable") from exc
 
 
 # --------------------------------------------------------------------------- #
@@ -345,7 +330,7 @@ def collect_mailbox(
         raise PublishError("the mailbox lists a folder twice")
     folders.sort(key=lambda name: (name != "INBOX", name))
 
-    earlier = _epochs(state)
+    earlier = epoch_map(state)
     vanished = sorted(set(earlier) - set(folders))
     if vanished:
         # Nothing this host does can remove a folder, so its absence means the

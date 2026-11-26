@@ -21,14 +21,13 @@ from typing import Iterable
 from urllib.parse import quote
 
 from ...errors import PublishError
-from ..staging import StagingGeneration
 from .media import media_files, originals_root
+from ..state import ReplicaState
 from .replica import (
     ABSENCE_NO_TOMBSTONE,
     CollectReport,
     canonical_json,
-    carry_forward,
-    previous_replica,
+    commit_pass,
     resolve_source_dir,
 )
 
@@ -93,14 +92,13 @@ def _title(path: Path) -> str:
 
 def collect_photos(
     entities_dir: str | Path,
-    generation: StagingGeneration,
+    state: ReplicaState,
     *,
     captured_at: str,
 ) -> CollectReport:
     """Enumerate every media file into ``generation``; never commit it."""
 
     root = resolve_source_dir(entities_dir, "photo library")
-    previous = previous_replica(generation)
 
     scan = media_files(originals_root(root), PHOTO_SUFFIXES)
     files = scan.files
@@ -122,7 +120,7 @@ def collect_photos(
                 "size": media.size,
                 "updated_at": media.updated_at,
             }
-            generation.put(
+            state.put(
                 object_id,
                 canonical_json(fields),
                 {
@@ -140,19 +138,13 @@ def collect_photos(
             # with a traceback and leaving the staging generation behind.
             raise PublishError(f"{media.relative!r} could not be stored: {exc}") from exc
 
-    carried = carry_forward(
-        generation,
-        previous,
-        reason=ABSENCE_NO_TOMBSTONE,
-        captured_at=captured_at,
-    )
-    return CollectReport(
+    return commit_pass(
+        state,
         source_id=SOURCE_ID,
-        generation_id=generation.generation_id,
         objects=len(files),
-        carried=carried,
-        deleted=0,
         details={"files": len(files), "skipped": scan.skipped},
+        captured_at=captured_at,
+        absence_reason=ABSENCE_NO_TOMBSTONE,
     )
 
 

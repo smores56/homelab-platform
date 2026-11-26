@@ -27,6 +27,7 @@ import os
 import re
 import sqlite3
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -79,6 +80,7 @@ CREATE TABLE IF NOT EXISTS cursor (
     epoch INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS version (v INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 """
 
 _UPSERT_PUT = """
@@ -250,6 +252,22 @@ class ReplicaState:
             return 0
         row = self._database().execute("SELECT v FROM version").fetchone()
         return int(row[0]) if row is not None else 0
+
+    @property
+    def state_id(self) -> str:
+        if self._dry_run:
+            return ""
+        row = self._database().execute(
+            "SELECT value FROM meta WHERE key = 'state_id'"
+        ).fetchone()
+        return str(row[0]) if row is not None else ""
+
+    @property
+    def snapshot(self) -> str:
+        """One name for one committed state, safe to cache a derivation under."""
+
+        identifier = self.state_id
+        return f"{identifier[:12]}-v{self.version}" if identifier else f"v{self.version}"
 
     @property
     def epoch(self) -> int:
@@ -529,6 +547,19 @@ class ReplicaState:
         cursor = self._database().execute(statement + " ORDER BY id", parameters)
         return tuple(self._row(row) for row in cursor)
 
+    def entries(self) -> tuple[Mapping[str, Any], ...]:
+        """Every live object as ``object_id``/``sha256``/``size``/``metadata``."""
+
+        return tuple(
+            {
+                "object_id": row["object_id"],
+                "sha256": row["sha256"],
+                "size": row["size"],
+                "metadata": row["metadata"],
+            }
+            for row in self.live_rows()
+        )
+
     def live_object_ids(self) -> tuple[str, ...]:
         return tuple(row["object_id"] for row in self.rows() if row["present"])
 
@@ -640,6 +671,19 @@ class ReplicaState:
             connection.executescript(_SCHEMA)
             if connection.execute("SELECT v FROM version").fetchone() is None:
                 connection.execute("INSERT INTO version (v) VALUES (0)")
+            if (
+                connection.execute(
+                    "SELECT value FROM meta WHERE key = 'state_id'"
+                ).fetchone()
+                is None
+            ):
+                # A replica that is deleted and rebuilt starts its versions over,
+                # so anything caching by version (the facade's search index) needs
+                # an identity that a rebuild cannot reuse.
+                connection.execute(
+                    "INSERT INTO meta (key, value) VALUES ('state_id', ?)",
+                    (uuid.uuid4().hex,),
+                )
             stored = self._source_of(connection)
             if stored and self._source_id and stored != self._source_id:
                 raise PublishError(

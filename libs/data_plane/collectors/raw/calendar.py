@@ -24,13 +24,12 @@ from typing import Any, Iterable, Mapping
 
 from ...errors import PublishError, ValidationError
 from ...model import FidelityLimit
-from ..staging import StagingGeneration
+from ..state import ReplicaState
 from .replica import (
     ABSENCE_NO_TOMBSTONE,
     CollectReport,
+    commit_pass,
     canonical_json,
-    carry_forward,
-    previous_replica,
     resolve_source_dir,
 )
 
@@ -186,14 +185,13 @@ def _entity_id(entity: Mapping[str, Any], path: Path) -> str:
 
 def collect_calendar(
     entities_dir: str | Path,
-    generation: StagingGeneration,
+    state: ReplicaState,
     *,
     captured_at: str,
 ) -> CollectReport:
-    """Enumerate every SDK entity into ``generation``; never commit it."""
+    """Enumerate every SDK entity into ``state`` and commit the pass."""
 
     root = resolve_source_dir(entities_dir, "calendar entities")
-    previous = previous_replica(generation)
 
     seen: set[str] = set()
     deleted = 0
@@ -214,13 +212,14 @@ def collect_calendar(
         raw_id = f"calendar::{entity_id}"
         ics_id = f"{raw_id}::ics"
         if entity.get("deleted") is True:
-            generation.delete(raw_id)
-            generation.delete(ics_id)
+            # The one deletion this provider does prove: the SDK said so.
+            state.tombstone(raw_id, "the SDK marked the entity deleted")
+            state.tombstone(ics_id, "the SDK marked the entity deleted")
             deleted += 1
             continue
 
         raw = canonical_json(entity)
-        generation.put(
+        state.put(
             raw_id,
             raw,
             {
@@ -236,7 +235,7 @@ def collect_calendar(
                 "captured_at": captured_at,
             },
         )
-        generation.put(
+        state.put(
             ics_id,
             to_ics(entity),
             {
@@ -247,19 +246,14 @@ def collect_calendar(
             },
         )
 
-    carried = carry_forward(
-        generation,
-        previous,
-        reason=ABSENCE_NO_TOMBSTONE,
-        captured_at=captured_at,
-    )
-    return CollectReport(
+    return commit_pass(
+        state,
         source_id=SOURCE_ID,
-        generation_id=generation.generation_id,
         objects=len(seen) - deleted,
-        carried=carried,
-        deleted=deleted,
         details={"entities": len(seen)},
+        captured_at=captured_at,
+        absence_reason=ABSENCE_NO_TOMBSTONE,
+        deleted=deleted,
     )
 
 

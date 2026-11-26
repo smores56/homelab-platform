@@ -43,8 +43,6 @@ class MailCommandTests(unittest.TestCase):
                 [
                     "--root",
                     str(root / "replica"),
-                    "--generation",
-                    "gen-0001",
                     "--captured-at",
                     CAPTURED,
                     "mail",
@@ -59,12 +57,10 @@ class MailCommandTests(unittest.TestCase):
             self.assertEqual(payload["source_id"], "tuta.mail")
             self.assertEqual(payload["objects"], 1)
             self.assertFalse(payload["dry_run"])
-            self.assertEqual(
-                RawReplica(root / "replica").generation_id, "gen-0001"
-            )
-            self.assertEqual(
-                RawReplica(root / "replica").source_id, "tuta.mail"
-            )
+            with ReplicaState(root / "replica", read_only=True) as state:
+                self.assertEqual(state.source_id, "tuta.mail")
+                self.assertEqual(state.version, 1)
+                self.assertEqual(len(state.live_object_ids()), 2)
 
     def test_dry_run_publishes_nothing(self) -> None:
         with tempfile.TemporaryDirectory() as work:
@@ -84,7 +80,8 @@ class MailCommandTests(unittest.TestCase):
             )
             self.assertEqual(code, 0, err)
             self.assertIsNone(json.loads(out)["published"])
-            self.assertIsNone(RawReplica.latest_generation(root / "replica"))
+            self.assertIsNone(json.loads(out)["version"])
+            self.assertFalse((root / "replica" / "state.sqlite").exists())
 
     def test_a_bad_uidvalidity_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as work:
@@ -114,7 +111,7 @@ class MailCommandTests(unittest.TestCase):
             )
             self.assertEqual(code, EXIT_REFUSED)
             self.assertIn("being written", err)
-            self.assertIsNone(RawReplica.latest_generation(root / "replica"))
+            self.assertFalse((root / "replica" / "state.sqlite").exists())
 
 
 class NotesCommandTests(unittest.TestCase):
@@ -147,24 +144,23 @@ class NotesCommandTests(unittest.TestCase):
                 self.assertEqual(state.source_id, "notes.markdown")
                 self.assertEqual(len(state.live_object_ids()), 2)
 
-    def test_a_generation_is_refused(self) -> None:
+    def test_the_generation_flag_is_gone(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
             vault = root / "vault"
             vault.mkdir()
-            code, _, err = _run(
-                [
-                    "--root",
-                    str(root / "replica"),
-                    "--generation",
-                    "gen-0001",
-                    "notes",
-                    "--entities",
-                    str(vault),
-                ]
-            )
-            self.assertEqual(code, EXIT_REFUSED)
-            self.assertIn("--generation does not apply", err)
+            with self.assertRaises(SystemExit):
+                _run(
+                    [
+                        "--root",
+                        str(root / "replica"),
+                        "--generation",
+                        "gen-0001",
+                        "notes",
+                        "--entities",
+                        str(vault),
+                    ]
+                )
 
     def test_a_dry_run_writes_nothing(self) -> None:
         with tempfile.TemporaryDirectory() as work:
@@ -326,8 +322,6 @@ class FinanceCommandTests(unittest.TestCase):
                 [
                     "--root",
                     str(root / "replica"),
-                    "--generation",
-                    "gen-0001",
                     "finance",
                     "--accountset",
                     str(accountset),
@@ -338,7 +332,8 @@ class FinanceCommandTests(unittest.TestCase):
             )
             self.assertEqual(code, 0, err)
             self.assertEqual(json.loads(out)["source_id"], "finance.ledger")
-            self.assertIsNotNone(RawReplica.latest_generation(root / "replica"))
+            with ReplicaState(root / "replica", read_only=True) as state:
+                self.assertEqual(state.version, 1)
 
 
 class FinanceWindowTests(unittest.TestCase):

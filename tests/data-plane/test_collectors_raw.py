@@ -50,6 +50,38 @@ def _publish(generation: StagingGeneration) -> Path:
     return generation.commit_next(complete=True)
 
 
+def _writer(root: Path, name: str = "gen-0001") -> ReplicaState:
+    """A write-side state: each collector commits its own complete pass."""
+
+    return ReplicaState(root)
+
+
+class _Published:
+    """The store read back with the names these cases were written in."""
+
+    def __init__(self, root: Path) -> None:
+        self._state = ReplicaState(root, read_only=True)
+
+    def read(self, object_id: str) -> bytes:
+        return self._state.read(object_id)
+
+    def object_ids(self) -> tuple[str, ...]:
+        return self._state.live_object_ids()
+
+    def metadata(self, object_id: str) -> dict:
+        return self._state.get(object_id)["metadata"]
+
+    def get(self, object_id: str):
+        return self._state.get(object_id)
+
+    def close(self) -> None:
+        self._state.close()
+
+
+def _published(root: Path, _name: str = "") -> _Published:
+    return _Published(root)
+
+
 def _object_files(root: Path) -> list[Path]:
     objects = root / "objects"
     if not objects.is_dir():
@@ -212,18 +244,18 @@ class MailTests(unittest.TestCase):
             _message(inbox, "bbb", flags="RS")
             _message(sent, "ccc", flags="S")
 
-            generation = _generation(root / "replica")
+            generation = _writer(root / "replica")
             report = collect_maildir(
                 root / "mail",
                 generation,
                 uidvalidity={"INBOX": 7, ".Sent": 3},
                 captured_at=CAPTURED,
             )
-            _publish(generation)
+            generation.close()
 
             self.assertEqual(report.objects, 3)
             self.assertEqual(report.details["folders"], {"INBOX": 2, ".Sent": 1})
-            replica = RawReplica(root / "replica")
+            replica = _published(root / "replica")
             metadata = replica.metadata("mail::INBOX::bbb")
             self.assertEqual(metadata["flags"], ["R", "S"])
             self.assertEqual(metadata["uidvalidity"], 7)
@@ -241,7 +273,7 @@ class MailTests(unittest.TestCase):
             with self.assertRaises(PublishError):
                 collect_maildir(
                     root / "mail",
-                    _generation(root / "replica"),
+                    _writer(root / "replica"),
                     uidvalidity={"INBOX": 1},
                     captured_at=CAPTURED,
                 )
@@ -255,7 +287,7 @@ class MailTests(unittest.TestCase):
             with self.assertRaises(PublishError):
                 collect_maildir(
                     root / "mail",
-                    _generation(root / "replica"),
+                    _writer(root / "replica"),
                     uidvalidity={"INBOX": 1},
                     captured_at=CAPTURED,
                 )
@@ -267,7 +299,7 @@ class MailTests(unittest.TestCase):
             with self.assertRaises(ValidationError):
                 collect_maildir(
                     root / "mail",
-                    _generation(root / "replica"),
+                    _writer(root / "replica"),
                     uidvalidity={},
                     captured_at=CAPTURED,
                 )
@@ -277,13 +309,13 @@ class MailTests(unittest.TestCase):
             root = Path(work)
             inbox = _maildir(root / "mail")
             _message(inbox, "aaa")
-            first = _generation(root / "replica")
+            first = _writer(root / "replica")
             collect_maildir(
                 root / "mail", first, uidvalidity={"INBOX": 7}, captured_at=CAPTURED
             )
-            _publish(first)
+            first.close()
 
-            second = _generation(root / "replica", "gen-0002")
+            second = _writer(root / "replica", "gen-0002")
             with self.assertRaises(EpochError):
                 collect_maildir(
                     root / "mail", second, uidvalidity={"INBOX": 8}, captured_at=CAPTURED
@@ -295,19 +327,19 @@ class MailTests(unittest.TestCase):
             inbox = _maildir(root / "mail")
             _maildir(root / "mail", ".Sent")
             _message(inbox, "aaa")
-            first = _generation(root / "replica")
+            first = _writer(root / "replica")
             collect_maildir(
                 root / "mail",
                 first,
                 uidvalidity={"INBOX": 7, ".Sent": 3},
                 captured_at=CAPTURED,
             )
-            _publish(first)
+            first.close()
 
             for name in ("cur", "new", "tmp"):
                 (root / "mail" / ".Sent" / name).rmdir()
             (root / "mail" / ".Sent").rmdir()
-            second = _generation(root / "replica", "gen-0002")
+            second = _writer(root / "replica", "gen-0002")
             with self.assertRaises(PublishError):
                 collect_maildir(
                     root / "mail",
@@ -322,20 +354,20 @@ class MailTests(unittest.TestCase):
             inbox = _maildir(root / "mail")
             _message(inbox, "aaa")
             _message(inbox, "bbb")
-            first = _generation(root / "replica")
+            first = _writer(root / "replica")
             collect_maildir(
                 root / "mail", first, uidvalidity={"INBOX": 7}, captured_at=CAPTURED
             )
-            _publish(first)
+            first.close()
 
             (inbox / "new" / "bbb").unlink()
-            second = _generation(root / "replica", "gen-0002")
+            second = _writer(root / "replica", "gen-0002")
             report = collect_maildir(
                 root / "mail", second, uidvalidity={"INBOX": 7}, captured_at=CAPTURED
             )
             self.assertEqual(report.deleted, 1)
-            _publish(second)
-            self.assertNotIn("mail::INBOX::bbb", RawReplica(root / "replica").object_ids())
+            second.close()
+            self.assertNotIn("mail::INBOX::bbb", _published(root / "replica").object_ids())
 
 
 class CalendarTests(unittest.TestCase):
@@ -362,12 +394,12 @@ class CalendarTests(unittest.TestCase):
                     "alarms": [{"trigger": "-PT15M"}],
                 },
             )
-            generation = _generation(root / "replica")
+            generation = _writer(root / "replica")
             report = collect_calendar(entities, generation, captured_at=CAPTURED)
-            _publish(generation)
+            generation.close()
 
             self.assertEqual(report.objects, 1)
-            replica = RawReplica(root / "replica")
+            replica = _published(root / "replica")
             raw = json.loads(replica.read("calendar::e1"))
             self.assertEqual(raw["rrule"], "FREQ=WEEKLY;COUNT=5")
             ics = replica.read("calendar::e1::ics").decode("utf-8")
@@ -384,19 +416,19 @@ class CalendarTests(unittest.TestCase):
             entities = root / "entities"
             self._write(entities, "e1.json", {"id": "e1", "uid": "uid-1"})
             self._write(entities, "e2.json", {"id": "e2", "uid": "uid-2"})
-            first = _generation(root / "replica")
+            first = _writer(root / "replica")
             collect_calendar(entities, first, captured_at=CAPTURED)
-            _publish(first)
+            first.close()
 
             # e1 is deleted by the provider; e2 simply stops appearing.
             self._write(entities, "e1.json", {"id": "e1", "uid": "uid-1", "deleted": True})
             (entities / "e2.json").unlink()
-            second = _generation(root / "replica", "gen-0002")
+            second = _writer(root / "replica", "gen-0002")
             report = collect_calendar(entities, second, captured_at=CAPTURED)
             self.assertEqual(report.deleted, 1)
-            _publish(second)
+            second.close()
 
-            replica = RawReplica(root / "replica", "gen-0002")
+            replica = _published(root / "replica", "gen-0002")
             self.assertEqual(replica.object_ids(), ("calendar::e2", "calendar::e2::ics"))
             metadata = replica.metadata("calendar::e2")
             self.assertEqual(metadata["absence_reason"], ABSENCE_NO_TOMBSTONE)
@@ -409,7 +441,7 @@ class CalendarTests(unittest.TestCase):
             self._write(entities, "a.json", {"id": "same", "uid": "u1"})
             self._write(entities, "b.json", {"id": "same", "uid": "u2"})
             with self.assertRaises(PublishError):
-                collect_calendar(entities, _generation(root / "replica"), captured_at=CAPTURED)
+                collect_calendar(entities, _writer(root / "replica"), captured_at=CAPTURED)
 
 
 class NotesTests(unittest.TestCase):
@@ -734,7 +766,7 @@ class FinanceTests(unittest.TestCase):
         accountset["accounts"][0]["org"] = {"domain": "schwab.com", "name": "Schwab"}
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
-            generation = _generation(root / "replica")
+            generation = _writer(root / "replica")
             collect_simplefin(
                 accountset,
                 generation,
@@ -743,8 +775,8 @@ class FinanceTests(unittest.TestCase):
                 include_pending=True,
                 now=1763500000,
             )
-            _publish(generation)
-            metadata = RawReplica(root / "replica").metadata(
+            generation.close()
+            metadata = _published(root / "replica").metadata(
                 "finance::txn::acct-1::txn-1"
             )
             self.assertEqual(metadata["conn_id"], "schwab.com")
@@ -752,7 +784,7 @@ class FinanceTests(unittest.TestCase):
     def test_stores_raw_records_keyed_and_hashed(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
-            generation = _generation(root / "replica")
+            generation = _writer(root / "replica")
             report = collect_simplefin(
                 self._accountset(),
                 generation,
@@ -761,11 +793,11 @@ class FinanceTests(unittest.TestCase):
                 include_pending=True,
                 now=1763500000,
             )
-            _publish(generation)
+            generation.close()
 
             self.assertEqual(report.details["transactions"], 2)
             self.assertEqual(report.details["pending"], 1)
-            replica = RawReplica(root / "replica")
+            replica = _published(root / "replica")
             metadata = replica.metadata("finance::txn::acct-1::txn-1")
             self.assertEqual(metadata["conn_id"], "conn-1")
             self.assertEqual(metadata["accountset_url"], "https://sfin.example/access")
@@ -782,7 +814,7 @@ class FinanceTests(unittest.TestCase):
             with self.assertRaises(PublishError):
                 collect_simplefin(
                     accountset,
-                    _generation(root / "replica"),
+                    _writer(root / "replica"),
                     accountset_url="https://sfin.example/access",
                     captured_at=CAPTURED,
                     include_pending=True,
@@ -796,7 +828,7 @@ class FinanceTests(unittest.TestCase):
             with self.assertRaises(PublishError):
                 collect_simplefin(
                     accountset,
-                    _generation(root / "replica"),
+                    _writer(root / "replica"),
                     accountset_url="https://sfin.example/access",
                     captured_at=CAPTURED,
                     include_pending=True,
@@ -808,7 +840,7 @@ class FinanceTests(unittest.TestCase):
             with self.assertRaises(ValidationError):
                 collect_simplefin(
                     self._accountset(),
-                    _generation(root / "replica"),
+                    _writer(root / "replica"),
                     accountset_url="https://sfin.example/access",
                     captured_at=CAPTURED,
                 )
@@ -817,7 +849,7 @@ class FinanceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
             now = 1763500000
-            first = _generation(root / "replica")
+            first = _writer(root / "replica")
             collect_simplefin(
                 self._accountset(),
                 first,
@@ -826,7 +858,7 @@ class FinanceTests(unittest.TestCase):
                 include_pending=True,
                 now=now,
             )
-            _publish(first)
+            first.close()
 
             old = self._accountset()
             old["accounts"][0]["transactions"] = [
@@ -837,7 +869,7 @@ class FinanceTests(unittest.TestCase):
                     "posted": now - 200 * 86400,
                 }
             ]
-            second = _generation(root / "replica", "gen-0002")
+            second = _writer(root / "replica", "gen-0002")
             report = collect_simplefin(
                 old,
                 second,
@@ -847,9 +879,9 @@ class FinanceTests(unittest.TestCase):
                 now=now,
             )
             self.assertEqual(report.deleted, 0)
-            _publish(second)
+            second.close()
 
-            replica = RawReplica(root / "replica", "gen-0002")
+            replica = _published(root / "replica", "gen-0002")
             metadata = replica.metadata("finance::txn::acct-1::txn-1")
             self.assertEqual(metadata["absence_reason"], ABSENCE_PROVIDER_WINDOW)
             self.assertNotIn("finance::txn::acct-1::txn-old", replica.object_ids())
@@ -877,7 +909,7 @@ class BraveTests(unittest.TestCase):
             database = root / "History"
             self._database(database)
 
-            generation = _generation(root / "replica")
+            generation = _writer(root / "replica")
             report = collect_brave_db(
                 database,
                 generation,
@@ -885,10 +917,10 @@ class BraveTests(unittest.TestCase):
                 profile="Default",
                 captured_at=CAPTURED,
             )
-            _publish(generation)
+            generation.close()
 
             self.assertEqual(report.details["tables"]["urls"], 1)
-            replica = RawReplica(root / "replica")
+            replica = _published(root / "replica")
             self.assertEqual(replica.read("brave::db"), database.read_bytes())
             dump = json.loads(replica.read("brave::table::urls"))
             self.assertEqual(dump["columns"], ["id", "url", "title"])
@@ -916,7 +948,7 @@ class BraveTests(unittest.TestCase):
             finally:
                 connection.close()
 
-            generation = _generation(root / "replica")
+            generation = _writer(root / "replica")
             collect_brave_db(
                 database,
                 generation,
@@ -924,9 +956,9 @@ class BraveTests(unittest.TestCase):
                 profile="Default",
                 captured_at=CAPTURED,
             )
-            _publish(generation)
+            generation.close()
 
-            dump = json.loads(RawReplica(root / "replica").read("brave::table::meta"))
+            dump = json.loads(_published(root / "replica").read("brave::table::meta"))
             self.assertEqual(dump["rows"], [["binary", {"b64": "//5o"}]])
 
     def test_a_wal_sibling_is_a_refusal(self) -> None:
@@ -938,7 +970,7 @@ class BraveTests(unittest.TestCase):
             with self.assertRaises(PublishError):
                 collect_brave_db(
                     database,
-                    _generation(root / "replica"),
+                    _writer(root / "replica"),
                     device="smorespro",
                     profile="Default",
                     captured_at=CAPTURED,
@@ -952,7 +984,7 @@ class BraveTests(unittest.TestCase):
             with self.assertRaises(PublishError):
                 collect_brave_db(
                     database,
-                    _generation(root / "replica"),
+                    _writer(root / "replica"),
                     device="smorespro",
                     profile="Default",
                     captured_at=CAPTURED,
@@ -963,11 +995,11 @@ class BraveTests(unittest.TestCase):
             root = Path(work)
             database = root / "History"
             self._database(database)
-            first = _generation(root / "replica")
+            first = _writer(root / "replica")
             collect_brave_db(
                 database, first, device="smorespro", profile="Default", captured_at=CAPTURED
             )
-            _publish(first)
+            first.close()
 
             # A second copy without the urls table: retention cannot be told
             # apart from a user deletion, so the old table stays, marked absent.
@@ -978,13 +1010,13 @@ class BraveTests(unittest.TestCase):
                 connection.commit()
             finally:
                 connection.close()
-            second = _generation(root / "replica", "gen-0002")
+            second = _writer(root / "replica", "gen-0002")
             collect_brave_db(
                 second_db, second, device="smorespro", profile="Default", captured_at=CAPTURED
             )
-            _publish(second)
+            second.close()
 
-            replica = RawReplica(root / "replica", "gen-0002")
+            replica = _published(root / "replica", "gen-0002")
             metadata = replica.metadata("brave::table::urls")
             self.assertEqual(metadata["absence_reason"], ABSENCE_RETENTION)
             self.assertIn("brave::table::visits", replica.object_ids())
@@ -1007,12 +1039,12 @@ class PhotosTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
             library = self._library(root)
-            generation = _generation(root / "replica")
+            generation = _writer(root / "replica")
             report = collect_photos(library, generation, captured_at=CAPTURED)
             self.assertEqual(report.objects, 2)
-            _publish(generation)
+            generation.close()
 
-            replica = RawReplica(root / "replica")
+            replica = _published(root / "replica")
             photo_id = "photos::2026%2F11%2Fharbour-sunset.jpg"
             self.assertEqual(
                 replica.object_ids(),
@@ -1039,15 +1071,15 @@ class PhotosTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
             library = self._library(root)
-            first = _generation(root / "replica", "gen-0001")
+            first = _writer(root / "replica", "gen-0001")
             collect_photos(library, first, captured_at=CAPTURED)
-            _publish(first)
-            second = _generation(root / "replica", "gen-0002")
+            first.close()
+            second = _writer(root / "replica", "gen-0002")
             collect_photos(library, second, captured_at=CAPTURED)
-            _publish(second)
+            second.close()
 
-            earlier = RawReplica(root / "replica", "gen-0001")
-            later = RawReplica(root / "replica", "gen-0002")
+            earlier = _published(root / "replica", "gen-0001")
+            later = _published(root / "replica", "gen-0002")
             self.assertEqual(earlier.object_ids(), later.object_ids())
             for object_id in earlier.object_ids():
                 self.assertEqual(earlier.read(object_id), later.read(object_id))
@@ -1056,17 +1088,17 @@ class PhotosTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
             library = self._library(root)
-            first = _generation(root / "replica", "gen-0001")
+            first = _writer(root / "replica", "gen-0001")
             collect_photos(library, first, captured_at=CAPTURED)
-            _publish(first)
+            first.close()
 
             (library / "2026" / "11" / "ridge.heic").unlink()
-            second = _generation(root / "replica", "gen-0002")
+            second = _writer(root / "replica", "gen-0002")
             report = collect_photos(library, second, captured_at=CAPTURED)
             self.assertEqual(report.carried, 1)
-            _publish(second)
+            second.close()
 
-            replica = RawReplica(root / "replica")
+            replica = _published(root / "replica")
             self.assertIn("photos::2026%2F11%2Fridge.heic", replica.object_ids())
             metadata = replica.metadata("photos::2026%2F11%2Fridge.heic")
             self.assertEqual(metadata["absence_reason"], ABSENCE_NO_TOMBSTONE)
@@ -1078,7 +1110,7 @@ class PhotosTests(unittest.TestCase):
             (root / "elsewhere").mkdir()
             (root / "elsewhere" / "foreign.jpg").write_bytes(b"\xff\xd8")
             (library / "linked").symlink_to(root / "elsewhere")
-            generation = _generation(root / "replica")
+            generation = _writer(root / "replica")
             with self.assertRaises(PublishError):
                 collect_photos(library, generation, captured_at=CAPTURED)
 
@@ -1086,7 +1118,7 @@ class PhotosTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
             library = self._library(root)
-            generation = _generation(root / "replica")
+            generation = _writer(root / "replica")
             with mock.patch("data_plane.collectors.raw.media.MAX_MEDIA_OBJECTS", 1):
                 with self.assertRaises(PublishError) as raised:
                     collect_photos(library, generation, captured_at=CAPTURED)
@@ -1100,7 +1132,7 @@ class PhotosTests(unittest.TestCase):
             library = root / "photos"
             library.mkdir()
             (library / "README.txt").write_text("no media\n", encoding="utf-8")
-            generation = _generation(root / "replica")
+            generation = _writer(root / "replica")
             with self.assertRaises(PublishError):
                 collect_photos(library, generation, captured_at=CAPTURED)
 
@@ -1114,12 +1146,12 @@ class PhotosTests(unittest.TestCase):
             originals = location / "library" / "2026" / "11"
             originals.mkdir(parents=True)
             (originals / "harbour-sunset.jpg").write_bytes(b"\xff\xd8jpegbytes")
-            generation = _generation(root / "replica")
+            generation = _writer(root / "replica")
             report = collect_photos(location, generation, captured_at=CAPTURED)
             self.assertEqual(report.objects, 1)
-            _publish(generation)
+            generation.close()
 
-            replica = RawReplica(root / "replica")
+            replica = _published(root / "replica")
             self.assertEqual(
                 replica.object_ids(), ("photos::2026%2F11%2Fharbour-sunset.jpg",)
             )
@@ -1129,7 +1161,7 @@ class PhotosTests(unittest.TestCase):
             root = Path(work)
             library = self._library(root)
             hidden = library / "2026" / "11"
-            generation = _generation(root / "replica")
+            generation = _writer(root / "replica")
             mode = hidden.stat().st_mode
             hidden.chmod(0o000)
             try:
@@ -1145,7 +1177,7 @@ class PhotosTests(unittest.TestCase):
             library = self._library(root)
             name = os.path.join(os.fsencode(library), b"bad\xffname.jpg")
             os.close(os.open(name, os.O_CREAT | os.O_WRONLY))
-            generation = _generation(root / "replica")
+            generation = _writer(root / "replica")
             with self.assertRaises(PublishError):
                 collect_photos(library, generation, captured_at=CAPTURED)
             self.assertFalse(any((root / "replica").glob("published/*")))
@@ -1166,7 +1198,7 @@ class PhotosTests(unittest.TestCase):
                     return future_stat
                 return real_stat(path, **kwargs)
 
-            generation = _generation(root / "replica")
+            generation = _writer(root / "replica")
             with mock.patch.object(Path, "stat", stat):
                 with self.assertRaises(PublishError):
                     collect_photos(library, generation, captured_at=CAPTURED)
@@ -1178,12 +1210,12 @@ class PhotosTests(unittest.TestCase):
             library = self._library(root)
             long_name = "immich-branded-" + "x" * 220 + ".jpg"
             (library / "2026" / "11" / long_name).write_bytes(b"\xff\xd8jpegbytes")
-            generation = _generation(root / "replica")
+            generation = _writer(root / "replica")
             report = collect_photos(library, generation, captured_at=CAPTURED)
             self.assertEqual(report.objects, 3)
-            _publish(generation)
+            generation.close()
 
-            replica = RawReplica(root / "replica")
+            replica = _published(root / "replica")
             object_id = f"photos::2026%2F11%2F{long_name}"
             self.assertIn(object_id, replica.object_ids())
             self.assertEqual(json.loads(replica.read(object_id))["title"],
@@ -1199,11 +1231,11 @@ class PhotosTests(unittest.TestCase):
             }
             encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
             (library / "2026" / "11" / f"{encoded}.jpg").write_bytes(b"\xff\xd8jpegbytes")
-            generation = _generation(root / "replica")
+            generation = _writer(root / "replica")
             collect_photos(library, generation, captured_at=CAPTURED)
-            _publish(generation)
+            generation.close()
 
-            replica = RawReplica(root / "replica")
+            replica = _published(root / "replica")
             object_id = f"photos::2026%2F11%2F{encoded}.jpg"
             self.assertEqual(
                 json.loads(replica.read(object_id))["title"],
@@ -1214,7 +1246,7 @@ class PhotosTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
             library = self._library(root)
-            generation = _generation(root / "replica")
+            generation = _writer(root / "replica")
             report = collect_photos(library, generation, captured_at=CAPTURED)
             self.assertEqual(report.details["skipped"], 1)
 
@@ -1237,12 +1269,12 @@ class MusicTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
             library = self._library(root)
-            generation = _generation(root / "replica")
+            generation = _writer(root / "replica")
             report = collect_music(library, generation, captured_at=CAPTURED)
             self.assertEqual(report.objects, 3)
-            _publish(generation)
+            generation.close()
 
-            replica = RawReplica(root / "replica")
+            replica = _published(root / "replica")
             track_id = "music::Tori%20Amos%2FLittle%20Earthquakes%2F01%20-%20Crucify.flac"
             self.assertIn(track_id, replica.object_ids())
             self.assertNotIn("music::cover.jpg", replica.object_ids())
@@ -1283,15 +1315,15 @@ class MusicTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
             library = self._library(root)
-            first = _generation(root / "replica", "gen-0001")
+            first = _writer(root / "replica", "gen-0001")
             collect_music(library, first, captured_at=CAPTURED)
-            _publish(first)
-            second = _generation(root / "replica", "gen-0002")
+            first.close()
+            second = _writer(root / "replica", "gen-0002")
             collect_music(library, second, captured_at=CAPTURED)
-            _publish(second)
+            second.close()
 
-            earlier = RawReplica(root / "replica", "gen-0001")
-            later = RawReplica(root / "replica", "gen-0002")
+            earlier = _published(root / "replica", "gen-0001")
+            later = _published(root / "replica", "gen-0002")
             self.assertEqual(earlier.object_ids(), later.object_ids())
             for object_id in earlier.object_ids():
                 self.assertEqual(earlier.read(object_id), later.read(object_id))
@@ -1302,7 +1334,7 @@ class MusicTests(unittest.TestCase):
             library = root / "music"
             (library / "Artwork").mkdir(parents=True)
             (library / "Artwork" / "cover.jpg").write_bytes(b"\xff\xd8artwork")
-            generation = _generation(root / "replica")
+            generation = _writer(root / "replica")
             with self.assertRaises(PublishError):
                 collect_music(library, generation, captured_at=CAPTURED)
 
@@ -1313,7 +1345,7 @@ class MusicTests(unittest.TestCase):
             (root / "elsewhere").mkdir()
             (root / "elsewhere" / "foreign.flac").write_bytes(b"fLaC")
             (library / "linked").symlink_to(root / "elsewhere")
-            generation = _generation(root / "replica")
+            generation = _writer(root / "replica")
             with self.assertRaises(PublishError):
                 collect_music(library, generation, captured_at=CAPTURED)
 
@@ -1321,7 +1353,7 @@ class MusicTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
             library = self._library(root)
-            generation = _generation(root / "replica")
+            generation = _writer(root / "replica")
             with mock.patch("data_plane.collectors.raw.media.MAX_MEDIA_OBJECTS", 1):
                 with self.assertRaises(PublishError):
                     collect_music(library, generation, captured_at=CAPTURED)

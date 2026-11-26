@@ -17,10 +17,30 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 from apps.brave_ingest import snapshot as snapper
-from data_plane.collectors.raw import RawReplica
+from data_plane.collectors.state import ReplicaState
 from data_plane.collectors.raw.cli import EXIT_REFUSED, main
 
 from history_fixture import create_history, url_count
+
+
+class _View:
+    """The committed state read back with the names these cases were written in."""
+
+    def __init__(self, root: Path) -> None:
+        self._state = ReplicaState(root, read_only=True)
+
+    def read(self, object_id: str) -> bytes:
+        return self._state.read(object_id)
+
+    def metadata(self, object_id: str) -> dict:
+        return self._state.get(object_id)["metadata"]
+
+    def object_ids(self) -> tuple[str, ...]:
+        return self._state.live_object_ids()
+
+
+def _replica(root: Path) -> _View:
+    return _View(root)
 
 
 class CollectorTests(unittest.TestCase):
@@ -39,8 +59,6 @@ class CollectorTests(unittest.TestCase):
                 [
                     "--root",
                     str(self.replica_root),
-                    "--generation",
-                    "gen-0001",
                     "--captured-at",
                     "2026-11-20T00:00:00+00:00",
                     "brave",
@@ -54,7 +72,7 @@ class CollectorTests(unittest.TestCase):
             )
         return code, out.getvalue(), err.getvalue()
 
-    def test_one_generation_is_published_with_a_brave_db_object(self) -> None:
+    def test_one_state_is_committed_with_a_brave_db_object(self) -> None:
         create_history(self.copy, visits=2)
 
         code, out, _ = self.collect()
@@ -63,8 +81,8 @@ class CollectorTests(unittest.TestCase):
         report = json.loads(out)
         self.assertEqual(report["source_id"], "brave.history")
         self.assertEqual(report["deleted"], 0)
-        self.assertEqual(report["published"], str(self.replica_root / "published" / "gen-0001"))
-        replica = RawReplica(self.replica_root, "gen-0001")
+        self.assertEqual(report["published"], str(self.replica_root / "state.sqlite"))
+        replica = _replica(self.replica_root)
         self.assertEqual(replica.read("brave::db"), self.copy.read_bytes())
         metadata = replica.metadata("brave::db")
         self.assertEqual(metadata["device"], "smortress")
@@ -91,7 +109,7 @@ class CollectorTests(unittest.TestCase):
         code, _, _ = self.collect()
 
         self.assertEqual(code, 0)
-        replica = RawReplica(self.replica_root, "gen-0001")
+        replica = _replica(self.replica_root)
         self.assertEqual(
             json.loads(replica.read("brave::table::urls"))["rows"][0][1],
             "https://example.com/0",

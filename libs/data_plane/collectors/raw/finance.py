@@ -31,13 +31,12 @@ from typing import Any, Iterable, Mapping
 
 from ...errors import PublishError, ValidationError
 from ...model import FidelityLimit
-from ..staging import StagingGeneration
+from ..state import ReplicaState
 from .replica import (
     ABSENCE_PROVIDER_WINDOW,
     CollectReport,
+    commit_pass,
     canonical_json,
-    carry_forward,
-    previous_replica,
 )
 
 SOURCE_ID = "finance.ledger"
@@ -139,7 +138,7 @@ def _requires_id(record: Mapping[str, Any], account_id: str) -> str:
 
 def collect_simplefin(
     accountset: Mapping[str, Any],
-    generation: StagingGeneration,
+    state: ReplicaState,
     *,
     accountset_url: str,
     captured_at: str,
@@ -172,7 +171,7 @@ def collect_simplefin(
         if identifier in (None, ""):
             continue
         connections[str(identifier)] = connection
-        generation.put(
+        state.put(
             f"finance::connection::{identifier}",
             canonical_json(connection),
             {
@@ -205,7 +204,7 @@ def collect_simplefin(
             )
         conn_id = _connection_id(account, connections)
         accounts_seen += 1
-        generation.put(
+        state.put(
             f"finance::account::{account_id}",
             canonical_json(account),
             {
@@ -229,7 +228,7 @@ def collect_simplefin(
             posted = _transaction_time(record)
             if not is_pending and posted is not None and posted < cutoff:
                 continue
-            generation.put(
+            state.put(
                 f"finance::txn::{account_id}::{transaction_id}",
                 raw,
                 {
@@ -247,7 +246,7 @@ def collect_simplefin(
             )
             transactions += 1
 
-    generation.put(
+    state.put(
         "finance::accountset",
         canonical_json(accountset),
         {
@@ -259,18 +258,10 @@ def collect_simplefin(
         },
     )
 
-    carried = carry_forward(
-        generation,
-        previous_replica(generation),
-        reason=ABSENCE_PROVIDER_WINDOW,
-        captured_at=captured_at,
-    )
-    return CollectReport(
+    return commit_pass(
+        state,
         source_id=SOURCE_ID,
-        generation_id=generation.generation_id,
         objects=transactions,
-        carried=carried,
-        deleted=0,
         details={
             "accounts": accounts_seen,
             "connections": len(connections),
@@ -278,6 +269,8 @@ def collect_simplefin(
             "pending": pending,
             "window_days": window_days,
         },
+        captured_at=captured_at,
+        absence_reason=ABSENCE_PROVIDER_WINDOW,
     )
 
 

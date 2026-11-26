@@ -30,7 +30,8 @@ from data_plane.collectors.raw import (
     collect_photos,
     collect_simplefin,
 )
-from data_plane.collectors.staging import StagingGeneration
+from data_plane.collectors.raw import ABSENCE_NO_TOMBSTONE
+from data_plane.collectors.state import ReplicaState
 from data_plane.errors import ContractError, ValidationError
 
 CAPTURED = "2026-11-19T00:00:00+00:00"
@@ -55,11 +56,10 @@ def _mail_generation(
             f"{body}\r\n"
         ).encode("utf-8")
     )
-    generation = StagingGeneration(root / "replica", generation_id, source_id="tuta.mail")
-    collect_maildir(
-        maildir, generation, uidvalidity={"INBOX": 7}, captured_at=CAPTURED
-    )
-    generation.commit_next(complete=True)
+    with ReplicaState(root / "replica", source_id="tuta.mail") as state:
+        collect_maildir(
+            maildir, state, uidvalidity={"INBOX": 7}, captured_at=CAPTURED
+        )
 
 
 def _calendar_generation(root: Path) -> None:
@@ -78,11 +78,8 @@ def _calendar_generation(root: Path) -> None:
         ),
         encoding="utf-8",
     )
-    generation = StagingGeneration(
-        root / "replica-calendar", "gen-0001", source_id="tuta.calendar"
-    )
-    collect_calendar(entities, generation, captured_at=CAPTURED)
-    generation.commit_next(complete=True)
+    with ReplicaState(root / "replica-calendar", source_id="tuta.calendar") as state:
+        collect_calendar(entities, state, captured_at=CAPTURED)
 
 
 def _finance_generation(root: Path) -> None:
@@ -103,48 +100,45 @@ def _finance_generation(root: Path) -> None:
             }
         ],
     }
-    generation = StagingGeneration(
-        root / "replica-finance", "gen-0001", source_id="finance.ledger"
-    )
-    collect_simplefin(
-        accountset,
-        generation,
-        accountset_url="https://sfin.example/access",
-        captured_at=CAPTURED,
-        include_pending=True,
-        now=1763500000,
-    )
-    generation.commit_next(complete=True)
+    with ReplicaState(root / "replica-finance", source_id="finance.ledger") as state:
+        collect_simplefin(
+            accountset,
+            state,
+            accountset_url="https://sfin.example/access",
+            captured_at=CAPTURED,
+            include_pending=True,
+            now=1763500000,
+        )
 
 
 def _notes_generation(root: Path, junk: bytes | None = None) -> None:
-    generation = StagingGeneration(
-        root / "replica-notes", "gen-0001", source_id="notes.markdown"
-    )
-    _note(
-        generation,
+    with ReplicaState(root / "replica-notes", source_id="notes.markdown") as state:
+        _note(
+            state,
         "index.md",
         "Vault index",
         "# Vault index\n\nBuy espresso beans before the roast.\n",
     )
-    _note(generation, "projects/alpha.md", "alpha", "No heading here.\n")
-    if junk is not None:
-        generation.put(
-            "notes::junk.md",
-            junk,
-            {"source_id": "notes.markdown", "captured_at": CAPTURED},
+        _note(state, "projects/alpha.md", "alpha", "No heading here.\n")
+        if junk is not None:
+            state.put(
+                "notes::junk.md",
+                junk,
+                {"source_id": "notes.markdown", "captured_at": CAPTURED},
+            )
+        state.commit(
+            complete=True,
+            absence_reason=ABSENCE_NO_TOMBSTONE,
+            captured_at=CAPTURED,
         )
-    generation.commit_next(complete=True)
 
 
-def _note(
-    generation: StagingGeneration, relative: str, heading: str, body: str
-) -> None:
+def _note(state: ReplicaState, relative: str, heading: str, body: str) -> None:
     """One object shaped the way the notes collector writes it."""
 
     object_id = f"notes::{quote(relative, safe='')}"
     digest = hashlib.sha256(body.encode("utf-8")).hexdigest()
-    generation.put(
+    state.put(
         object_id,
         canonical_json(
             {
@@ -168,15 +162,13 @@ def _note(
 
 
 def _tasks_generation(root: Path, junk: bytes | None = None) -> None:
-    generation = StagingGeneration(
-        root / "replica-tasks", "gen-0001", source_id="tasks.todo"
-    )
-    for line, name in (
-        ("(A) renew the boat licence +admin", "todo.txt"),
-        ("x 2026-11-01 call the clinic", "done.txt"),
-    ):
-        object_id = _task_id(line)
-        generation.put(
+    with ReplicaState(root / "replica-tasks", source_id="tasks.todo") as state:
+        for line, name in (
+            ("(A) renew the boat licence +admin", "todo.txt"),
+            ("x 2026-11-01 call the clinic", "done.txt"),
+        ):
+            object_id = _task_id(line)
+            state.put(
             object_id,
             canonical_json(
                 {
@@ -188,11 +180,17 @@ def _tasks_generation(root: Path, junk: bytes | None = None) -> None:
             ),
             {"source_id": "tasks.todo", "captured_at": CAPTURED, "file": name},
         )
-    if junk is not None:
-        generation.put(
-            "tasks::junk", junk, {"source_id": "tasks.todo", "captured_at": CAPTURED}
+        if junk is not None:
+            state.put(
+                "tasks::junk",
+                junk,
+                {"source_id": "tasks.todo", "captured_at": CAPTURED},
+            )
+        state.commit(
+            complete=True,
+            absence_reason=ABSENCE_NO_TOMBSTONE,
+            captured_at=CAPTURED,
         )
-    generation.commit_next(complete=True)
 
 
 def _task_id(line: str) -> str:
@@ -205,28 +203,23 @@ def _photos_generation(root: Path, junk: bytes | None = None) -> None:
     library = root / "photos"
     (library / "2026").mkdir(parents=True)
     (library / "2026" / "harbour-sunset.jpg").write_bytes(b"\xff\xd8jpegbytes")
-    generation = StagingGeneration(
-        root / "replica-photos", "gen-0001", source_id="photos.library"
-    )
-    collect_photos(library, generation, captured_at=CAPTURED)
-    if junk is not None:
-        generation.put(
-            "photos::junk.jpg",
-            junk,
-            {"source_id": "photos.library", "captured_at": CAPTURED},
-        )
-    generation.commit_next(complete=True)
+    with ReplicaState(root / "replica-photos", source_id="photos.library") as state:
+        collect_photos(library, state, captured_at=CAPTURED)
+        if junk is not None:
+            state.put(
+                "photos::junk.jpg",
+                junk,
+                {"source_id": "photos.library", "captured_at": CAPTURED},
+            )
+            state.commit(complete=False, captured_at=CAPTURED)
 
 
 def _music_generation(root: Path) -> None:
     album = root / "music" / "Tori Amos" / "Little Earthquakes"
     album.mkdir(parents=True)
     (album / "01 - Crucify.flac").write_bytes(b"fLaCaudio")
-    generation = StagingGeneration(
-        root / "replica-music", "gen-0001", source_id="music.library"
-    )
-    collect_music(root / "music", generation, captured_at=CAPTURED)
-    generation.commit_next(complete=True)
+    with ReplicaState(root / "replica-music", source_id="music.library") as state:
+        collect_music(root / "music", state, captured_at=CAPTURED)
 
 
 class MailReplicaTests(unittest.TestCase):
@@ -366,7 +359,6 @@ class CalendarAndFinanceTests(unittest.TestCase):
             self.assertIn("repeats FREQ=MONTHLY", record.body)
             with self.assertRaises(sources.SourceNotFound):
                 calendar.read("calendar::e1::ics")
-
     def test_finance_projects_the_transaction_only(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
@@ -389,8 +381,6 @@ class BraveReplicaTests(unittest.TestCase):
     def test_urls_become_searchable_records(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
-            replica = root / "replica-brave" / "published" / "gen-0001"
-            (replica / "objects").mkdir(parents=True)
             dump = {
                 "table": "urls",
                 "columns": ["id", "url", "title"],
@@ -400,32 +390,20 @@ class BraveReplicaTests(unittest.TestCase):
             data = (json.dumps(dump) + "\n").encode("utf-8")
             import hashlib
 
-            (replica / "objects" / object_id).write_bytes(data)
-            (replica / "manifest.json").write_text(
-                json.dumps(
+            with ReplicaState(
+                root / "replica-brave", source_id="brave.history"
+            ) as state:
+                state.put(
+                    object_id,
+                    data,
                     {
-                        "generation_id": "gen-0001",
                         "source_id": "brave.history",
-                        "epoch": None,
-                        "cursor": 1,
-                        "objects": [
-                            {
-                                "object_id": object_id,
-                                "filename": object_id,
-                                "size": len(data),
-                                "sha256": hashlib.sha256(data).hexdigest(),
-                                "metadata": {
-                                    "kind": "table",
-                                    "table": "urls",
-                                    "captured_at": CAPTURED,
-                                },
-                            }
-                        ],
-                        "tombstones": [],
-                    }
-                ),
-                encoding="utf-8",
-            )
+                        "kind": "table",
+                        "table": "urls",
+                        "captured_at": CAPTURED,
+                    },
+                )
+                state.commit(complete=False, captured_at=CAPTURED)
             brave = replica_sources.adapters_for(
                 sources.Visibility.PERSONAL, {"brave": root / "replica-brave"}
             )["brave"]
@@ -541,38 +519,38 @@ class SplitTests(unittest.TestCase):
     def test_an_object_without_a_capture_time_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
-            replica = root / "published" / "gen-0001"
-            (replica / "objects").mkdir(parents=True)
             data = b'{"id": "e1", "uid": "u1"}'
-            import hashlib
-
-            (replica / "objects" / "calendar::e1").write_bytes(data)
-            (replica / "manifest.json").write_text(
-                json.dumps(
-                    {
-                        "generation_id": "gen-0001",
-                        "source_id": "tuta.calendar",
-                        "epoch": None,
-                        "cursor": 1,
-                        "objects": [
-                            {
-                                "object_id": "calendar::e1",
-                                "filename": "calendar::e1",
-                                "size": len(data),
-                                "sha256": hashlib.sha256(data).hexdigest(),
-                                "metadata": {"kind": "sdk-entity"},
-                            }
-                        ],
-                        "tombstones": [],
-                    }
-                ),
-                encoding="utf-8",
-            )
+            with ReplicaState(
+                root / "replica-calendar", source_id="tuta.calendar"
+            ) as state:
+                state.put(
+                    "calendar::e1",
+                    data,
+                    {"source_id": "tuta.calendar", "kind": "sdk-entity"},
+                )
+                state.commit(complete=False, captured_at=CAPTURED)
             calendar = replica_sources.adapters_for(
-                sources.Visibility.PERSONAL, {"calendar": root}
+                sources.Visibility.PERSONAL, {"calendar": root / "replica-calendar"}
             )["calendar"]
+
             with self.assertRaises(ContractError):
                 calendar.read("calendar::e1")
+    def test_finance_projects_the_transaction_only(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            _finance_generation(root)
+            finance = replica_sources.adapters_for(
+                sources.Visibility.PERSONAL, {"finance": root / "replica-finance"}
+            )["finance"]
+
+            record = finance.read("finance::txn::acct-1::txn-1")
+            self.assertEqual(record.title, "Corner shop")
+            self.assertIn("amount -23.40", record.body)
+            for derived in ("finance::accountset", "finance::account::acct-1"):
+                with self.assertRaises(sources.SourceNotFound):
+                    finance.read(derived)
+            self.assertEqual([hit.id for hit in finance.search("corner", 5)],
+                             ["finance::txn::acct-1::txn-1"])
 
 
 class QueryValidationTests(unittest.TestCase):

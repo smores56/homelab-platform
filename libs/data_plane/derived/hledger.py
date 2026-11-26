@@ -55,7 +55,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from ..collectors.raw.replica import RawReplica
+from ..collectors.state import ReplicaState
 from ..errors import DataPlaneError, PublishError, ValidationError
 
 #: A refusal publishes nothing: a bad mapping, an unreadable replica, an
@@ -90,7 +90,7 @@ _SAFE_COMMODITY = re.compile(r"[A-Za-z0-9._-]+")
 class JournalReport:
     """What one render produced, for the unit and the operator's JSON line."""
 
-    generation_id: str
+    snapshot: str
     #: Transaction objects in the generation.
     objects: int
     #: Those that carried no usable date and were left out.
@@ -181,9 +181,9 @@ def load_accounts(path: str | Path) -> dict[str, str]:
 
 
 def render_journal(
-    replica: RawReplica, accounts: Mapping[str, str]
+    replica: ReplicaState, accounts: Mapping[str, str]
 ) -> tuple[str, JournalReport]:
-    """Render one generation as a journal; no I/O beyond reading the replica."""
+    """Render one replica state as a journal; no I/O beyond reading the replica."""
 
     account_objects: dict[str, Mapping[str, Any]] = {}
     transactions: list[Mapping[str, Any]] = []
@@ -241,7 +241,7 @@ def render_journal(
     )
     text = _render(replica, entries, names)
     return text, JournalReport(
-        generation_id=replica.generation_id,
+        snapshot=replica.snapshot,
         objects=len(transactions),
         skipped=skipped,
         accounts=len(names),
@@ -291,7 +291,7 @@ def write_journal(text: str, path: str | Path) -> bool:
     return True
 
 
-def _json_object(replica: RawReplica, object_id: str) -> Mapping[str, Any]:
+def _json_object(replica: ReplicaState, object_id: str) -> Mapping[str, Any]:
     try:
         value = json.loads(replica.read(object_id))
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
@@ -413,12 +413,12 @@ def _format_amount(value: Decimal) -> str:
 
 
 def _render(
-    replica: RawReplica, entries: Iterable[_Entry], names: Iterable[str]
+    replica: ReplicaState, entries: Iterable[_Entry], names: Iterable[str]
 ) -> str:
     lines = [
         "; hledger journal projected from a raw finance replica; never authoritative.",
         f"; source: {replica.source_id or 'finance'}, "
-        f"generation {replica.generation_id}",
+        f"replica {replica.snapshot}",
         "; sign: the provider's amount goes through unchanged onto the mapped account",
         f";       and {COUNTER_ACCOUNT} carries its exact negation, so a debit keeps",
         ";       whatever sign SimpleFIN sent. The mapping decides which side is out.",
@@ -446,7 +446,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--replica",
         required=True,
-        help="the finance replica root; the newest published generation is read",
+        help="the finance replica root; its committed state is read",
     )
     parser.add_argument(
         "--accounts",
@@ -464,7 +464,7 @@ def _parser() -> argparse.ArgumentParser:
 
 def run(args: argparse.Namespace) -> int:
     accounts = load_accounts(args.accounts)
-    replica = RawReplica(args.replica)
+    replica = ReplicaState(args.replica, read_only=True)
     text, report = render_journal(replica, accounts)
     if not args.dry_run:
         write_journal(text, args.out)

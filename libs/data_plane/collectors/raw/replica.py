@@ -113,6 +113,12 @@ class RawReplica:
         return self._path
 
     @property
+    def snapshot(self) -> str:
+        """The name a derivation of this replica can be cached under."""
+
+        return self._generation_id
+
+    @property
     def manifest(self) -> Mapping[str, Any]:
         return self._manifest
 
@@ -234,6 +240,46 @@ class RawReplica:
                     f"generation {self._generation_id!r} has an invalid object entry"
                 )
         return manifest
+
+
+def commit_pass(
+    state,
+    *,
+    source_id: str,
+    objects: int,
+    details: Mapping[str, Any],
+    captured_at: str,
+    absence_reason: str | None = None,
+    deleted: int | None = None,
+) -> CollectReport:
+    """Commit one complete pass and report it, or report a dry run and commit none.
+
+    Every raw collector enumerates its whole provider, so every one of them is a
+    complete pass: what it did not see must be tombstoned by the collector or
+    carried by ``absence_reason``. ``deleted`` lets a collector report deletions
+    in its own unit (entities, not objects) when that differs from the number of
+    tombstoned rows.
+    """
+
+    if state.dry_run:
+        return CollectReport(
+            source_id=source_id,
+            objects=objects,
+            carried=0,
+            deleted=deleted or 0,
+            details=details,
+        )
+    stats = state.commit(
+        complete=True, absence_reason=absence_reason, captured_at=captured_at
+    )
+    return CollectReport(
+        source_id=source_id,
+        objects=objects,
+        carried=stats.absent,
+        deleted=stats.tombstoned if deleted is None else deleted,
+        details=details,
+        version=stats.version,
+    )
 
 
 def previous_replica(generation: StagingGeneration) -> RawReplica | None:

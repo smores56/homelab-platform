@@ -38,8 +38,8 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Callable, Mapping
 
-from data_plane.collectors.raw import RawReplica
-from data_plane.errors import ContractError, ValidationError
+from data_plane.collectors.state import STATE_NAME, ReplicaState
+from data_plane.errors import ContractError, PublishError, ValidationError
 
 from . import contracts, source_index, sources
 
@@ -269,13 +269,14 @@ ROW_PROJECTORS: Mapping[str, Callable[[Mapping[str, Any], bytes], list[tuple[str
 
 
 class RefreshingReplica:
-    """A replica root that resolves its newest published generation on demand.
+    """A replica root whose committed state is resolved on demand.
 
-    A collector publishes by rename, so a facade that cached the generation id at
-    startup would serve yesterday's bytes until it restarted. This wrapper checks
-    the directory at most once per ``refresh_seconds`` and rebuilds ``RawReplica``
-    only when the newest generation changes. Before the first publication it
-    raises ``SourceUnavailable`` on use, which keeps the facade (and memory) up.
+    A collector commits beside a facade that may already be serving, so one that
+    cached the state at startup would serve yesterday's bytes until it restarted.
+    This wrapper checks at most once per ``refresh_seconds``, and reopens only
+    when the version moved or the database file was replaced underneath it.
+    Before the first commit it raises ``SourceUnavailable`` on use, which keeps
+    the facade (and memory) up.
     """
 
     def __init__(self, root: str | Path, refresh_seconds: float = 2.0) -> None:
@@ -283,27 +284,57 @@ class RefreshingReplica:
             raise ValueError("refresh_seconds must not be negative")
         self._root = Path(root)
         self._refresh_seconds = refresh_seconds
-        self._replica: RawReplica | None = None
+        self._state: ReplicaState | None = None
+        self._identity: tuple[int, int, str, int] | None = None
         self._checked = 0.0
 
-    def current(self) -> RawReplica:
-        now = time.monotonic()
-        if self._replica is not None and now - self._checked < self._refresh_seconds:
-            return self._replica
-        self._checked = now
-        latest = RawReplica.latest_generation(self._root)
-        if latest is None:
-            self._replica = None
+    def _database(self) -> Path:
+        return self._root / STATE_NAME
+
+    def _stat(self) -> tuple[int, int]:
+        try:
+            stat = self._database().stat()
+        except OSError as exc:
             raise sources.SourceUnavailable(
-                f"source has no published generation at {self._root}"
+                f"source has no replica state at {self._root}"
+            ) from exc
+        return stat.st_dev, stat.st_ino
+
+    def current(self) -> ReplicaState:
+        now = time.monotonic()
+        if self._state is not None and now - self._checked < self._refresh_seconds:
+            return self._state
+        self._checked = now
+        try:
+            device, inode = self._stat()
+            if self._state is not None:
+                version, state_id = self._state.version, self._state.state_id
+                if self._identity == (device, inode, state_id, version):
+                    return self._state
+        except (sources.SourceUnavailable, PublishError):
+            self._discard()
+            raise sources.SourceUnavailable(
+                f"source has no readable replica state at {self._root}"
             )
-        if self._replica is None or self._replica.generation_id != latest:
-            self._replica = RawReplica(self._root, latest)
-        return self._replica
+        candidate = ReplicaState(self._root, read_only=True)
+        self._discard()
+        self._state = candidate
+        self._identity = (device, inode, candidate.state_id, candidate.version)
+        return candidate
+
+    def _discard(self) -> None:
+        if self._state is not None:
+            self._state.close()
+            self._state = None
+            self._identity = None
 
     @property
-    def generation_id(self) -> str:
-        return self.current().generation_id
+    def snapshot(self) -> str:
+        return self.current().snapshot
+
+    @property
+    def source_id(self) -> str:
+        return self.current().source_id
 
     def entries(self):
         return self.current().entries()
@@ -331,7 +362,7 @@ class ReplicaAdapter:
     def __init__(
         self,
         contract,
-        replica: RawReplica | RefreshingReplica,
+        replica: ReplicaState | RefreshingReplica,
         index_root: str | Path | None = None,
     ) -> None:
         contract.validate()
@@ -343,7 +374,7 @@ class ReplicaAdapter:
         self.contract = contract
         self.replica = replica
         self.index_root = None if index_root is None else Path(index_root)
-        self._generation_id = replica.generation_id if isinstance(replica, RawReplica) else None
+        self._snapshot = None if isinstance(replica, RefreshingReplica) else replica.snapshot
         self._records: dict[str, sources.SourceRecord] | None = None
         self._index: source_index.SourceIndex | None = None
         self._index_attempted = False
@@ -353,14 +384,14 @@ class ReplicaAdapter:
         return self.contract.source_id
 
     def _refresh(self) -> None:
-        """Pick up a newer generation and drop everything derived from the old one."""
+        """Pick up a newer state and drop everything derived from the old one."""
 
         if not isinstance(self.replica, RefreshingReplica):
             return
         current = self.replica.current()
-        if current.generation_id == self._generation_id:
+        if current.snapshot == self._snapshot:
             return
-        self._generation_id = current.generation_id
+        self._snapshot = current.snapshot
         self._records = None
         self._index = None
         self._index_attempted = False
@@ -404,7 +435,7 @@ class ReplicaAdapter:
         return self._scan(words, limit)
 
     def _scan(self, words: tuple[str, ...], limit: int) -> tuple[sources.SearchHit, ...]:
-        """The whole-generation substring scan: what the adapter did before any index."""
+        """The whole-replica substring scan: what the adapter did before any index."""
 
         hits: list[sources.SearchHit] = []
         for record in self._built().values():
@@ -433,7 +464,7 @@ class ReplicaAdapter:
             return None
         try:
             index = source_index.SourceIndex(
-                self.index_root, self.name, self.replica.generation_id
+                self.index_root, self.name, self.replica.snapshot
             )
             # The file is named after an immutable generation and checked by its
             # meta row, so one that is already here is the answer. Building it
