@@ -326,6 +326,8 @@ has no route off the host.
 | `smortress-agent-collect-brave.path` → `.service`, plus a six-hourly `.timer` reconcile | `agent-brave.network` for the browser (`agent-brave`); neither collection stage has a network | `state/agent-local/quarantine/brave` (the snapshot) and `state/agent-local/replica/brave` (the collection) | Podman secret `brave-sync-seed`, uid 1000 mode 0400, held by the seed unit only |
 | `smortress-agent-collect-notes.timer` → `.service` | none: it reads `/srv/files/vault` and needs no address | `state/agent-local/replica/notes` | none: the vault is already on this host |
 | `smortress-agent-collect-tasks.timer` → `.service` | none: it reads `/srv/files/notes` | `state/agent-local/replica/tasks` | none |
+| `smortress-agent-collect-photos.timer` → `.service` | none: it reads `/srv/photos` and needs no address | `state/agent-local/replica/photos` (metadata only; the media stays on `raw/photos`) | none |
+| `smortress-agent-collect-music.timer` → `.service` | none: it reads `/srv/music` | `state/agent-local/replica/music` (metadata only; the audio stays on `raw/music`) | none |
 
 Tuta serves no IMAP at all, so `agent-tmail` -- TutaBridge, mirrored and pinned
 like every other application image -- is the mail provider half: it holds the
