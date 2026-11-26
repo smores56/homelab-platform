@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 # bats file_tags=python
-# The agent-facade unit suite, run the way its check-all group runs it.
+# The agent-facade unit suite, run the way its CI area runs it.
 #
 #   bats tests/python/agent-facade.bats
 #

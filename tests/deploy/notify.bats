@@ -316,11 +316,9 @@ PY
 }
 
 # --- the suite runs in CI ----------------------------------------------------
-# The `gates` job is the one CI gate that runs these suites, and its command names
-# the deploy group in full. Asserting the exact command the workflow runs -- and
-# not a prefix of one -- is what keeps this honest: when #931 replaces check-all.sh
-# and the group's command changes, this line fails loudly and is updated in the
-# same change instead of quietly matching nothing.
-@test "CI runs the deploy group (notify, poll, heartbeat included)" {
-    assert grep -qE '^ *run: scripts/check-all\.sh --only provision,core,apps,deploy$' "$ci"
+# The deploy area job is what runs this suite. Asserting its filter expression --
+# and not a prefix of one -- keeps this honest: an expression that stops naming
+# the area fails here instead of quietly selecting nothing.
+@test "CI runs the deploy area job (notify, poll, heartbeat included)" {
+    assert grep -qE -- "--filter-tags 'deploy'" "$ci"
 }

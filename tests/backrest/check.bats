@@ -449,7 +449,7 @@ fi
 }
 
 # The two node checks are skipped together when this host cannot run them, which
-# is what the shell suite did: the toolchain is check-all.sh's to install, not
+# is what the shell suite did: the toolchain is the CI job's to install, not
 # this suite's.
 typecheck() { (cd "$dir" && npx tsc --noEmit >/dev/null 2>&1); }
 unit_tests() { (cd "$dir" && npm test >/dev/null 2>&1); }

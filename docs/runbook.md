@@ -117,8 +117,8 @@ Expected: `{"default_workflow_permissions":"read","can_approve_pull_request_revi
 ## Scheduled sanity checks
 
 ```sh
-scripts/check-all.sh                # every group, in parallel; CI runs it per shard
-scripts/check-all.sh --only lint    # action pins, secret boundary, CODEOWNERS, yamllint, shellcheck
+bats --jobs "$(nproc)" $(git ls-files 'tests/*.bats' 'tests/*/*.bats') # every suite; CI runs them per area
+bats tests/lint.bats                # action pins, secret boundary, CODEOWNERS, yamllint, shellcheck
 ```
 
 All of the above pass on `main`; see `docs/negative-tests.md` for the fork-PR

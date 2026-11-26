@@ -45,12 +45,6 @@ load helpers
     assert_success
 }
 
-@test "every group is reachable from a workflow or explicitly local-only" {
-    # The check is #931's subject; it stays in the group table as it stands.
-    run tests/check-all/ci-parity.sh
-    assert_success
-}
-
 @test "the branch adds no whitespace errors" {
     run diff_check
     assert_success

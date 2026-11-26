@@ -1776,7 +1776,7 @@ sudo scripts/legacy/retirement-gate.sh --keep           # leave the targets for 
    them only after 90 days through the reviewed retention process.
 5. **The edge reaches no old origin** — "Retire the Cloudflare SSH route" and
    `scripts/verify-public-edge.sh` all green.
-6. **Nothing hand-run is left** — `scripts/check-all.sh` and
+6. **Nothing hand-run is left** — the suite sweep in `README.md` and
    `python3 scripts/check-doc-refs.py` both exit 0, so the tree describes the host
    that is running.
 

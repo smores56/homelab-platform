@@ -1,6 +1,6 @@
 #!/bin/sh
 # tests/tags.sh maps changed paths to the suites that cover them: one suite
-# path per line, `all`, or nothing. A path no row claims is `all`, so a new
+# path per line, or nothing. A path no row claims selects every suite, so a new
 # file can never fall through to a green run that tested nothing.
 #
 # usage: tests/tags.sh [<path>...]
@@ -86,7 +86,9 @@ while IFS= read -r path; do
 done <"$work"
 
 if $all; then
-    printf 'all\n'
+    # Every suite, by path: the caller runs what it is given, and a sentinel
+    # would need its own expansion at each call site.
+    find "$root/tests" -name '*.bats' -type f | sed "s#^$root/##" | sort
     exit 0
 fi
 for tag in $tags; do

@@ -84,12 +84,12 @@ tests/core/storage-layout.bats"
 
 @test "a path no row claims selects every suite" {
     run sh "$tags_sh" brand/new/thing
-    assert_output "all"
+    assert_equal "$(printf '%s\n' "$output" | wc -l)" "$(find tests -name '*.bats' | wc -l)"
 }
 
 @test "a harness change selects every suite" {
     run sh "$tags_sh" tests/helpers.bash
-    assert_output "all"
+    assert_equal "$(printf '%s\n' "$output" | wc -l)" "$(find tests -name '*.bats' | wc -l)"
 }
 
 @test "a documentation change selects nothing" {
@@ -109,4 +109,32 @@ tests/core/storage-layout.bats"
     cp "$repo_root/scripts/storage-layout.sh" "$repo/scripts/"
     run sh -c "cd '$repo' && sh tests/tags.sh --changed --base HEAD"
     assert_output --partial "tests/core/storage-layout.bats"
+}
+
+# --- CI areas ----------------------------------------------------------------
+# ci.yml runs one job per area, selected by `--filter-tags`. A suite whose tag
+# no job claims would run nowhere, and a claimed tag with no suite means a job
+# that can only ever fail on "Found no tests".
+
+area_tags() {  # the tags the workflow's filter expressions name
+    grep -oE -- "--filter-tags '[^']+'" "$repo_root/.github/workflows/ci.yml" |
+        sed -E "s/--filter-tags '(.*)'/\1/" | tr '|' '\n' | sed '/^$/d' | sort -u
+}
+
+@test "every suite's tag is claimed by a CI area job" {
+    areas=$(area_tags)
+    missing=''
+    for tag in $(grep -hE '^# bats file_tags=' tests/*.bats tests/*/*.bats | sed -E 's/.*file_tags=//' | sort -u); do
+        grep -qx "$tag" <<<"$areas" || missing="$missing $tag"
+    done
+    assert_equal "$missing" ""
+}
+
+@test "every CI area names a tag a suite carries" {
+    tags=$(grep -hE '^# bats file_tags=' tests/*.bats tests/*/*.bats | sed -E 's/.*file_tags=//' | sort -u)
+    stale=''
+    for area in $(area_tags); do
+        grep -qx "$area" <<<"$tags" || stale="$stale $area"
+    done
+    assert_equal "$stale" ""
 }

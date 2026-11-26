@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 # bats file_tags=actionlint
-# The workflow linter, run the way its check-all group runs it.
+# The workflow linter, run the way its CI area runs it.
 #
 #   bats tests/actionlint.bats
 #
