@@ -238,10 +238,12 @@ smoresnet-deploy.service`.
 The secrets are the operator's, never image content, plaintext and 0600 under
 `/etc/smoresnet` (a `tmpfiles.d` line creates the 0700 directory): the webhook
 secret the listener authenticates against (`webhook-secret.yaml`, plus
-`webhook-secret-next.yaml` for a rotation window) and the dead-man URL above. A
-missing secret is the listener's own refusal to start naming the file, and a
-secret readable by group or other is refused the same way; `edge-bootstrap` (T10)
-is what writes them.
+`webhook-secret-next.yaml` for a rotation window), the dead-man URL above and the
+transport credential the join unit reads (`tailscale-authkey`). A missing secret
+is the listener's own refusal to start naming the file, and a secret readable by
+group or other is refused the same way. `scripts/edge-bootstrap.sh` writes all of
+them from stdin — never argv — and a re-run rotates one only with `--force`;
+`docs/manual-steps.md#bootstrap-the-fresh-edge` is the order.
 
 ## Rebuild
 
