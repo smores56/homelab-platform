@@ -1,0 +1,55 @@
+# Derived uCore bootc image for the public edge (design #939, task T3). Built by
+# scripts/build-image.sh edge and published by
+# .github/workflows/publish-edge-image.yml.
+#
+# The base doctrine is bootc/server/Containerfile's, unchanged: the base is the
+# uCore `stable` stream tag from bootc/lib/pins.env, not a digest-pinned build.
+# Upstream publishes new streams constantly and ghcr garbage-collects superseded
+# digests within hours, so a pinned digest rots into "manifest unknown" build
+# failures. The build resolves the tag and passes the digest as BASE_DIGEST,
+# which is what the org.opencontainers.image.base.digest label below records:
+# nothing in the repository pins the base, so the built image is the only
+# durable statement of what it was built on.
+#
+# This file is the skeleton. Caddy, firewalld, sshd, the units and the container
+# policy and key install are T4, and bootc/edge/tests/check.sh is T5; nothing
+# here ships rootfs content, and no secret, signing key or age identity may ever
+# enter it.
+
+ARG BASE_IMAGE
+
+FROM ${BASE_IMAGE}
+
+ARG BASE_IMAGE
+# The digest the tag resolved to at build time, passed by scripts/build-image.sh
+# and the publish workflow. The image asserts nothing about its value; it is
+# recorded so a built image still names the exact base it was built on.
+ARG BASE_DIGEST
+
+# base.name is the tag the build asked for and base.digest is what that tag
+# resolved to, both recorded here because nothing in the repository pins them.
+LABEL org.opencontainers.image.title="smoresnet edge image" \
+      org.opencontainers.image.description="Derived uCore bootc image for the public edge" \
+      org.opencontainers.image.source="https://github.com/smores56/homelab-platform" \
+      org.opencontainers.image.base.name="${BASE_IMAGE}" \
+      org.opencontainers.image.base.digest="${BASE_DIGEST}" \
+      org.opencontainers.image.vendor="smores56"
+
+# The skeleton's whole payload: a marker that names the artifact, so a built edge
+# image is distinguishable from the server image by inspection and the build has
+# a file of its own to prove it wrote a layer. T4 adds the real rootfs.
+RUN install -D -m 0644 /dev/null /usr/share/smoresnet/edge-image
+
+# The same fail-closed gate the server image runs, for the same reasons: the base
+# must stay a stream tag (a digest-pinned base rots when upstream garbage-collects
+# it, and `:latest` is not a stream the uCore project maintains), and an empty
+# BASE_DIGEST would mean the image cannot say what it was built on.
+RUN set -eux; \
+    case "${BASE_IMAGE}" in \
+      *:latest) echo "BASE_IMAGE must be a stream tag, not :latest: ${BASE_IMAGE}" >&2; exit 1 ;; \
+      *@sha256:*) echo "BASE_IMAGE must be a stream tag, not a digest: ${BASE_IMAGE}" >&2; exit 1 ;; \
+      *:*) ;; \
+      *) echo "BASE_IMAGE must be a tagged reference: ${BASE_IMAGE}" >&2; exit 1 ;; \
+    esac; \
+    test -n "${BASE_DIGEST}" || { echo "BASE_DIGEST is empty: the image would not record the base it was built on" >&2; exit 1; }; \
+    test -f /usr/share/smoresnet/edge-image
