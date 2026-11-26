@@ -98,10 +98,33 @@ MAX_CONCURRENCY = int(os.environ.get("DEPLOY_MAX_CONCURRENCY", "32"))
 # that disagree by minutes from reopening a replay.
 NONCE_TTL = 3600
 NONCE_CAP = 4096
-# The one policy table this role enforces: the repos it accepts. An apps
-# request on a host that runs no apps tenant is refused here, before it takes a
-# queue slot, rather than queued and failed downstream.
-ROLE = decisions.role(decisions.SERVER)
+
+
+def role_from_env() -> decisions.Role:
+    """This host's policy table: the repos it accepts, and nothing else.
+
+    `DEPLOY_ROLE` is the image's choice, because the listener is the same program
+    on every role and the allowlist is the one thing it must not guess. The
+    default is the server -- the host this program shipped on first -- and an
+    unknown name is a refusal to start rather than a fallback to it: a listener
+    whose policy table is not the host's is a listener that has to be stopped by
+    hand, and refusing here means the unit fails instead.
+
+    It is enforced *here*, before the nonce ring and before a queue file: an apps
+    entry on the edge would occupy one of the 32 slots and lock out a platform
+    deploy the host does run.
+    """
+    name = os.environ.get("DEPLOY_ROLE", decisions.SERVER)
+    try:
+        return decisions.role(name)
+    except ValueError:
+        raise SystemExit(
+            "deploy-receiver: refusing to start: DEPLOY_ROLE="
+            f"{name!r} is not one of {', '.join(sorted(decisions.ROLES))}"
+        ) from None
+
+
+ROLE = role_from_env()
 SIGNATURE_PREFIX = "sha256="
 HEX = decisions.HEX
 

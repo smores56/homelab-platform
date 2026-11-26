@@ -61,6 +61,13 @@ RUN set -eux; \
 # everything this Containerfile reads.
 COPY bootc/edge/rootfs/ /
 
+# The shared deploy decision (design #939, T2) that the edge verifier and the
+# listener call, at the path both resolve it from: the program's own directory
+# first, then this one. A COPY of the single file, like the server's image, keeps
+# the golden fixtures out of the artifact -- they name hosts and digests and are
+# test data.
+COPY bootc/lib/deploy/decisions.py /usr/libexec/deploy/decisions.py
+
 RUN set -eux; \
     chmod 0755 /usr/libexec/smoresnet-firewall-zones /usr/libexec/smoresnet-firewall-bind; \
     chmod 0644 /usr/share/smoresnet/Caddyfile /usr/share/smoresnet/firewalld/zones/public.xml /usr/share/smoresnet/firewalld/zones/tailscale.xml; \
@@ -127,6 +134,8 @@ RUN set -eux; \
 # predicate on, and every one of them is cheap here and expensive on a box whose
 # console is a provider's VNC page.
 RUN set -eux; \
+    test -x /usr/libexec/deploy-verify.py || { echo "the edge verifier is missing or not executable: nothing would verify a deploy"; exit 1; }; \
+    test -f /usr/libexec/deploy/decisions.py || { echo "the shared deploy decision is missing: the verifier would refuse to start"; exit 1; }; \
     case "${BASE_IMAGE}" in \
       *:latest) echo "BASE_IMAGE must be a stream tag, not :latest: ${BASE_IMAGE}" >&2; exit 1 ;; \
       *@sha256:*) echo "BASE_IMAGE must be a stream tag, not a digest: ${BASE_IMAGE}" >&2; exit 1 ;; \
