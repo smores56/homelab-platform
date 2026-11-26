@@ -835,10 +835,35 @@ can use it:
 
 ```sh
 sudo podman exec smortress-agent-tmail password
+```
+
+A fresh `init` regenerates that password, so the ciphertext must be rewritten
+before the collector starts. `edit` runs on the operator machine, where the YubiKey
+is; `stage` writes the ciphertext into `/var/lib/smortress/secrets`, which only the
+host has, so it needs a checkout of this repository there:
+
+```sh
 scripts/secret.sh edit tmail-bridge-password.yaml   # tmail.bridge_password
-scripts/secret.sh stage tmail-bridge-password.yaml
+scripts/secret.sh verify
 git commit -am 'chore(agent): set the TutaBridge password'
 git push
+sudo scripts/secret.sh stage tmail-bridge-password.yaml   # from a checkout on the host
+```
+
+Without a checkout on the host, copy the bundle `edit` rewrote, keep the root-only
+ownership, and restart the units that read it:
+
+```sh
+scp secrets/agents.json smortress:/tmp/agents.json
+sudo install -m 0600 -o root -g root /tmp/agents.json /var/lib/smortress/secrets/agents.json
+rm -f /tmp/agents.json
+sudo systemctl restart sops-decrypt.service smortress-app-secrets.service
+```
+
+`stage` restarts `sops-decrypt.service` itself; `smortress-app-secrets.service` is
+`RemainAfterExit`, so only a restart recreates the Podman secret.
+
+```sh
 sudo systemctl start smortress-agent-mail-stream.service
 sudo journalctl -u smortress-agent-mail-stream.service -f
 ```
