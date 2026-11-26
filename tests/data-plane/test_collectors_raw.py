@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
 import tempfile
 import unittest
@@ -20,12 +21,15 @@ from data_plane.collectors.raw import (
     ABSENCE_PROVIDER_WINDOW,
     ABSENCE_RETENTION,
     ABSENT_SINCE,
+    MAX_MEDIA_OBJECTS,
     RawReplica,
     carry_forward,
     collect_brave_db,
     collect_calendar,
     collect_maildir,
+    collect_music,
     collect_notes,
+    collect_photos,
     collect_simplefin,
     collect_tasks,
     previous_replica,
@@ -966,6 +970,284 @@ class BraveTests(unittest.TestCase):
             metadata = replica.metadata("brave::table::urls")
             self.assertEqual(metadata["absence_reason"], ABSENCE_RETENTION)
             self.assertIn("brave::table::visits", replica.object_ids())
+
+
+class PhotosTests(unittest.TestCase):
+    """A photo library is metadata only: the bytes stay on the media dataset."""
+
+    def _library(self, root: Path) -> Path:
+        library = root / "photos"
+        (library / "2026" / "11").mkdir(parents=True)
+        (library / "2026" / "11" / "harbour-sunset.jpg").write_bytes(b"\xff\xd8jpegbytes")
+        (library / "2026" / "11" / "ridge.heic").write_bytes(b"\x00\x00heicbytes")
+        (library / "2026" / "11" / "README.txt").write_text(
+            "not media\n", encoding="utf-8"
+        )
+        return library
+
+    def test_each_media_file_becomes_one_metadata_object(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            library = self._library(root)
+            generation = _generation(root / "replica")
+            report = collect_photos(library, generation, captured_at=CAPTURED)
+            self.assertEqual(report.objects, 2)
+            _publish(generation)
+
+            replica = RawReplica(root / "replica")
+            photo_id = "photos::2026%2F11%2Fharbour-sunset.jpg"
+            self.assertEqual(
+                replica.object_ids(),
+                (photo_id, "photos::2026%2F11%2Fridge.heic"),
+            )
+
+            photo = json.loads(replica.read(photo_id))
+            self.assertEqual(photo["photo_id"], photo_id)
+            self.assertEqual(photo["path"], "2026/11/harbour-sunset.jpg")
+            self.assertEqual(photo["title"], "harbour-sunset")
+            self.assertEqual(photo["format"], "jpg")
+            self.assertEqual(photo["size"], len(b"\xff\xd8jpegbytes"))
+            self.assertTrue(photo["updated_at"].endswith("+00:00"))
+            # The generation carries the metadata, never the media bytes.
+            self.assertNotIn(b"jpegbytes", replica.read(photo_id))
+
+            metadata = replica.metadata(photo_id)
+            self.assertEqual(metadata["source_id"], "photos.library")
+            self.assertEqual(metadata["captured_at"], CAPTURED)
+            self.assertEqual(metadata["path"], "2026/11/harbour-sunset.jpg")
+            self.assertEqual(metadata["revision"], photo["revision"])
+
+    def test_an_unchanged_library_republishes_identical_objects(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            library = self._library(root)
+            first = _generation(root / "replica", "gen-0001")
+            collect_photos(library, first, captured_at=CAPTURED)
+            _publish(first)
+            second = _generation(root / "replica", "gen-0002")
+            collect_photos(library, second, captured_at=CAPTURED)
+            _publish(second)
+
+            earlier = RawReplica(root / "replica", "gen-0001")
+            later = RawReplica(root / "replica", "gen-0002")
+            self.assertEqual(earlier.object_ids(), later.object_ids())
+            for object_id in earlier.object_ids():
+                self.assertEqual(earlier.read(object_id), later.read(object_id))
+
+    def test_a_deleted_photo_is_carried_forward(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            library = self._library(root)
+            first = _generation(root / "replica", "gen-0001")
+            collect_photos(library, first, captured_at=CAPTURED)
+            _publish(first)
+
+            (library / "2026" / "11" / "ridge.heic").unlink()
+            second = _generation(root / "replica", "gen-0002")
+            report = collect_photos(library, second, captured_at=CAPTURED)
+            self.assertEqual(report.carried, 1)
+            _publish(second)
+
+            replica = RawReplica(root / "replica")
+            self.assertIn("photos::2026%2F11%2Fridge.heic", replica.object_ids())
+            metadata = replica.metadata("photos::2026%2F11%2Fridge.heic")
+            self.assertEqual(metadata["absence_reason"], ABSENCE_NO_TOMBSTONE)
+
+    def test_a_symlinked_directory_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            library = self._library(root)
+            (root / "elsewhere").mkdir()
+            (root / "elsewhere" / "foreign.jpg").write_bytes(b"\xff\xd8")
+            (library / "linked").symlink_to(root / "elsewhere")
+            generation = _generation(root / "replica")
+            with self.assertRaises(PublishError):
+                collect_photos(library, generation, captured_at=CAPTURED)
+
+    def test_a_library_over_the_limit_is_refused_not_truncated(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            library = self._library(root)
+            generation = _generation(root / "replica")
+            with mock.patch("data_plane.collectors.raw.media.MAX_MEDIA_OBJECTS", 1):
+                with self.assertRaises(PublishError) as raised:
+                    collect_photos(library, generation, captured_at=CAPTURED)
+            self.assertIn(str(1), str(raised.exception))
+            self.assertFalse(any((root / "replica").glob("published/*")))
+            self.assertGreater(MAX_MEDIA_OBJECTS, 1)
+
+    def test_an_empty_library_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            library = root / "photos"
+            library.mkdir()
+            (library / "README.txt").write_text("no media\n", encoding="utf-8")
+            generation = _generation(root / "replica")
+            with self.assertRaises(PublishError):
+                collect_photos(library, generation, captured_at=CAPTURED)
+
+    def test_immich_derived_trees_are_not_walked(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            location = self._library(root)
+            thumbs = location / "thumbs" / "2026" / "11"
+            thumbs.mkdir(parents=True)
+            (thumbs / "harbour-sunset.webp").write_bytes(b"RIFFthumb")
+            originals = location / "library" / "2026" / "11"
+            originals.mkdir(parents=True)
+            (originals / "harbour-sunset.jpg").write_bytes(b"\xff\xd8jpegbytes")
+            generation = _generation(root / "replica")
+            report = collect_photos(location, generation, captured_at=CAPTURED)
+            self.assertEqual(report.objects, 1)
+            _publish(generation)
+
+            replica = RawReplica(root / "replica")
+            self.assertEqual(
+                replica.object_ids(), ("photos::2026%2F11%2Fharbour-sunset.jpg",)
+            )
+
+    def test_an_unreadable_directory_is_refused_not_skipped(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            library = self._library(root)
+            hidden = library / "2026" / "11"
+            generation = _generation(root / "replica")
+            mode = hidden.stat().st_mode
+            hidden.chmod(0o000)
+            try:
+                with self.assertRaises(PublishError):
+                    collect_photos(library, generation, captured_at=CAPTURED)
+            finally:
+                hidden.chmod(mode)
+            self.assertFalse(any((root / "replica").glob("published/*")))
+
+    def test_a_name_the_replica_cannot_store_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            library = self._library(root)
+            name = os.path.join(os.fsencode(library), b"bad\xffname.jpg")
+            os.close(os.open(name, os.O_CREAT | os.O_WRONLY))
+            generation = _generation(root / "replica")
+            with self.assertRaises(PublishError):
+                collect_photos(library, generation, captured_at=CAPTURED)
+            self.assertFalse(any((root / "replica").glob("published/*")))
+
+    def test_the_report_counts_the_files_it_skipped(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            library = self._library(root)
+            generation = _generation(root / "replica")
+            report = collect_photos(library, generation, captured_at=CAPTURED)
+            self.assertEqual(report.details["skipped"], 1)
+
+
+class MusicTests(unittest.TestCase):
+    """A music library is metadata only: the audio stays on the music dataset."""
+
+    def _library(self, root: Path) -> Path:
+        library = root / "music"
+        album = library / "Tori Amos" / "Little Earthquakes"
+        album.mkdir(parents=True)
+        (album / "01 - Crucify.flac").write_bytes(b"fLaCaudio")
+        (album / "02 Crucify (live).mp3").write_bytes(b"ID3audio")
+        (library / "singles").mkdir()
+        (library / "singles" / "Aurora.opus").write_bytes(b"OggSaudio")
+        (library / "cover.jpg").write_bytes(b"\xff\xd8artwork")
+        return library
+
+    def test_artist_and_album_come_from_the_path_and_the_track_is_stripped(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            library = self._library(root)
+            generation = _generation(root / "replica")
+            report = collect_music(library, generation, captured_at=CAPTURED)
+            self.assertEqual(report.objects, 3)
+            _publish(generation)
+
+            replica = RawReplica(root / "replica")
+            track_id = "music::Tori%20Amos%2FLittle%20Earthquakes%2F01%20-%20Crucify.flac"
+            self.assertIn(track_id, replica.object_ids())
+            self.assertNotIn("music::cover.jpg", replica.object_ids())
+
+            track = json.loads(replica.read(track_id))
+            self.assertEqual(track["track_id"], track_id)
+            self.assertEqual(track["title"], "Crucify")
+            self.assertEqual(track["track"], 1)
+            self.assertEqual(track["artist"], "Tori Amos")
+            self.assertEqual(track["album"], "Little Earthquakes")
+            self.assertEqual(track["format"], "flac")
+            self.assertEqual(track["size"], len(b"fLaCaudio"))
+            self.assertNotIn(b"fLaCaudio", replica.read(track_id))
+
+            # A space is a separator too, and the suffix stays part of the title.
+            live = json.loads(
+                replica.read(
+                    "music::Tori%20Amos%2FLittle%20Earthquakes%2F02%20Crucify%20%28live%29.mp3"
+                )
+            )
+            self.assertEqual(live["title"], "Crucify (live)")
+            self.assertEqual(live["track"], 2)
+
+            # One directory is not enough to claim an artist or an album.
+            single = json.loads(replica.read("music::singles%2FAurora.opus"))
+            self.assertEqual(single["title"], "Aurora")
+            self.assertEqual(single["artist"], "")
+            self.assertEqual(single["album"], "")
+            self.assertIsNone(single["track"])
+
+            metadata = replica.metadata(track_id)
+            self.assertEqual(metadata["source_id"], "music.library")
+            self.assertEqual(metadata["captured_at"], CAPTURED)
+            self.assertEqual(metadata["artist"], "Tori Amos")
+            self.assertEqual(metadata["album"], "Little Earthquakes")
+
+    def test_an_unchanged_library_republishes_identical_objects(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            library = self._library(root)
+            first = _generation(root / "replica", "gen-0001")
+            collect_music(library, first, captured_at=CAPTURED)
+            _publish(first)
+            second = _generation(root / "replica", "gen-0002")
+            collect_music(library, second, captured_at=CAPTURED)
+            _publish(second)
+
+            earlier = RawReplica(root / "replica", "gen-0001")
+            later = RawReplica(root / "replica", "gen-0002")
+            self.assertEqual(earlier.object_ids(), later.object_ids())
+            for object_id in earlier.object_ids():
+                self.assertEqual(earlier.read(object_id), later.read(object_id))
+
+    def test_an_empty_library_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            library = root / "music"
+            (library / "Artwork").mkdir(parents=True)
+            (library / "Artwork" / "cover.jpg").write_bytes(b"\xff\xd8artwork")
+            generation = _generation(root / "replica")
+            with self.assertRaises(PublishError):
+                collect_music(library, generation, captured_at=CAPTURED)
+
+    def test_a_symlinked_directory_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            library = self._library(root)
+            (root / "elsewhere").mkdir()
+            (root / "elsewhere" / "foreign.flac").write_bytes(b"fLaC")
+            (library / "linked").symlink_to(root / "elsewhere")
+            generation = _generation(root / "replica")
+            with self.assertRaises(PublishError):
+                collect_music(library, generation, captured_at=CAPTURED)
+
+    def test_a_library_over_the_limit_is_refused_not_truncated(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            library = self._library(root)
+            generation = _generation(root / "replica")
+            with mock.patch("data_plane.collectors.raw.media.MAX_MEDIA_OBJECTS", 1):
+                with self.assertRaises(PublishError):
+                    collect_music(library, generation, captured_at=CAPTURED)
+            self.assertFalse(any((root / "replica").glob("published/*")))
 
 
 if __name__ == "__main__":

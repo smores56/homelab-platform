@@ -33,8 +33,12 @@ from .finance import SOURCE_ID as FINANCE_SOURCE
 from .finance import collect_simplefin
 from .mail import SOURCE_ID as MAIL_SOURCE
 from .mail import collect_maildir
+from .music import SOURCE_ID as MUSIC_SOURCE
+from .music import collect_music
 from .notes import SOURCE_ID as NOTES_SOURCE
 from .notes import collect_notes
+from .photos import SOURCE_ID as PHOTOS_SOURCE
+from .photos import collect_photos
 from .replica import CollectReport, RawReplica
 from .simplefin import AccessUrl, fetch_accountset
 from .tasks import SOURCE_ID as TASKS_SOURCE
@@ -56,6 +60,8 @@ _SOURCE_IDS = {
     "brave": BRAVE_SOURCE,
     "notes": NOTES_SOURCE,
     "tasks": TASKS_SOURCE,
+    "photos": PHOTOS_SOURCE,
+    "music": MUSIC_SOURCE,
 }
 
 
@@ -175,6 +181,12 @@ def _parser() -> argparse.ArgumentParser:
 
     tasks = subparsers.add_parser("tasks", help="a todo.txt directory")
     tasks.add_argument("--entities", required=True, help="the todo.txt directory")
+
+    photos = subparsers.add_parser("photos", help="a photo library")
+    photos.add_argument("--entities", required=True, help="the library root")
+
+    music = subparsers.add_parser("music", help="a music library")
+    music.add_argument("--entities", required=True, help="the library root")
     return parser
 
 
@@ -284,6 +296,10 @@ def _collect(
         report = collect_notes(args.entities, generation, captured_at=captured_at)
     elif args.source == "tasks":
         report = collect_tasks(args.entities, generation, captured_at=captured_at)
+    elif args.source == "photos":
+        report = collect_photos(args.entities, generation, captured_at=captured_at)
+    elif args.source == "music":
+        report = collect_music(args.entities, generation, captured_at=captured_at)
     else:  # pragma: no cover - argparse rejects an unknown subcommand first
         raise ValidationError(f"unknown source {args.source!r}")
 

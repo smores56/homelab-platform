@@ -86,6 +86,12 @@ class RawReplica:
         if not self._path.is_dir():
             raise ManifestError(f"generation {generation_id!r} is not published")
         self._manifest = self._load_manifest()
+        # The manifest is the reader's hot path: ``read`` resolves one id per
+        # object it projects, and scanning the list each time is quadratic over a
+        # library-sized generation.
+        self._entries_by_id: dict[str, Mapping[str, Any]] = {
+            entry["object_id"]: entry for entry in self._manifest["objects"]
+        }
 
     @staticmethod
     def latest_generation(root: str | Path) -> str | None:
@@ -200,12 +206,12 @@ class RawReplica:
     def _entry(self, object_id: str) -> Mapping[str, Any]:
         if not isinstance(object_id, str):
             raise ValidationError("object id must be a string")
-        for entry in self._manifest["objects"]:
-            if entry["object_id"] == object_id:
-                return entry
-        raise ManifestError(
-            f"generation {self._generation_id!r} has no object {object_id!r}"
-        )
+        try:
+            return self._entries_by_id[object_id]
+        except KeyError:
+            raise ManifestError(
+                f"generation {self._generation_id!r} has no object {object_id!r}"
+            ) from None
 
     def _load_manifest(self) -> dict[str, Any]:
         path = self._path / MANIFEST_NAME

@@ -155,13 +155,16 @@ own table, so a personal facade naming either root fails at startup.
 
 A source with a published raw generation is served by a `ReplicaAdapter`; the rest
 keep their deterministic in-process fixture. Today the personal deployment serves
-`mail`, `calendar`, `finance` and `brave` from `state/agent-local/replica`, while
-`notes`, `tasks`, `photos`, `music`, `workspace` and the general deployment's
-`repos`/`books` are still fixtures. The adapter checks for a newer published
-generation on each read/search (at most once per two seconds) and rebuilds its
-projection when the generation id changes, so a collector's next publication is
-visible without a facade restart. Before the first publication the source answers
-`unavailable`; the facade and its memory stay up.
+`mail`, `calendar`, `finance`, `brave`, `notes`, `tasks`, `photos` and `music` from
+`state/agent-local/replica`, the general deployment's `repos`/`books` from the
+mounted `/srv/git` and `/srv/books` trees (`tree_sources.py`), and only `workspace`
+is still a fixture. `photos` and `music` are metadata-only
+generations: the media bytes stay on their own datasets, so a search finds a file
+by its name, its folders, its format and its size. The adapter checks for a newer
+published generation on each read/search (at most once per two seconds) and
+rebuilds its projection when the generation id changes, so a collector's next
+publication is visible without a facade restart. Before the first publication the
+source answers `unavailable`; the facade and its memory stay up.
 
 ## Test
 
