@@ -1132,6 +1132,18 @@ class PhotosTests(unittest.TestCase):
                 collect_photos(library, generation, captured_at=CAPTURED)
             self.assertFalse(any((root / "replica").glob("published/*")))
 
+    def test_an_unrepresentable_mtime_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            library = self._library(root)
+            future = library / "2026" / "11" / "harbour-sunset.jpg"
+            year_10000 = 253_402_300_800
+            os.utime(future, ns=(year_10000 * 10**9,) * 2)
+            generation = _generation(root / "replica")
+            with self.assertRaises(PublishError):
+                collect_photos(library, generation, captured_at=CAPTURED)
+            self.assertFalse(any((root / "replica").glob("published/*")))
+
     def test_the_report_counts_the_files_it_skipped(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
