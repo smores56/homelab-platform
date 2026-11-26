@@ -20,6 +20,12 @@ listener never opens it for writing.
 
 Stdlib only, like the webhook service: the image installs no distribution
 package, and the tailnet is bounded by Serve rather than by this process.
+
+The receiver is the same program on every role -- the server and the edge differ
+only in what they run -- so it lives in bootc/lib beside the decisions it
+enforces (bootc/lib/deploy/decisions.py, design #939): the repo allowlist, the
+request shapes, the journal line and the two records it reads are pure functions
+there, and each role passes its own name.
 """
 
 from __future__ import annotations
@@ -29,7 +35,6 @@ import hashlib
 import hmac
 import json
 import os
-import re
 import signal
 import sys
 import threading
@@ -38,6 +43,30 @@ import uuid
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
+
+
+# The policy tables and the pure checks are shared with the verifier and the
+# drain loop. The image installs them at /usr/libexec/deploy; this file sits in
+# that directory in a checkout. The program's own directory is searched first so
+# a test run never picks up an installed copy of the shared code.
+def _decisions_dir() -> str:
+    here = os.path.dirname(os.path.abspath(__file__))
+    for candidate in (
+        os.environ.get("DEPLOY_LIB_DIR", ""),
+        here,
+        os.path.join(here, os.pardir, os.pardir, os.pardir, os.pardir, "lib", "deploy"),
+        "/usr/libexec/deploy",
+    ):
+        if candidate and os.path.isfile(os.path.join(candidate, "decisions.py")):
+            return os.path.abspath(candidate)
+    raise SystemExit(
+        "deploy-receiver: no decisions.py beside this program, in the checkout or in "
+        "/usr/libexec/deploy"
+    )
+
+
+sys.path.insert(0, _decisions_dir())
+import decisions  # noqa: E402  # the path above is what makes it importable
 
 STATE_DIR = os.environ.get("DEPLOY_STATE_DIR", "/var/lib/homelab/deploy")
 SECRETS_DIR = os.environ.get("DEPLOY_SECRETS_DIR", "/run/smortress/secrets")
@@ -69,11 +98,12 @@ MAX_CONCURRENCY = int(os.environ.get("DEPLOY_MAX_CONCURRENCY", "32"))
 # that disagree by minutes from reopening a replay.
 NONCE_TTL = 3600
 NONCE_CAP = 4096
-REPOS = frozenset({"homelab-platform", "homelab-apps"})
-COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
-NONCE_RE = re.compile(r"^[0-9a-f]{32}$")
+# The one policy table this role enforces: the repos it accepts. An apps
+# request on a host that runs no apps tenant is refused here, before it takes a
+# queue slot, rather than queued and failed downstream.
+ROLE = decisions.role(decisions.SERVER)
 SIGNATURE_PREFIX = "sha256="
-HEX = frozenset("0123456789abcdef")
+HEX = decisions.HEX
 
 
 def log(message: str) -> None:
@@ -138,12 +168,14 @@ def atomic_write(path: str, data: bytes) -> None:
 def journal(event: str, **fields: Any) -> None:
     """One fsynced line before the action it describes.
 
-    Opened per write: the drain rotates this file, and a held descriptor would
-    keep appending to the rotated inode. A journal failure must not turn an
+    The line's shape is shared (`decisions.journal_line`), because the drain and
+    the shell readers grep the same file: timestamp and event first, details
+    after. Opened per write: the drain rotates this file, and a held descriptor
+    would keep appending to the rotated inode. A journal failure must not turn an
     answer into a different answer -- the request is still queued or refused on
     its own merits -- so the error is logged and not raised.
     """
-    line = json.dumps({"ts": utc_now(), "event": event, **fields}, separators=(",", ":"))
+    line = decisions.journal_line(utc_now(), event, fields)
     try:
         fd = os.open(JOURNAL_FILE, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
     except OSError as exc:
@@ -375,25 +407,11 @@ class Receiver:
 
     @staticmethod
     def _deployed_commit(repo: str) -> str | None:
-        document = read_json(STATE_FILE)
-        if not isinstance(document, dict):
-            return None
-        repos = document.get("repos")
-        if not isinstance(repos, dict):
-            return None
-        entry = repos.get(repo)
-        if not isinstance(entry, dict):
-            return None
-        commit = entry.get("commit")
-        return commit if isinstance(commit, str) and commit else None
+        return decisions.recorded_commit(read_json(STATE_FILE), repo)
 
     @staticmethod
     def _denylisted(commit: str) -> bool:
-        document = read_json(DENYLIST_FILE)
-        if not isinstance(document, dict):
-            return False
-        commits = document.get("commits")
-        return isinstance(commits, dict) and commit in commits
+        return decisions.denylisted(read_json(DENYLIST_FILE), decisions.COMMITS, commit)
 
     # -- answers ------------------------------------------------------------
     def health(self) -> Response:
@@ -457,11 +475,11 @@ class Receiver:
         repo = payload.get("repo")
         commit = payload.get("commit")
         nonce = payload.get("nonce")
-        if not isinstance(repo, str) or repo not in REPOS:
+        if not decisions.allows(ROLE.name, repo):
             return self._refuse(400, "unsupported-repo", repo=str(repo))
-        if not isinstance(commit, str) or not COMMIT_RE.match(commit):
+        if not decisions.is_commit(commit):
             return self._refuse(400, "invalid-commit", repo=repo)
-        if not isinstance(nonce, str) or not NONCE_RE.match(nonce):
+        if not decisions.is_nonce(nonce):
             return self._refuse(400, "invalid-nonce", repo=repo)
         try:
             ts = int(payload["ts"])

@@ -214,7 +214,7 @@ done
 # same holds for every shell helper: the install loop strips the `.sh` and the
 # unit runs the result, which is how smortress-boot-gate.sh shipped 100644 and
 # would have failed the boot gate with 203/EXEC on the first boot after a deploy.
-for program in bootc/server/rootfs/usr/libexec/deploy-receiver.py \
+for program in bootc/lib/deploy/deploy-receiver.py \
   bootc/server/rootfs/usr/libexec/deploy-verify.py scripts/*.sh; do
   check "$program is committed executable" \
     test "$(git ls-files -s "$program" | cut -d' ' -f1)" = 100755

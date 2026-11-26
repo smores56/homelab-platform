@@ -1,0 +1,46 @@
+{
+  "name": "descendancy-behind",
+  "kind": "verify",
+  "role": "server",
+  "request": {
+    "repo": "homelab-platform",
+    "commit": "0123456789abcdef0123456789abcdef01234567"
+  },
+  "state": {
+    "schema": 1,
+    "repos": {
+      "homelab-platform": {
+        "commit": "fedcba9876543210fedcba9876543210fedcba98",
+        "indexDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "manifestDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+      },
+      "homelab-apps": {
+        "commit": "fedcba9876543210fedcba9876543210fedcba98"
+      }
+    },
+    "updated": "2026-01-01T00:00:00Z"
+  },
+  "denylist": null,
+  "world": {
+    "tip": {
+      "homelab-platform": "0123456789abcdef0123456789abcdef01234567",
+      "homelab-apps": "0123456789abcdef0123456789abcdef01234567"
+    },
+    "compare": "behind",
+    "github_status": null,
+    "tag": {
+      "found": true,
+      "name": "sha-0123456789ab",
+      "index": true,
+      "index_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "manifest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "arm64": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+      "config": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+      "label": "0123456789abcdef0123456789abcdef01234567"
+    }
+  },
+  "expect": {
+    "exit": 3,
+    "stdout": "{\"verdict\":\"rejected\",\"reason\":\"behind\",\"repo\":\"homelab-platform\",\"commit\":\"0123456789abcdef0123456789abcdef01234567\",\"detail\":\"$BASE/repos/smores56/homelab-platform/compare/fedcba9876543210fedcba9876543210fedcba98...0123456789abcdef0123456789abcdef01234567 answered behind\"}\n"
+  }
+}

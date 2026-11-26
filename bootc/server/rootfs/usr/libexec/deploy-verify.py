@@ -18,6 +18,12 @@ be retried, while an exhausted budget or a dead network says nothing about the
 commit and has to keep looking like a retryable failure, or the host would
 record a rate limit as a bad deploy for ever.
 
+This file is the server role: the I/O and the exit codes. The questions
+themselves -- the allowlist, the tag name, the digest and label shapes,
+descendancy, the state and denylist records -- are pure functions in
+bootc/lib/deploy/decisions.py, shared with the edge verifier (design #939), and
+the golden fixtures under bootc/lib/deploy/fixtures/ pin both roles' answers.
+
 Stdlib only, and it ships in the image rootfs beside the receiver for the same
 reason: the build's `smortress-src` loop installs `.sh` files only.
 """
@@ -27,7 +33,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import socket
 import sys
 import time
@@ -36,6 +41,31 @@ import urllib.request
 import uuid
 from dataclasses import dataclass
 from typing import Any
+
+
+# The policy tables and the pure checks are shared with the edge verifier
+# (bootc/lib/deploy/decisions.py, design #939 T2). The image installs them at
+# /usr/libexec/deploy; a checkout has them under bootc/lib. The script's own
+# directory is searched first, so a suite run on a host that carries an image
+# never tests the installed copy of the shared code.
+def _decisions_dir() -> str:
+    here = os.path.dirname(os.path.abspath(__file__))
+    for candidate in (
+        os.environ.get("DEPLOY_LIB_DIR", ""),
+        here,
+        os.path.join(here, os.pardir, os.pardir, os.pardir, os.pardir, "lib", "deploy"),
+        "/usr/libexec/deploy",
+    ):
+        if candidate and os.path.isfile(os.path.join(candidate, "decisions.py")):
+            return os.path.abspath(candidate)
+    raise SystemExit(
+        "deploy-verify: no decisions.py beside this program, in the checkout or in "
+        "/usr/libexec/deploy"
+    )
+
+
+sys.path.insert(0, _decisions_dir())
+import decisions  # noqa: E402  # the path above is what makes it importable
 
 STATE_DIR = os.environ.get("DEPLOY_STATE_DIR", "/var/lib/homelab/deploy")
 GITHUB_API = os.environ.get("DEPLOY_GITHUB_API", "https://api.github.com").rstrip("/")
@@ -48,20 +78,20 @@ STATE_FILE = os.path.join(STATE_DIR, "state.json")
 DENYLIST_FILE = os.path.join(STATE_DIR, "denylist.json")
 CACHE_FILE = os.path.join(STATE_DIR, "cache.json")
 
-OWNER = "smores56"
-PLATFORM = "homelab-platform"
-REPOS = ("homelab-platform", "homelab-apps")
+# The server role's policy table: the repo allowlist, the image repository and
+# the revision label live beside the edge's, so two verifiers cannot disagree
+# about which commit an image belongs to.
+ROLE = decisions.role(decisions.SERVER)
+OWNER = decisions.OWNER
+PLATFORM = decisions.PLATFORM
+REPOS = tuple(sorted(ROLE.repos))
 # Must match IMAGE_REPO in bootc/lib/pins.env: the tag, both digests and the
 # revision label are all resolved out of this one repository.
-IMAGE_REPO = "smores56/homelab-platform/server"
-REVISION_LABEL = "org.opencontainers.image.revision"
+IMAGE_REPO = ROLE.image_repo
 CACHE_TTL = 120
 # A manifest or a config blob is a few KiB; a read that is not bounded is a
 # response that can hold the drain open.
 MAX_BODY = 8 * 1024 * 1024
-
-COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
-DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 INDEX_ACCEPT = ", ".join(
     (
@@ -82,12 +112,24 @@ def log(message: str) -> None:
 
 
 class Failure(Exception):
-    """A named outcome, with a reason the journal can hold verbatim."""
+    """A named outcome, with a reason the journal can hold verbatim.
+
+    `kind` is the shared decision vocabulary and `code` this role's exit code:
+    the pair is the contract the drain reads, so the golden fixtures assert
+    both rather than only the words.
+    """
+
+    kind = decisions.INFRASTRUCTURE
+    code = decisions.EXIT_CODES[decisions.VERDICT_INFRA]
 
     def __init__(self, reason: str, detail: str = "") -> None:
         super().__init__(reason)
         self.reason = reason
         self.detail = detail
+
+    def document(self, repo: str, commit: str) -> dict[str, Any]:
+        """The one line the drain reads: the verdict, the reason and the base."""
+        return decisions.Decision(self.kind, self.reason, self.detail).document(repo, commit)
 
 
 class NotDeployable(Failure):
@@ -100,13 +142,32 @@ class NotDeployable(Failure):
     image-bearing commit.
     """
 
+    kind = decisions.NOT_DEPLOYABLE
+    code = decisions.EXIT_CODES[decisions.VERDICT_NOT_DEPLOYABLE]
+
 
 class Refused(Failure):
     """A verdict about the commit: exit 3. No later attempt changes it."""
 
+    kind = decisions.REFUSE
+    code = decisions.EXIT_CODES[decisions.VERDICT_REJECTED]
+
 
 class Infrastructure(Failure):
     """No verdict at all: exit 4, the entry stays queued and is retried."""
+
+
+FAILURES = {
+    decisions.REFUSE: Refused,
+    decisions.NOT_DEPLOYABLE: NotDeployable,
+    decisions.INFRASTRUCTURE: Infrastructure,
+}
+
+
+def _raise(answer: decisions.Decision) -> None:
+    """The one place a shared answer becomes this role's exception."""
+    if not answer.ok:
+        raise FAILURES[answer.kind](answer.reason, answer.detail)
 
 
 # -- HTTP -------------------------------------------------------------------
@@ -268,14 +329,14 @@ def github_get(path: str) -> Reply:
     reply = http_get(url, {"Accept": "application/vnd.github+json"})
     # An exhausted anonymous budget is about the API, not about the commit.
     if reply.status in (403, 429):
-        raise Infrastructure("rate-limited", f"{url} answered {reply.status}")
+        _raise(decisions.rate_limited(reply.status, url))
     return reply
 
 
 def _document(reply: Reply, url: str) -> dict[str, Any]:
     document = reply.json()
     if not isinstance(document, dict):
-        raise Infrastructure("bad-response", f"{url} is not a JSON object")
+        _raise(decisions.infrastructure("bad-response", f"{url} is not a JSON object"))
     return document
 
 
@@ -287,14 +348,12 @@ def tip(repo: str, cache: Cache) -> str:
     if not isinstance(document, dict):
         reply = github_get(path)
         if reply.status != 200:
-            raise Infrastructure(f"http-{reply.status}", url)
+            _raise(decisions.http_failure(reply.status, url))
         document = _document(reply, url)
         cache.put(url, document)
-    pointer = document.get("object")
-    sha = pointer.get("sha") if isinstance(pointer, dict) else None
-    if not isinstance(sha, str) or not COMMIT_RE.match(sha):
-        raise Infrastructure("bad-response", f"{url} carries no commit sha")
-    return sha
+    answer = decisions.tip_from(document, url)
+    _raise(answer)
+    return answer.value
 
 
 def descendancy(repo: str, deployed: str, commit: str, cache: Cache) -> None:
@@ -304,47 +363,38 @@ def descendancy(repo: str, deployed: str, commit: str, cache: Cache) -> None:
     document = cache.get(url)
     if not isinstance(document, dict):
         reply = github_get(path)
-        if reply.status == 404:
-            # A commit GitHub has never seen: nothing about it can be trusted,
-            # and no later call would answer differently.
-            raise Refused("descendancy-unknown", f"{url} answered 404")
-        if reply.status != 200:
-            raise Infrastructure(f"http-{reply.status}", url)
-        document = _document(reply, url)
+        answer = decisions.compare(reply.status, reply.json(), url)
+        _raise(answer)
+        document = reply.json()
         cache.put(url, document)
-    status = document.get("status")
-    if status == "ahead":
         return
-    if status in ("behind", "diverged"):
-        raise Refused(status, f"{url} answered {status}")
-    # `identical` lands here, and so does anything GitHub adds later: the
-    # deployed commit already being the proposed one is the drain's no-op, not a
-    # descendance.
-    raise Refused("descendancy-unknown", f"compare status {status!r}")
+    # A cached answer is a 200 this process already stored; the status matters
+    # only on the way in, which is why the shared check takes it as an argument.
+    _raise(decisions.compare(200, document, url))
 
 
 # -- the registry: tag -> digests -> revision label -------------------------
 
 
 def _digest(value: Any, what: str) -> str:
-    if not isinstance(value, str) or not DIGEST_RE.match(value):
-        raise Infrastructure("registry-response", f"{what}: {value!r}")
-    return value
+    answer = decisions.checked_digest(value, what)
+    _raise(answer)
+    return answer.value
 
 
 def registry_token() -> str:
     url = f"{REGISTRY}/token?service=ghcr.io&scope=repository:{IMAGE_REPO}:pull"
     reply = http_get(url, {"Accept": "application/json"})
     if reply.status in (403, 429):
-        raise Infrastructure("rate-limited", f"{url} answered {reply.status}")
+        _raise(decisions.rate_limited(reply.status, url))
     if reply.status != 200:
-        raise Infrastructure(f"http-{reply.status}", url)
+        _raise(decisions.http_failure(reply.status, url))
     document = reply.json()
     token = None
     if isinstance(document, dict):
         token = document.get("token") or document.get("access_token")
     if not isinstance(token, str) or not token:
-        raise Infrastructure("registry-auth", f"{url} returned no token")
+        _raise(decisions.infrastructure("registry-auth", f"{url} returned no token"))
     return token
 
 
@@ -357,9 +407,9 @@ def registry_get(path: str, token: str, accept: str) -> Reply:
             url, {"Accept": accept, "Authorization": f"Bearer {registry_token()}"}
         )
         if reply.status == 401:
-            raise Infrastructure("registry-auth", f"{url} refused an anonymous token")
+            _raise(decisions.infrastructure("registry-auth", f"{url} refused an anonymous token"))
     if reply.status in (403, 429):
-        raise Infrastructure("rate-limited", f"{url} answered {reply.status}")
+        _raise(decisions.rate_limited(reply.status, url))
     return reply
 
 
@@ -380,14 +430,11 @@ def resolve_digests(commit: str) -> Resolved:
     because bootc reports either the index digest or the platform manifest
     digest, and the boot gate has to accept whichever it reports.
     """
-    tag = f"sha-{commit[:12]}"
+    tag = decisions.tag_for(commit)
     token = registry_token()
     base = f"/v2/{IMAGE_REPO}"
     reply = registry_get(f"{base}/manifests/{tag}", token, INDEX_ACCEPT)
-    if reply.status == 404:
-        raise NotDeployable("tag-missing", f"{IMAGE_REPO}:{tag} is not published")
-    if reply.status != 200:
-        raise Infrastructure(f"http-{reply.status}", f"{base}/manifests/{tag}")
+    _raise(decisions.tag_reference(reply.status, IMAGE_REPO, tag, f"{base}/manifests/{tag}"))
     document = _document(reply, f"{base}/manifests/{tag}")
     index_digest = _digest(reply.headers.get("docker-content-digest"), "Docker-Content-Digest")
     children = document.get("manifests")
@@ -398,44 +445,36 @@ def resolve_digests(commit: str) -> Resolved:
     manifest_digest = _amd64_digest(children, f"{IMAGE_REPO}:{tag}")
     reply = registry_get(f"{base}/manifests/{manifest_digest}", token, INDEX_ACCEPT)
     if reply.status != 200:
-        raise Infrastructure(f"http-{reply.status}", f"{base}/manifests/{manifest_digest}")
+        _raise(decisions.http_failure(reply.status, f"{base}/manifests/{manifest_digest}"))
     manifest = _document(reply, f"{base}/manifests/{manifest_digest}")
     if _digest(reply.headers.get("docker-content-digest"), "Docker-Content-Digest") != manifest_digest:
         # The registry answered with something other than what the index named;
         # recording either digest would be recording a guess.
-        raise Infrastructure("registry-response", f"{base}/manifests/{manifest_digest} is not that digest")
+        _raise(
+            decisions.infrastructure(
+                "registry-response", f"{base}/manifests/{manifest_digest} is not that digest"
+            )
+        )
     return Resolved(token, tag, index_digest, manifest_digest, manifest)
 
 
 def _amd64_digest(children: Any, what: str) -> str:
-    if not isinstance(children, list):
-        raise Refused("no-amd64-manifest", f"{what} carries no manifest list")
-    for child in children:
-        if not isinstance(child, dict):
-            continue
-        platform = child.get("platform")
-        if not isinstance(platform, dict):
-            continue
-        if platform.get("os") == "linux" and platform.get("architecture") == "amd64":
-            return _digest(child.get("digest"), "an index entry")
-    raise Refused("no-amd64-manifest", f"{what} has no linux/amd64 manifest")
+    answer = decisions.amd64_digest(children, what)
+    _raise(answer)
+    return answer.value
 
 
 def revision_label(resolved: Resolved) -> str:
     """The commit the image itself says it was built from."""
-    config = resolved.document.get("config")
-    digest = _digest(config.get("digest") if isinstance(config, dict) else None, "config digest")
-    path = f"/v2/{IMAGE_REPO}/blobs/{digest}"
+    digest = decisions.config_digest(resolved.document)
+    _raise(digest)
+    path = f"/v2/{IMAGE_REPO}/blobs/{digest.value}"
     reply = registry_get(path, resolved.token, "*/*")
     if reply.status != 200:
-        raise Infrastructure(f"http-{reply.status}", path)
-    document = _document(reply, path)
-    section = document.get("config")
-    labels = section.get("Labels") if isinstance(section, dict) else None
-    revision = labels.get(REVISION_LABEL) if isinstance(labels, dict) else None
-    if not isinstance(revision, str) or not COMMIT_RE.match(revision):
-        raise Refused("label-missing", f"{IMAGE_REPO}:{resolved.tag} carries no {REVISION_LABEL}")
-    return revision
+        _raise(decisions.http_failure(reply.status, path))
+    answer = decisions.revision_label(_document(reply, path), IMAGE_REPO, resolved.tag)
+    _raise(answer)
+    return answer.value
 
 
 # -- the host's own records -------------------------------------------------
@@ -463,15 +502,13 @@ def deployed_commit(repo: str) -> str:
     if not isinstance(document, dict):
         # A record that will not parse cannot be trusted as an ancestor either.
         raise Refused("bootstrap-required", f"{STATE_FILE} is unreadable")
-    repos = document.get("repos")
-    entry = repos.get(repo) if isinstance(repos, dict) else None
-    commit = entry.get("commit") if isinstance(entry, dict) else None
-    if not isinstance(commit, str) or not COMMIT_RE.match(commit):
+    commit = decisions.deployed_commit(document, repo)
+    if commit is None:
         raise Refused("bootstrap-required", f"no deployed commit for {repo}")
     return commit
 
 
-def denylisted(kind: str, value: str) -> bool:
+def denylisted(table: str, value: str) -> bool:
     """The host's own refusal list: apps commits, platform digests, either form."""
     if not os.path.exists(DENYLIST_FILE):
         return False
@@ -479,8 +516,7 @@ def denylisted(kind: str, value: str) -> bool:
     if not isinstance(document, dict):
         # Fail closed: a list that will not parse is not an empty list.
         raise Infrastructure("denylist-unreadable", DENYLIST_FILE)
-    table = document.get(kind)
-    return isinstance(table, dict) and value in table
+    return decisions.denylisted(document, table, value)
 
 
 # -- the ordered verification -----------------------------------------------
@@ -501,7 +537,7 @@ def verify(repo: str, commit: str) -> dict[str, Any]:
         raise Refused("already-deployed", commit)
     descendancy(repo, deployed, commit, cache)
     verdict: dict[str, Any] = {
-        "verdict": "verified",
+        "verdict": decisions.VERDICT_VERIFIED,
         "repo": repo,
         "commit": commit,
         "deployed": deployed,
@@ -531,10 +567,6 @@ def emit(document: dict[str, Any]) -> None:
     sys.stdout.flush()
 
 
-def _detail(failure: Failure) -> dict[str, str]:
-    return {"detail": failure.detail} if failure.detail else {}
-
-
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="deploy-verify",
@@ -543,27 +575,26 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--repo", required=True, choices=REPOS)
     parser.add_argument("--commit", required=True)
     args = parser.parse_args(argv)
-    if not COMMIT_RE.match(args.commit):
+    if not decisions.is_commit(args.commit):
         log("--commit must be a 40-character lowercase hex sha")
         return 2
-    base = {"repo": args.repo, "commit": args.commit}
     try:
         verdict = verify(args.repo, args.commit)
     except NotDeployable as failure:
-        emit({"verdict": "not-deployable", "reason": failure.reason, **base, **_detail(failure)})
+        emit(failure.document(args.repo, args.commit))
         log(f"{args.repo} {args.commit}: not deployable ({failure.reason})")
-        return 5
+        return failure.code
     except Refused as failure:
-        emit({"verdict": "rejected", "reason": failure.reason, **base, **_detail(failure)})
+        emit(failure.document(args.repo, args.commit))
         log(f"{args.repo} {args.commit}: rejected ({failure.reason}) {failure.detail}".rstrip())
-        return 3
+        return failure.code
     except Infrastructure as failure:
-        emit({"verdict": "infra-failure", "reason": failure.reason, **base, **_detail(failure)})
+        emit(failure.document(args.repo, args.commit))
         log(f"{args.repo} {args.commit}: could not verify ({failure.reason}) {failure.detail}".rstrip())
-        return 4
+        return failure.code
     emit(verdict)
     log(f"{args.repo} {args.commit}: verified")
-    return 0
+    return decisions.EXIT_CODES[decisions.VERDICT_VERIFIED]
 
 
 if __name__ == "__main__":

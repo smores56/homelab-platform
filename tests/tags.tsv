@@ -7,7 +7,7 @@ all	tests/tags.sh tests/tags.tsv tests/tags.bats tests/helpers.bash tests/parity
 none	*.md docs/* .github/* .gitignore CODEOWNERS
 core/app-quadlets	tests/core/app-quadlets.bats units/quadlet/* units/systemd/* bootc/server/* scripts/app-images.sh scripts/storage-layout.sh
 core/storage-layout	tests/core/storage-layout.bats scripts/storage-layout.sh scripts/init-zpool.sh units/systemd/smortress-zpool.service
-core/check	tests/core/check.bats scripts/legacy/* scripts/deploy-state.sh scripts/deploy-cli.sh bootc/server/rootfs/usr/libexec/* bootc/server/rootfs/usr/share/smortress/secrets.manifest units/systemd/smortress-deploy* units/systemd/smortress-boot-gate.service docs/core/server-image.md docs/core/t0-gate.md docs/manual-steps.md
+core/check	tests/core/check.bats scripts/legacy/* scripts/deploy-state.sh scripts/deploy-cli.sh bootc/lib/deploy/* bootc/server/rootfs/usr/share/smortress/secrets.manifest units/systemd/smortress-deploy* units/systemd/smortress-boot-gate.service docs/core/server-image.md docs/core/t0-gate.md docs/manual-steps.md
 core/operator-access	tests/core/operator-access.bats scripts/operator-access.sh docs/manual-steps.md
 core/apps-egress	tests/core/apps-egress.bats units/systemd/smortress-apps-deny.service units/systemd/smortress-apps-egress.service bootc/server/rootfs/etc/nftables/smortress-apps*.nft bootc/server/Containerfile
 core/apps-user	tests/core/apps-user.bats scripts/apps-user.sh units/systemd/smortress-apps-user.service units/systemd/smortress-apps-quota.service units/systemd/smortress-apps-egress.service bootc/server/rootfs/etc/sysusers.d/smortress-apps.conf bootc/server/rootfs/etc/tmpfiles.d/smortress.conf bootc/server/rootfs/usr/share/smortress/apps-policy.json bootc/server/rootfs/etc/nftables/smortress-apps.nft
@@ -15,8 +15,8 @@ core/restic-drill	tests/core/restic-drill.bats scripts/restic-plane-common.sh sc
 core/agent-drill	tests/core/agent-drill.bats scripts/agent-runtime-drill.sh
 core/tailscale-serve	tests/core/tailscale-serve.bats scripts/tailscale-serve.sh scripts/apps-schema.py
 deploy/state	tests/deploy/state.bats scripts/deploy-state.sh scripts/deploy-drain.sh scripts/deploy-platform.sh scripts/deploy-apps.sh units/systemd/smortress-deploy.service units/systemd/smortress-boot-gate.service scripts/storage-layout.sh
-deploy/atomic	tests/deploy/atomic.bats scripts/deploy-state.sh bootc/server/rootfs/usr/libexec/deploy-verify.py bootc/server/rootfs/usr/libexec/deploy-receiver.py
-deploy/receiver	tests/deploy/receiver.bats scripts/deploy-state.sh bootc/server/rootfs/usr/libexec/deploy-receiver.py
+deploy/atomic	tests/deploy/atomic.bats scripts/deploy-state.sh bootc/server/rootfs/usr/libexec/deploy-verify.py bootc/lib/deploy/*
+deploy/receiver	tests/deploy/receiver.bats scripts/deploy-state.sh bootc/lib/deploy/*
 core/restic-plane	tests/core/restic-plane.bats scripts/smortress-restic-* scripts/restic-plane-common.sh scripts/storage-layout.sh scripts/sops-decrypt.sh scripts/smortress-secrets-seed.sh units/systemd/smortress-restic-* units/systemd/var-lib-restic-*.mount bootc/server/Containerfile bootc/server/rootfs/usr/share/smortress/secrets.manifest
 deploy/apps	tests/deploy/apps.bats scripts/deploy-apps.sh scripts/deploy/apps/* scripts/lib/log.sh scripts/apps-schema.py scripts/deploy-state.sh scripts/deploy-drain.sh scripts/smortress-boot-gate.sh
 deploy/apps-health	tests/deploy/apps-health.bats scripts/smortress-apps-health.sh scripts/deploy-state.sh
@@ -25,7 +25,8 @@ deploy/heartbeat	tests/deploy/heartbeat.bats scripts/deploy-heartbeat.sh scripts
 deploy/notify	tests/deploy/notify.bats .github/workflows/publish-server-image.yml .github/workflows/ci.yml scripts/check-action-pins.sh scripts/check-pr-secret-boundary.sh
 deploy/platform	tests/deploy/platform.bats scripts/deploy-platform.sh scripts/deploy-cli.sh scripts/deploy-state.sh tests/deploy/fake-curl.sh
 deploy/poll	tests/deploy/poll.bats scripts/deploy-poll.sh scripts/deploy-state.sh bootc/server/rootfs/usr/libexec/deploy-verify.py units/systemd/smortress-deploy-poll.* bootc/server/Containerfile
-deploy/verify	tests/deploy/verify.bats bootc/server/rootfs/usr/libexec/deploy-verify.py scripts/deploy-state.sh scripts/deploy-drain.sh
+deploy/verify	tests/deploy/verify.bats bootc/server/rootfs/usr/libexec/deploy-verify.py scripts/deploy-state.sh scripts/deploy-drain.sh bootc/lib/deploy/*
+deploy/fixtures	tests/deploy/fixtures.bats bootc/lib/deploy/*
 apps/check	tests/apps/check.bats scripts/apps-schema.py
 apps/ingress	tests/apps/ingress.bats scripts/apps-ingress.sh bootc/server/Containerfile units/systemd/smortress-app-ingress@.service
 apps/ingress-reconcile	tests/apps/ingress-reconcile.bats scripts/apps-ingress-reconcile.sh units/systemd/smortress-app-ingress-reconcile.service
@@ -40,7 +41,7 @@ secrets/decrypt	tests/secrets/decrypt.bats scripts/sops-decrypt.sh
 secrets/migration	tests/secrets/migration.bats scripts/smortress-secrets-seed.sh scripts/secrets-index.py
 secrets/policy	tests/secrets/policy.bats scripts/sops-policy.py
 secrets/rotate	tests/secrets/rotate.bats scripts/secret.sh secrets/index.json secrets/boot.json .sops.yaml scripts/sops-policy.py scripts/secrets-check.py
-lint	tests/lint.bats .github/* CODEOWNERS .yamllint.yaml scripts/* tests/* provision/* backrest/* .githooks/*
+lint	tests/lint.bats .github/* CODEOWNERS .yamllint.yaml scripts/* tests/* provision/* backrest/* .githooks/* bootc/lib/*
 docs	tests/docs.bats scripts/check-doc-refs.py scripts/doc-refs-baseline.txt
 tofu-fmt	tests/tofu-fmt.bats tofu/*
 actionlint	tests/actionlint.bats .github/*
