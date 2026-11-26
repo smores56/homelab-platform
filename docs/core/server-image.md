@@ -42,8 +42,8 @@ rollback path. Operator-only actions are in `docs/manual-steps.md#install-a-host
 | `/usr/lib/systemd/system/smortress-agent-config.service` | Seeds each gateway's `config.yaml` (`cp -n`), substitutes the facade token from its decrypted ciphertext while the placeholder is still there, rewrites `.env`'s `API_SERVER_KEY` and `webui.env`'s gateway key and UI password at every boot, and creates each facade's memory root and each UI's state and workspace directories. |
 | `/usr/libexec/agent-config-seed` | `scripts/agent-config-seed.sh`: the seeding itself, so the token is read from a file into a variable instead of being spliced into an `ExecStart` line. |
 | `/usr/lib/systemd/system/smortress-nvidia-cdi.service` | Generates `/etc/cdi/nvidia.yaml` at boot so `AddDevice=nvidia.com/gpu=all` resolves for the model container; ordered before it. |
-| `/usr/libexec/deploy-receiver.py` | The deploy listener (#798): loopback HTTP on `127.0.0.1:8484`, HMAC over the raw request bytes against two rotation slots, ±300 s skew, nonce ring under its own `flock listener.lock`, 64 KiB body cap, queue cap 32. It resolves no tag and writes no deployment state; it ships in the rootfs because the build's `smortress-src` loop installs `*.sh` only. |
-| `/usr/libexec/deploy-verify.py` | The host's own verification: tip of `main`, descendancy from the deployed commit, tag `sha-<commit[:12]>` → digests, `org.opencontainers.image.revision` label, denylist. Anonymous GitHub and registry calls, cached 120 s, 30 s each. Also rootfs, for the same reason. |
+| `/usr/libexec/deploy-receiver.py` | The deploy listener (#798): loopback HTTP on `127.0.0.1:8484`, HMAC over the raw request bytes against two rotation slots, ±300 s skew, nonce ring under its own `flock listener.lock`, 64 KiB body cap, queue cap 32. It resolves no tag and writes no deployment state. The source is `bootc/lib/deploy/deploy-receiver.py`, because the edge runs the same listener (#939); the Containerfile installs it here because the listener unit runs it by this name. |
+| `/usr/libexec/deploy-verify.py` | The host's own verification: tip of `main`, descendancy from the deployed commit, tag `sha-<commit[:12]>` → digests, `org.opencontainers.image.revision` label, denylist. Anonymous GitHub and registry calls, cached 120 s, 30 s each. This file is the server role only: the questions themselves are pure functions in `/usr/libexec/deploy/decisions.py` (`bootc/lib/deploy/`), which both bootc images install, and `bootc/lib/deploy/fixtures/` pins the answers the edge has to match. Still rootfs, because the build's `smortress-src` loop installs `*.sh` only. |
 | `/usr/libexec/{deploy-state,deploy-drain,deploy-platform,deploy-apps,deploy-poll,deploy-heartbeat}` | `scripts/deploy-*.sh`: the state library, the queue drain (single writer of `state.json`), the platform snapshot gate and stage, the apps apply and revert, the daily deploy window and the five-minute dead-man. The apps apply sources its phases from `/usr/libexec/deploy/apps/` (`scripts/deploy/apps/*.sh`). |
 | `/usr/libexec/smortress-boot-gate` | `scripts/smortress-boot-gate.sh`: reconciles an interrupted apps apply, then keeps or rolls back the deployment this host just booted. |
 | `/usr/libexec/smortress-deploy` | `scripts/deploy-cli.sh`, staged under the name the runbook uses: `status`, `release --force`, `unblock`, `bootstrap`. |
@@ -321,8 +321,11 @@ replaces an older pending one, with one rescan before exit.
 It is the single writer of `state.json`. `TimeoutStartSec=7200` bounds a wedged
 drain, and every external command inside it has its own deadline.
 
-`/usr/libexec/deploy-verify.py` answers "may this commit deploy" for every entry,
-fail-closed and journaled with the reason:
+The drain's loop is `bootc/lib/deploy/drain.sh` and the answers it acts on are
+`bootc/lib/deploy/decisions.py`, both installed under `/usr/libexec/deploy/`;
+`scripts/deploy-drain.sh` is only the server role's part -- the snapshot gate, the
+stage and the tenant apply. `/usr/libexec/deploy-verify.py` answers "may this
+commit deploy" for every entry, fail-closed and journaled with the reason:
 
 1. The commit is off the denylist, is the tip of `main` *now*
    (`GET /repos/smores56/<repo>/git/ref/heads/main`), is not the deployed commit,

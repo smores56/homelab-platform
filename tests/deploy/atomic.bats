@@ -18,7 +18,7 @@ load ../helpers
 
 lib=scripts/deploy-state.sh
 verify=bootc/server/rootfs/usr/libexec/deploy-verify.py
-receiver=bootc/server/rootfs/usr/libexec/deploy-receiver.py
+receiver=bootc/lib/deploy/deploy-receiver.py
 
 setup() {
     for file in "$lib" "$verify" "$receiver"; do
@@ -72,13 +72,14 @@ write_with() { # <impl> <path> <payload-file>
             atomic_write "$2" <"$3"
             ;;
         verify | receiver)
-            python3 - "$1" "$2" "$3" <<'PY'
+            python3 - "$1" "$2" "$3" "$verify" "$receiver" <<'PY'
 import importlib.util
 import sys
 
-impl, path, payload = sys.argv[1], sys.argv[2], sys.argv[3]
+impl, path, payload, verify, receiver = sys.argv[1:6]
+sources = {"verify": verify, "receiver": receiver}
 name = "deploy_verify" if impl == "verify" else "deploy_receiver"
-spec = importlib.util.spec_from_file_location(name, f"bootc/server/rootfs/usr/libexec/deploy-{impl}.py")
+spec = importlib.util.spec_from_file_location(name, sources[impl])
 module = importlib.util.module_from_spec(spec)
 sys.modules[name] = module
 spec.loader.exec_module(module)

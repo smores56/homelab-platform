@@ -23,14 +23,14 @@ image_repo_agrees() { # <pins.env> <stage script> <verifier>
   repo=$(sed -nE 's/^IMAGE_REPO=//p' "$pins" | head -n 1)
   repo=${repo%\"}; repo=${repo#\"}; repo=${repo%\'}; repo=${repo#\'}
   [[ -n $repo ]] || return 1
-  # The verifier names the repository below its registry host: it builds the API
-  # path from its own REGISTRY constant.
+  # The verifier's policy table names the repository below its registry host: the
+  # API path is built from that value.
   bare=${repo#*/}
   grep -qF -- "$repo" "$stage" || return 1
   grep -qF -- "IMAGE_REPO = \"$bare\"" "$verify"
 }
 check "the image repository agrees across the pins, the stage and the verifier" \
-  image_repo_agrees bootc/lib/pins.env scripts/deploy-platform.sh bootc/server/rootfs/usr/libexec/deploy-verify.py
+  image_repo_agrees bootc/lib/pins.env scripts/deploy-platform.sh bootc/lib/deploy/decisions.py
 # bootc's first act in a mutation is to remount /sysroot writable; with
 # ProtectSystem=strict that remount is the failure unless the unit re-opens
 # /sysroot itself. `/sysroot/ostree` alone produced "Initializing storage:
@@ -44,7 +44,7 @@ repo_fixture=$(mktemp -d)
 sed -E 's|^IMAGE_REPO=.*$|IMAGE_REPO=ghcr.io/example/other/server|' bootc/lib/pins.env \
   >"$repo_fixture/pins.env"
 if image_repo_agrees "$repo_fixture/pins.env" scripts/deploy-platform.sh \
-  bootc/server/rootfs/usr/libexec/deploy-verify.py; then
+  bootc/lib/deploy/decisions.py; then
   bad "a drifted image repository is refused"
 else
   ok "a drifted image repository is refused"

@@ -52,6 +52,8 @@ expect "a quadlet change selects the server-image and core groups" $'server-imag
   "$(selected units/quadlet/pattern.container)"
 expect "a systemd unit change selects the server-image and core groups" $'server-image\ncore' \
   "$(selected units/systemd/smortress-app-ingress@.service)"
+expect "a shared deploy change selects the image, deploy and lint groups" \
+  $'server-image\ndeploy\nlint' "$(selected bootc/lib/deploy/decisions.py)"
 expect "a secret change selects the secrets group" "secrets" \
   "$(selected secrets/boot.json)"
 expect "a config change selects secrets and lint" $'secrets\nlint' \
