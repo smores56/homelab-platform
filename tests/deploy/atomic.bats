@@ -17,8 +17,8 @@
 load ../helpers
 
 lib=scripts/deploy-state.sh
-verify=image/rootfs/usr/libexec/deploy-verify.py
-receiver=image/rootfs/usr/libexec/deploy-receiver.py
+verify=bootc/server/rootfs/usr/libexec/deploy-verify.py
+receiver=bootc/server/rootfs/usr/libexec/deploy-receiver.py
 
 setup() {
     for file in "$lib" "$verify" "$receiver"; do
@@ -78,7 +78,7 @@ import sys
 
 impl, path, payload = sys.argv[1], sys.argv[2], sys.argv[3]
 name = "deploy_verify" if impl == "verify" else "deploy_receiver"
-spec = importlib.util.spec_from_file_location(name, f"image/rootfs/usr/libexec/deploy-{impl}.py")
+spec = importlib.util.spec_from_file_location(name, f"bootc/server/rootfs/usr/libexec/deploy-{impl}.py")
 module = importlib.util.module_from_spec(spec)
 sys.modules[name] = module
 spec.loader.exec_module(module)

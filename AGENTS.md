@@ -22,8 +22,8 @@
 
 ## Platform conventions
 
-- One immutable uCore bootc host, configured by this repository alone: `image/`
-  builds it, `units/` and `image/rootfs/` are what boots (`docs/core/server-image.md`).
+- One immutable uCore bootc host, configured by this repository alone: `bootc/server/`
+  builds it, `units/` and `bootc/server/rootfs/` are what boots (`docs/core/server-image.md`).
   There is no configuration-management layer beside the image.
 - Podman Quadlets are the only container control plane. A deployment change is
   an image change plus a maintenance-window reboot; stateful Quadlets never

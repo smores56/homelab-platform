@@ -27,7 +27,7 @@ reader that boots the host.
 `sops-decrypt.service` reads the ciphertext from `/var/lib/smortress/secrets`
 (root-only, `0700`/`0600`) and writes each output into `/run/smortress/secrets` by
 extracting the dotted `key` from the `bundle` its line names, with the owner, mode
-and `format` from `image/rootfs/usr/share/smortress/secrets.manifest`.
+and `format` from `bootc/server/rootfs/usr/share/smortress/secrets.manifest`.
 
 That manifest is metadata — a name, a bundle, a key, an owner, a mode, a format —
 never a secret, so the image owns it. It does **not** ship under `/etc`: bootc

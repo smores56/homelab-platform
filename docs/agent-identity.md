@@ -50,7 +50,7 @@ scripts/secret.sh stage agent-github-token.yaml    # both bundles are agents.jso
 ```
 
 ```text
-# image/rootfs/usr/share/smortress/secrets.manifest
+# bootc/server/rootfs/usr/share/smortress/secrets.manifest
 agent-github-token.yaml  agents.json  agent.github_token  root  root  0400  value
 sdlc-github-token.yaml   agents.json  agent.sdlc_github_token  root  root  0400  value
 ```

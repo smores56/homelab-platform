@@ -23,7 +23,7 @@ load ../helpers
 platform=scripts/deploy-platform.sh
 gate=scripts/smortress-boot-gate.sh
 lib=scripts/deploy-state.sh
-snippet=image/rootfs/usr/lib/bootupd/grub2-static/configs.d/10-smortress-count.cfg
+snippet=bootc/server/rootfs/usr/lib/bootupd/grub2-static/configs.d/10-smortress-count.cfg
 
 commit=9f2c0d3b1a4e5f60718293a4b5c6d7e8f9012345
 digest_index=sha256:1111111111111111111111111111111111111111111111111111111111111111
@@ -1321,13 +1321,13 @@ gate_failed_rollback() {
 }
 
 @test "a hung PID 1 becomes a reboot the counter can act on" {
-    assert grep -qF -- 'RuntimeWatchdogSec=1min' image/rootfs/etc/systemd/system.conf.d/10-watchdog.conf
+    assert grep -qF -- 'RuntimeWatchdogSec=1min' bootc/server/rootfs/etc/systemd/system.conf.d/10-watchdog.conf
 }
 
 # A panic reboot without a bootloader counter loops the same image forever, so
 # the image must not ship one until counting is installed on the host.
 @test "no panic reboot ships without a counter" {
-    assert [ ! -e image/rootfs/etc/sysctl.d/10-panic.conf ]
+    assert [ ! -e bootc/server/rootfs/etc/sysctl.d/10-panic.conf ]
 }
 
 # --- 11. a host whose GRUB does not read the counter says so ----------------

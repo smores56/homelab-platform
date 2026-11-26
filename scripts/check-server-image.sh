@@ -17,8 +17,8 @@ for _key in "${dataset_order[@]}"; do
 done
 unset _key
 cd "$repo"
-# shellcheck source=../image/pins.env disable=SC1091
-source image/pins.env
+# shellcheck source=../bootc/lib/pins.env disable=SC1091
+source bootc/lib/pins.env
 
 fail=0
 ok() { printf 'ok   %s\n' "$1"; }
@@ -31,10 +31,10 @@ probe() { local name=$1; shift; if "$@" >/dev/null 2>&1; then ok "$name"; else b
 no_file_exists() { [[ ! -e $1 ]]; }
 
 # shellcheck source=/dev/null
-source "$repo/scripts/check/image/image.sh"
+source "$repo/scripts/check/server/image.sh"
 # shellcheck source=/dev/null
-source "$repo/scripts/check/image/access.sh"
+source "$repo/scripts/check/server/access.sh"
 # shellcheck source=/dev/null
-source "$repo/scripts/check/image/secrets.sh"
+source "$repo/scripts/check/server/secrets.sh"
 # shellcheck source=/dev/null
-source "$repo/scripts/check/image/deploy.sh"
+source "$repo/scripts/check/server/deploy.sh"

@@ -86,7 +86,7 @@ LABEL org.opencontainers.image.title="smortress server image" \
 
 # Runtime helpers, units and ciphertext. The public cosign key is the only
 # signature-related material in the image; the policy references it by path.
-COPY image/rootfs/ /
+COPY bootc/server/rootfs/ /
 # The build-stage artifact: the PAM module the sudo stack loads.
 COPY --from=sudo-build /src/pam_rssh/target/release/libpam_rssh.so /usr/lib64/security/libpam_rssh.so
 COPY units/systemd/ /usr/lib/systemd/system/
@@ -141,7 +141,7 @@ COPY units/quadlet/immich.network units/quadlet/immich-postgres.container \
      /usr/share/containers/systemd/
 COPY secrets/boot.json secrets/apps.json secrets/agents.json /etc/smortress/secrets/
 COPY secrets/index.json /usr/share/smortress/secrets.index.json
-COPY image/cosign.pub /etc/pki/containers/smortress.pub
+COPY bootc/server/cosign.pub /etc/pki/containers/smortress.pub
 
 # The hosted-model proxy is a python program, not a shell helper, so it keeps its
 # name and needs its own mode: the smortress-src loop below only strips `.sh`.

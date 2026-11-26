@@ -18,11 +18,11 @@ core=scripts/agent-job.sh
 personal=scripts/agent-job-personal.sh
 general=scripts/agent-job-general.sh
 provision=scripts/agent-job-provision.sh
-sysusers=image/rootfs/etc/sysusers.d/smortress-agent-shell.conf
-tmpfiles=image/rootfs/etc/tmpfiles.d/smortress-agent-shell.conf
-nft=image/rootfs/etc/nftables/smortress-agent-jobs.nft
+sysusers=bootc/server/rootfs/etc/sysusers.d/smortress-agent-shell.conf
+tmpfiles=bootc/server/rootfs/etc/tmpfiles.d/smortress-agent-shell.conf
+nft=bootc/server/rootfs/etc/nftables/smortress-agent-jobs.nft
 service=units/systemd/smortress-agent-job-provision.service
-job_image_file=image/rootfs/etc/smortress/agent/job-image
+job_image_file=bootc/server/rootfs/etc/smortress/agent/job-image
 doc=docs/agent-jobs.md
 
 file_exists() { [[ -e $1 ]]; }
@@ -601,11 +601,11 @@ SHIM
 # --- image wiring --------------------------------------------------------------
 
 @test "the image installs the dispatcher" {
-    grep -q 'scripts/agent-job.sh' image/Containerfile
+    grep -q 'scripts/agent-job.sh' bootc/server/Containerfile
 }
 
 @test "the image enables the provisioning unit" {
-    grep -q 'smortress-agent-job-provision.service' image/Containerfile
+    grep -q 'smortress-agent-job-provision.service' bootc/server/Containerfile
 }
 
 @test "no gateway or job unit receives a Podman socket" {

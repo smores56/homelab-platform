@@ -6,7 +6,7 @@
   "albumIds": ["synthetic-album"],
   "original": {
     "filename": "synthetic.png",
-    "mimeType": "image/png",
+    "mimeType": "bootc/server/png",
     "dataBase64": "c3ludGhldGljIGltYWdlIGJ5dGVzIGZvciBpbW1pY2g="
   },
   "faces": [{"person": "Example Person"}],

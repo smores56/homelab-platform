@@ -14,10 +14,10 @@
 load ../helpers
 
 script=scripts/apps-user.sh
-sysusers=image/rootfs/etc/sysusers.d/smortress-apps.conf
+sysusers=bootc/server/rootfs/etc/sysusers.d/smortress-apps.conf
 unit=units/systemd/smortress-apps-user.service
-nft=image/rootfs/etc/nftables/smortress-apps.nft
-tmpfiles=image/rootfs/etc/tmpfiles.d/smortress.conf
+nft=bootc/server/rootfs/etc/nftables/smortress-apps.nft
+tmpfiles=bootc/server/rootfs/etc/tmpfiles.d/smortress.conf
 
 # Everything the provisioner touches is per test: each @test runs in its own
 # process, so the fake account, the subid files and the policy dir live under
@@ -116,7 +116,7 @@ done
 # for user@<uid> silently stops applying the moment sysusers allocates another
 # id, which is how the gate and the slice limits used to disappear unnoticed.
 @test "no unit or image line names the tenant user manager by number" {
-    numeric_user_units=$(grep -rlE 'user@[0-9]+|user-[0-9]+\.slice' units image/Containerfile 2>/dev/null |
+    numeric_user_units=$(grep -rlE 'user@[0-9]+|user-[0-9]+\.slice' units bootc/server/Containerfile 2>/dev/null |
         sort | paste -sd' ' || true)
     assert_equal "$numeric_user_units" ""
 }
@@ -132,11 +132,11 @@ done
 }
 
 @test "the image ships the plan verifier" {
-    grep -q '/usr/libexec/apps-schema' image/Containerfile
+    grep -q '/usr/libexec/apps-schema' bootc/server/Containerfile
 }
 
 @test "the image enables the provisioning unit" {
-    grep -q 'smortress-apps-user.service' image/Containerfile
+    grep -q 'smortress-apps-user.service' bootc/server/Containerfile
 }
 
 # The gate is what orders the prerequisites ahead of the tenant's manager: a
@@ -192,9 +192,9 @@ done
 
 # The tenant's looser image policy is root-owned and named by the renderer.
 @test "the tenant image policy is shipped and root-owned" {
-    [[ -f image/rootfs/usr/share/smortress/apps-policy.json ]]
+    [[ -f bootc/server/rootfs/usr/share/smortress/apps-policy.json ]]
     jq -e '.default[0].type == "insecureAcceptAnything"' \
-        image/rootfs/usr/share/smortress/apps-policy.json >/dev/null 2>&1
+        bootc/server/rootfs/usr/share/smortress/apps-policy.json >/dev/null 2>&1
 }
 
 # A range that already belongs to another account is refused.

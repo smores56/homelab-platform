@@ -13,7 +13,7 @@ changes by pull request from a fork, so no PR workflow can read a secret.
 
 | Path | Contents |
 | --- | --- |
-| `image/` | The server image: Containerfile, rootfs, pins and the cosign public key (`docs/core/server-image.md`) |
+| `bootc/server/` | The server image: Containerfile, rootfs, pins and the cosign public key (`docs/core/server-image.md`) |
 | `units/systemd/` | systemd units baked into the image: gates, backup timers, mounts (Quadlets are below) |
 | `units/quadlet/` | Podman Quadlet workloads: the agents, Immich, OPDShelf, Syncthing and their networks |
 | `ignition/` | First-boot Ignition for the bootc deployment |

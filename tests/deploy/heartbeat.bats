@@ -266,5 +266,5 @@ expect_failure() {
 }
 
 @test "the image enables the heartbeat timer" {
-    assert grep -qF 'smortress-deploy-heartbeat.timer' image/Containerfile
+    assert grep -qF 'smortress-deploy-heartbeat.timer' bootc/server/Containerfile
 }

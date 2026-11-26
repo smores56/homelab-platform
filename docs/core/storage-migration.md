@@ -192,7 +192,7 @@ and the helper refuses a target without room instead of filling the disk.
 Re-link the dotfiles as `smores` (the absolute symlinks under `~` still point at
 `/var/home/core`) and confirm `sshd -T | grep allowusers` reports `smores`. The
 YubiKey needs no enrolment on the host: mint the sudo credential on a client,
-commit its public half to `image/rootfs/etc/ssh/sudo_authorized_keys`, deploy,
+commit its public half to `bootc/server/rootfs/etc/ssh/sudo_authorized_keys`, deploy,
 and prove the tap with the drill in `docs/manual-steps.md#the-tailnet-policy-sshd-and-sudo`.
 
 Two stores under `~` record the old home path as absolute state and fail after
