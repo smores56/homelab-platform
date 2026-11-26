@@ -39,6 +39,22 @@ bytes, never a row whose object is missing, and a refused pass commits nothing.
 it did not see: that refusal is the whole reason deletion cannot be inferred
 from silence.
 
+The version counts committed changes, not passes: it moves when the pass wrote a
+row, tombstoned one, or marked one absent for the first time, and it stays put
+when the enumeration matched what the replica already held. The cursor still
+advances, because it is the provider's position rather than the state. The
+`snapshot` (`<state_id>-v<version>`) is what names a derived artifact, so an
+unchanged pass is also a pass that does not invalidate the facade's index;
+silence is reported as `"changed": false` in the pass's JSON line rather than as
+a version that moved for nothing (`null` on a dry run, which committed nothing).
+A source that has never changed is version 0.
+
+Garbage is collected by the pass that created it: a pass that writes a row sweeps
+unreferenced bytes after it commits. A pass that wrote bytes and then aborted -- a
+refused commit, a collector refusal, a kill -- leaves `.gc-pending` in the replica
+root, because the pass that follows it may change nothing and would otherwise
+never sweep.
+
 ## The absence ledger
 
 The provider is not the only thing that makes an object disappear. Ask "why is
@@ -142,7 +158,7 @@ restarts during an upgrade and the collector must outlive it. A refusal is
 different: `EpochError` and `PublishError` commit nothing and exit
 non-zero, because nothing can be published from a mailbox whose epoch moved and
 a human has to reconcile it. Each committed pass prints one JSON line with
-`source_id`, `version`, `objects`, `carried`, `deleted` and
+`source_id`, `version`, `changed`, `objects`, `carried`, `deleted` and
 `details.folders`.
 
 ## Calendar
@@ -492,7 +508,10 @@ index root, per source and per snapshot, built from those projections. It is
 derived and never authoritative -- the state is the record of what was
 collected, the index is a cache of reading it, and deleting the index costs one
 rebuild and no data. A new snapshot publishes a new file, a short-word query
-falls back to the scan, and nothing outside the facade reads the file.
+falls back to the scan, and nothing outside the facade reads the file. Because
+the snapshot is the file's name, a pass that changed nothing leaves the file
+where it is: the same state answers from the same index, and only a real change
+pays the projection and the write.
 
 ## Running one
 
@@ -523,7 +542,8 @@ and is never guessed.
 `--dry-run` enumerates and validates, then publishes nothing: no object bytes
 and no database, so a first run against a real provider can be read before
 anything is committed. There is no `--generation` flag: a pass advances the
-state's version instead.
+state's version when it changed something, and reports `"changed": false` when
+it did not.
 
 ## What a collector does not do
 

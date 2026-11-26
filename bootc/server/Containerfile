@@ -114,6 +114,16 @@ COPY scripts/storage-layout.sh scripts/zfs-ready.sh scripts/sops-decrypt.sh \
      scripts/smortress-password.sh scripts/agent-job.sh scripts/agent-job-personal.sh scripts/agent-job-general.sh scripts/agent-job-provision.sh \
      /usr/libexec/smortress-src/
 COPY scripts/deploy/apps/ /usr/libexec/deploy/apps/
+# The shared deploy code (design #939, T2). The receiver and the decisions are
+# consumed by both bootc images -- the server and the edge receive the same wire
+# contract -- so they live in bootc/lib and install here, beside the gate's own
+# programs. The receiver keeps its /usr/libexec name because the listener unit
+# already runs it there; the decisions and the drain loop go under the directory
+# both roles resolve them from (bootc/lib/deploy). The golden fixtures are test
+# data, so they stay out of the image.
+COPY bootc/lib/deploy/deploy-receiver.py /usr/libexec/deploy-receiver.py
+COPY bootc/lib/deploy/decisions.py /usr/libexec/deploy/decisions.py
+COPY bootc/lib/deploy/drain.sh /usr/libexec/deploy/drain.sh
 # The operator CLI is one command, not a second name for the drain: the loop
 # above names a helper after its file, so it is staged under the name the
 # runbook uses and the loop installs it as /usr/libexec/smortress-deploy.

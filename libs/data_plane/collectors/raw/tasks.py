@@ -163,6 +163,7 @@ def collect_tasks(
         deleted=stats.tombstoned,
         details=details,
         version=stats.version,
+        changed=stats.changed,
     )
 
 

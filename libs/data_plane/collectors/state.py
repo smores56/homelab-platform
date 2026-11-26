@@ -123,6 +123,8 @@ class CommitStats:
     absent: int
     tombstoned: int
     collected: int
+    #: Whether this pass moved any row, and so whether ``version`` moved with it.
+    changed: bool
 
 
 def _check_object_id(object_id: str) -> None:
@@ -370,6 +372,11 @@ class ReplicaState:
         row it did not see must be accounted for: by a tombstone, or by
         ``absence_reason``. ``cursor`` defaults to one past the stored cursor;
         a provider cursor may jump forward, never back.
+
+        ``version`` moves only when the pass moved a row, so ``snapshot`` -- the
+        name a derived artifact is cached under, and part of the facade's cache
+        identity -- stays put for an enumeration that matched the replica. The
+        cursor still moves: it is the provider's position, not the state.
         """
 
         self._require_writable()
@@ -429,13 +436,16 @@ class ReplicaState:
                 tombstoned += 1
 
             if complete:
+                newly_absent = 0
                 for object_id in sorted(unseen):
-                    connection.execute(
+                    newly_absent += connection.execute(
                         "UPDATE object SET absent_since = ?, absence_reason = ?, "
                         "updated_at = ? WHERE id = ? AND present = 1 "
                         "AND absent_since IS NULL",
                         (stamped, absence_reason, stamped, object_id),
-                    )
+                    ).rowcount
+            else:
+                newly_absent = 0
             absent = int(
                 connection.execute(
                     "SELECT COUNT(*) FROM object "
@@ -443,13 +453,16 @@ class ReplicaState:
                 ).fetchone()[0]
             )
 
-            version = (
-                int(
-                    connection.execute("SELECT v FROM version").fetchone()[0]
-                )
-                + 1
+            # A pass that moved no row is not a new state: the snapshot names
+            # the derived index file and is part of the facade's cache identity,
+            # so advancing it would rebuild both for nothing.
+            changed = bool(written or tombstoned or newly_absent)
+            current = int(
+                connection.execute("SELECT v FROM version").fetchone()[0]
             )
-            connection.execute("UPDATE version SET v = ?", (version,))
+            version = current + 1 if changed else current
+            if changed:
+                connection.execute("UPDATE version SET v = ?", (version,))
             connection.execute(
                 "INSERT INTO cursor (source_id, cursor, epoch) VALUES (?, ?, ?) "
                 "ON CONFLICT(source_id) DO UPDATE SET "
@@ -462,6 +475,10 @@ class ReplicaState:
                 connection.execute("ROLLBACK")
             except sqlite3.DatabaseError:
                 pass
+            # The pass may have written object bytes before it rolled back. No
+            # row references them now, so the next pass collects them even when
+            # that pass changes nothing itself, which is what the marker asks.
+            self._mark_collection_pending()
             raise
 
         marker = self._root / GC_MARKER
@@ -480,6 +497,7 @@ class ReplicaState:
             absent=absent,
             tombstoned=tombstoned,
             collected=collected,
+            changed=changed,
         )
 
     def rebuild(self, epoch: int | None = None) -> int:
@@ -614,6 +632,8 @@ class ReplicaState:
             raise ManifestError(f"{row['object_id']!r} does not match its recorded size")
 
     def close(self) -> None:
+        if not self._dry_run and (self._puts or self._tombstones):
+            self._mark_collection_pending()
         if self._connection is not None:
             self._connection.close()
             self._connection = None
@@ -801,6 +821,19 @@ class ReplicaState:
             handle.close()
             raise PublishError(f"another pass holds {path}") from exc
         self._lock = handle
+
+    def _mark_collection_pending(self) -> None:
+        """Ask the next pass to sweep, without following a planted symlink."""
+
+        try:
+            handle = os.open(
+                self._root / GC_MARKER,
+                os.O_CREAT | os.O_WRONLY | os.O_NOFOLLOW,
+                0o600,
+            )
+        except OSError:
+            return
+        os.close(handle)
 
     def _is_new(
         self,

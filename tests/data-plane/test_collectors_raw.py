@@ -347,17 +347,20 @@ class NotesTests(unittest.TestCase):
                 self.assertEqual(metadata["body_sha256"], alpha["revision"])
                 self.assertTrue(metadata["updated_at"].endswith("+00:00"))
 
-    def test_a_second_pass_writes_no_new_object(self) -> None:
+    def test_a_second_pass_writes_no_new_object_and_moves_no_version(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
             vault = self._vault(root)
             with ReplicaState(root / "replica", source_id="notes.markdown") as state:
                 collect_notes(vault, state, captured_at=CAPTURED)
                 before = _object_files(root / "replica")
-                collect_notes(vault, state, captured_at=CAPTURED)
+                snapshot = state.snapshot
+                report = collect_notes(vault, state, captured_at=CAPTURED)
 
                 self.assertEqual(_object_files(root / "replica"), before)
-                self.assertEqual(state.version, 2)
+                self.assertFalse(report.changed)
+                self.assertEqual(report.version, 1)
+                self.assertEqual(state.snapshot, snapshot)
                 self.assertEqual(len(state.live_object_ids()), 2)
 
     def test_a_vanished_file_keeps_its_bytes_with_an_absence_marker(self) -> None:
@@ -517,7 +520,7 @@ class TasksTests(unittest.TestCase):
                 self.assertEqual(metadata["dates"], {"due": "2026-11-10"})
                 self.assertEqual(metadata["created"], "2026-11-08")
 
-    def test_a_second_pass_writes_no_new_object(self) -> None:
+    def test_a_second_pass_writes_no_new_object_and_moves_no_version(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
             directory = self._directory(root)
@@ -529,10 +532,13 @@ class TasksTests(unittest.TestCase):
             with ReplicaState(root / "replica", source_id="tasks.todo") as state:
                 collect_tasks(directory, state, captured_at=CAPTURED)
                 before = _object_files(root / "replica")
-                collect_tasks(directory, state, captured_at=CAPTURED)
+                snapshot = state.snapshot
+                report = collect_tasks(directory, state, captured_at=CAPTURED)
 
                 self.assertEqual(_object_files(root / "replica"), before)
-                self.assertEqual(state.version, 2)
+                self.assertFalse(report.changed)
+                self.assertEqual(report.version, 1)
+                self.assertEqual(state.snapshot, snapshot)
 
     def test_an_edited_line_is_a_new_task_and_the_old_one_keeps_an_absence_marker(
         self,

@@ -97,6 +97,7 @@ def _report(report: CollectReport, published: Path | None, *, dry_run: bool) -> 
         "carried": report.carried,
         "deleted": report.deleted,
         "version": report.version,
+        "changed": report.changed,
         "details": dict(report.details),
         "published": str(published) if published is not None else None,
         "dry_run": dry_run,

@@ -157,6 +157,7 @@ def collect_notes(
         deleted=stats.tombstoned,
         details=details,
         version=stats.version,
+        changed=stats.changed,
     )
 
 

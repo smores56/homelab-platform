@@ -223,6 +223,30 @@ class ColdStartTests(unittest.TestCase):
                 hits = cold.search("boiler", 5)
             self.assertEqual({hit.id: hit for hit in hits}, expected)
 
+    def test_an_unchanged_pass_keeps_the_file_and_the_projection(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            replica = _commit(root, "pass-1", MESSAGES)
+            expected = {hit.id: hit for hit in _adapter(replica, root / "index").search("boiler", 5)}
+            snapshot = _snapshot(replica)
+
+            # The same maildir again: nothing moved, so the snapshot does not
+            # move and this snapshot's file is still the answer.
+            replica = _commit(root, "pass-1", MESSAGES)
+            self.assertEqual(_snapshot(replica), snapshot)
+            self.assertEqual(
+                sorted(path.name for path in (root / "index" / "mail").iterdir()),
+                [f"{snapshot}.sqlite"],
+            )
+            resumed = _adapter(replica, root / "index")
+            with mock.patch.object(
+                resumed.replica, "entries", side_effect=AssertionError("listed the state")
+            ), mock.patch.object(
+                resumed.replica, "read", side_effect=AssertionError("read an object")
+            ):
+                hits = resumed.search("boiler", 5)
+            self.assertEqual({hit.id: hit for hit in hits}, expected)
+
     def test_a_state_without_a_file_pays_one_build(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)

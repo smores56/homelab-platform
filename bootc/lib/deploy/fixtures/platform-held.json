@@ -1,0 +1,63 @@
+{
+  "name": "platform-held",
+  "kind": "gate",
+  "role": "server",
+  "request": {
+    "repo": "homelab-platform",
+    "commit": "0123456789abcdef0123456789abcdef01234567"
+  },
+  "state": {
+    "schema": 1,
+    "repos": {
+      "homelab-platform": {
+        "commit": "fedcba9876543210fedcba9876543210fedcba98",
+        "indexDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "manifestDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+      },
+      "homelab-apps": {
+        "commit": "fedcba9876543210fedcba9876543210fedcba98"
+      }
+    },
+    "updated": "2026-01-01T00:00:00Z"
+  },
+  "denylist": null,
+  "world": {
+    "tip": {
+      "homelab-platform": "0123456789abcdef0123456789abcdef01234567",
+      "homelab-apps": "0123456789abcdef0123456789abcdef01234567"
+    },
+    "compare": "ahead",
+    "github_status": null,
+    "tag": {
+      "found": true,
+      "name": "sha-0123456789ab",
+      "index": true,
+      "index_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "manifest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "arm64": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+      "config": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+      "label": "0123456789abcdef0123456789abcdef01234567"
+    }
+  },
+  "gate": {
+    "prepare": 5,
+    "stage": 0
+  },
+  "expect": {
+    "exit": 0,
+    "summary": "deploy-drain: drained 1, rejected 0, held 1, refused 0, no-op 0, not-deployable 0, superseded 0, invalid 0\n",
+    "queued": 0,
+    "action": "held",
+    "finish": {
+      "drained": 1,
+      "rejected": 0,
+      "held": 1,
+      "refused": 0,
+      "notDeployable": 0,
+      "noop": 0,
+      "invalid": 0,
+      "superseded": 0
+    },
+    "deferred": null
+  }
+}

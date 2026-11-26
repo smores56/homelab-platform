@@ -14,7 +14,7 @@
 #   tests/deploy/receiver.bats
 load ../helpers
 
-receiver=bootc/server/rootfs/usr/libexec/deploy-receiver.py
+receiver=bootc/lib/deploy/deploy-receiver.py
 lib=scripts/deploy-state.sh
 
 commit_ok=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
@@ -46,6 +46,9 @@ setup_file() {
     next=$(printf 'next-%04d' "$RANDOM")
     printf 'value: %s\n' "$secret" >"$secrets/webhook-secret.yaml"
     printf 'value: %s\n' "$next" >"$secrets/webhook-secret-next.yaml"
+    # The listener refuses a secret any other user can read; sops-decrypt writes
+    # 0400 and the edge's plaintext files are 0600.
+    chmod 0600 "$secrets/webhook-secret.yaml" "$secrets/webhook-secret-next.yaml"
     printf '%s\n' "$secret" >"$work/secret"
     printf '%s\n' "$next" >"$work/secret-next"
 
@@ -717,6 +720,7 @@ bare_fixture() { # -> bare_state, bare_secrets
     chmod 0700 "$bare_secrets" "$bare_state" "$bare_state/queue"
     printf '%s\n' "$secret" >"$bare_secrets/webhook-secret.yaml"
     printf '%s\n' "$secret_next" >"$bare_secrets/webhook-secret-next.yaml"
+    chmod 0600 "$bare_secrets/webhook-secret.yaml" "$bare_secrets/webhook-secret-next.yaml"
 }
 
 @test "the listener starts from the bare scalar sops-decrypt writes" {
@@ -747,6 +751,7 @@ bare_fixture() { # -> bare_state, bare_secrets
     empty_secrets=$BATS_TEST_TMPDIR/empty-secrets
     mkdir -p "$empty_secrets"
     printf 'value:\n' >"$empty_secrets/webhook-secret.yaml"
+    chmod 0600 "$empty_secrets/webhook-secret.yaml"
     rc=0
     DEPLOY_STATE_DIR=$state_dir DEPLOY_SECRETS_DIR=$empty_secrets \
         DEPLOY_LISTEN_PORT="$(free_port)" timeout 20 python3 "$receiver" \

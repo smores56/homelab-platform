@@ -385,6 +385,7 @@ def collect_mailbox(
         deleted=stats.tombstoned,
         details={"folders": counts},
         version=stats.version,
+        changed=stats.changed,
     )
 
 
@@ -745,6 +746,7 @@ class StreamCollector:
         payload = {
             "source_id": report.source_id,
             "version": report.version,
+            "changed": report.changed,
             "objects": report.objects,
             "carried": report.carried,
             "deleted": report.deleted,

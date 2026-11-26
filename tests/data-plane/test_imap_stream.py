@@ -519,7 +519,7 @@ class CarryTests(unittest.TestCase):
             self.assertEqual(report.carried, 1)
             self.assertEqual(second.fetched, [])
 
-    def test_a_second_pass_writes_no_new_object(self) -> None:
+    def test_a_second_pass_writes_no_new_object_and_moves_no_version(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
             _publish(
@@ -527,16 +527,29 @@ class CarryTests(unittest.TestCase):
                 ScriptedMailbox({"INBOX": ScriptedFolder(1, {"1": _message("1")})}),
             )
             before = sorted((root / "objects").glob("*/*"))
+            with ReplicaState(root, read_only=True) as replica:
+                snapshot = replica.snapshot
 
-            _publish(
+            report = _publish(
                 root,
                 ScriptedMailbox({"INBOX": ScriptedFolder(1, {"1": _message("1")})}),
                 captured_at=LATER,
             )
 
             self.assertEqual(sorted((root / "objects").glob("*/*")), before)
+            self.assertFalse(report.changed)
+            self.assertEqual(report.version, 1)
             with ReplicaState(root, read_only=True) as replica:
-                self.assertEqual(replica.version, 2)
+                self.assertEqual(replica.version, 1)
+                self.assertEqual(replica.snapshot, snapshot)
+                self.assertEqual(
+                    [
+                        object_id
+                        for object_id in replica.live_object_ids()
+                        if object_id != "mail::_uidvalidity"
+                    ],
+                    ["mail::INBOX::1"],
+                )
                 self.assertEqual(
                     [
                         object_id

@@ -43,8 +43,11 @@ class CollectReport:
     carried: int
     deleted: int
     details: Mapping[str, Any] = field(default_factory=dict)
-    #: The committed replica version: every pass advances it by one.
+    #: The committed replica version, or None when this pass committed nothing.
     version: int | None = None
+    #: Whether this pass moved a row, and so moved ``version`` and ``snapshot``.
+    #: None when nothing was committed: a dry run has no answer to give.
+    changed: bool | None = None
 
 
 def commit_pass(
@@ -84,6 +87,7 @@ def commit_pass(
         deleted=stats.tombstoned if deleted is None else deleted,
         details=details,
         version=stats.version,
+        changed=stats.changed,
     )
 
 

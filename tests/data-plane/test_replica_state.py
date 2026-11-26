@@ -80,18 +80,88 @@ class ReplicaStateTests(unittest.TestCase):
         self.assertEqual(len(_object_files(self.root)), 1)
         self.assertEqual(state.read("a"), state.read("b"))
 
-    def test_an_unchanged_object_writes_no_second_file(self) -> None:
+    def test_an_unchanged_pass_writes_no_file_and_moves_no_snapshot(self) -> None:
         state = self._state()
         state.put("a", b"same", {})
         state.commit(complete=True, captured_at=CAPTURED)
         before = _object_files(self.root)
+        snapshot = state.snapshot
 
         state.put("a", b"same", {})
         stats = state.commit(complete=True, captured_at=CAPTURED)
 
         self.assertEqual(_object_files(self.root), before)
         self.assertEqual(stats.written, 0)
+        # The snapshot names the derived index file and is part of the facade's
+        # cache identity, so a pass that changed nothing must not move it.
+        self.assertFalse(stats.changed)
+        self.assertEqual(stats.version, 1)
+        self.assertEqual(state.version, 1)
+        self.assertEqual(state.snapshot, snapshot)
+        # The cursor is a provider position, not state: it still advances.
+        self.assertEqual(state.cursor, 2)
+
+    def test_a_changed_object_advances_the_version_once(self) -> None:
+        state = self._state()
+        state.put("a", b"before", {})
+        state.commit(complete=True, captured_at=CAPTURED)
+        before = state.snapshot
+
+        state.put("a", b"after", {})
+        stats = state.commit(complete=True, captured_at=CAPTURED)
+
+        self.assertTrue(stats.changed)
         self.assertEqual(stats.version, 2)
+        self.assertNotEqual(state.snapshot, before)
+
+    def test_a_tombstone_advances_the_version(self) -> None:
+        state = self._state()
+        state.put("a", b"hello", {})
+        state.commit(complete=True, captured_at=CAPTURED)
+
+        state.tombstone("a", "provider expunge")
+        stats = state.commit(complete=True, captured_at=CAPTURED)
+
+        self.assertTrue(stats.changed)
+        self.assertEqual(stats.version, 2)
+        self.assertEqual(_object_files(self.root), [])
+
+    def test_a_reseen_row_that_moved_a_field_advances_the_version(self) -> None:
+        state = self._state()
+        state.put("a", b"hello", {"flags": []})
+        state.commit(complete=True, captured_at=CAPTURED)
+        row = state.get("a")
+
+        state.seen(row, {"flags": ["Seen"]})
+        stats = state.commit(complete=True, captured_at=CAPTURED)
+
+        self.assertEqual(stats.written, 1)
+        self.assertTrue(stats.changed)
+        self.assertEqual(stats.version, 2)
+
+    def test_the_absence_marker_moves_the_version_only_once(self) -> None:
+        state = self._state()
+        state.put("a", b"hello", {})
+        state.commit(complete=True, captured_at=CAPTURED)
+
+        stats = state.commit(
+            complete=True,
+            absence_reason=ABSENCE_NO_TOMBSTONE,
+            captured_at=CAPTURED,
+        )
+        self.assertTrue(stats.changed)
+        absent = state.snapshot
+
+        # The marker is the first pass that saw it missing, so the second pass
+        # records nothing new and the snapshot stays where it is.
+        stats = state.commit(
+            complete=True,
+            absence_reason=ABSENCE_NO_TOMBSTONE,
+            captured_at=CAPTURED,
+        )
+        self.assertEqual(stats.absent, 1)
+        self.assertFalse(stats.changed)
+        self.assertEqual(state.snapshot, absent)
 
     def test_changed_bytes_are_a_new_object_and_the_old_one_is_collected(self) -> None:
         state = self._state()
@@ -233,10 +303,14 @@ class ReplicaStateTests(unittest.TestCase):
 
     def test_cursors_only_move_forward(self) -> None:
         state = self._state()
+        state.put("a", b"hello", {})
         state.commit(complete=True, captured_at=CAPTURED)
         # A file-backed source has no provider cursor: the store supplies one.
         self.assertEqual(state.cursor, 1)
 
+        # The cursor is the provider's position, so it moves without the state
+        # changing: no row moved, so no version moved.
+        state.put("a", b"hello", {})
         state.commit(complete=True, captured_at=CAPTURED, cursor=5)
         self.assertEqual(state.cursor, 5)
         with self.assertRaises(CursorError):
@@ -246,7 +320,7 @@ class ReplicaStateTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             state.commit(complete=True, captured_at=CAPTURED, cursor=0)
         self.assertEqual(state.cursor, 5)
-        self.assertEqual(state.version, 2)
+        self.assertEqual(state.version, 1)
 
     def test_a_failed_commit_leaves_the_state_untouched(self) -> None:
         state = self._state()
@@ -261,10 +335,31 @@ class ReplicaStateTests(unittest.TestCase):
         self.assertEqual(state.cursor, 1)
         self.assertIsNone(state.get("b"))
 
+    def test_a_rolled_back_pass_leaves_the_collection_pending(self) -> None:
+        state = self._state()
+        state.put("a", b"hello", {})
+        state.commit(complete=True, captured_at=CAPTURED)
+
+        state.put("b", b"unaccounted", {})
+        with self.assertRaises(PublishError):
+            state.commit(complete=True, captured_at=CAPTURED)
+
+        # The pass wrote those bytes before it rolled back, so the next pass has
+        # to collect them even when that pass itself changes nothing.
+        state.close()
+        state = self._state()
+        state.put("a", b"hello", {})
+        stats = state.commit(complete=True, captured_at=CAPTURED)
+
+        self.assertFalse(stats.changed)
+        self.assertEqual(stats.collected, 1)
+        self.assertEqual(len(_object_files(self.root)), 1)
+
     def test_rebuild_starts_a_new_epoch_with_no_cursor_and_bumps_the_version(
         self,
     ) -> None:
         state = self._state()
+        state.put("a", b"hello", {})
         state.commit(complete=True, captured_at=CAPTURED)
         self.assertEqual(state.version, 1)
         self.assertEqual(state.epoch, 1)
@@ -275,8 +370,10 @@ class ReplicaStateTests(unittest.TestCase):
         self.assertEqual(state.epoch, 2)
         self.assertIsNone(state.cursor)
         self.assertEqual(state.version, 2)
+        state.put("a", b"hello", {})
         state.commit(complete=True, captured_at=CAPTURED)
         self.assertEqual(state.cursor, 1)
+        self.assertEqual(state.version, 2)
 
     def test_a_new_epoch_refuses_a_pass_that_started_in_the_old_one(self) -> None:
         state = self._state()
@@ -413,7 +510,8 @@ class ReplicaStateTests(unittest.TestCase):
         state.seen(row)
         stats = state.commit(complete=True, captured_at=CAPTURED)
         self.assertEqual(stats.written, 0)
-        self.assertEqual(state.version, 2)
+        self.assertFalse(stats.changed)
+        self.assertEqual(state.version, 1)
 
         state.seen(row, {"flags": ["\\Seen"]})
         stats = state.commit(complete=True, captured_at=CAPTURED)
@@ -472,6 +570,32 @@ class ReplicaStateTests(unittest.TestCase):
         self.assertEqual(stats.collected, 1)
         self.assertFalse(orphan.exists())
         self.assertEqual(state.live_object_ids(), ("kept",))
+
+    def test_an_abandoned_pass_is_collected_even_by_one_that_changes_nothing(
+        self,
+    ) -> None:
+        first = self._state()
+        first.put("a", b"hello", {})
+        first.commit(complete=True, captured_at=CAPTURED)
+        first.put("orphan", b"never committed", {})
+        first.close()
+
+        # A pass that wrote nothing still sweeps: the abandoned bytes are the
+        # only reason the marker exists.
+        state = self._state()
+        state.put("a", b"hello", {})
+        stats = state.commit(complete=True, captured_at=CAPTURED)
+
+        self.assertFalse(stats.changed)
+        self.assertEqual(stats.collected, 1)
+        self.assertEqual(len(_object_files(self.root)), 1)
+        self.assertFalse((self.root / ".gc-pending").exists())
+
+    def test_a_dry_run_leaves_no_collection_pending(self) -> None:
+        with ReplicaState(self.root, source_id="test.source", dry_run=True) as state:
+            state.put("a", b"hello", {})
+
+        self.assertFalse((self.root / ".gc-pending").exists())
 
     def test_seen_of_a_tombstone_is_refused(self) -> None:
         state = self._state()

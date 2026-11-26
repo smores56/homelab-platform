@@ -251,12 +251,27 @@ contains() {
 # programs are checked for.
 @test "the edge rootfs programs are committed executable" {
     for program in "$edge_rootfs/usr/libexec/smoresnet-firewall-zones" \
-        "$edge_rootfs/usr/libexec/smoresnet-firewall-bind"; do
+        "$edge_rootfs/usr/libexec/smoresnet-firewall-bind" \
+        "$edge_rootfs/usr/libexec/edge-boot-gate"; do
         mode=$(git ls-files -s "$program" | cut -d' ' -f1)
         [[ $mode == 100755 ]] || fail "$program is committed as ${mode:-untracked}, not 100755"
     done
     contains 'chmod 0755 /usr/libexec/smoresnet-firewall-zones /usr/libexec/smoresnet-firewall-bind' \
         "$edge_containerfile"
+    contains 'chmod 0755 /usr/libexec/edge-boot-gate' "$edge_containerfile"
+}
+
+# The boot gate is enabled like every other unit in the image, and it reads two
+# files that have to arrive with it: the shared deploy state library under the
+# name the server's smortress-src loop gives it, and the list of units whose
+# failure is a verdict (design #939, T7).
+@test "the edge image enables the boot gate and ships what it reads" {
+    contains '      edge-boot-gate.service \' "$edge_containerfile"
+    contains 'COPY scripts/deploy-state.sh /usr/libexec/deploy-state' "$edge_containerfile"
+    contains 'COPY scripts/lib/ /usr/libexec/lib/' "$edge_containerfile"
+    contains 'ExecStart=/usr/libexec/edge-boot-gate' \
+        "$edge_rootfs/usr/lib/systemd/system/edge-boot-gate.service"
+    contains 'caddy.service' "$edge_rootfs/usr/share/smoresnet/deploy-units.txt"
 }
 
 @test "the edge Containerfile copies the whole rootfs and gates the build on it" {
