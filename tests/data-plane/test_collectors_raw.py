@@ -7,6 +7,7 @@ test writes itself. No network, no provider, no credentials.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -1170,6 +1171,44 @@ class PhotosTests(unittest.TestCase):
                 with self.assertRaises(PublishError):
                     collect_photos(library, generation, captured_at=CAPTURED)
             self.assertFalse(any((root / "replica").glob("published/*")))
+
+    def test_a_name_longer_than_a_filename_is_still_stored(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            library = self._library(root)
+            long_name = "immich-branded-" + "x" * 220 + ".jpg"
+            (library / "2026" / "11" / long_name).write_bytes(b"\xff\xd8jpegbytes")
+            generation = _generation(root / "replica")
+            report = collect_photos(library, generation, captured_at=CAPTURED)
+            self.assertEqual(report.objects, 3)
+            _publish(generation)
+
+            replica = RawReplica(root / "replica")
+            object_id = f"photos::2026%2F11%2F{long_name}"
+            self.assertIn(object_id, replica.object_ids())
+            self.assertEqual(json.loads(replica.read(object_id))["title"],
+                             "immich-branded-" + "x" * 220)
+
+    def test_a_branded_base64_name_is_read_as_the_name_it_encodes(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            library = self._library(root)
+            payload = {
+                "bucket": "smp-prod",
+                "key": "events/1c3f/photos/branded/1793739847399-26-11-03 Blitzy Headshots-0870.jpg",
+            }
+            encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
+            (library / "2026" / "11" / f"{encoded}.jpg").write_bytes(b"\xff\xd8jpegbytes")
+            generation = _generation(root / "replica")
+            collect_photos(library, generation, captured_at=CAPTURED)
+            _publish(generation)
+
+            replica = RawReplica(root / "replica")
+            object_id = f"photos::2026%2F11%2F{encoded}.jpg"
+            self.assertEqual(
+                json.loads(replica.read(object_id))["title"],
+                "1793739847399-26-11-03 Blitzy Headshots-0870",
+            )
 
     def test_the_report_counts_the_files_it_skipped(self) -> None:
         with tempfile.TemporaryDirectory() as work:

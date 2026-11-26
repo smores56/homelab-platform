@@ -57,6 +57,20 @@ class StagingGenerationTests(unittest.TestCase):
         self.assertEqual(manifest["objects"][0]["object_id"], "a")
         self.assertEqual(manifest["tombstones"], [])
 
+    def test_an_object_id_longer_than_a_filename_gets_a_stable_digest_name(self):
+        generation = self.generation("gen-1")
+        long_id = "photos::" + "a" * 400
+        generation.put(long_id, b"{}", {"kind": "photo"})
+        generation.commit(1, complete=True)
+
+        published = self.root / "published" / "gen-1"
+        manifest = json.loads((published / "manifest.json").read_text(encoding="utf-8"))
+        entry = manifest["objects"][0]
+        self.assertEqual(entry["object_id"], long_id)
+        self.assertTrue(entry["filename"].startswith("%sha256-"))
+        self.assertLessEqual(len(entry["filename"].encode("utf-8")), 255)
+        self.assertEqual((published / "objects" / entry["filename"]).read_bytes(), b"{}")
+
     def test_commit_requires_complete_enumeration(self):
         generation = self.generation("gen-1")
         generation.put("a", b"alpha", {})

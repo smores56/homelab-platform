@@ -14,6 +14,8 @@ for richer metadata later without changing what was published here.
 
 from __future__ import annotations
 
+import base64
+import json
 from pathlib import Path
 from typing import Iterable
 from urllib.parse import quote
@@ -63,6 +65,32 @@ PHOTO_SUFFIXES = frozenset(
 )
 
 
+def _title(path: Path) -> str:
+    """The file's own name, or the name a branded upload path encodes.
+
+    One upload path this library holds stores the original location as base64
+    JSON in the filename, so the stem is 200 unsearchable characters. A stem that
+    decodes to an object with a ``key`` takes the basename of that key; anything
+    else keeps its stem, because a guess is worse than a name that is merely
+    ugly.
+    """
+
+    stem = path.stem
+    if not stem.startswith("eyJ"):
+        return stem
+    try:
+        payload = json.loads(
+            base64.urlsafe_b64decode(stem + "=" * (-len(stem) % 4))
+        )
+    except ValueError:
+        return stem
+    key = payload.get("key") if isinstance(payload, dict) else None
+    if not isinstance(key, str):
+        return stem
+    name = key.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+    return name or stem
+
+
 def collect_photos(
     entities_dir: str | Path,
     generation: StagingGeneration,
@@ -89,7 +117,7 @@ def collect_photos(
                 "photo_id": object_id,
                 "revision": media.revision,
                 "path": media.relative,
-                "title": media.path.stem,
+                "title": _title(media.path),
                 "format": media.path.suffix.lstrip(".").lower(),
                 "size": media.size,
                 "updated_at": media.updated_at,

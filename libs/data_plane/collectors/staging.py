@@ -35,7 +35,14 @@ def _object_filename(object_id: str) -> str:
         or "\x00" in object_id
     ):
         raise ValidationError(f"invalid object id {object_id!r}")
-    return quote(object_id, safe="")
+    name = quote(object_id, safe="")
+    # A media path can be longer than a filename: quoting expands it, and NAME_MAX
+    # is 255 bytes. The manifest maps the id to its file, so the file itself only
+    # has to be unique and stable -- a digest of the id is both. The "%" prefix
+    # cannot occur in a quoted name, so the two forms cannot collide.
+    if len(name.encode("utf-8")) > 255:
+        return "%sha256-" + hashlib.sha256(object_id.encode("utf-8")).hexdigest()
+    return name
 
 
 def _check_generation_id(generation_id: str) -> None:
