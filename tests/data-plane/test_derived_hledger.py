@@ -54,17 +54,15 @@ def _publish(
     transactions: Iterable[Mapping[str, Any]] = (),
     *,
     accountset: bool = True,
-    generation: str = "gen-0001",
 ) -> ReplicaState:
     """One committed replica state, written the way the finance collector writes it.
 
     A transaction is a mapping of ``account_id`` and ``record``; an explicit
     ``posted`` overrides what the record's own fields would give, which is how a
-    generation that carries no date at all is built.
+    state that carries no date at all is built.
     """
 
     state = ReplicaState(root, source_id="finance.ledger")
-    staging = state
     for account in accounts:
         state.put(
             f"finance::account::{account['id']}",

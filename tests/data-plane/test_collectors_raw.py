@@ -109,14 +109,14 @@ class MailTests(unittest.TestCase):
             _message(inbox, "bbb", flags="RS")
             _message(sent, "ccc", flags="S")
 
-            generation = _writer(root / "replica")
+            state = _writer(root / "replica")
             report = collect_maildir(
                 root / "mail",
-                generation,
+                state,
                 uidvalidity={"INBOX": 7, ".Sent": 3},
                 captured_at=CAPTURED,
             )
-            generation.close()
+            state.close()
 
             self.assertEqual(report.objects, 3)
             self.assertEqual(report.details["folders"], {"INBOX": 2, ".Sent": 1})
@@ -259,9 +259,9 @@ class CalendarTests(unittest.TestCase):
                     "alarms": [{"trigger": "-PT15M"}],
                 },
             )
-            generation = _writer(root / "replica")
-            report = collect_calendar(entities, generation, captured_at=CAPTURED)
-            generation.close()
+            state = _writer(root / "replica")
+            report = collect_calendar(entities, state, captured_at=CAPTURED)
+            state.close()
 
             self.assertEqual(report.objects, 1)
             replica = _published(root / "replica")
@@ -631,16 +631,16 @@ class FinanceTests(unittest.TestCase):
         accountset["accounts"][0]["org"] = {"domain": "schwab.com", "name": "Schwab"}
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
-            generation = _writer(root / "replica")
+            state = _writer(root / "replica")
             collect_simplefin(
                 accountset,
-                generation,
+                state,
                 accountset_url="https://sfin.example/access",
                 captured_at=CAPTURED,
                 include_pending=True,
                 now=1763500000,
             )
-            generation.close()
+            state.close()
             metadata = _published(root / "replica").metadata(
                 "finance::txn::acct-1::txn-1"
             )
@@ -649,16 +649,16 @@ class FinanceTests(unittest.TestCase):
     def test_stores_raw_records_keyed_and_hashed(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
-            generation = _writer(root / "replica")
+            state = _writer(root / "replica")
             report = collect_simplefin(
                 self._accountset(),
-                generation,
+                state,
                 accountset_url="https://sfin.example/access",
                 captured_at=CAPTURED,
                 include_pending=True,
                 now=1763500000,
             )
-            generation.close()
+            state.close()
 
             self.assertEqual(report.details["transactions"], 2)
             self.assertEqual(report.details["pending"], 1)
@@ -774,15 +774,15 @@ class BraveTests(unittest.TestCase):
             database = root / "History"
             self._database(database)
 
-            generation = _writer(root / "replica")
+            state = _writer(root / "replica")
             report = collect_brave_db(
                 database,
-                generation,
+                state,
                 device="smorespro",
                 profile="Default",
                 captured_at=CAPTURED,
             )
-            generation.close()
+            state.close()
 
             self.assertEqual(report.details["tables"]["urls"], 1)
             replica = _published(root / "replica")
@@ -813,15 +813,15 @@ class BraveTests(unittest.TestCase):
             finally:
                 connection.close()
 
-            generation = _writer(root / "replica")
+            state = _writer(root / "replica")
             collect_brave_db(
                 database,
-                generation,
+                state,
                 device="smortress",
                 profile="Default",
                 captured_at=CAPTURED,
             )
-            generation.close()
+            state.close()
 
             dump = json.loads(_published(root / "replica").read("brave::table::meta"))
             self.assertEqual(dump["rows"], [["binary", {"b64": "//5o"}]])
@@ -904,10 +904,10 @@ class PhotosTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
             library = self._library(root)
-            generation = _writer(root / "replica")
-            report = collect_photos(library, generation, captured_at=CAPTURED)
+            state = _writer(root / "replica")
+            report = collect_photos(library, state, captured_at=CAPTURED)
             self.assertEqual(report.objects, 2)
-            generation.close()
+            state.close()
 
             replica = _published(root / "replica")
             photo_id = "photos::2026%2F11%2Fharbour-sunset.jpg"
@@ -923,7 +923,7 @@ class PhotosTests(unittest.TestCase):
             self.assertEqual(photo["format"], "jpg")
             self.assertEqual(photo["size"], len(b"\xff\xd8jpegbytes"))
             self.assertTrue(photo["updated_at"].endswith("+00:00"))
-            # The generation carries the metadata, never the media bytes.
+            # The state carries the metadata, never the media bytes.
             self.assertNotIn(b"jpegbytes", replica.read(photo_id))
 
             metadata = replica.metadata(photo_id)
@@ -975,18 +975,18 @@ class PhotosTests(unittest.TestCase):
             (root / "elsewhere").mkdir()
             (root / "elsewhere" / "foreign.jpg").write_bytes(b"\xff\xd8")
             (library / "linked").symlink_to(root / "elsewhere")
-            generation = _writer(root / "replica")
+            state = _writer(root / "replica")
             with self.assertRaises(PublishError):
-                collect_photos(library, generation, captured_at=CAPTURED)
+                collect_photos(library, state, captured_at=CAPTURED)
 
     def test_a_library_over_the_limit_is_refused_not_truncated(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
             library = self._library(root)
-            generation = _writer(root / "replica")
+            state = _writer(root / "replica")
             with mock.patch("data_plane.collectors.raw.media.MAX_MEDIA_OBJECTS", 1):
                 with self.assertRaises(PublishError) as raised:
-                    collect_photos(library, generation, captured_at=CAPTURED)
+                    collect_photos(library, state, captured_at=CAPTURED)
             self.assertIn(str(1), str(raised.exception))
             self.assertFalse(any((root / "replica").glob("published/*")))
             self.assertGreater(MAX_MEDIA_OBJECTS, 1)
@@ -997,9 +997,9 @@ class PhotosTests(unittest.TestCase):
             library = root / "photos"
             library.mkdir()
             (library / "README.txt").write_text("no media\n", encoding="utf-8")
-            generation = _writer(root / "replica")
+            state = _writer(root / "replica")
             with self.assertRaises(PublishError):
-                collect_photos(library, generation, captured_at=CAPTURED)
+                collect_photos(library, state, captured_at=CAPTURED)
 
     def test_immich_derived_trees_are_not_walked(self) -> None:
         with tempfile.TemporaryDirectory() as work:
@@ -1011,10 +1011,10 @@ class PhotosTests(unittest.TestCase):
             originals = location / "library" / "2026" / "11"
             originals.mkdir(parents=True)
             (originals / "harbour-sunset.jpg").write_bytes(b"\xff\xd8jpegbytes")
-            generation = _writer(root / "replica")
-            report = collect_photos(location, generation, captured_at=CAPTURED)
+            state = _writer(root / "replica")
+            report = collect_photos(location, state, captured_at=CAPTURED)
             self.assertEqual(report.objects, 1)
-            generation.close()
+            state.close()
 
             replica = _published(root / "replica")
             self.assertEqual(
@@ -1026,12 +1026,12 @@ class PhotosTests(unittest.TestCase):
             root = Path(work)
             library = self._library(root)
             hidden = library / "2026" / "11"
-            generation = _writer(root / "replica")
+            state = _writer(root / "replica")
             mode = hidden.stat().st_mode
             hidden.chmod(0o000)
             try:
                 with self.assertRaises(PublishError):
-                    collect_photos(library, generation, captured_at=CAPTURED)
+                    collect_photos(library, state, captured_at=CAPTURED)
             finally:
                 hidden.chmod(mode)
             self.assertFalse(any((root / "replica").glob("published/*")))
@@ -1042,9 +1042,9 @@ class PhotosTests(unittest.TestCase):
             library = self._library(root)
             name = os.path.join(os.fsencode(library), b"bad\xffname.jpg")
             os.close(os.open(name, os.O_CREAT | os.O_WRONLY))
-            generation = _writer(root / "replica")
+            state = _writer(root / "replica")
             with self.assertRaises(PublishError):
-                collect_photos(library, generation, captured_at=CAPTURED)
+                collect_photos(library, state, captured_at=CAPTURED)
             self.assertFalse(any((root / "replica").glob("published/*")))
 
     def test_an_unrepresentable_mtime_is_refused(self) -> None:
@@ -1063,10 +1063,10 @@ class PhotosTests(unittest.TestCase):
                     return future_stat
                 return real_stat(path, **kwargs)
 
-            generation = _writer(root / "replica")
+            state = _writer(root / "replica")
             with mock.patch.object(Path, "stat", stat):
                 with self.assertRaises(PublishError):
-                    collect_photos(library, generation, captured_at=CAPTURED)
+                    collect_photos(library, state, captured_at=CAPTURED)
             self.assertFalse(any((root / "replica").glob("published/*")))
 
     def test_a_name_longer_than_a_filename_is_still_stored(self) -> None:
@@ -1075,10 +1075,10 @@ class PhotosTests(unittest.TestCase):
             library = self._library(root)
             long_name = "immich-branded-" + "x" * 220 + ".jpg"
             (library / "2026" / "11" / long_name).write_bytes(b"\xff\xd8jpegbytes")
-            generation = _writer(root / "replica")
-            report = collect_photos(library, generation, captured_at=CAPTURED)
+            state = _writer(root / "replica")
+            report = collect_photos(library, state, captured_at=CAPTURED)
             self.assertEqual(report.objects, 3)
-            generation.close()
+            state.close()
 
             replica = _published(root / "replica")
             object_id = f"photos::2026%2F11%2F{long_name}"
@@ -1096,9 +1096,9 @@ class PhotosTests(unittest.TestCase):
             }
             encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
             (library / "2026" / "11" / f"{encoded}.jpg").write_bytes(b"\xff\xd8jpegbytes")
-            generation = _writer(root / "replica")
-            collect_photos(library, generation, captured_at=CAPTURED)
-            generation.close()
+            state = _writer(root / "replica")
+            collect_photos(library, state, captured_at=CAPTURED)
+            state.close()
 
             replica = _published(root / "replica")
             object_id = f"photos::2026%2F11%2F{encoded}.jpg"
@@ -1111,8 +1111,8 @@ class PhotosTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
             library = self._library(root)
-            generation = _writer(root / "replica")
-            report = collect_photos(library, generation, captured_at=CAPTURED)
+            state = _writer(root / "replica")
+            report = collect_photos(library, state, captured_at=CAPTURED)
             self.assertEqual(report.details["skipped"], 1)
 
 
@@ -1134,10 +1134,10 @@ class MusicTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
             library = self._library(root)
-            generation = _writer(root / "replica")
-            report = collect_music(library, generation, captured_at=CAPTURED)
+            state = _writer(root / "replica")
+            report = collect_music(library, state, captured_at=CAPTURED)
             self.assertEqual(report.objects, 3)
-            generation.close()
+            state.close()
 
             replica = _published(root / "replica")
             track_id = "music::Tori%20Amos%2FLittle%20Earthquakes%2F01%20-%20Crucify.flac"
@@ -1199,9 +1199,9 @@ class MusicTests(unittest.TestCase):
             library = root / "music"
             (library / "Artwork").mkdir(parents=True)
             (library / "Artwork" / "cover.jpg").write_bytes(b"\xff\xd8artwork")
-            generation = _writer(root / "replica")
+            state = _writer(root / "replica")
             with self.assertRaises(PublishError):
-                collect_music(library, generation, captured_at=CAPTURED)
+                collect_music(library, state, captured_at=CAPTURED)
 
     def test_a_symlinked_directory_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as work:
@@ -1210,18 +1210,18 @@ class MusicTests(unittest.TestCase):
             (root / "elsewhere").mkdir()
             (root / "elsewhere" / "foreign.flac").write_bytes(b"fLaC")
             (library / "linked").symlink_to(root / "elsewhere")
-            generation = _writer(root / "replica")
+            state = _writer(root / "replica")
             with self.assertRaises(PublishError):
-                collect_music(library, generation, captured_at=CAPTURED)
+                collect_music(library, state, captured_at=CAPTURED)
 
     def test_a_library_over_the_limit_is_refused_not_truncated(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
             library = self._library(root)
-            generation = _writer(root / "replica")
+            state = _writer(root / "replica")
             with mock.patch("data_plane.collectors.raw.media.MAX_MEDIA_OBJECTS", 1):
                 with self.assertRaises(PublishError):
-                    collect_music(library, generation, captured_at=CAPTURED)
+                    collect_music(library, state, captured_at=CAPTURED)
             self.assertFalse(any((root / "replica").glob("published/*")))
 
 

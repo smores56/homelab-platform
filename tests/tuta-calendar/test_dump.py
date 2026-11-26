@@ -169,7 +169,7 @@ class CollectorIntegrationTest(unittest.TestCase):
             )
         return report, ReplicaState(self.root / "replica", read_only=True)
 
-    def test_a_dump_becomes_a_generation_with_both_objects_per_event(self) -> None:
+    def test_a_dump_commits_both_objects_per_event(self) -> None:
         api = FakeApi(
             {
                 "shortList": [

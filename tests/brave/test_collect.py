@@ -1,4 +1,4 @@
-"""The collector over a snapshot: one generation, one ``brave::db`` object.
+"""The collector over a snapshot: one committed state, one ``brave::db`` object.
 
 This is the half the unit runs, so it is the real CLI (`data_plane.collectors.raw`)
 over a real database written by the fixture -- not a function call that skips the
