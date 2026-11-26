@@ -43,8 +43,11 @@ from ..errors import (
 
 OBJECTS_DIR = "objects"
 STATE_NAME = "state.sqlite"
-#: One pass at a time per source; the writer holds this for its whole life.
+#: One pass at a time per source; the writer holds it for its whole life.
 LOCK_NAME = ".pass.lock"
+#: Set when object bytes are written, cleared by a sweep: a refused pass that
+#: wrote bodies leaves it behind for the next pass that commits.
+GC_MARKER = ".gc-pending"
 
 #: Set on a row the current enumeration did not see. It is the first time any
 #: pass saw the object missing, so the marker does not move on later runs.
@@ -133,6 +136,21 @@ def _check_object_id(object_id: str) -> None:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _prefix_bounds(prefix: str) -> tuple[str, str] | None:
+    """The half-open id range holding every id that starts with ``prefix``.
+
+    ``substr`` would match the same rows but scan the whole table: the id range
+    is a seek on the primary key, which is what a 300k-message pass needs.
+    """
+
+    if not prefix:
+        return None
+    last = ord(prefix[-1])
+    if last >= 0x10FFFF:
+        return None
+    return prefix, prefix[:-1] + chr(last + 1)
 
 
 def _serialize(metadata: dict) -> str:
@@ -283,6 +301,11 @@ class ReplicaState:
         _check_object_id(object_id)
         if not row["present"]:
             raise ManifestError(f"{object_id!r} is not a live object")
+        if object_id in self._puts:
+            raise ManifestError(
+                f"{object_id!r} was written in this pass; seen() would revert its bytes"
+            )
+        self._require_object(row)
         clean = {
             key: value
             for key, value in (metadata if metadata is not None else row["metadata"]).items()
@@ -423,7 +446,12 @@ class ReplicaState:
                 pass
             raise
 
-        collected = self._collect_garbage() if complete else 0
+        marker = self._root / GC_MARKER
+        collected = (
+            self._collect_garbage()
+            if complete and (written or tombstoned or marker.exists())
+            else 0
+        )
         self._puts.clear()
         self._seen.clear()
         self._tombstones.clear()
@@ -489,8 +517,13 @@ class ReplicaState:
             "absence_reason, updated_at FROM object WHERE present = 1"
         )
         parameters: tuple = ()
-        if prefix:
-            # substr, not LIKE: an object id may contain "%" or "_".
+        bounds = _prefix_bounds(prefix)
+        if bounds is not None:
+            statement += " AND id >= ? AND id < ?"
+            parameters = bounds
+        elif prefix:
+            # An id may contain "%" or "_", so LIKE is out; substr matches the
+            # same rows, it just cannot use the index.
             statement += " AND substr(id, 1, ?) = ?"
             parameters = (len(prefix), prefix)
         cursor = self._database().execute(statement + " ORDER BY id", parameters)
@@ -531,6 +564,24 @@ class ReplicaState:
             raise ManifestError(f"{object_id!r} does not match its recorded sha256")
         return data
 
+    def _require_object(self, row: Mapping[str, Any]) -> None:
+        """A live row whose file vanished is damage, not a stale cache.
+
+        A replica restored without ``objects/`` would otherwise keep every row
+        live and report a healthy pass until something reads the bytes.
+        """
+
+        digest = row["sha256"]
+        if not isinstance(digest, str) or _DIGEST.fullmatch(digest) is None:
+            raise ManifestError(f"{row['object_id']!r} has no recorded sha256")
+        path = self._root / OBJECTS_DIR / digest[:2] / digest
+        try:
+            stat = path.stat()
+        except OSError as exc:
+            raise ManifestError(f"{row['object_id']!r} has no object file") from exc
+        if path.is_symlink() or stat.st_size != row["size"]:
+            raise ManifestError(f"{row['object_id']!r} does not match its recorded size")
+
     def close(self) -> None:
         if self._connection is not None:
             self._connection.close()
@@ -538,6 +589,9 @@ class ReplicaState:
         if self._lock is not None:
             self._lock.close()
             self._lock = None
+        self._puts.clear()
+        self._seen.clear()
+        self._tombstones.clear()
         self._closed = True
 
     def __enter__(self) -> "ReplicaState":
@@ -785,6 +839,10 @@ class ReplicaState:
                 except OSError:
                     continue
                 collected += 1
+        try:
+            (self._root / GC_MARKER).unlink(missing_ok=True)
+        except OSError:
+            pass
         return collected
 
     @staticmethod

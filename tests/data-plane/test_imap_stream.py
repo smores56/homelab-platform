@@ -262,6 +262,58 @@ class MailCollectionTests(unittest.TestCase):
                     json.loads(replica.read("mail::_uidvalidity")), {"INBOX": 1}
                 )
 
+    def test_a_uid_absent_from_the_flags_response_keeps_its_flags(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            _publish(
+                root,
+                ScriptedMailbox(
+                    {"INBOX": ScriptedFolder(1, {"1": _message("1")}, {"1": ("\\Seen",)})}
+                ),
+            )
+
+            # The provider answered SEARCH with the UID but its FLAGS fetch did
+            # not mention it, which must not be read as "this message is unread".
+            mailbox = ScriptedMailbox(
+                {"INBOX": ScriptedFolder(1, {"1": _message("1")}, {})}
+            )
+            _publish(root, mailbox, captured_at=LATER)
+
+            with ReplicaState(root, read_only=True) as replica:
+                self.assertEqual(
+                    replica.get("mail::INBOX::1")["metadata"]["flags"], ["\\Seen"]
+                )
+
+    def test_a_lost_epoch_map_still_tombstones_an_expunge(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            _publish(
+                root,
+                ScriptedMailbox(
+                    {
+                        "INBOX": ScriptedFolder(
+                            1, {"1": _message("1"), "2": _message("2")}
+                        )
+                    }
+                ),
+            )
+            with ReplicaState(root, source_id=SOURCE_ID) as state:
+                state.tombstone("mail::_uidvalidity", "operator deleted the map")
+                state.commit(complete=False, captured_at=LATER)
+
+            mailbox = ScriptedMailbox(
+                {"INBOX": ScriptedFolder(1, {"1": _message("1")})}
+            )
+            report = _publish(root, mailbox, captured_at=LATER)
+
+            self.assertEqual(report.deleted, 1)
+            with ReplicaState(root, read_only=True) as replica:
+                row = replica.get("mail::INBOX::2")
+                self.assertFalse(row["present"])
+                self.assertEqual(
+                    json.loads(replica.read("mail::_uidvalidity")), {"INBOX": 1}
+                )
+
     def test_a_vanished_folder_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)

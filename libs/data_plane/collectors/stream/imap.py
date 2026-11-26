@@ -169,11 +169,11 @@ def _epochs(state: ReplicaState) -> dict[str, int]:
         return {}
     try:
         value = json.loads(state.read(UIDVALIDITY_OBJECT).decode("utf-8"))
-    except (ValueError, UnicodeDecodeError) as exc:
+        if not isinstance(value, dict):
+            raise ValueError("not an object")
+        return {str(name): int(epoch) for name, epoch in value.items()}
+    except (ValueError, UnicodeDecodeError, TypeError) as exc:
         raise PublishError("the replica's uidvalidity map is unreadable") from exc
-    if not isinstance(value, dict):
-        raise PublishError("the replica's uidvalidity map is not an object")
-    return {str(name): int(epoch) for name, epoch in value.items()}
 
 
 # --------------------------------------------------------------------------- #
@@ -226,6 +226,7 @@ def collect_folder(
     folder: str,
     state: ReplicaState,
     captured_at: str,
+    earlier: dict[str, int],
 ) -> FolderReport:
     """Write one folder's changes into ``state``; the caller commits."""
 
@@ -234,16 +235,30 @@ def collect_folder(
     if isinstance(epoch, bool) or not isinstance(epoch, int) or epoch < 1:
         raise PublishError(f"folder {folder}: SELECT returned no positive UIDVALIDITY")
 
-    earlier = _epochs(state)
-    stable = folder in earlier
-    if stable and int(earlier[folder]) != epoch:
-        raise EpochError(
-            f"folder {folder} uidvalidity changed {earlier[folder]} -> {epoch}; "
-            "every UID was renumbered, so reconcile the source as a new epoch"
-        )
-
     prefix = f"mail::{folder_key(folder)}::"
     held = {row["object_id"]: row for row in state.live_rows(prefix)}
+    recorded = {
+        int(row["metadata"]["uidvalidity"])
+        for row in held.values()
+        if isinstance(row["metadata"].get("uidvalidity"), int)
+    }
+    known = earlier.get(folder)
+    if known is not None and known != epoch:
+        raise EpochError(
+            f"folder {folder} uidvalidity changed {known} -> {epoch}; "
+            "every UID was renumbered, so reconcile the source as a new epoch"
+        )
+    if recorded - {epoch}:
+        raise EpochError(
+            f"folder {folder} holds messages of uidvalidity "
+            f"{sorted(recorded)} but the provider reports {epoch}; reconcile the "
+            "source as a new epoch"
+        )
+    # The map is the authority, but the rows carry the same epoch, so a map that
+    # lost an entry must not turn every expunge into a missing tombstone that
+    # refuses the pass forever.
+    stable = known is not None or bool(recorded)
+
     previous_uids = [object_id[len(prefix) :] for object_id in held]
     current = _uids(mailbox.uid_search_all())
     added, removed = uid_diff(previous_uids, current)
@@ -261,9 +276,11 @@ def collect_folder(
             # The body is the provider's bytes and the capture time is when this
             # UID first arrived, so neither moves. Flags are the one field an
             # existing object updates: reading a message has to be visible
-            # without a re-fetch.
+            # without a re-fetch -- and a UID the FLAGS response did not mention
+            # keeps the flags it had rather than being read as flagless.
             metadata = dict(held[object_id]["metadata"])
-            metadata["flags"] = wanted
+            if uid in flags:
+                metadata["flags"] = wanted
             # Every row the pass still holds is recorded as seen, so a complete
             # commit can tell "unchanged" from "gone"; an unchanged row writes
             # nothing, because the store compares it before it updates.
@@ -350,7 +367,7 @@ def collect_mailbox(
         started = time.monotonic()
         if progress is not None:
             progress(f"folder {index}/{total} {folder}: collecting")
-        report = collect_folder(mailbox, folder, state, captured_at)
+        report = collect_folder(mailbox, folder, state, captured_at, earlier)
         epochs[folder] = report.uidvalidity
         counts[folder] = report.objects
         carried += report.carried

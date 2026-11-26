@@ -420,6 +420,59 @@ class ReplicaStateTests(unittest.TestCase):
         self.assertEqual(stats.written, 1)
         self.assertEqual(state.get("a")["metadata"]["flags"], ["\\Seen"])
 
+    def test_seen_of_a_row_file_that_vanished_is_refused(self) -> None:
+        state = self._state()
+        state.put("a", b"hello", {})
+        state.commit(complete=True, captured_at=CAPTURED)
+        row = state.get("a")
+        digest = hashlib.sha256(b"hello").hexdigest()
+        (self.root / "objects" / digest[:2] / digest).unlink()
+
+        with self.assertRaises(ManifestError):
+            state.seen(row)
+
+    def test_seen_never_reverts_bytes_written_in_the_same_pass(self) -> None:
+        state = self._state()
+        state.put("a", b"old", {})
+        state.commit(complete=True, captured_at=CAPTURED)
+        old_row = state.get("a")
+
+        state.put("a", b"new", {})
+        with self.assertRaises(ManifestError):
+            state.seen(old_row)
+
+    def test_live_rows_stop_at_the_prefix_boundary(self) -> None:
+        state = self._state()
+        state.put("mail::INBOX::1", b"one", {})
+        state.put("mail::INBOXES::2", b"two", {})
+        state.put("mail::INBOX::", b"three", {})
+        state.commit(complete=True, captured_at=CAPTURED)
+
+        self.assertEqual(
+            [row["object_id"] for row in state.live_rows("mail::INBOX::")],
+            ["mail::INBOX::", "mail::INBOX::1"],
+        )
+
+    def test_an_abandoned_pass_leaves_bytes_that_the_next_pass_collects(self) -> None:
+        first = self._state()
+        first.put("orphan", b"never committed", {})
+        first.close()
+        orphan = (
+            self.root
+            / "objects"
+            / hashlib.sha256(b"never committed").hexdigest()[:2]
+            / hashlib.sha256(b"never committed").hexdigest()
+        )
+        self.assertTrue(orphan.is_file())
+
+        state = self._state()
+        state.put("kept", b"committed", {})
+        stats = state.commit(complete=True, captured_at=CAPTURED)
+
+        self.assertEqual(stats.collected, 1)
+        self.assertFalse(orphan.exists())
+        self.assertEqual(state.live_object_ids(), ("kept",))
+
     def test_seen_of_a_tombstone_is_refused(self) -> None:
         state = self._state()
         state.put("a", b"hello", {})
