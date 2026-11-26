@@ -18,7 +18,12 @@ deploy/state	tests/deploy/state.bats scripts/deploy-state.sh scripts/deploy-drai
 deploy/atomic	tests/deploy/atomic.bats scripts/deploy-state.sh bootc/server/rootfs/usr/libexec/deploy-verify.py bootc/lib/deploy/* tests/deploy/*
 deploy/receiver	tests/deploy/receiver.bats scripts/deploy-state.sh bootc/lib/deploy/* tests/deploy/*
 core/restic-plane	tests/core/restic-plane.bats scripts/smortress-restic-* scripts/restic-plane-common.sh scripts/storage-layout.sh scripts/sops-decrypt.sh scripts/smortress-secrets-seed.sh units/systemd/smortress-restic-* units/systemd/var-lib-restic-*.mount bootc/server/Containerfile bootc/server/rootfs/usr/share/smortress/secrets.manifest tests/core/*
-deploy/apps	tests/deploy/apps.bats scripts/deploy-apps.sh scripts/deploy/apps/* scripts/lib/log.sh scripts/apps-schema.py scripts/deploy-state.sh scripts/deploy-drain.sh scripts/smortress-boot-gate.sh tests/deploy/*
+deploy/apps-install	tests/deploy/apps-install.bats scripts/deploy-apps.sh scripts/deploy/apps/* scripts/lib/log.sh scripts/apps-schema.py scripts/deploy-state.sh scripts/deploy-drain.sh scripts/smortress-boot-gate.sh
+deploy/apps-revert	tests/deploy/apps-revert.bats scripts/deploy-apps.sh scripts/deploy/apps/* scripts/lib/log.sh scripts/apps-schema.py scripts/deploy-state.sh scripts/deploy-drain.sh scripts/smortress-boot-gate.sh
+deploy/apps-verdict	tests/deploy/apps-verdict.bats scripts/deploy-apps.sh scripts/deploy/apps/* scripts/lib/log.sh scripts/apps-schema.py scripts/deploy-state.sh scripts/deploy-drain.sh scripts/smortress-boot-gate.sh
+deploy/apps-settle	tests/deploy/apps-settle.bats scripts/deploy-apps.sh scripts/deploy/apps/* scripts/lib/log.sh scripts/apps-schema.py scripts/deploy-state.sh scripts/deploy-drain.sh scripts/smortress-boot-gate.sh
+deploy/apps-manager	tests/deploy/apps-manager.bats scripts/deploy-apps.sh scripts/deploy/apps/* scripts/lib/log.sh scripts/apps-schema.py scripts/deploy-state.sh scripts/deploy-drain.sh scripts/smortress-boot-gate.sh
+deploy/apps-guard	tests/deploy/apps-guard.bats scripts/deploy-apps.sh scripts/deploy/apps/* scripts/lib/log.sh scripts/apps-schema.py scripts/deploy-state.sh scripts/deploy-drain.sh scripts/smortress-boot-gate.sh
 deploy/apps-health	tests/deploy/apps-health.bats scripts/smortress-apps-health.sh scripts/deploy-state.sh tests/deploy/*
 deploy/boot	tests/deploy/boot.bats scripts/deploy-platform.sh scripts/smortress-boot-gate.sh scripts/deploy-state.sh bootc/server/rootfs/usr/lib/bootupd/grub2-static/configs.d/*.cfg bootc/server/rootfs/etc/systemd/system.conf.d/*.conf tests/deploy/*
 deploy/heartbeat	tests/deploy/heartbeat.bats scripts/deploy-heartbeat.sh scripts/deploy-state.sh units/systemd/smortress-deploy-heartbeat.* bootc/server/Containerfile tests/deploy/*
