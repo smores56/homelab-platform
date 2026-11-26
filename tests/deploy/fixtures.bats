@@ -32,132 +32,17 @@ verify=bootc/server/rootfs/usr/libexec/deploy-verify.py
 drain=scripts/deploy-drain.sh
 state_lib=scripts/deploy-state.sh
 decisions=bootc/lib/deploy/decisions.py
+# The GitHub API and the ghcr registry: one loopback server, shared with
+# tests/deploy/edge-verify.bats, answering out of the fixture document it is
+# pointed at. The fixture *is* the world, so a new case needs no new server code,
+# and both roles replay the same answers rather than two renderings of them.
+world_server=tests/deploy/fixture-server.py
 
 commit=0123456789abcdef0123456789abcdef01234567
 id_e=55555555-5555-4555-8555-555555555555
 
 setup_file() {
     local dir=$BATS_FILE_TMPDIR
-
-    # One loopback server for the GitHub API and the ghcr registry, answering out
-    # of the fixture document it is pointed at: the fixture *is* the world, so a
-    # new case needs no new server code.
-    cat >"$dir/server.py" <<'PY'
-"""The GitHub API and the ghcr registry, answering out of a fixture document."""
-
-import json
-import sys
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-
-FIXTURE, PORT = sys.argv[1], int(sys.argv[2])
-
-INDEX_TYPE = "application/vnd.oci.image.index.v1+json"
-MANIFEST_TYPE = "application/vnd.oci.image.manifest.v1+json"
-
-
-def world():
-    with open(FIXTURE) as handle:
-        return json.load(handle)["world"]
-
-
-def manifest(image):
-    return {
-        "schemaVersion": 2,
-        "mediaType": MANIFEST_TYPE,
-        "config": {
-            "mediaType": "application/vnd.oci.image.config.v1+json",
-            "digest": image["config"],
-            "size": 7,
-        },
-        "layers": [],
-    }
-
-
-class Handler(BaseHTTPRequestHandler):
-    protocol_version = "HTTP/1.1"
-
-    def log_message(self, *_args):
-        pass
-
-    def _send(self, status, document=None, headers=None):
-        body = b"" if document is None else json.dumps(document).encode()
-        try:
-            self.send_response(status)
-            for key, value in (headers or {}).items():
-                self.send_header(key, value)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-        except OSError:
-            # A client that hung up mid-answer is the verifier's own deadline.
-            pass
-
-    def do_GET(self):
-        state = world()
-        path = self.path.split("?", 1)[0]
-        if path == "/token":
-            self._send(200, {"token": "anonymous-test-token"})
-            return
-        if path.startswith("/repos/"):
-            if state.get("github_status"):
-                self._send(state["github_status"], {"message": "no"})
-                return
-            if path.endswith("/git/ref/heads/main"):
-                repo = path.split("/")[3]
-                self._send(200, {"ref": "refs/heads/main", "object": {"sha": state["tip"][repo]}})
-                return
-            if "/compare/" in path:
-                self._send(200, {"status": state["compare"], "ahead_by": 1})
-                return
-        image = state["tag"]
-        if "/manifests/" in path:
-            ref = path.rsplit("/", 1)[1]
-            digest = image["index_digest"] if image["index"] and ref == image["name"] else image["manifest"]
-            if not image["found"] or ref not in (image["name"], image["manifest"], image["index_digest"]):
-                self._send(404, {"errors": [{"code": "MANIFEST_UNKNOWN"}]})
-                return
-            if ref == image["name"] and image["index"]:
-                document = {
-                    "schemaVersion": 2,
-                    "mediaType": INDEX_TYPE,
-                    "manifests": [
-                        {
-                            "mediaType": MANIFEST_TYPE,
-                            "digest": image["arm64"],
-                            "platform": {"os": "linux", "architecture": "arm64"},
-                        },
-                        {
-                            "mediaType": MANIFEST_TYPE,
-                            "digest": image["manifest"],
-                            "platform": {"os": "linux", "architecture": "amd64"},
-                        },
-                    ],
-                }
-            else:
-                document = manifest(image)
-            self._send(
-                200,
-                document,
-                {
-                    "Content-Type": INDEX_TYPE if document.get("manifests") else MANIFEST_TYPE,
-                    "Docker-Content-Digest": digest,
-                },
-            )
-            return
-        if "/blobs/" in path:
-            labels = (
-                {}
-                if image.get("label") is None
-                else {"org.opencontainers.image.revision": image["label"]}
-            )
-            self._send(200, {"architecture": "amd64", "os": "linux", "config": {"Labels": labels}})
-            return
-        self._send(404, {})
-
-
-ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever(poll_interval=0.1)
-PY
 
     # The role hooks the drain calls. The platform stub answers per sub-command,
     # because "held" and "refused" are two different exit codes of one program.
@@ -182,7 +67,7 @@ setup() {
     work=$BATS_TEST_TMPDIR
     state_dir=$work/state
 
-    for file in "$verify" "$drain" "$state_lib" "$decisions"; do
+    for file in "$verify" "$drain" "$state_lib" "$decisions" "$world_server"; do
         [[ -r $file ]] || fail "$file is missing"
     done
     for file in jq python3 timeout cmp; do
@@ -228,7 +113,7 @@ s.close()'
 start_world() { # <fixture>
     port=$(free_port)
     base=http://127.0.0.1:$port
-    python3 "$BATS_FILE_TMPDIR/server.py" "$1" "$port" >"$work/server.log" 2>&1 &
+    python3 "$world_server" "$1" "$port" >"$work/server.log" 2>&1 &
     server_pid=$!
     local _
     for _ in $(seq 1 100); do
