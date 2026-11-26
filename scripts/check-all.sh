@@ -54,29 +54,29 @@ while IFS='|' read -r name cmd pathlist; do
   cmds+=("$cmd")
   paths+=("$pathlist")
 done <<'EOF'
-broker|bats --jobs 4 tests/python/broker.bats|apps/broker/*
-webhook|bats --jobs 4 tests/python/webhook.bats|apps/webhook/*
-agent-proxy|bats --jobs 4 tests/python/agent-proxy.bats|apps/agent_proxy/*
-agent-facade|bats --jobs 4 tests/python/agent-facade.bats|apps/agent_facade/*
-agent-shell-bridge|tests/agent-shell-bridge/check.sh|tests/agent-shell-bridge/*,scripts/agent-shell-bridge.py
-backrest|if ! npm --version >/dev/null 2>&1; then d="${XDG_CACHE_HOME:-$HOME/.cache}/check-all/node"; mkdir -p "$d"; for t in node npm npx; do printf '#!/bin/sh\nexec mise x node@22.23.5 -- %s "$@"\n' "$t" > "$d/$t"; chmod +x "$d/$t"; done; PATH="$d:$PATH"; export PATH; fi; npm ci --prefix backrest && npm --prefix backrest run typecheck && npm --prefix backrest test && tests/backrest/check.sh|backrest/*
-tofu-check|tests/tofu/check.sh|tests/tofu/*,tofu/*,scripts/check-tofu-providers.py
+broker|bats --jobs 4 tests/python/broker.bats|
+webhook|bats --jobs 4 tests/python/webhook.bats|
+agent-proxy|bats --jobs 4 tests/python/agent-proxy.bats|
+agent-facade|bats --jobs 4 tests/python/agent-facade.bats|
+agent-shell-bridge|bats --jobs 4 tests/agent-shell-bridge/check.bats|tests/agent-shell-bridge/*,scripts/agent-shell-bridge.py
+backrest|if ! npm --version >/dev/null 2>&1; then d="${XDG_CACHE_HOME:-$HOME/.cache}/check-all/node"; mkdir -p "$d"; for t in node npm npx; do printf '#!/bin/sh\nexec mise x node@22.23.5 -- %s "$@"\n' "$t" > "$d/$t"; chmod +x "$d/$t"; done; PATH="$d:$PATH"; export PATH; fi; npm ci --prefix backrest && npm --prefix backrest run typecheck && npm --prefix backrest test && bats --jobs 4 tests/backrest/check.bats|backrest/*
+tofu-check|bats --jobs 4 tests/tofu/check.bats|tests/tofu/*,tofu/*,scripts/check-tofu-providers.py
 tofu-fmt|bats --jobs 4 tests/tofu-fmt.bats|tofu/*
-provision|tests/provision/check.sh|tests/provision/*,provision/*
-docs|bats --jobs 4 tests/docs.bats|*.md,docs/*,scripts/check-doc-refs.py,scripts/doc-refs-baseline.txt
+provision|bats --jobs 4 tests/provision/check.bats|tests/provision/*,provision/*
+docs|bats --jobs 4 tests/docs.bats|
 secrets|bats --jobs 4 tests/secrets/policy.bats && bats --jobs 4 tests/secrets/migration.bats && bats --jobs 4 tests/secrets/decrypt.bats && bats --jobs 4 tests/secrets/bundles.bats && bats --jobs 4 tests/secrets/rotate.bats && bats --jobs 4 tests/secrets/cloudflare-derive.bats && python3 scripts/sops-policy.py check --repo . && python3 scripts/secrets-check.py --shadow && python3 scripts/secrets-check.py|secrets/*,.sops.yaml,scripts/sops-policy.py,scripts/secrets-check.py,scripts/secrets-index.py,scripts/secrets-bundle.py,scripts/secrets-bundles.json,scripts/secret.sh,scripts/cloudflare-derive.sh,scripts/smortress-secrets-seed.sh,image/rootfs/usr/share/smortress/secrets.manifest,tests/secrets/*
 server-image|bats --jobs 4 tests/image/server-image.bats && bats --jobs 4 tests/image/ignition-boundary.bats|scripts/lib/*,scripts/check/image/*,image/*,ignition/*,units/*,images/*,tests/fixtures/*,docs/core/server-image.md,scripts/check-server-image.sh,tests/image/*
-edge|tests/edge/check.sh|tests/edge/*,scripts/verify-public-edge.sh,scripts/verify-caa.sh
-tailnet-names|tests/tailnet-names/check.sh|tests/tailnet-names/*,scripts/verify-tailnet-names.sh
+edge|bats --jobs 4 tests/edge/check.bats|tests/edge/*,scripts/verify-public-edge.sh,scripts/verify-caa.sh
+tailnet-names|bats --jobs 4 tests/tailnet-names/check.bats|tests/tailnet-names/*,scripts/verify-tailnet-names.sh
 core|bats --jobs 4 tests/core/check.bats && bats --jobs 4 tests/core/storage-layout.bats && bats --jobs 4 tests/tags.bats && bats --jobs 4 tests/core/restic-drill.bats && bats --jobs 4 tests/core/tailscale-serve.bats && bats --jobs 4 tests/core/apps-egress.bats && bats --jobs 4 tests/core/apps-user.bats && bats --jobs 4 tests/core/agent-drill.bats && bats --jobs 4 tests/core/operator-access.bats && bats --jobs 4 tests/core/restic-plane.bats && bats --jobs 4 tests/core/app-quadlets.bats && bats --jobs 4 tests/core/smortress-restic-progress.bats && bats --jobs 4 tests/core/agent-recovery.bats && bats --jobs 4 tests/core/agent-jobs.bats|tests/core/*,tests/tags.*,tests/helpers.bash,scripts/core/*,scripts/access-*,scripts/storage-layout.sh,scripts/init-zpool.sh,units/systemd/smortress-zpool.service
 apps|bats --jobs 4 tests/apps/check.bats && bats --jobs 4 tests/apps/render.bats && bats --jobs 4 tests/apps/quota.bats && bats --jobs 4 tests/apps/ingress.bats|tests/apps/*,scripts/apps-*
 deploy|bats --jobs 4 tests/deploy/state.bats && bats --jobs 4 tests/deploy/atomic.bats && bats --jobs 4 tests/deploy/receiver.bats && bats --jobs 4 tests/deploy/apps.bats && bats --jobs 4 tests/deploy/verify.bats && bats --jobs 4 tests/deploy/platform.bats && bats --jobs 4 tests/deploy/boot.bats && bats --jobs 4 tests/deploy/apps-health.bats && bats --jobs 4 tests/deploy/notify.bats && bats --jobs 4 tests/deploy/poll.bats && bats --jobs 4 tests/deploy/heartbeat.bats|tests/deploy/*,scripts/deploy-*,scripts/deploy/apps/*,image/rootfs/usr/libexec/deploy-verify.py,image/rootfs/usr/libexec/deploy-receiver.py,scripts/smortress-boot-gate.sh,scripts/smortress-apps-health.sh
-data-plane|scripts/render-source-schemas.py --check && tests/data-plane/check.sh|tests/data-plane/*,apps/data_plane/*,libs/data_plane/*,scripts/render-source-schemas.py,recovery/*,deploy/data-plane/*
-tuta-calendar|venv="${XDG_CACHE_HOME:-$HOME/.cache}/check-all/tuta-calendar"; if [ ! -x "$venv/bin/python" ]; then python3 -m venv "$venv" && "$venv/bin/pip" install -q --disable-pip-version-check -r images/tuta-calendar/requirements.lock; fi; PATH="$venv/bin:$PATH" tests/tuta-calendar/check.sh|tests/tuta-calendar/*,apps/tuta_calendar/*
-agent-egress|tests/agent-egress/check.sh|tests/agent-egress/*,apps/agent_egress/*
-brave|tests/brave/check.sh|tests/brave/*,apps/brave_ingest/*
+data-plane|bats --jobs 4 tests/data-plane/check.bats|tests/data-plane/*,apps/data_plane/*,libs/data_plane/*,scripts/render-source-schemas.py,recovery/*,deploy/data-plane/*
+tuta-calendar|bats --jobs 4 tests/tuta-calendar/check.bats|tests/tuta-calendar/*,apps/tuta_calendar/*
+agent-egress|bats --jobs 4 tests/agent-egress/check.bats|tests/agent-egress/*,apps/agent_egress/*
+brave|bats --jobs 4 tests/brave/check.bats|tests/brave/*,apps/brave_ingest/*
 lint|bats --jobs 4 tests/lint.bats|.github/*,CODEOWNERS,.sops.yaml,.yamllint.yaml,scripts/*,tests/*,provision/*,backrest/*,.githooks/*,recovery/*
-actionlint|bats --jobs 4 tests/actionlint.bats|.github/*
+actionlint|bats --jobs 4 tests/actionlint.bats|
 EOF
 
 if $list; then

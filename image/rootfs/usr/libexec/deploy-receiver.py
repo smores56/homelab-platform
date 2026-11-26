@@ -355,7 +355,7 @@ class Receiver:
     # The queue-directory contract documented in scripts/deploy-state.sh: one
     # regular file directly inside QUEUE_DIR whose name ends in `.json`. A
     # subdirectory called `x.json` is not an entry, so the cap here counts what
-    # the drain's `queue_entries` sees. tests/deploy/receiver.bats compares this
+    # the drain's `queue_entries` sees. tests/deploy/receiver.sh compares this
     # reader with the bash one on a fixture.
     @staticmethod
     def _queue_count() -> int:

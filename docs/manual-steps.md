@@ -1589,7 +1589,7 @@ dig +short nothing-here.sammohr.dev
 scripts/verify-public-edge.sh     # photos and opds, over valid TLS
 ```
 
-The static half is `tests/tofu/check.sh`, which asserts there is no Access object
+The static half is `tests/tofu/check.bats`, which asserts there is no Access object
 left to reintroduce.
 
 ### Kanbei behind Access

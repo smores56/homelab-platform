@@ -35,8 +35,8 @@ changes by pull request from a fork, so no PR workflow can read a secret.
 | `tests/core/` | Offline checks for the core gate, the Restic plane, the apps tenant and the Serve routes |
 | `tests/data-plane/` | Data-plane unit tests: contracts, backup plan, migration gates, restore planning |
 | `tests/deploy/` | Offline checks for the deploy receiver: listener, verification, gates, apps apply, CI notify |
-| `tests/tofu/` | Static assertions on the Cloudflare config (`tests/tofu/check.sh`) |
-| `tests/edge/` | Offline checks for the public-edge probe (`tests/edge/check.sh`) |
+| `tests/tofu/` | Static assertions on the Cloudflare config (`tests/tofu/check.bats`) |
+| `tests/edge/` | Offline checks for the public-edge probe (`tests/edge/check.bats`) |
 | `scripts/` | CI helpers, shellchecked |
 | `docs/` | Core image, apps tenant, Restic plane, backrest, public edge, recovery kit, broker, webhook, agent facade, runbook, manual steps |
 
@@ -48,10 +48,10 @@ scripts/check-all.sh --changed           # only the groups this branch touches
 scripts/check-all.sh --list              # the groups and their commands
 
 scripts/install-ci-tools.sh ~/.local/bin # the pinned binaries the gate and tofu group need
-tests/tofu/check.sh                      # Cloudflare config shape, no credentials
-tests/data-plane/check.sh                # data-plane unit tests, no host
+bats tests/tofu/check.bats               # Cloudflare config shape, no credentials
+bats tests/data-plane/check.bats         # data-plane unit tests, no host
 bats tests/core/*.bats                   # core gate, apps tenant and deploy docs
-tests/deploy/*.sh                        # deploy receiver, verification, gates, apps apply, notification
+bats tests/deploy/*.bats                 # deploy receiver, verification, gates, apps apply, notification
 scripts/render-recovery-groups.py --check # the recovery manifest matches its source
 ```
 
