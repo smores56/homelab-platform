@@ -1635,7 +1635,8 @@ the config line the browser lists a session it cannot attach to, with no error t
 say why; `zellij setup --check` accepts the config, so it is not the probe either.
 
 ```sh
-mise dotfiles                                        # the unit and the config
+mise dot apply                                      # the unit and the config (alias: d)
+systemctl --user daemon-reload
 systemctl --user enable --now zellij-web.service    # one time, then at every boot
 systemctl --user status zellij-web.service
 ```
