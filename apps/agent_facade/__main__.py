@@ -43,7 +43,7 @@ DEFAULT_TRANSPORT = "stdio"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 18004
 DEFAULT_MEMORY_ROOT = "state/agent-facade"
-#: The derived source index lives below here, one file per source and generation;
+#: The derived source index lives below here, one file per source and snapshot;
 #: an unwritable root only means searches scan (apps/agent_facade/source_index.py).
 DEFAULT_INDEX_ROOT = "/index"
 TOKEN_ENV = "AGENT_FACADE_TOKEN"
@@ -151,7 +151,7 @@ def _parser() -> argparse.ArgumentParser:
         default=[],
         metavar="SOURCE=DIR",
         help=(
-            "answer one source of this deployment from a published raw generation "
+            "answer one source of this deployment from a committed replica state "
             "at DIR instead of the fixture (mail, calendar, finance, brave)"
         ),
     )

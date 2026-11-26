@@ -1,11 +1,11 @@
 """Replica-backed source tests: projection, provenance and the structural split.
 
-Each case publishes a real generation and then asks the adapter the same
-questions the facade tool surface asks: read one record, search for words, and
-describe what the record can cite as provenance. Mail, calendar, finance, photos
-and music are published with their raw collectors; notes and tasks are laid out
-directly, because their collectors write the live replica state and this suite
-tests the generation reader.
+Each case runs the raw collectors into a real replica state and then asks the
+adapter the same questions the facade tool surface asks: read one record, search
+for words, and describe what the record can cite as provenance. Mail, calendar,
+finance, photos and music are committed with their raw collectors; notes and
+tasks are laid out directly, because their collectors write the live replica
+state and this suite tests the adapter that reads it.
 """
 
 from __future__ import annotations
@@ -23,9 +23,6 @@ from data_plane.collectors.raw import (
     canonical_json,
     collect_calendar,
     collect_maildir,
-    canonical_json,
-    collect_calendar,
-    collect_maildir,
     collect_music,
     collect_photos,
     collect_simplefin,
@@ -37,9 +34,8 @@ from data_plane.errors import ContractError, ValidationError
 CAPTURED = "2026-11-19T00:00:00+00:00"
 
 
-def _mail_generation(
+def _commit_mail(
     root: Path,
-    generation_id: str = "gen-0001",
     subject: str = "Boiler inspection",
     body: str = "The boiler inspection is booked for the twelfth.",
 ) -> None:
@@ -62,7 +58,7 @@ def _mail_generation(
         )
 
 
-def _calendar_generation(root: Path) -> None:
+def _commit_calendar(root: Path) -> None:
     entities = root / "entities"
     entities.mkdir()
     (entities / "e1.json").write_text(
@@ -82,7 +78,7 @@ def _calendar_generation(root: Path) -> None:
         collect_calendar(entities, state, captured_at=CAPTURED)
 
 
-def _finance_generation(root: Path) -> None:
+def _commit_finance(root: Path) -> None:
     accountset = {
         "connections": [{"conn_id": "conn-1", "name": "Schwab"}],
         "accounts": [
@@ -111,7 +107,7 @@ def _finance_generation(root: Path) -> None:
         )
 
 
-def _notes_generation(root: Path, junk: bytes | None = None) -> None:
+def _commit_notes(root: Path, junk: bytes | None = None) -> None:
     with ReplicaState(root / "replica-notes", source_id="notes.markdown") as state:
         _note(
             state,
@@ -161,7 +157,7 @@ def _note(state: ReplicaState, relative: str, heading: str, body: str) -> None:
     )
 
 
-def _tasks_generation(root: Path, junk: bytes | None = None) -> None:
+def _commit_tasks(root: Path, junk: bytes | None = None) -> None:
     with ReplicaState(root / "replica-tasks", source_id="tasks.todo") as state:
         for line, name in (
             ("(A) renew the boat licence +admin", "todo.txt"),
@@ -199,7 +195,7 @@ def _task_id(line: str) -> str:
     return f"tasks::{hashlib.sha256(line.encode('utf-8')).hexdigest()[:16]}"
 
 
-def _photos_generation(root: Path, junk: bytes | None = None) -> None:
+def _commit_photos(root: Path, junk: bytes | None = None) -> None:
     library = root / "photos"
     (library / "2026").mkdir(parents=True)
     (library / "2026" / "harbour-sunset.jpg").write_bytes(b"\xff\xd8jpegbytes")
@@ -214,7 +210,7 @@ def _photos_generation(root: Path, junk: bytes | None = None) -> None:
             state.commit(complete=False, captured_at=CAPTURED)
 
 
-def _music_generation(root: Path) -> None:
+def _commit_music(root: Path) -> None:
     album = root / "music" / "Tori Amos" / "Little Earthquakes"
     album.mkdir(parents=True)
     (album / "01 - Crucify.flac").write_bytes(b"fLaCaudio")
@@ -226,7 +222,7 @@ class MailReplicaTests(unittest.TestCase):
     def test_reads_and_searches_the_projection(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
-            _mail_generation(root)
+            _commit_mail(root)
             adapters = replica_sources.adapters_for(
                 sources.Visibility.PERSONAL, {"mail": root / "replica"}
             )
@@ -247,7 +243,7 @@ class MailReplicaTests(unittest.TestCase):
     def test_derived_objects_are_not_records(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
-            _mail_generation(root)
+            _commit_mail(root)
             mail = replica_sources.adapters_for(
                 sources.Visibility.PERSONAL, {"mail": root / "replica"}
             )["mail"]
@@ -257,7 +253,7 @@ class MailReplicaTests(unittest.TestCase):
     def test_the_contract_is_the_deployment_table_s(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
-            _mail_generation(root)
+            _commit_mail(root)
             adapter = replica_sources.adapters_for(
                 sources.Visibility.PERSONAL, {"mail": root / "replica"}
             )["mail"]
@@ -269,7 +265,7 @@ class NotesAndTasksReplicaTests(unittest.TestCase):
     def test_notes_projects_the_markdown_and_its_heading(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
-            _notes_generation(root)
+            _commit_notes(root)
             notes = replica_sources.adapters_for(
                 sources.Visibility.PERSONAL, {"notes": root / "replica-notes"}
             )["notes"]
@@ -288,7 +284,7 @@ class NotesAndTasksReplicaTests(unittest.TestCase):
     def test_tasks_projects_the_line_and_keeps_a_completed_one_findable(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
-            _tasks_generation(root)
+            _commit_tasks(root)
             tasks = replica_sources.adapters_for(
                 sources.Visibility.PERSONAL, {"tasks": root / "replica-tasks"}
             )["tasks"]
@@ -308,8 +304,8 @@ class NotesAndTasksReplicaTests(unittest.TestCase):
     def test_a_junk_object_is_not_a_record_and_does_not_raise(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
-            _notes_generation(root, junk=b"this is not json\n")
-            _tasks_generation(root, junk=b'{"text": 5}')
+            _commit_notes(root, junk=b"this is not json\n")
+            _commit_tasks(root, junk=b'{"text": 5}')
             notes_and_tasks = replica_sources.adapters_for(
                 sources.Visibility.PERSONAL,
                 {"notes": root / "replica-notes", "tasks": root / "replica-tasks"},
@@ -327,8 +323,8 @@ class NotesAndTasksReplicaTests(unittest.TestCase):
     def test_both_sources_bind_to_the_personal_table(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
-            _notes_generation(root)
-            _tasks_generation(root)
+            _commit_notes(root)
+            _commit_tasks(root)
             adapters = replica_sources.adapters_for(
                 sources.Visibility.PERSONAL,
                 {"notes": root / "replica-notes", "tasks": root / "replica-tasks"},
@@ -349,7 +345,7 @@ class CalendarAndFinanceTests(unittest.TestCase):
     def test_calendar_projects_the_entity_not_the_ics(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
-            _calendar_generation(root)
+            _commit_calendar(root)
             calendar = replica_sources.adapters_for(
                 sources.Visibility.PERSONAL, {"calendar": root / "replica-calendar"}
             )["calendar"]
@@ -362,7 +358,7 @@ class CalendarAndFinanceTests(unittest.TestCase):
     def test_finance_projects_the_transaction_only(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
-            _finance_generation(root)
+            _commit_finance(root)
             finance = replica_sources.adapters_for(
                 sources.Visibility.PERSONAL, {"finance": root / "replica-finance"}
             )["finance"]
@@ -413,10 +409,10 @@ class BraveReplicaTests(unittest.TestCase):
 
 
 class LiveRefreshTests(unittest.TestCase):
-    def test_a_new_generation_is_visible_without_rebuilding_the_adapter(self) -> None:
+    def test_a_new_state_is_visible_without_rebuilding_the_adapter(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
-            _mail_generation(root)
+            _commit_mail(root)
             mail = replica_sources.adapters_for(
                 sources.Visibility.PERSONAL,
                 {"mail": root / "replica"},
@@ -424,9 +420,8 @@ class LiveRefreshTests(unittest.TestCase):
             )["mail"]
             self.assertEqual(mail.read("mail::INBOX::aaa").title, "Boiler inspection")
 
-            _mail_generation(
+            _commit_mail(
                 root,
-                "gen-0002",
                 subject="Boiler inspection updated",
                 body="Rescheduled to the nineteenth.",
             )
@@ -439,7 +434,7 @@ class LiveRefreshTests(unittest.TestCase):
                 ["mail::INBOX::aaa"],
             )
 
-    def test_an_absent_generation_is_unavailable_and_recovers_later(self) -> None:
+    def test_an_uncommitted_source_is_unavailable_and_recovers_later(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
             mail = replica_sources.adapters_for(
@@ -452,7 +447,7 @@ class LiveRefreshTests(unittest.TestCase):
             with self.assertRaises(sources.SourceUnavailable):
                 mail.search("boiler", 5)
 
-            _mail_generation(root)
+            _commit_mail(root)
             self.assertEqual(mail.read("mail::INBOX::aaa").title, "Boiler inspection")
 
 
@@ -460,7 +455,7 @@ class SplitTests(unittest.TestCase):
     def test_a_general_deployment_cannot_gain_a_personal_source(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
-            _mail_generation(root)
+            _commit_mail(root)
             with self.assertRaises(ContractError):
                 replica_sources.adapters_for(
                     sources.Visibility.GENERAL, {"mail": root / "replica"}
@@ -469,7 +464,7 @@ class SplitTests(unittest.TestCase):
     def test_an_unknown_source_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
-            _mail_generation(root)
+            _commit_mail(root)
             with self.assertRaises(ContractError):
                 replica_sources.adapters_for(
                     sources.Visibility.PERSONAL, {"nonsense": root / "replica"}
@@ -478,7 +473,7 @@ class SplitTests(unittest.TestCase):
     def test_catalog_replacement_must_keep_the_contract(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
-            _mail_generation(root)
+            _commit_mail(root)
             personal = sources.Visibility.PERSONAL
             adapter = replica_sources.adapters_for(personal, {"mail": root / "replica"})[
                 "mail"
@@ -507,7 +502,7 @@ class SplitTests(unittest.TestCase):
     def test_replacing_a_source_the_table_lacks_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
-            _mail_generation(root)
+            _commit_mail(root)
             adapter = replica_sources.adapters_for(
                 sources.Visibility.PERSONAL, {"mail": root / "replica"}
             )["mail"]
@@ -538,7 +533,7 @@ class SplitTests(unittest.TestCase):
     def test_finance_projects_the_transaction_only(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
-            _finance_generation(root)
+            _commit_finance(root)
             finance = replica_sources.adapters_for(
                 sources.Visibility.PERSONAL, {"finance": root / "replica-finance"}
             )["finance"]
@@ -557,7 +552,7 @@ class QueryValidationTests(unittest.TestCase):
     def test_search_uses_the_facade_rules(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
-            _mail_generation(root)
+            _commit_mail(root)
             mail = replica_sources.adapters_for(
                 sources.Visibility.PERSONAL, {"mail": root / "replica"}
             )["mail"]
@@ -597,7 +592,7 @@ class MediaReplicaTests(unittest.TestCase):
     def test_photos_project_the_title_and_the_path_into_search(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
-            _photos_generation(root)
+            _commit_photos(root)
             photos = replica_sources.adapters_for(
                 sources.Visibility.PERSONAL, {"photos": root / "replica-photos"}
             )["photos"]
@@ -618,7 +613,7 @@ class MediaReplicaTests(unittest.TestCase):
     def test_music_projects_the_title_artist_and_album_into_search(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
-            _music_generation(root)
+            _commit_music(root)
             music = replica_sources.adapters_for(
                 sources.Visibility.PERSONAL, {"music": root / "replica-music"}
             )["music"]
@@ -637,7 +632,7 @@ class MediaReplicaTests(unittest.TestCase):
     def test_a_media_object_the_projector_cannot_read_costs_only_itself(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
-            _photos_generation(root, junk=b"not json")
+            _commit_photos(root, junk=b"not json")
             photos = replica_sources.adapters_for(
                 sources.Visibility.PERSONAL, {"photos": root / "replica-photos"}
             )["photos"]

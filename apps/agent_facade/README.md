@@ -144,7 +144,7 @@ to stderr, so stdout belongs to stdio alone.
 ## Live trees: repos and books (general only)
 
 `--repo-root` and `--books-root` serve the general deployment's two trees live,
-read-only, with no generation and no publication step: `repos` is a file at `HEAD`
+read-only, with no replica state and no collector pass: `repos` is a file at `HEAD`
 of a clean-bare clone (`repos::<host>/<owner>/<repo>::<path>`), and `books` is one
 OPDShelf entry's `metadata.opf` (`books::<author>/<title>`). A search is bounded by
 a 5 s deadline and a path/book cap, binary blobs are refused, and a body is cut at
@@ -153,18 +153,18 @@ own table, so a personal facade naming either root fails at startup.
 
 ## Status: live replicas where wired, fixtures elsewhere
 
-A source with a published raw generation is served by a `ReplicaAdapter`; the rest
+A source with a committed replica state is served by a `ReplicaAdapter`; the rest
 keep their deterministic in-process fixture. Today the personal deployment serves
 `mail`, `calendar`, `finance`, `brave`, `notes`, `tasks`, `photos` and `music` from
 `state/agent-local/replica`, the general deployment's `repos`/`books` from the
 mounted `/srv/git` and `/srv/books` trees (`tree_sources.py`), and only `workspace`
 is still a fixture. `photos` and `music` are metadata-only
-generations: the media bytes stay on their own datasets, so a search finds a file
-by its name, its folders, its format and its size. The adapter checks for a newer
-published generation on each read/search (at most once per two seconds) and
-rebuilds its projection when the generation id changes, so a collector's next
-publication is visible without a facade restart. Before the first publication the
-source answers `unavailable`; the facade and its memory stay up.
+states: the media bytes stay on their own datasets, so a search finds a file by
+its name, its folders, its format and its size. The adapter checks for a newer
+state on each read/search (at most once per two seconds) and rebuilds its
+projection when the snapshot changes, so a collector's next pass is visible
+without a facade restart. Before the first commit the source answers
+`unavailable`; the facade and its memory stay up.
 
 ## Test
 

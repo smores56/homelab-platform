@@ -1,7 +1,7 @@
 """Live adapters over the two general trees: ``/srv/git`` and ``/srv/books``.
 
 SDLC #851 (T9 of #702). The general profile reads two trees the operator already
-maintains, and neither is a published generation:
+maintains, and neither is a replica state:
 
 * ``repos`` is one **file at HEAD** in a clean-bare clone under
   ``/srv/git/<host>/<owner>/<repo>/.git``. The id names the clone and the path,
@@ -11,7 +11,7 @@ maintains, and neither is a published generation:
   The record is that OPF's metadata, never the epub's bytes.
 
 Both trees are live: a file that lands in a clone is readable as soon as it is
-committed, with no publication step and no generation to resolve. What keeps that
+committed, with no collector pass and no replica state to resolve. What keeps that
 safe is the bounds, not a snapshot -- a search walks a bounded number of
 repositories under a deadline, ``git grep -I`` never reads a binary blob, and a
 body is capped and says when it was cut.

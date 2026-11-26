@@ -1,8 +1,8 @@
-"""Disk-backed sources: a published raw generation answering as one source.
+"""Disk-backed sources: a committed raw replica state answering as one source.
 
 The fixture adapters exist so the facade has a complete, deterministic tool
 surface before any provider plumbing runs. This is the other half: when a
-deployment has a published generation for a source, the same ``SourceAdapter``
+deployment has a committed replica state for a source, the same ``SourceAdapter``
 contract is answered from those objects instead.
 
 Two rules keep the substitution honest:
@@ -13,7 +13,8 @@ Two rules keep the substitution honest:
   holding another deployment's adapter.
 * What is returned is a *projection* -- title and body for search and for a
   readable record -- computed from the raw object. The bytes stay in the
-  generation, where they can be re-read or re-projected; nothing is written back.
+  store's objects, where they can be re-read or re-projected; nothing is written
+  back.
 
 Provenance is exactly the three fields a memory record may cite: the source id
 with the record, the record's revision (the sha256 of the object that produced
@@ -159,7 +160,7 @@ def _json_object(data: bytes) -> dict[str, Any] | None:
 
     A replica holds whatever a collector published, including an object this
     projector was not written for: one unreadable object must cost the reader
-    that object, not every other record in the generation.
+    that object, not every other record in the state.
     """
 
     try:
@@ -208,7 +209,7 @@ def _project_tasks(metadata: Mapping[str, Any], data: bytes) -> Projection | Non
 def _project_photos(metadata: Mapping[str, Any], data: bytes) -> Projection | None:
     """The file's title, then what the path and the stat prove.
 
-    The media bytes are not in the generation, so a search can only find what the
+    The media bytes are not in the state, so a search can only find what the
     library's own naming says: the filename, the folders it sits in, its format
     and its size. EXIF and album names live in Immich's database, not here.
     """
@@ -344,18 +345,19 @@ class RefreshingReplica:
 
 
 class ReplicaAdapter:
-    """One source answered from one published generation.
+    """One source answered from one committed replica state.
 
-    Records are projected on first use and kept until the published generation
-    changes; a generation is immutable, so a new one is the only reason to
-    rebuild. A ``RefreshingReplica`` is checked on each read/search (bounded by
-    its own TTL) and the caches are dropped when it moves forward.
+    Records are projected on first use and kept until the state changes (its
+    version or snapshot moves); a pass commits a new state rather than rewriting
+    the old one, so a new state is the only reason to rebuild. A
+    ``RefreshingReplica`` is checked on each read/search (bounded by its own TTL)
+    and the caches are dropped when it moves forward.
 
     ``index_root`` adds the derived full-text index (``source_index``): a search
     whose words a trigram can match is answered from that file, which carries the
     projection it was built from, so a facade that restarts next to an existing
-    index searches without projecting the generation at all. Only a generation
-    with no file pays one projection (and writes the file); everything a trigram
+    index searches without projecting the state at all. Only a state with no
+    index file pays one projection (and writes the file); everything a trigram
     cannot match keeps scanning.
     """
 
@@ -422,7 +424,7 @@ class ReplicaAdapter:
             except source_index.SourceIndexUnavailable:
                 return self._scan(words, limit)
             # The row is the projection the file was built from, so the hit is
-            # answered here: projecting the generation to re-derive it is the
+            # answered here: projecting the state to re-derive it is the
             # cost this path exists to avoid.
             return tuple(
                 sources.SearchHit(
@@ -466,7 +468,7 @@ class ReplicaAdapter:
             index = source_index.SourceIndex(
                 self.index_root, self.name, self.replica.snapshot
             )
-            # The file is named after an immutable generation and checked by its
+            # The file is named after the snapshot and checked by its
             # meta row, so one that is already here is the answer. Building it
             # again would project every record to write the same bytes -- the
             # minutes-long first search after a facade restart.
@@ -546,7 +548,7 @@ def adapters_for(
     The contract comes from the deployment's own table, so the visibility of the
     resulting adapter is not a new decision: it is the one the table already
     made. ``index_root`` is shared: each adapter indexes its own source and
-    generation below it, and none of them needs it to answer.
+    snapshot below it, and none of them needs it to answer.
     """
 
     table = sources.SOURCES_BY_DEPLOYMENT[deployment]
