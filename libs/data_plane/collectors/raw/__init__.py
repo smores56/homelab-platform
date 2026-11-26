@@ -11,7 +11,10 @@ from .brave import collect_brave_db
 from .calendar import collect_calendar
 from .finance import collect_simplefin
 from .mail import collect_maildir
+from .media import MAX_MEDIA_OBJECTS
+from .music import collect_music
 from .notes import collect_notes
+from .photos import collect_photos
 from .replica import (
     ABSENCE_REASON,
     ABSENCE_NO_TOMBSTONE,
@@ -33,6 +36,7 @@ __all__ = [
     "ABSENCE_REASON",
     "ABSENCE_RETENTION",
     "ABSENT_SINCE",
+    "MAX_MEDIA_OBJECTS",
     "CollectReport",
     "RawObject",
     "RawReplica",
@@ -41,7 +45,9 @@ __all__ = [
     "collect_brave_db",
     "collect_calendar",
     "collect_maildir",
+    "collect_music",
     "collect_notes",
+    "collect_photos",
     "collect_simplefin",
     "collect_tasks",
     "previous_replica",
