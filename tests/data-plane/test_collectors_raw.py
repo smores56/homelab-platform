@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
 import tempfile
 import unittest
@@ -1075,6 +1076,70 @@ class PhotosTests(unittest.TestCase):
             self.assertFalse(any((root / "replica").glob("published/*")))
             self.assertGreater(MAX_MEDIA_OBJECTS, 1)
 
+    def test_an_empty_library_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            library = root / "photos"
+            library.mkdir()
+            (library / "README.txt").write_text("no media\n", encoding="utf-8")
+            generation = _generation(root / "replica")
+            with self.assertRaises(PublishError):
+                collect_photos(library, generation, captured_at=CAPTURED)
+
+    def test_immich_derived_trees_are_not_walked(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            location = self._library(root)
+            thumbs = location / "thumbs" / "2026" / "11"
+            thumbs.mkdir(parents=True)
+            (thumbs / "harbour-sunset.webp").write_bytes(b"RIFFthumb")
+            originals = location / "library" / "2026" / "11"
+            originals.mkdir(parents=True)
+            (originals / "harbour-sunset.jpg").write_bytes(b"\xff\xd8jpegbytes")
+            generation = _generation(root / "replica")
+            report = collect_photos(location, generation, captured_at=CAPTURED)
+            self.assertEqual(report.objects, 1)
+            _publish(generation)
+
+            replica = RawReplica(root / "replica")
+            self.assertEqual(
+                replica.object_ids(), ("photos::2026%2F11%2Fharbour-sunset.jpg",)
+            )
+
+    def test_an_unreadable_directory_is_refused_not_skipped(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            library = self._library(root)
+            hidden = library / "2026" / "11"
+            generation = _generation(root / "replica")
+            mode = hidden.stat().st_mode
+            hidden.chmod(0o000)
+            try:
+                with self.assertRaises(PublishError):
+                    collect_photos(library, generation, captured_at=CAPTURED)
+            finally:
+                hidden.chmod(mode)
+            self.assertFalse(any((root / "replica").glob("published/*")))
+
+    def test_a_name_the_replica_cannot_store_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            library = self._library(root)
+            name = os.path.join(os.fsencode(library), b"bad\xffname.jpg")
+            os.close(os.open(name, os.O_CREAT | os.O_WRONLY))
+            generation = _generation(root / "replica")
+            with self.assertRaises(PublishError):
+                collect_photos(library, generation, captured_at=CAPTURED)
+            self.assertFalse(any((root / "replica").glob("published/*")))
+
+    def test_the_report_counts_the_files_it_skipped(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            library = self._library(root)
+            generation = _generation(root / "replica")
+            report = collect_photos(library, generation, captured_at=CAPTURED)
+            self.assertEqual(report.details["skipped"], 1)
+
 
 class MusicTests(unittest.TestCase):
     """A music library is metadata only: the audio stays on the music dataset."""
@@ -1152,6 +1217,37 @@ class MusicTests(unittest.TestCase):
             self.assertEqual(earlier.object_ids(), later.object_ids())
             for object_id in earlier.object_ids():
                 self.assertEqual(earlier.read(object_id), later.read(object_id))
+
+    def test_an_empty_library_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            library = root / "music"
+            (library / "Artwork").mkdir(parents=True)
+            (library / "Artwork" / "cover.jpg").write_bytes(b"\xff\xd8artwork")
+            generation = _generation(root / "replica")
+            with self.assertRaises(PublishError):
+                collect_music(library, generation, captured_at=CAPTURED)
+
+    def test_a_symlinked_directory_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            library = self._library(root)
+            (root / "elsewhere").mkdir()
+            (root / "elsewhere" / "foreign.flac").write_bytes(b"fLaC")
+            (library / "linked").symlink_to(root / "elsewhere")
+            generation = _generation(root / "replica")
+            with self.assertRaises(PublishError):
+                collect_music(library, generation, captured_at=CAPTURED)
+
+    def test_a_library_over_the_limit_is_refused_not_truncated(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            library = self._library(root)
+            generation = _generation(root / "replica")
+            with mock.patch("data_plane.collectors.raw.media.MAX_MEDIA_OBJECTS", 1):
+                with self.assertRaises(PublishError):
+                    collect_music(library, generation, captured_at=CAPTURED)
+            self.assertFalse(any((root / "replica").glob("published/*")))
 
 
 if __name__ == "__main__":
