@@ -157,6 +157,67 @@ photo allowance, and a null-route would then take both roles down at once.
 | new IP after rebuild | a replacement VPS, not an OS reinstall | update `edge_ipv4`, apply, re-run the probe |
 | 404s where an app should answer | ACL, firewalld on smortress, or the Serve route | `tailscale ping`, then the host's `tailscale serve status` |
 
+## The boot gate
+
+The bootc edge (design #939) runs `bootc/edge/rootfs/usr/libexec/edge-boot-gate`
+from `edge-boot-gate.service` on every boot, `Before=boot-complete.target` and
+`After=multi-user.target`, the way the server's
+`scripts/smortress-boot-gate.sh` does. What it can do about a bad deployment is
+much less, so its inputs fall into two classes and the class is the contract.
+
+**Verdict inputs** are facts about the deployment, and the deployment may be
+denylisted and rolled back for them: the booted digest `bootc status --booted`
+reports is the one the staged request recorded (either digest form), the boot's
+own startup finished (`systemctl is-system-running` reached `running` or
+`degraded`), no unit in `bootc/edge/rootfs/usr/share/smoresnet/deploy-units.txt`
+— caddy, firewalld, sshd — is inactive or failed, and `state.json` records this
+commit and these digests, read back after the write. A failure journals
+`boot-gate-failed`, denylists both digest forms, pages the `deploy` check and runs
+`bootc rollback --apply`. A boot whose digest is not the staged one is the
+bootloader's own fallback: it is journaled `rolled-back-by-bootloader`, denylisted
+and consumed, and nothing is rolled back, because there is nothing to roll back
+to.
+
+**Infrastructure inputs** are facts about the host's surroundings, and the commit
+is never the reason they are down: the tailscale backend is `Running`, each of the
+three public names resolves, Caddy completes a TLS handshake on loopback (any
+status — a 502 is an upstream's answer, not a failed handshake), and this host's
+public address is the address the names resolve to. The name list is a knob
+(`EDGE_PUBLIC_NAMES`) because the zone is the other half of it: a name the gate
+checks and `local.edge_hosts` in `tofu/cluster.tf` does not publish is a boot that
+holds on `dns` and pages until one of the two changes. They are retried inside a
+300 s budget, because the tailnet and DNS come up seconds after multi-user. A
+failure never denylists and never rolls back: it journals `deploy-held` with
+reason `infra-<input>`, pages `/fail`, and stamps `retry_at` (epoch seconds, the
+queue's own field) on the pending record. The record stays, so the next boot
+decides again, and `state.json` still names the old commit, so the poll re-requests
+the deployment the host could not prove.
+
+**A first boot** — an install or a reinstall, `/var` without
+`/var/lib/smoresnet/boot-gate-landed.json` — alerts, holds and writes the marker,
+and touches nothing else. `/var` is the only tree it can keep a record in, the
+marker is the record, and without it nothing could say the running deployment is
+worse than the one it replaced: the previous deployment on a fresh box is the
+install medium's. So the marker costs one page per host life and buys a gate that
+never rolls back on a history it does not have. The boot after it decides
+normally.
+
+There is no boot counting on this box: the image ships no GRUB snippet and T13 is
+unproven, so the gate journals `boot-counting-absent` on every boot and the
+verdict above is the only rollback there is. A deployment that never reaches
+userspace is a console recovery, which is what `## Rebuild` is for.
+
+The page is the operator's URL in `/etc/smoresnet/deploy-ping-url`, written the
+way the tailnet auth key is written and by the same kind of step: it is not image
+content, and until it exists every page journals `notify-skipped` instead of
+failing the boot.
+
+A hold exits 1 on purpose: the deployment was neither blessed nor refused, and a
+clean `boot-complete.target` would be the host claiming otherwise. The tests are
+`tests/deploy/edge-boot.bats`, and the outside-in assertions — 443 answering, 22
+and 8484 closed to the internet — are the scheduled probe's
+(`scripts/verify-public-edge.sh`), not this gate's.
+
 ## Rebuild
 
 A reinstall erases the disk; there is no snapshot to fall back to. The drill is

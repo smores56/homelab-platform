@@ -67,15 +67,26 @@ COPY bootc/edge/rootfs/ /
 # the golden fixtures out of the artifact -- they name hosts and digests and are
 # test data.
 COPY bootc/lib/deploy/decisions.py /usr/libexec/deploy/decisions.py
+# The deploy state library the boot gate shares with the server's deploy plane:
+# one implementation of the journal, the denylist, the records and the lock, so a
+# gate cannot write a record the drain reads differently. The server's build
+# installs it from scripts/ through the smortress-src loop, which strips the
+# suffix; here it arrives as a file under the name that loop would give it, beside
+# the shared output helpers. Both are sourced, never executed.
+COPY scripts/lib/ /usr/libexec/lib/
+COPY scripts/deploy-state.sh /usr/libexec/deploy-state
 
 RUN set -eux; \
     chmod 0755 /usr/libexec/smoresnet-firewall-zones /usr/libexec/smoresnet-firewall-bind; \
+    chmod 0755 /usr/libexec/edge-boot-gate; \
     chmod 0644 /usr/share/smoresnet/Caddyfile /usr/share/smoresnet/firewalld/zones/public.xml /usr/share/smoresnet/firewalld/zones/tailscale.xml; \
+    chmod 0644 /usr/share/smoresnet/deploy-units.txt; \
     chmod 0644 /etc/ssh/sshd_config.d/05-edge-hardening.conf; \
     chmod 0644 /usr/lib/systemd/system/caddy.service.d/10-smoresnet.conf; \
     rm -f /etc/caddy/Caddyfile; \
     systemctl enable \
       caddy.service \
+      edge-boot-gate.service \
       firewalld.service \
       smoresnet-firewall-zones.service \
       smoresnet-firewall-public.service \
@@ -149,6 +160,10 @@ RUN set -eux; \
     grep -qF -- '--config /usr/share/smoresnet/Caddyfile' /usr/lib/systemd/system/caddy.service.d/10-smoresnet.conf || { echo "the caddy unit does not pass --config for the image's Caddyfile" >&2; exit 1; }; \
     test ! -e /etc/caddy/Caddyfile || { echo "/etc/caddy/Caddyfile exists: bootc keeps a host's /etc, so it would shadow the image's config on a running box" >&2; exit 1; }; \
     test -x /usr/libexec/smoresnet-firewall-zones || { echo "the zones helper is not executable: smoresnet-firewall-zones.service would fail 203/EXEC" >&2; exit 1; }; \
+    test -x /usr/libexec/edge-boot-gate || { echo "the boot gate is missing or not executable: edge-boot-gate.service would fail 203/EXEC and nothing would judge a deployment" >&2; exit 1; }; \
+    test -r /usr/libexec/deploy-state || { echo "the deploy state library is missing: the boot gate sources it for every record" >&2; exit 1; }; \
+    test -r /usr/libexec/lib/log.sh || { echo "the output helpers are missing: the boot gate prints through them" >&2; exit 1; }; \
+    grep -qx caddy.service /usr/share/smoresnet/deploy-units.txt || { echo "caddy is not a deploy-critical unit: a box that boots without it is judged healthy and never rolled back" >&2; exit 1; }; \
     test -x /usr/libexec/smoresnet-firewall-bind || { echo "the bind helper is not executable: the firewall units would fail 203/EXEC" >&2; exit 1; }; \
     test -f /usr/share/smoresnet/firewalld/zones/public.xml || { echo "the public zone is missing" >&2; exit 1; }; \
     ! grep -q '<service' /usr/share/smoresnet/firewalld/zones/public.xml || { echo "the public zone carries a service list; stock public ships ssh, which would publish sshd on the internet" >&2; exit 1; }; \

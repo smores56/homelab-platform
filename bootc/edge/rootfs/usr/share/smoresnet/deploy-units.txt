@@ -1,0 +1,15 @@
+# The units whose failure is a verdict on the deployment (design #939, T7).
+#
+# One line per unit, `#` starts a comment: the boot gate asks each one `is-active`
+# and `is-failed`, and a deployment that left any of them not serving is rolled
+# back and denylisted. The server's list is its own file with the same job
+# (/usr/share/smortress/deploy-units.txt); the two differ because the two hosts
+# serve different things.
+#
+# What is absent and why. tailscaled and the firewall's helpers are infrastructure
+# inputs, not verdict inputs: a box whose tailnet is down is a box that cannot be
+# served, but the image being deployed did not break it, so the gate holds and
+# pages instead of rolling back. The gate itself cannot be in its own list.
+caddy.service
+firewalld.service
+sshd.service
