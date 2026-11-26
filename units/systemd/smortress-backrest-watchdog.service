@@ -1,0 +1,18 @@
+[Unit]
+# One restart when the reader stops answering, then a dead-man ping if that did
+# not help (SDLC #953; the script moved here from the edge with the reader).
+#
+# `Restart=always` covers a process that exits. It does not cover a guard that is
+# still running and answers nothing, which is the failure this timer exists for.
+#
+# A host with no /etc/backrest/env has no reader to watch: skipping is the honest
+# state there, and the probe that pages is scripts/verify-public-edge.sh, not a
+# watchdog pinging `fail` for a reader nobody configured.
+Description=Probe the recovery reader and restart it when it stops answering
+ConditionPathExists=/etc/backrest/env
+After=smortress-backrest.service
+Wants=smortress-backrest.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/smortress-backrest-watchdog

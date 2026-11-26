@@ -187,6 +187,15 @@ fi
 if ! "$tailscale_bin" serve --bg --service=svc:sync --https=443 http://127.0.0.1:8384; then
   fail "could not advertise the Syncthing GUI Service on svc:sync https/443"
 fi
+# The recovery reader (SDLC #953), which runs on this host now: the guard owns
+# 127.0.0.1:9898 and Backrest sits behind it on 9899. This is the only route the
+# public edge reads that is not an application the owner browses, and it is
+# declared here rather than on the edge because the corpus-read credential lives
+# here. The Service, not the host's own 443: that port also carries the agent
+# gateway APIs and the wallpaper tree, and a tailnet ACL is port-scoped.
+if ! "$tailscale_bin" serve --bg --service=svc:recovery --https=443 http://127.0.0.1:9898; then
+  fail "could not advertise the recovery reader Service on svc:recovery https/443"
+fi
 
 # The status is only needed to prune stale app routes; if it cannot be read,
 # declare the plan's routes anyway and leave the pruning to a later run.
@@ -238,7 +247,7 @@ done < <(
 # `svc:agent` and other recordings of it `svc:agent:443`, so a key is reduced to the
 # name it holds before it is compared. Only `Services` is read here -- the host
 # ports are the loop above, and the receiver's forward is `TCP`.
-declared_services=(svc:opds svc:immich svc:navidrome svc:assistant svc:agent svc:sync svc:terminal)
+declared_services=(svc:opds svc:recovery svc:immich svc:navidrome svc:assistant svc:agent svc:sync svc:terminal)
 while IFS= read -r name; do
   $plan_ok || break
   [[ -n $name ]] || continue

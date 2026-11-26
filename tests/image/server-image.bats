@@ -130,6 +130,24 @@ contains() {
     assert_failure
 }
 
+# The reader moved to smortress (SDLC #953), so the edge's third name is a
+# tailnet proxy like the other two and the box holds no process, no config
+# directory and no credential for the repository. Both halves are asserted here
+# because they are the same claim: a route cannot read a corpus, and a reader on
+# this box is the credential's old home.
+@test "the edge proxies the reader to the tailnet and runs none of its own" {
+    contains 'reverse_proxy {$RECOVERY_UPSTREAM}' "$edge_rootfs/usr/share/smoresnet/Caddyfile"
+    if grep -qF '127.0.0.1:9898' "$edge_rootfs/usr/share/smoresnet/Caddyfile"; then
+        fail "the edge Caddyfile still proxies to the reader on loopback"
+    fi
+    hits=$(grep -rInE 'RESTIC_PASSWORD|R2_(ACCESS|SECRET)_ACCESS_KEY|AWS_(ACCESS|SECRET)_ACCESS_KEY|restic-password|r2-credentials|backrest\.(service|container)|/etc/backrest' \
+        "$edge_rootfs" "$edge_containerfile" || true)
+    if [[ -n $hits ]]; then
+        printf '%s\n' "$hits" >&2
+        fail "the edge image carries a reader or a credential"
+    fi
+}
+
 # The design's load-bearing firewall claim, as a file: stock `public` ships ssh,
 # mdns and dhcpv6-client, so an image that kept that list would publish sshd on
 # the internet the moment the NIC was bound to it. The three entries below are the

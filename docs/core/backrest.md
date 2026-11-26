@@ -1,4 +1,4 @@
-# Backrest recovery reader (T4, moved to the edge in T2)
+# Backrest recovery reader (T4; on smortress since SDLC #953)
 
 Backrest is the browser recovery path for the R2 repository. It is a *reader*:
 one repository, a read-only credential, no plans, and no scheduling. It replaced
@@ -6,22 +6,26 @@ the static recovery letter on `recovery.sammohr.dev`. That letter, its Pages
 project and the R2 browser policy it needed are deleted (SDLC #833), so the
 repository is read server-side only.
 
-**The reader runs on the edge VPS now (#725 T2), not on Cloudflare.** The Worker
-and its container were deleted; `recovery.sammohr.dev` is a grey A record and
-Caddy on `smoresnet` terminates TLS in front of the guard. The guard
-(`backrest/container/guard.py`) reproduces the Worker's policy inside the image —
-read-only RPC allowlist, JSON and protobuf redaction of the repository password
-and the restic environment, verified-only listing and downloads, and the
-10-per-10-s login budget the Cloudflare rule used to provide. It owns the port
-and starts Backrest on loopback, so a host cannot expose an unguarded reader.
+**The reader runs on smortress, not on the public edge.** It ran on the VPS from
+#725 T2 until #953, which is where the corpus-read credential would have sat on a
+box anybody can reach; the edge now holds one Caddy route and no credential at
+all. `recovery.sammohr.dev` is still a grey `A` record to the edge, Caddy there
+terminates TLS, and the request crosses the tailnet to the reader's own Service
+(`svc:recovery`). The guard (`backrest/container/guard.py`) reproduces the
+Worker's policy — read-only RPC allowlist, JSON and protobuf redaction of the
+repository password and the restic environment, verified-only listing and
+downloads, and the 10-per-10-s login budget the Cloudflare rule used to provide.
+It owns the port and starts Backrest on loopback, so a host cannot expose an
+unguarded reader.
 
 ```
-browser -- Backrest password -- Caddy (LE cert) -- guard -- Backrest (loopback) -- R2 (read-only token)
+browser -- Backrest password -- Caddy on the edge (LE cert)
+        -- tailnet -- svc:recovery -- guard -- Backrest (loopback) -- R2 (read-only token)
 ```
 
-`provision/edge/backrest-watchdog.sh` restarts the reader when it stops
-answering and pings Healthchecks if a ping URL is written to
-`/etc/backrest/healthcheck-url`.
+`scripts/smortress-backrest-watchdog.sh` (unit
+`smortress-backrest-watchdog.timer`) restarts the reader when it stops answering
+and pings Healthchecks if a ping URL is written to `/etc/backrest/healthcheck-url`.
 
 - `backrest/` builds the image, the guard, and the Worker (now retired).
 - `backrest/scripts/deploy.sh` is the only deploy path: it refuses to run
@@ -196,9 +200,10 @@ to the Worker log unless `BACKREST_DEBUG=1`.
 
 ## Gate matrix
 
-Every row must pass against the deployed reader, which is the edge VPS. The
-Cloudflare column of this document is history; nothing about the matrix loses a
-row because the hosting changed, and the two hosting-only rows are marked.
+Every row must pass against the deployed reader, which is smortress behind
+`svc:recovery` since SDLC #953 (the edge VPS before that). The Cloudflare column of
+this document is history; nothing about the matrix loses a row because the hosting
+changed, and the hosting-only rows are marked.
 
 | Check | Command / evidence |
 | --- | --- |
@@ -214,7 +219,8 @@ row because the hosting changed, and the two hosting-only rows are marked.
 | cancellation | `gate.sh cancel <path>`, then a follow-up request must answer |
 | interruption is visible | operator kills the container's main process mid-stream; the client sees a truncated, failed download, never a silent success |
 | write denial | `gate.sh denial`: restic init/backup/forget/prune/unlock all fail with the read-only token and leave the snapshot list unchanged; the proxy also refuses every write RPC with 403 |
-| smortress powered off | the whole matrix runs with the server down; only R2 and the edge box are involved |
+| edge box down | the public name is unreachable and nothing else is: the reader is on smortress, so `gate.sh` against the Service still passes — that is the hosting change #953 made, and it is the reason the corpus-read credential left the public box |
+| smortress powered off | the reader is unreachable with it: `gate.sh` fails at the edge (502 from Caddy) and passes against nothing else. The edge no longer holds a copy, so the recovery path has the host's availability and no second reader |
 
 Record the run, byte counts, durations and failure text on issue #707. An
 interruption during the four-hour stream fails that attempt; the documented
@@ -227,29 +233,41 @@ behaviour is "restart from the beginning", not resume.
   prune.
 - Only `verified`-tagged snapshots count as complete. The proxy enforces it for
   this UI; plain restic still does not, so the runbook rule stands.
-- The restic password lives in the container config on the edge box (rendered
-  from `/etc/backrest/env`, mode 0600) and in Bitwarden/on paper. Nothing on
-  Cloudflare keeps it, and no Cloudflare account can read it.
-- Plain restic remains the documented fallback when Backrest or the edge box is
+- The restic password lives in the reader's rendered config on smortress
+  (`/var/lib/backrest/config.json`, 0600 root, rendered from `/etc/backrest/env`)
+  and in Bitwarden/on paper. Nothing on Cloudflare keeps it, no Cloudflare account
+  can read it, and nothing on the public edge has ever seen it since SDLC #953.
+- Plain restic remains the documented fallback when Backrest or the host is
   unavailable.
 
 ## Where it runs
 
-The edge VPS (#725 T2), not Cloudflare. Same image and same environment
-contract, so nothing about the repository, token, `--no-lock`, or "verified
-only" changes. The differences are hosting only:
+Smortress, since SDLC #953; the edge VPS before that (#725 T2), and Cloudflare
+before that. The environment contract is unchanged, so nothing about the
+repository, token, `--no-lock` or "verified only" moves with the host:
 
-- `/data` and `/cache` are persistent volumes; the config is still re-rendered
-  from `/etc/backrest/env` on every start, so no drift is possible;
-- the name is a grey `A` record to the box (`docs/core/public-edge.md`) and
-  Caddy terminates TLS in front of the guard, so there is no tunnel, no Worker
-  route and no Access gate on the path;
-- `provision/edge/backrest-watchdog.sh` restarts `backrest.service` when it stops
-  answering, and the same `gate.sh` matrix runs against the same hostname.
+- `units/systemd/smortress-backrest.service` runs the renderer
+  (`backrest/container/entrypoint.sh`), which writes the config from
+  `/etc/backrest/env` at every start and then execs the guard, which starts the
+  pinned Backrest binary on `127.0.0.1:9899` and owns `127.0.0.1:9898`. The binary
+  is a hash-pinned release artifact in the image (`bootc/lib/pins.env`), like
+  restic, sops and age: the guard is python3 and the renderer needs jq, and the
+  host already carries both, so the reader needs no container image of its own.
+- `/var/lib/backrest` holds the rendered config and the snapshot index. The index
+  is a cache — it is rebuilt by listing the repository — so it is in no recovery
+  group.
+- `svc:recovery` is the tailnet name `scripts/tailscale-serve.sh` advertises on
+  `127.0.0.1:9898`, `tofu/tailscale.tf` creates it and grants it to `tag:vps`
+  alone, and the edge's Caddyfile proxies `recovery.sammohr.dev` to
+  `$RECOVERY_UPSTREAM` (`https://recovery.<tailnet>.ts.net`).
+- `smortress-backrest-watchdog.timer` restarts the reader when it stops answering
+  and pings Healthchecks from `/etc/backrest/healthcheck-url`, which is why it is
+  one secret to seed rather than two.
 
-What the reader deploys from is `backrest/container`; the Worker sources, the
-`wrangler` path and the Cloudflare secrets below are retired. Exact commands are
-in `docs/manual-steps.md#hosted-backrest`.
+What the reader deploys from is still `backrest/container`: the guard and the
+renderer are that directory's files, shipped in the host image. The Worker
+sources, the `wrangler` path and the Cloudflare secrets below are retired. Exact
+commands are in `docs/manual-steps.md#hosted-backrest`.
 
 ## Operator order
 
@@ -276,8 +294,9 @@ The small checks use `small.bin` and `small-tree` and are capped at 64 MiB. Crea
 read-only R2 token (Object Read only, scoped to `homelab-restic`) — Backrest's only
 credential. The block below is the retired Cloudflare deployment: the `put_secret`
 calls write Worker secrets and `deploy.sh` deploys the Worker, and neither exists
-any more (#725 T2). The reader's environment is `/etc/backrest/env` on the edge
-box, and the password hash is what goes into it (`backrest/scripts/hash-password.sh`):
+any more (#725 T2). The reader's environment is `/etc/backrest/env` on smortress,
+written by hand as `docs/manual-steps.md#hosted-backrest` gives, and the password
+hash is what goes into it (`backrest/scripts/hash-password.sh`):
 
 ```sh
 put_secret() { (cd backrest && mise x node@22 -- npx wrangler secret put "$1"); }
@@ -299,8 +318,8 @@ backrest/scripts/gate.sh matrix
 backrest/scripts/gate.sh stream "$GATE/big.bin" sha "$BIG_SHA256"
 ```
 
-The first request after a deploy is the cold start; watch it in the container's
-journal (`journalctl -u backrest` on the edge box), where a restic write attempt is
-a gate failure. On a pass, redeploy with the production repository URI and GUID and
+The first request after a start is the cold start; watch it in the unit's journal
+(`journalctl -u smortress-backrest.service` on smortress), where a restic write
+attempt is a gate failure. On a pass, redeploy with the production repository URI and GUID and
 delete the `/gate` path. Where the reader runs, and the watchdog that keeps it
 answering, is "Where it runs" above.

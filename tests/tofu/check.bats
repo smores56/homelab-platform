@@ -1086,7 +1086,7 @@ done
 }
 
 @test "a test proves a tagged device reaches none of them" {
-    has 'deny[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:vps:22", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443", "svc:terminal:443"\]'
+    has 'deny[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:vps:22", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443", "svc:terminal:443", "svc:recovery:443"\]'
 }
 
 @test "a test proves the edge does not reach the other Services" {
@@ -1142,7 +1142,7 @@ service_advertises() { grep -qF 'ports = ["tcp:443"]' <<<"$(service_block "$1")"
 service_gated() { grep -qE 'count[[:space:]]*=[[:space:]]*var\.tailnet == "" \? 0 : 1' <<<"$(service_block "$1")"; }
 
 for spec in 'immich:Immich' 'navidrome:Navidrome' 'assistant:personal web UI' \
-    'agent:general web UI' 'sync:Syncthing GUI'; do
+    'agent:general web UI' 'sync:Syncthing GUI' 'recovery:recovery reader'; do
     address=${spec%%:*}
     label=${spec#*:}
     register "the $label Service exists" service_exists "$address"
@@ -1161,6 +1161,16 @@ for dst in svc:immich svc:navidrome svc:assistant svc:agent svc:sync svc:termina
     register "the policy grants the owner $dst" grant_to "$dst"
 done
 
+# The reader is the edge's alone (SDLC #953): no owner grant, no probe grant, so
+# its password is the only login anybody gets at it.
+@test "the policy grants the edge the reader Service" {
+    grant_to svc:recovery
+}
+
+@test "the owner has no grant on the reader Service" {
+    eq "$(grep -cF 'dst = ["svc:recovery"]' "$BATS_FILE_TMPDIR/code.tf")" 1
+}
+
 @test "the grant names the one service port" {
     has 'ip[[:space:]]*=[[:space:]]*\["443"\]'
 }
@@ -1175,7 +1185,7 @@ done
 
 auto_approves() { has "\"$1\"[[:space:]]*=[[:space:]]*\\[\"tag:smortress\"\\]"; }
 
-for dst in svc:immich svc:navidrome svc:assistant svc:agent svc:sync svc:terminal; do
+for dst in svc:immich svc:navidrome svc:assistant svc:agent svc:sync svc:terminal svc:recovery; do
     register "the host auto-approves $dst" auto_approves "$dst"
 done
 
@@ -1184,12 +1194,12 @@ done
 }
 
 # The destination is the service and the port, never the name, so a source needs
-# one grant per Service it reaches. Fifteen grants are the whole admitted set --
-# the owner's on each of the seven Services (#834: the catalogue's, the four core
+# one grant per Service it reaches. Sixteen grants are the whole admitted set --
+# the owner's on seven of the eight Services (#834: the catalogue's, the four core
 # apps', the Syncthing GUI's and the web terminal's), the CI names probe's on the
-# same six (#848) and the public edge's on the two it proxies (#725) -- so a
-# sixteenth, a second port on any, or a grant no test below reads, is a widening
-# nobody decided.
+# same six (#848) and the public edge's on the three it proxies (#725, #953) -- so
+# a seventeenth, a second port on any, or a grant no test below reads, is a
+# widening nobody decided.
 grants_block() {
     awk '/^    grants = \[/ { f = 1 } f { print } f && /^    \]/ { exit }' "$BATS_FILE_TMPDIR/code.tf"
 }
@@ -1198,8 +1208,8 @@ grants_block() {
     [ -n "$(grants_block)" ]
 }
 
-@test "the Services are granted to exactly fifteen sources" {
-    eq "$(grep -cE '^        src = ' <<<"$(grants_block)")" 15
+@test "the Services are granted to exactly sixteen sources" {
+    eq "$(grep -cE '^        src = ' <<<"$(grants_block)")" 16
 }
 
 @test "the owner reaches all seven Services" {
@@ -1210,12 +1220,12 @@ grants_block() {
     eq "$(grep -cF 'src = ["tag:deploy"]' <<<"$(grants_block)")" 6
 }
 
-@test "the public edge reaches the two it proxies" {
-    eq "$(grep -cF 'src = ["tag:vps"]' <<<"$(grants_block)")" 2
+@test "the public edge reaches the three it proxies" {
+    eq "$(grep -cF 'src = ["tag:vps"]' <<<"$(grants_block)")" 3
 }
 
 @test "every grant names the one Service port" {
-    eq "$(grep -cF 'ip  = ["443"]' <<<"$(grants_block)")" 15
+    eq "$(grep -cF 'ip  = ["443"]' <<<"$(grants_block)")" 16
 }
 
 # No test names the retired Service at all: a destination a grant no longer
@@ -1229,6 +1239,14 @@ grants_block() {
 # proxy (design #954): one accept, the owner's, and the two denies.
 @test "the terminal Service port is one accept and two denies in the tests" {
     eq "$(count_fixed '"svc:terminal:443"')" 3
+}
+
+# The reader's Service port is granted to the edge and to nothing a test accepts,
+# so the one entry naming it is the untagged device's deny. It is not in the
+# edge's own deny either: a deny test may not name a destination its source is
+# granted.
+@test "the reader Service port is one deny and no accept in the tests" {
+    eq "$(count_fixed '"svc:recovery:443"')" 1
 }
 
 # The catalogue and Immich keep their grant to the edge, which is why the edge's

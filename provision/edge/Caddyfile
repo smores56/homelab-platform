@@ -43,10 +43,11 @@ opds.sammohr.dev {
 	reverse_proxy {$OPDS_UPSTREAM}
 }
 
-# The recovery reader (#725 T2). Unlike the two above it proxies to a process on
-# this box, not to smortress: Backrest reads R2 directly, and the guard in front
-# of it is what keeps the admin RPCs and the repository password off the public
-# surface. No tailnet upstream is involved.
+# The recovery reader (SDLC #953). Backrest runs on smortress behind its
+# read-only guard and answers on the `svc:recovery` Service, so this box proxies
+# to the tailnet like the two names above and holds no repository credential and
+# no reader at all. A Service again rather than the host's own 443, for the same
+# reason: that port also carries the agent gateway APIs and the wallpaper tree.
 recovery.sammohr.dev {
 	tls {
 		issuer acme {
@@ -54,5 +55,5 @@ recovery.sammohr.dev {
 		}
 	}
 	encode zstd gzip
-	reverse_proxy http://127.0.0.1:9898
+	reverse_proxy {$RECOVERY_UPSTREAM}
 }

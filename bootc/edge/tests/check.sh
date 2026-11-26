@@ -357,7 +357,7 @@ check 'Caddy serves opds.sammohr.dev' serves opds.sammohr.dev
 check 'Caddy serves recovery.sammohr.dev' serves recovery.sammohr.dev
 check 'Caddy proxies Immich to the Service upstream' proxies '{$IMMICH_UPSTREAM}'
 check 'Caddy proxies OPDShelf to the Service upstream' proxies '{$OPDS_UPSTREAM}'
-check 'Caddy proxies the recovery name to the loopback guard' proxies 'http://127.0.0.1:9898'
+check 'Caddy proxies the recovery name to the Service upstream' proxies '{$RECOVERY_UPSTREAM}'
 check 'Caddy never answers the HTTP-01 challenge' http01_never_answered
 check 'Caddy has no admin API' admin_off
 check 'Caddy serves exactly the three public names' exactly_three_names
