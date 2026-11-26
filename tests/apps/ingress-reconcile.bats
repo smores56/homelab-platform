@@ -132,7 +132,7 @@ reconcile_run() {
 # A script that is tested but never shipped is dead code, and a unit that is
 # shipped but never enabled never runs.
 @test "the image installs the reconcile helper" {
-    grep -q 'scripts/apps-ingress-reconcile.sh' image/Containerfile
+    grep -q 'scripts/apps-ingress-reconcile.sh' bootc/server/Containerfile
 }
 
 @test "the unit runs the installed helper" {
@@ -140,7 +140,7 @@ reconcile_run() {
 }
 
 @test "the image enables the reconcile" {
-    grep -q 'smortress-app-ingress-reconcile.service' image/Containerfile
+    grep -q 'smortress-app-ingress-reconcile.service' bootc/server/Containerfile
 }
 
 @test "the reconcile is ordered after the tenant's prerequisites and logind" {

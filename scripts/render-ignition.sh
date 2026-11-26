@@ -18,8 +18,8 @@
 set -euo pipefail
 
 repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-# shellcheck source=../image/pins.env disable=SC1091
-source "$repo/image/pins.env"
+# shellcheck source=../bootc/lib/pins.env disable=SC1091
+source "$repo/bootc/lib/pins.env"
 
 synthetic=false
 # --stock is only for uCore installer media: it installs onto the base and drops
@@ -95,12 +95,12 @@ template=$repo/ignition/smortress.bu
 if $synthetic; then
   files_dir=$tmp
   template=$tmp/ignition/smortress.bu
-  mkdir -p "$tmp/ignition/operator" "$tmp/image/rootfs/etc/containers/registries.d" "$tmp/image/rootfs/etc/containers"
+  mkdir -p "$tmp/ignition/operator" "$tmp/bootc/server/rootfs/etc/containers/registries.d" "$tmp/bootc/server/rootfs/etc/containers"
   cp "$repo/ignition/smortress.bu" "$template"
-  cp "$repo/image/rootfs/etc/containers/policy.json" "$tmp/image/rootfs/etc/containers/policy.json"
-  cp "$repo/image/rootfs/etc/containers/registries.d/ghcr.io-smortress.yaml" \
-    "$tmp/image/rootfs/etc/containers/registries.d/ghcr.io-smortress.yaml"
-  cp "$repo/tests/fixtures/cosign.pub" "$tmp/image/cosign.pub"
+  cp "$repo/bootc/server/rootfs/etc/containers/policy.json" "$tmp/bootc/server/rootfs/etc/containers/policy.json"
+  cp "$repo/bootc/server/rootfs/etc/containers/registries.d/ghcr.io-smortress.yaml" \
+    "$tmp/bootc/server/rootfs/etc/containers/registries.d/ghcr.io-smortress.yaml"
+  cp "$repo/tests/fixtures/cosign.pub" "$tmp/bootc/server/cosign.pub"
   printf '%s\n' 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFixtureOnlyForButaneValidation smortress-fixture' \
     >"$tmp/ignition/operator/ssh_authorized_keys"
   derived_image="${IMAGE_REPO}@sha256:0000000000000000000000000000000000000000000000000000000000000000"
@@ -109,7 +109,7 @@ if $synthetic; then
   tang_url='http://10.0.0.193:7654'
   tang_thumbprint=$(printf 'A%.0s' {1..43})
 else
-  require_file "$repo/image/cosign.pub"
+  require_file "$repo/bootc/server/cosign.pub"
   for f in derived-image disk tang-thumbprint ssh_authorized_keys; do
     require_file "$repo/ignition/operator/$f"
   done

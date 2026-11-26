@@ -45,7 +45,7 @@ name: tofu-plan-pr
 # a remote source.
 #
 # scripts/check-pr-secret-boundary.sh asserts these guards statically, and
-# tests/tofu/check.sh asserts the credential split.
+# tests/tofu/check.bats asserts the credential split.
 on:
   pull_request:
     types: [opened, synchronize, reopened]

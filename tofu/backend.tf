@@ -11,7 +11,7 @@
 # The identifiers are inline rather than passed with `-backend-config` on
 # purpose: the account tag is already committed in `terraform.tfvars`, and a
 # backend that initialises identically from a CI runner and from the operator's
-# checkout is worth more than the indirection. `tests/tofu/check.sh` asserts the
+# checkout is worth more than the indirection. `tests/tofu/check.bats` asserts the
 # endpoint carries the same account tag as `var.account_id`.
 #
 # State contents: resource addresses and attributes, which are Cloudflare object

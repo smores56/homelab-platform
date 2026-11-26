@@ -15,9 +15,9 @@ runtime_stage_is_clean() { # <containerfile>
   ! awk -v start="$line" 'NR > start && /dnf/' "$1" | grep -q .
 }
 check "the runtime stage installs no distribution package" \
-  runtime_stage_is_clean image/Containerfile
+  runtime_stage_is_clean bootc/server/Containerfile
 stage_fixture=$(mktemp -d)
-printf 'FROM ${BASE_IMAGE} AS sudo-build\nRUN dnf install -y git\nFROM ${BASE_IMAGE} AS runtime\nCOPY image/rootfs/ /\n' \
+printf 'FROM ${BASE_IMAGE} AS sudo-build\nRUN dnf install -y git\nFROM ${BASE_IMAGE} AS runtime\nCOPY bootc/server/rootfs/ /\n' \
   >"$stage_fixture/Containerfile"
 if runtime_stage_is_clean "$stage_fixture/Containerfile"; then
   ok "a named final stage is still the runtime stage"
@@ -59,9 +59,9 @@ rm -rf "$path_fixture"
 publish=.github/workflows/publish-server-image.yml
 deploy_files=()
 while IFS= read -r file; do deploy_files+=("$file"); done < <(
-  printf '%s\n' scripts/deploy-*.sh scripts/smortress-boot-gate.sh image/rootfs/usr/libexec/deploy-*.py \
-    image/rootfs/usr/share/smortress/deploy-units.txt \
-    image/rootfs/usr/lib/bootupd/grub2-static/configs.d/10-smortress-count.cfg \
+  printf '%s\n' scripts/deploy-*.sh scripts/smortress-boot-gate.sh bootc/server/rootfs/usr/libexec/deploy-*.py \
+    bootc/server/rootfs/usr/share/smortress/deploy-units.txt \
+    bootc/server/rootfs/usr/lib/bootupd/grub2-static/configs.d/10-smortress-count.cfg \
     units/systemd/smortress-deploy* units/systemd/smortress-boot-gate.service \
     secrets/boot.json
 )
@@ -83,7 +83,7 @@ fi
 for timer in units/systemd/*.timer; do
   unit=${timer#units/systemd/}
   pattern="^[[:space:]]*${unit//./\\.}([[:space:]]|;)"
-  check "image enables $unit" grep -qE "$pattern" image/Containerfile
+  check "image enables $unit" grep -qE "$pattern" bootc/server/Containerfile
 done
 
 # Serve topology (review finding G1 of design #748). The wallpaper library is the
@@ -132,7 +132,7 @@ check "the Serve unit is ordered after the wallpapers dataset is ready" \
 # login resolves, so a browser attaches to the sessions an SSH client started.
 terminal_unit=units/systemd/smortress-zellij-web.service
 check "the image enables the web terminal" \
-  grep -qE '^[[:space:]]+smortress-zellij-web\.service[[:space:]]*\\?$' image/Containerfile
+  grep -qE '^[[:space:]]+smortress-zellij-web\.service[[:space:]]*\\?$' bootc/server/Containerfile
 check "the terminal listens on loopback only" \
   has 'web --ip 127.0.0.1 --port 8082' "$terminal_unit"
 check "the terminal shares the fixed socket directory" \
@@ -180,18 +180,18 @@ check "the runtime image installs the agent proxy" \
   has 'apps/agent_proxy/proxy.py /usr/libexec/agent-proxy' images/agent-runtime/Containerfile
 check "the runtime image makes the agent proxy executable" \
   has 'chmod 0755 /usr/libexec/agent-proxy' images/agent-runtime/Containerfile
-# `COPY image/rootfs/ /` is what puts these in the image, so a template that is
+# `COPY bootc/server/rootfs/ /` is what puts these in the image, so a template that is
 # missing from the tree is missing from the image.
 check "image rootfs carries the agent config templates" \
-  test -s image/rootfs/etc/smortress/agent/local-config.yaml -a -s image/rootfs/etc/smortress/agent/general-config.yaml
+  test -s bootc/server/rootfs/etc/smortress/agent/local-config.yaml -a -s bootc/server/rootfs/etc/smortress/agent/general-config.yaml
 for template in local-config.yaml general-config.yaml; do
-  # The image ships them through `COPY image/rootfs/ /`, so a template that is not
+  # The image ships them through `COPY bootc/server/rootfs/ /`, so a template that is not
   # tracked here is not in the image either.
-  check "the agent template $template exists" test -s "image/rootfs/etc/smortress/agent/$template"
+  check "the agent template $template exists" test -s "bootc/server/rootfs/etc/smortress/agent/$template"
   # Any `api_key:` with a value would put a credential in a template that both
   # gateways receive.
   if grep -qE '^[[:space:]]*api_key:[[:space:]]*[^[:space:]]' \
-      "image/rootfs/etc/smortress/agent/$template"; then
+      "bootc/server/rootfs/etc/smortress/agent/$template"; then
     bad "the agent template $template carries no api key"
   else
     ok "the agent template $template carries no api key"
@@ -214,20 +214,20 @@ check "the CDI unit runs the documented command" \
   has 'nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml' units/systemd/smortress-nvidia-cdi.service
 for unit in smortress-nvidia-cdi.service smortress-agent-config.service \
   smortress-selinux-nvidia-map.service; do
-  check "image enables $unit" has "$unit" image/Containerfile
+  check "image enables $unit" has "$unit" bootc/server/Containerfile
 done
 # shellcheck disable=SC2016  # the matched text is a line of the seed script
 probe "agent config seeding is idempotent" grep -qF 'cp -n "$template" "$config"' scripts/agent-config-seed.sh
 # The hledger projection's account mapping is seeded from the image the same way,
 # so the template is what an operator's copy starts from and must ship with it.
 check "image rootfs carries the hledger account mapping" \
-  test -s image/rootfs/etc/smortress/agent/hledger-accounts.json
+  test -s bootc/server/rootfs/etc/smortress/agent/hledger-accounts.json
 # shellcheck disable=SC2016  # the matched text is a line of the seed script
 probe "the hledger mapping is seeded once and never overwritten" \
   grep -qF 'cp -n "$template_dir/hledger-accounts.json"' scripts/agent-config-seed.sh
 # The seed work moved from an ExecStart one-liner into the script, because splicing
 # a token into a YAML file from a unit line would put it in the process table.
-check "the image installs the seed script" has 'scripts/agent-config-seed.sh' image/Containerfile
+check "the image installs the seed script" has 'scripts/agent-config-seed.sh' bootc/server/Containerfile
 check "the seed unit runs the installed script" \
   has 'ExecStart=/usr/libexec/agent-config-seed' units/systemd/smortress-agent-config.service
 
@@ -238,7 +238,7 @@ check "the seed unit runs the installed script" \
 # nothing from the host, so there is no second copy to drift.
 for path in 'apps/agent_facade' 'apps/brave_ingest' 'apps/agent_proxy' \
   'libs/data_plane' '/usr/lib/agent-facade' '/usr/libexec/agent-proxy'; do
-  check "the host image ships no $path" lacks "$path" image/Containerfile
+  check "the host image ships no $path" lacks "$path" bootc/server/Containerfile
 done
 for q in units/quadlet/agent-facade-personal.container units/quadlet/agent-facade-general.container; do
   check "$q mounts no host copy of the facade" lacks 'Volume=/usr/lib/agent-facade' "$q"
@@ -266,22 +266,22 @@ else
   ok "the runtime image ships no test suite"
 fi
 check "the browser unit ships with the egress gate it depends on" \
-  has 'units/quadlet/agent-brave.container' image/Containerfile
+  has 'units/quadlet/agent-brave.container' bootc/server/Containerfile
 check "Syncthing's sync port is permitted on the tailscale zone" \
-  has '<port port="22000" protocol="tcp"/>' image/rootfs/etc/firewalld/zones/tailscale.xml
+  has '<port port="22000" protocol="tcp"/>' bootc/server/rootfs/etc/firewalld/zones/tailscale.xml
 check "Syncthing's QUIC port is permitted on the tailscale zone" \
-  has '<port port="22000" protocol="udp"/>' image/rootfs/etc/firewalld/zones/tailscale.xml
+  has '<port port="22000" protocol="udp"/>' bootc/server/rootfs/etc/firewalld/zones/tailscale.xml
 # The deploy receiver is the one service whose caller is a CI job, so its port has
 # to be open on the tailnet zone or the notify path silently times out.
 check "the deploy receiver's port is permitted on the tailscale zone" \
-  has '<port port="8484" protocol="tcp"/>' image/rootfs/etc/firewalld/zones/tailscale.xml
+  has '<port port="8484" protocol="tcp"/>' bootc/server/rootfs/etc/firewalld/zones/tailscale.xml
 # The public edge (design #725) proxies the `svc:immich` and `svc:opds` Services,
 # so it needs no port of its own and the zone is Syncthing's two plus the
 # receiver's one. A `<port>` no route stands behind is an opening on the tailnet
 # zone that nothing would notice, so the set is pinned whole rather than one
 # retired entry at a time.
 zone_ports=$(grep -oE '<port port="[0-9]+" protocol="[a-z]+"/>' \
-  image/rootfs/etc/firewalld/zones/tailscale.xml | tr '\n' ' ')
+  bootc/server/rootfs/etc/firewalld/zones/tailscale.xml | tr '\n' ' ')
 if [[ $zone_ports == '<port port="22000" protocol="tcp"/> <port port="22000" protocol="udp"/> <port port="8484" protocol="tcp"/> ' ]]; then
   ok "the tailscale zone opens only Syncthing and the deploy receiver"
 else
@@ -293,10 +293,10 @@ fi
 # manager drop-ins — went stale the moment the id moved, silently.
 check "the tenant id is allocated, not demanded" \
   grep -qx 'u apps - "apps tenant" /var/home/apps /usr/sbin/nologin' \
-  image/rootfs/etc/sysusers.d/smortress-apps.conf
+  bootc/server/rootfs/etc/sysusers.d/smortress-apps.conf
 check "the tenant dataset owner is the account name" test "$(dataset_owner_for raw/apps)" = apps:apps
-check "the image ships no per-uid manager drop-in" lacks 'user@1001.service.d' image/Containerfile
-check "the image ships no per-uid slice drop-in" lacks 'user-1001.slice.d' image/Containerfile
+check "the image ships no per-uid manager drop-in" lacks 'user@1001.service.d' bootc/server/Containerfile
+check "the image ships no per-uid slice drop-in" lacks 'user-1001.slice.d' bootc/server/Containerfile
 for gate in smortress-apps-deny smortress-apps-user smortress-apps-egress smortress-apps-quota; do
   check "$gate finishes before a user manager can start" \
     grep -q '^Before=.*systemd-logind.service' "units/systemd/$gate.service"
@@ -305,7 +305,7 @@ done
 # Every directory the Containerfile copies is baked into the image, so a change
 # under it has to rebuild that image. `libs/` was absent from the publish
 # workflow's path filter and a collector fix merged without ever being built.
-copied=$(awk '/^COPY / { for (i = 2; i <= NF; i++) print $i }' image/Containerfile |
+copied=$(awk '/^COPY / { for (i = 2; i <= NF; i++) print $i }' bootc/server/Containerfile |
   grep -v '^--' | grep / | cut -d/ -f1 | sort -u)
 for directory in $copied; do
   check "the publish workflow rebuilds on ${directory}/ changes" \
@@ -335,4 +335,4 @@ fi
 echo "server image static checks passed"
 
 check "the image installs the deploy-apps modules" \
-  has 'COPY scripts/deploy/apps/ /usr/libexec/deploy/apps/' image/Containerfile
+  has 'COPY scripts/deploy/apps/ /usr/libexec/deploy/apps/' bootc/server/Containerfile

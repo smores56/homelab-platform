@@ -11,7 +11,7 @@
 #   bats tests/core/apps-egress.bats
 load ../helpers
 
-rules=image/rootfs/etc/nftables/smortress-apps.nft
+rules=bootc/server/rootfs/etc/nftables/smortress-apps.nft
 unit=units/systemd/smortress-apps-egress.service
 
 @test "the tenant egress ruleset exists" {
@@ -123,7 +123,7 @@ unit=units/systemd/smortress-apps-egress.service
 }
 
 @test "the image enables the loader" {
-    grep -q 'smortress-apps-egress.service' image/Containerfile
+    grep -q 'smortress-apps-egress.service' bootc/server/Containerfile
 }
 
 @test "the unit loads the immutable vendor ruleset" {
@@ -157,7 +157,7 @@ unit=units/systemd/smortress-apps-egress.service
 # name is loaded before anything tenant-side can start: the allow-list replaces
 # it, and whatever happens to the replacement, the tenant is left dropped rather
 # than open.
-deny=image/rootfs/etc/nftables/smortress-apps-deny.nft
+deny=bootc/server/rootfs/etc/nftables/smortress-apps-deny.nft
 deny_unit=units/systemd/smortress-apps-deny.service
 
 @test "the deny ruleset exists" {
@@ -276,11 +276,11 @@ deny_unit=units/systemd/smortress-apps-deny.service
 }
 
 @test "the image enables the deny unit" {
-    grep -q 'smortress-apps-deny.service' image/Containerfile
+    grep -q 'smortress-apps-deny.service' bootc/server/Containerfile
 }
 
 @test "the image enables the allow-list unit" {
-    grep -q 'smortress-apps-egress.service' image/Containerfile
+    grep -q 'smortress-apps-egress.service' bootc/server/Containerfile
 }
 
 # nft_parses <file>: the real parser reads the file, run in a user + network

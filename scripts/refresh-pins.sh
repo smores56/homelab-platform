@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Print the digest the uCore stream tag currently resolves to. Informational
-# only: image/pins.env tracks the tag, so there is no base pin to refresh and
+# only: bootc/lib/pins.env tracks the tag, so there is no base pin to refresh and
 # nothing here edits a file. The digest a build resolves is recorded in the
 # image's org.opencontainers.image.base.digest label and in the publish run
 # summary; this script only answers "what would the next build get today".
@@ -11,8 +11,8 @@
 set -euo pipefail
 
 repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-# shellcheck source=../image/pins.env disable=SC1091
-source "$repo/image/pins.env"
+# shellcheck source=../bootc/lib/pins.env disable=SC1091
+source "$repo/bootc/lib/pins.env"
 
 write=false
 case "${1:-}" in
@@ -24,7 +24,7 @@ esac
 # Both flags are accepted because the surrounding steps still call them; a moving
 # tag has no pin to rewrite, so neither changes anything on disk.
 if $write; then
-  echo "refresh-pins.sh: image/pins.env tracks the tag; nothing to write" >&2
+  echo "refresh-pins.sh: bootc/lib/pins.env tracks the tag; nothing to write" >&2
 fi
 
 if ! command -v skopeo >/dev/null 2>&1; then

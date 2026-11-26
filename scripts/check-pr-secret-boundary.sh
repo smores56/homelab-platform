@@ -68,7 +68,7 @@ done
 
 # The exemption is only as strong as its guards. Each guard carries a marker
 # comment, and the marker is required text, so deleting a guard fails CI on the
-# same diff. tests/tofu/check.sh asserts the guard bodies themselves.
+# same diff. tests/tofu/check.bats asserts the guard bodies themselves.
 if [[ -f $exempt ]]; then
   require() {
     if ! grep -qE "^[[:space:]]*# guard: $1$" "$exempt"; then

@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# bats file_tags=lint
 # tests/tags.tsv decides which suites a change selects; these hold it to the
 # tree, so a new suite without a row, a stale pattern, or a row naming nothing
 # fails here instead of going unnoticed.
@@ -29,14 +30,20 @@ suites() {  # every suite path under tests/, one per line
     assert_equal "$dups" ""
 }
 
-@test "every suite selects itself" {
+@test "every suite's own row claims it" {
+    # Read the row, not the selection: an unclaimed path selects every suite, so
+    # a row that forgets its own file would still look right through tags.sh.
     bad=''
     while IFS= read -r suite; do
-        selected=$(sh "$tags_sh" "$suite")
-        # A path may select several rows and the output is one suite per line, so
-        # membership is per line. `all` selects the suite too; either is fine.
-        [[ $selected == all ]] && continue
-        grep -Fqx -- "$suite" <<<"$selected" || bad="$bad $suite"
+        name=${suite#tests/}
+        name=${name%.bats}
+        row=$(grep -F "$name$tab" "$tags_file" | head -n1)
+        pattern=$(cut -f2 <<<"$row")
+        # shellcheck disable=SC2086  # a row lists its patterns space-separated
+        for p in $pattern; do
+            [[ $p == "$suite" ]] && continue 2
+        done
+        bad="$bad $suite"
     done < <(suites)
     assert_equal "$bad" ""
 }
@@ -112,29 +119,70 @@ tests/core/storage-layout.bats"
 }
 
 # --- CI areas ----------------------------------------------------------------
-# ci.yml runs one job per area, selected by `--filter-tags`. A suite whose tag
-# no job claims would run nowhere, and a claimed tag with no suite means a job
-# that can only ever fail on "Found no tests".
+# ci.yml runs one job per area. bats selects by tag with a repeated
+# `--filter-tags` per alternative: a single `a||b` string is not an expression
+# and selects nothing, which is how three suites silently left CI once.
+# A suite whose tag no job claims would run nowhere; a claimed tag with no suite
+# means a job that can only ever fail on "Found no tests".
+
+local_only='actionlint'
 
 area_tags() {  # the tags the workflow's filter expressions name
-    grep -oE -- "--filter-tags '[^']+'" "$repo_root/.github/workflows/ci.yml" |
-        sed -E "s/--filter-tags '(.*)'/\1/" | tr '|' '\n' | sed '/^$/d' | sort -u
+    grep -oE -- "--filter-tags '?[a-z-]+'?" "$repo_root/.github/workflows/ci.yml" |
+        sed -E "s/--filter-tags '?([a-z-]+)'?/\1/" | sort -u
 }
 
-@test "every suite's tag is claimed by a CI area job" {
+suite_tags() {  # the area each suite declares
+    grep -hE '^# bats file_tags=' tests/*.bats tests/*/*.bats | sed -E 's/.*file_tags=//'
+}
+
+@test "every suite declares its area exactly once" {
+    bad=''
+    while IFS= read -r suite; do
+        count=$(grep -cE '^# bats file_tags=' "$suite")
+        # Zero would drop every test from every area job; two would let a stray
+        # line disagree with the one register() reads.
+        [[ $count == 1 ]] || bad="$bad $suite($count)"
+    done < <(suites)
+    assert_equal "$bad" ""
+}
+
+@test "every suite's tag is claimed by a CI area job or declared local-only" {
     areas=$(area_tags)
     missing=''
-    for tag in $(grep -hE '^# bats file_tags=' tests/*.bats tests/*/*.bats | sed -E 's/.*file_tags=//' | sort -u); do
+    for tag in $(suite_tags | sort -u); do
+        [[ $tag == "$local_only" ]] && continue
         grep -qx "$tag" <<<"$areas" || missing="$missing $tag"
     done
     assert_equal "$missing" ""
 }
 
+@test "every test in a suite carries the suite's tag" {
+    # The area jobs select by tag, so an untagged test runs in no job. A file's
+    # `# bats file_tags=` covers its literal @tests but not the ones register()
+    # creates, which is why register reads the same line; this counts both.
+    bad=''
+    while IFS= read -r suite; do
+        tag=$(grep -hE '^# bats file_tags=' "$suite" | head -n1 | sed -E 's/.*file_tags=//')
+        all=$(bats --count "$suite")
+        tagged=$(bats --filter-tags "$tag" --count "$suite" 2>/dev/null | tr -dc 0-9)
+        [[ $all == "$tagged" ]] || bad="$bad $suite($tagged/$all)"
+    done < <(suites)
+    assert_equal "$bad" ""
+}
+
 @test "every CI area names a tag a suite carries" {
-    tags=$(grep -hE '^# bats file_tags=' tests/*.bats tests/*/*.bats | sed -E 's/.*file_tags=//' | sort -u)
+    tags=$(suite_tags | sort -u)
     stale=''
     for area in $(area_tags); do
         grep -qx "$area" <<<"$tags" || stale="$stale $area"
     done
     assert_equal "$stale" ""
+}
+
+@test "the local-only list names a suite that exists" {
+    grep -qx "$local_only" <<<"$(suite_tags)" || {
+        printf '%s names no suite\n' "$local_only" >&2
+        return 1
+    }
 }

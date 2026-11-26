@@ -10,7 +10,7 @@ load helpers
 
 @test "the workflows pass actionlint" {
     command -v actionlint >/dev/null 2>&1 ||
-        skip "actionlint is not on PATH (mise installs it; CI runs this group)"
+        skip "actionlint is not on PATH (mise installs it; CI does not, so this area is local-only)"
     run actionlint
     assert_success
 }

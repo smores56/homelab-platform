@@ -382,7 +382,7 @@ host sends notifications, and no ntfy or observability stack is involved.
 
 All three outputs are extracted from one ciphertext, `secrets/boot.json`.
 `restic-password.yaml` is decrypted with `format=value` in
-`image/rootfs/usr/share/smortress/secrets.manifest`, so the file contains only the
+`bootc/server/rootfs/usr/share/smortress/secrets.manifest`, so the file contains only the
 password; restic cannot read a YAML document with a key. Credentials reach
 restic through the environment, never argv, and are never printed.
 `r2-credentials.yaml` is derived into `boot.json` from the Cloudflare bundle and is listed in the manifest.

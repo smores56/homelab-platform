@@ -29,15 +29,12 @@ assert_contains() {
 }
 
 # register <description> <command...>: a @test a suite generates in a loop —
-# bats only understands a literal `@test`. The tag is the suite's area (its
-# directory under tests/), matching the file's `# bats file_tags=` line, which
-# does not cover a test registered this way. bats resolves the description with
-# `eval`, so it must stay a literal or a value from the tree, never plan or
-# tenant data.
+# bats only understands a literal `@test`. The tag is read from the file's own
+# `# bats file_tags=` line, which does not cover a test registered this way, so
+# a suite's area is written once. bats resolves the description with `eval`, so
+# it must stay a literal or a value from the tree, never plan or tenant data.
 register() {
-    tag=${BATS_TEST_FILENAME##*/tests/}
-    tag=${tag%%/*}
-    case $BATS_TEST_FILENAME in */tests/*/*) ;; *) tag=harness ;; esac
+    tag=$(sed -n 's/^# bats file_tags=//p' "$BATS_TEST_FILENAME" | head -n1)
     bats_test_function --tags "$tag" --description "$1" -- "${@:2}"
 }
 

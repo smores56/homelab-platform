@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# bats file_tags=core
 # Offline checks for the Restic plane (SDLC #706, T3): fail-closed freshness and
 # the deploy gate's local query, the backup driver's exit codes, stale-staging
 # reconciliation, the readiness and mount gates, the retention filter,
@@ -1349,10 +1350,10 @@ refresh_fixture() {
     mg=$(id -gn)
     refresh=$work/refresh
     install -d -m 0700 "$refresh/host"
-    install -d -m 0755 "$refresh/image" "$refresh/image/secrets"
-    printf 'canary: baked\n' >"$refresh/image/secrets/canary.yaml"
-    printf 'token: baked\n' >"$refresh/image/secrets/new-token.yaml"
-    cat >"$refresh/image/secrets.manifest" <<EOF
+    install -d -m 0755 "$refresh/image" "$refresh/bootc/server/secrets"
+    printf 'canary: baked\n' >"$refresh/bootc/server/secrets/canary.yaml"
+    printf 'token: baked\n' >"$refresh/bootc/server/secrets/new-token.yaml"
+    cat >"$refresh/bootc/server/secrets.manifest" <<EOF
 canary.yaml      $me $mg 0600
 new-token.yaml   $me $mg 0600 value
 EOF
@@ -1360,9 +1361,9 @@ EOF
     # the two ciphertexts already rotated in place under it.
     printf 'canary.yaml  %s %s 0600\n' "$me" "$mg" >"$refresh/host/secrets.manifest"
     printf 'canary: rotated\n' >"$refresh/host/canary.yaml"
-    export SMORTRESS_SECRETS_BAKED=$refresh/image/secrets \
+    export SMORTRESS_SECRETS_BAKED=$refresh/bootc/server/secrets \
         SMORTRESS_SECRETS_SRC=$refresh/host \
-        SMORTRESS_SECRETS_IMAGE_MANIFEST=$refresh/image/secrets.manifest \
+        SMORTRESS_SECRETS_IMAGE_MANIFEST=$refresh/bootc/server/secrets.manifest \
         SMORTRESS_SECRETS_MANIFEST=$refresh/host/secrets.manifest
 }
 
@@ -1390,7 +1391,7 @@ refresh_reseeded() {
 # seed is not allowed to delete the only manifest a booting host has.
 refresh_without_image_manifest() {
     refresh_fixture
-    mv "$refresh/image/secrets.manifest" "$refresh/image/secrets.manifest.off"
+    mv "$refresh/bootc/server/secrets.manifest" "$refresh/bootc/server/secrets.manifest.off"
     printf 'canary.yaml  %s %s 0600\n' "$me" "$mg" >"$refresh/host/secrets.manifest"
     drive "$seeder"
 }
@@ -1402,7 +1403,7 @@ refresh_without_image_manifest() {
 
 @test "the host manifest becomes the image's, not the one bootc preserved" {
     refresh_seeded
-    if ! cmp -s "$refresh/image/secrets.manifest" "$refresh/host/secrets.manifest"; then
+    if ! cmp -s "$refresh/bootc/server/secrets.manifest" "$refresh/host/secrets.manifest"; then
         fail "the host manifest is not the image's: $(cat "$refresh/host/secrets.manifest")"
     fi
 }
@@ -1483,7 +1484,7 @@ done
 unset _key _instance
 
 image_enables_unit() { # unit
-    grep -q "$1" image/Containerfile || fail "image/Containerfile does not enable $1"
+    grep -q "$1" bootc/server/Containerfile || fail "bootc/server/Containerfile does not enable $1"
 }
 
 for _unit in var-lib-restic-ssd.mount var-lib-restic-hdd.mount \

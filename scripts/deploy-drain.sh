@@ -83,7 +83,7 @@ defer_cap=${DEPLOY_DRAIN_DEFER_CAP:-60}
 # The verifier ships in the image rootfs beside the receiver rather than through
 # the `smortress-src` loop, which installs `.sh` files only.
 verify_bin=$(deploy_resolve "${DEPLOY_VERIFY_BIN:-}" deploy-verify.py \
-  "$self_dir/../image/rootfs/usr/libexec/deploy-verify.py")
+  "$self_dir/../bootc/server/rootfs/usr/libexec/deploy-verify.py")
 # The verifier bounds each HTTP call (30 s) itself; this bounds the call as a
 # whole, so a wedged process cannot hold the deploy lock until TimeoutStartSec.
 verify_deadline=${DEPLOY_VERIFY_DEADLINE:-300}
@@ -403,6 +403,13 @@ while :; do
             # hold record is what the operator releases.
             say "$repo $commit: deploy held"
             held=$((held + 1))
+            ;;
+          6)
+            # The host carries a drop-in the image does not ship, and staging
+            # would reboot into a host whose apps apply cannot land (#152). The
+            # gate journaled the paths; the entry keeps its place until an
+            # operator removes them.
+            defer_entry "$id" "host-drift"
             ;;
           *)
             defer_entry "$id" "snapshot-gate-exit-$gate_rc"

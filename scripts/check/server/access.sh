@@ -7,7 +7,7 @@
 # so two shapes are checked below: every line is an sk line, and no line carries
 # the `no-touch-required` option text. Neither check proves the credential is
 # touch-required, and nothing read from the file could: the public half does not
-# record a touch policy, and pam_rssh at the pinned commit (image/pins.env,
+# record a touch policy, and pam_rssh at the pinned commit (bootc/lib/pins.env,
 # e8dd046) rebuilds the signed message with sig.flags but never reads the
 # user-presence bit, so a credential minted with `-O no-touch-required` looks
 # identical here. The only proof of the property is the cover-the-sensor drill
@@ -15,7 +15,7 @@
 # signs without a tap. An empty file is allowed and expected until the owner
 # enrolls the keys: pam_rssh finds no matching key, returns PAM_AUTH_ERR, and the
 # password is the way in until the public halves are committed.
-sudo_keys=image/rootfs/etc/ssh/sudo_authorized_keys
+sudo_keys=bootc/server/rootfs/etc/ssh/sudo_authorized_keys
 check "the image ships the sudo key file" test -e "$sudo_keys"
 if grep -qvE '^sk-ssh-ed25519@openssh\.com [A-Za-z0-9+/]+[=]{0,2}([[:space:]].*)?$' "$sudo_keys"; then
   bad "every sudo key line is an sk-ssh-ed25519 line"
@@ -30,8 +30,8 @@ fi
 # The build refuses the missing file, and the mode is the build's business:
 # /etc/ssh is world-readable, and the sudo list names credentials that unlock
 # root.
-check "the build refuses a missing sudo key file" has 'test -e /etc/ssh/sudo_authorized_keys' image/Containerfile
-check "the sudo key file is installed 0600" has 'chmod 0600 /etc/ssh/sudo_authorized_keys' image/Containerfile
+check "the build refuses a missing sudo key file" has 'test -e /etc/ssh/sudo_authorized_keys' bootc/server/Containerfile
+check "the sudo key file is installed 0600" has 'chmod 0600 /etc/ssh/sudo_authorized_keys' bootc/server/Containerfile
 
 # The SELinux half. The targeted policy grants sudo_t no access to the forwarded
 # agent socket, which would cost the tap if sudo ran as sudo_t. It does not, and
@@ -45,19 +45,19 @@ check "the sudo key file is installed 0600" has 'chmod 0600 /etc/ssh/sudo_author
 # against the caller's own socket, which sudodomain already allows -- a rule
 # asking for connect grants nothing and looks like a policy that never loaded.
 check "no local sudo policy module ships" \
-  test ! -e image/rootfs/usr/share/smortress/selinux/smortress_sudo_rssh.cil
+  test ! -e bootc/server/rootfs/usr/share/smortress/selinux/smortress_sudo_rssh.cil
 check "no policy loader unit ships" \
   test ! -e units/systemd/smortress-selinux-sudo-rssh.service
 check "no policy loader script ships" \
   test ! -e scripts/selinux-sudo-rssh-load.sh
-check "the image wires no policy loader" lacks 'smortress-selinux-sudo-rssh' image/Containerfile
+check "the image wires no policy loader" lacks 'smortress-selinux-sudo-rssh' bootc/server/Containerfile
 
 # The retired TOTP stack may not leave a trace: the skill moved to a touch, and a
 # leftover usersfile, enrollment script or package reference would be state
 # nothing reads and the runbooks would still describe.
 check "the enrollment script is gone" test ! -e scripts/enroll-yubikey-totp.sh
 if git grep -qF -e 'pam_oath' -e 'users.oath' -e 'HOTP/T30' -- . \
-    ':(exclude)scripts/check-server-image.sh' ':(exclude)scripts/check/image/*' ':(exclude)image/Containerfile'; then
+    ':(exclude)scripts/check-server-image.sh' ':(exclude)scripts/check/server/*' ':(exclude)bootc/server/Containerfile'; then
   bad "no TOTP artifact is left anywhere"
 else
   ok "no TOTP artifact is left anywhere"
@@ -75,21 +75,21 @@ else
   ok "no sha512crypt hash is tracked in the image or ignition tree"
 fi
 
-probe "policy rejects by default" jq -e '.default[0].type == "reject"' image/rootfs/etc/containers/policy.json
+probe "policy rejects by default" jq -e '.default[0].type == "reject"' bootc/server/rootfs/etc/containers/policy.json
 # An empty docker scope is the transport default and shadows the global reject
 # for every registry reference, so it must not exist.
-probe "no docker transport-wide accept" jq -e '.transports.docker[""] == null' image/rootfs/etc/containers/policy.json
-check "firewalld is enabled in the image" has "firewalld.service" image/Containerfile
+probe "no docker transport-wide accept" jq -e '.transports.docker[""] == null' bootc/server/rootfs/etc/containers/policy.json
+check "firewalld is enabled in the image" has "firewalld.service" bootc/server/Containerfile
 probe "policy trusts the smortress key by path" jq -e \
   '.transports.docker["ghcr.io/smores56/homelab-platform"][0].keyPath == "/etc/pki/containers/smortress.pub"' \
-  image/rootfs/etc/containers/policy.json
+  bootc/server/rootfs/etc/containers/policy.json
 check "signature attachments enabled for our repo" has 'use-sigstore-attachments: true' \
-  image/rootfs/etc/containers/registries.d/ghcr.io-smortress.yaml
+  bootc/server/rootfs/etc/containers/registries.d/ghcr.io-smortress.yaml
 
-if [[ -f image/cosign.pub ]]; then
-  check "operator public key is PEM" has 'BEGIN PUBLIC KEY' image/cosign.pub
+if [[ -f bootc/server/cosign.pub ]]; then
+  check "operator public key is PEM" has 'BEGIN PUBLIC KEY' bootc/server/cosign.pub
 else
-  printf 'warn %s\n' "image/cosign.pub is not provisioned yet (docs/manual-steps.md section 37)"
+  printf 'warn %s\n' "bootc/server/cosign.pub is not provisioned yet (docs/manual-steps.md section 37)"
 fi
 if grep -rIl --exclude-dir=.git --exclude=check-server-image.sh --exclude-dir=check \
     -e '-----BEGIN [A-Z ]*PRIVATE KEY-----' -e 'AGE-SECRET-KEY-1[A-Z0-9]{10,}' \
@@ -166,15 +166,15 @@ for u in units/systemd/smortress-restic-backup@.service units/systemd/smortress-
 done
 for key in "${dataset_order[@]}"; do
   instance=$(readiness_instance "$key")
-  check "image enables zfs-ready@$instance" has "zfs-ready@$instance.service" image/Containerfile
+  check "image enables zfs-ready@$instance" has "zfs-ready@$instance.service" bootc/server/Containerfile
 done
 check "decrypt unit is ordered after local-fs" has 'After=local-fs.target' units/systemd/sops-decrypt.service
 check "zpool unit follows the data cryptsetup unit" has 'After=systemd-cryptsetup@data.service' units/systemd/smortress-zpool.service
 check "zpool unit requires the data formatting oneshot" has 'Requires=smortress-data-init.service' units/systemd/smortress-zpool.service
 check "the data formatting oneshot runs before the pool" has 'Before=smortress-zpool.service' units/systemd/smortress-data-init.service
 check "the data formatting oneshot is installed" has 'ExecStart=/usr/libexec/init-data-luks' units/systemd/smortress-data-init.service
-check "the image enables the data formatting oneshot" has 'smortress-data-init.service' image/Containerfile
-check "the image installs the data formatting helper" has 'scripts/init-data-luks.sh' image/Containerfile
+check "the image enables the data formatting oneshot" has 'smortress-data-init.service' bootc/server/Containerfile
+check "the image installs the data formatting helper" has 'scripts/init-data-luks.sh' bootc/server/Containerfile
 check "the data key is generated on the host" has 'head -c 64 /dev/urandom' scripts/init-data-luks.sh
 check "the data key is root-only" has 'chmod 0400 "$keyfile.new"' scripts/init-data-luks.sh
 check "the data partition is formatted by the oneshot" has 'cryptsetup luksFormat' scripts/init-data-luks.sh
@@ -187,7 +187,7 @@ check "HDD unlock cannot block boot" has 'ExecStart=-/usr/libexec/open-hdd' unit
 # silently on the host, so the shape is asserted here.
 for m in var-lib-restic-ssd.mount var-lib-restic-hdd.mount; do
   check "Restic mount unit $m exists" test -s "units/systemd/$m"
-  check "image enables $m" has "$m" image/Containerfile
+  check "image enables $m" has "$m" bootc/server/Containerfile
 done
 check "SSD mount is keyed by the wiped disk label" has 'What=/dev/disk/by-label/restic-ssd' units/systemd/var-lib-restic-ssd.mount
 check "SSD mount cannot block boot" has 'nofail' units/systemd/var-lib-restic-ssd.mount
@@ -242,7 +242,7 @@ check "the plane never names the legacy R2 bucket" lacks 'restic-backup' scripts
 for unit in smortress-restic-backup-ssd.timer smortress-restic-backup-hdd.timer \
   smortress-restic-backup-r2.timer smortress-restic-verify.timer \
   smortress-restic-init.service; do
-  check "image enables $unit" has "$unit" image/Containerfile
+  check "image enables $unit" has "$unit" bootc/server/Containerfile
 done
 check "R2 timer is daily at midnight" has 'OnCalendar=*-*-* 00:00:00' units/systemd/smortress-restic-backup-r2.timer
 check "local backups run hourly" has 'OnCalendar=*-*-* *:05:00' units/systemd/smortress-restic-backup-ssd.timer
@@ -284,7 +284,7 @@ for cipher in secrets/*.yaml secrets/*.json; do
   check "$name is ciphertext" grep -q 'ENC\[' "$cipher"
   if grep -q 'sops-decrypt-ok' "$cipher"; then bad "$name leaks plaintext"; else ok "$name has no plaintext canary"; fi
   if [[ $name == *.json ]]; then
-    check "$name is a declared bundle" grep -qE "[[:space:]]${name//./\\.}[[:space:]]" image/rootfs/usr/share/smortress/secrets.manifest
+    check "$name is a declared bundle" grep -qE "[[:space:]]${name//./\\.}[[:space:]]" bootc/server/rootfs/usr/share/smortress/secrets.manifest
   fi
 done
 # The reverse direction matters just as much: the boot decrypt fails closed on
@@ -292,7 +292,7 @@ done
 # sops-decrypt goes down with it.
 while read -r name bundle; do
   check "$name has committed ciphertext" test -s "secrets/$bundle"
-done < <(awk '!/^[[:space:]]*(#|$)/ && NF >= 7 { print $1, $2 }' image/rootfs/usr/share/smortress/secrets.manifest)
+done < <(awk '!/^[[:space:]]*(#|$)/ && NF >= 7 { print $1, $2 }' bootc/server/rootfs/usr/share/smortress/secrets.manifest)
 
 # The ciphertext moved from the image to /var: a rotation is an operator write and
 # a restart of the decrypt unit, not an OS image and a reboot. The baked set is
@@ -309,11 +309,11 @@ check "the boot decrypt seeds the host copy first" \
 # seed reads the bootc-owned path, and the /etc path stays the decrypt's default
 # so a rollback to an image that only read /etc still finds a manifest.
 check "the manifest ships at the bootc-owned path" \
-  test -s image/rootfs/usr/share/smortress/secrets.manifest
-check "no manifest ships under /etc" no_file_exists image/rootfs/etc/smortress/secrets.manifest
+  test -s bootc/server/rootfs/usr/share/smortress/secrets.manifest
+check "no manifest ships under /etc" no_file_exists bootc/server/rootfs/etc/smortress/secrets.manifest
 check "the build makes the manifest world-readable" \
   has 'chmod 0644 /etc/pki/containers/smortress.pub /usr/share/smortress/secrets.manifest' \
-  image/Containerfile
+  bootc/server/Containerfile
 check "the seed reads the bootc-owned manifest" \
   has 'SMORTRESS_SECRETS_IMAGE_MANIFEST:-/usr/share/smortress/secrets.manifest' \
   scripts/smortress-secrets-seed.sh
@@ -331,5 +331,5 @@ check "the boot decrypt still reads the /etc copy" \
 for name in agent-github-token.yaml sdlc-github-token.yaml; do
   check "$name is a root-only manifest value" \
     grep -qE "^${name//./\\.}[[:space:]]+[^[:space:]]+[[:space:]]+[^[:space:]]+[[:space:]]+root[[:space:]]+root[[:space:]]+0400[[:space:]]+value$" \
-    image/rootfs/usr/share/smortress/secrets.manifest
+    bootc/server/rootfs/usr/share/smortress/secrets.manifest
 done

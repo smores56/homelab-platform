@@ -423,7 +423,7 @@ attacker-influenced mail and calendar text.
 
 The flags are one measured decision, not defaults: `-c 196608 --parallel 3` is
 three 65,536-token slots because llama.cpp divides `-c` across slots, and
-`image/rootfs/etc/smortress/agent/local-config.yaml` pins `model.context_length:
+`bootc/server/rootfs/etc/smortress/agent/local-config.yaml` pins `model.context_length:
 65536`, which is one slot -- not the total. Three slots is also the subagent
 bound (`delegation.max_concurrent_children: 2` plus the parent). `-ub 128` keeps
 the prompt graph allocatable (the default micro-batch wants a 6.5 GiB compute
@@ -446,7 +446,7 @@ node in the container's `/dev` tmpfs, where it carries `container_file_t`, and
 the mmap was denied, CUDA answered "no CUDA-capable device is detected", and the
 server ran on CPU with `nvidia-smi` showing no process at all -- for every boot,
 silently, until it was measured. `smortress-selinux-nvidia-map.service` loads one
-CIL rule (`image/rootfs/usr/share/selinux/smortress/agent-nvidia-map.cil`) before
+CIL rule (`bootc/server/rootfs/usr/share/selinux/smortress/agent-nvidia-map.cil`) before
 `agent-model` starts, on every boot, because a base update recompiles the policy
 store. `nvidia-smi --query-compute-apps` listing `llama-server` is the proof that
 it took effect; `docs/manual-steps.md#validate-the-units-and-check-the-listeners` checks it.
@@ -796,7 +796,7 @@ sudo jq -r '.rows[] | "\(.[1]) \(.[2])"' \
 ```
 
 The proxy's journal names `sync-v2.brave.com:443` and nothing else, because
-`image/rootfs/etc/smortress/agent/egress-policy.json` grants the `brave` label
+`bootc/server/rootfs/etc/smortress/agent/egress-policy.json` grants the `brave` label
 exactly that hostname, and the resolver refuses every other name Chromium tries. A
 visit on a phone in the same chain appears in that `urls` object. `deleted` is
 always `0`: retention expiry, a deletion in the browser and a recreated profile all

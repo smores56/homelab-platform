@@ -30,7 +30,7 @@ image_repo_agrees() { # <pins.env> <stage script> <verifier>
   grep -qF -- "IMAGE_REPO = \"$bare\"" "$verify"
 }
 check "the image repository agrees across the pins, the stage and the verifier" \
-  image_repo_agrees image/pins.env scripts/deploy-platform.sh image/rootfs/usr/libexec/deploy-verify.py
+  image_repo_agrees bootc/lib/pins.env scripts/deploy-platform.sh bootc/server/rootfs/usr/libexec/deploy-verify.py
 # bootc's first act in a mutation is to remount /sysroot writable; with
 # ProtectSystem=strict that remount is the failure unless the unit re-opens
 # /sysroot itself. `/sysroot/ostree` alone produced "Initializing storage:
@@ -41,10 +41,10 @@ done
 # The same assertion on a drifted copy: a check that only ever sees the tree it
 # was written for cannot fail for the reason it exists.
 repo_fixture=$(mktemp -d)
-sed -E 's|^IMAGE_REPO=.*$|IMAGE_REPO=ghcr.io/example/other/server|' image/pins.env \
+sed -E 's|^IMAGE_REPO=.*$|IMAGE_REPO=ghcr.io/example/other/server|' bootc/lib/pins.env \
   >"$repo_fixture/pins.env"
 if image_repo_agrees "$repo_fixture/pins.env" scripts/deploy-platform.sh \
-  image/rootfs/usr/libexec/deploy-verify.py; then
+  bootc/server/rootfs/usr/libexec/deploy-verify.py; then
   bad "a drifted image repository is refused"
 else
   ok "a drifted image repository is refused"
@@ -54,38 +54,38 @@ for pin in SOPS_SHA256 AGE_SHA256 RESTIC_SHA256 BUTANE_SHA256 COSIGN_SHA256; do
   if [[ ${!pin} =~ ^[0-9a-f]{64}$ ]]; then ok "$pin format"; else bad "$pin format"; fi
 done
 
-check "Containerfile takes a base argument" has "FROM \${BASE_IMAGE}" image/Containerfile
+check "Containerfile takes a base argument" has "FROM \${BASE_IMAGE}" bootc/server/Containerfile
 check "Containerfile rejects a floating base" \
-  has '*:latest) echo "BASE_IMAGE must be a stream tag, not :latest' image/Containerfile
+  has '*:latest) echo "BASE_IMAGE must be a stream tag, not :latest' bootc/server/Containerfile
 check "Containerfile rejects a digest-pinned base" \
-  has 'BASE_IMAGE must be a stream tag, not a digest' image/Containerfile
+  has 'BASE_IMAGE must be a stream tag, not a digest' bootc/server/Containerfile
 check "Containerfile requires a tagged base" \
-  has 'BASE_IMAGE must be a tagged reference' image/Containerfile
-check "Containerfile takes the resolved base digest" has 'ARG BASE_DIGEST' image/Containerfile
+  has 'BASE_IMAGE must be a tagged reference' bootc/server/Containerfile
+check "Containerfile takes the resolved base digest" has 'ARG BASE_DIGEST' bootc/server/Containerfile
 check "the image records the base tag" \
-  has 'org.opencontainers.image.base.name="${BASE_IMAGE}"' image/Containerfile
+  has 'org.opencontainers.image.base.name="${BASE_IMAGE}"' bootc/server/Containerfile
 check "the image records the resolved base digest" \
-  has 'org.opencontainers.image.base.digest="${BASE_DIGEST}"' image/Containerfile
+  has 'org.opencontainers.image.base.digest="${BASE_DIGEST}"' bootc/server/Containerfile
 check "the build resolves a base digest" has 'BASE_DIGEST' scripts/build-image.sh
 check "the publish workflow resolves a base digest" \
   has 'BASE_DIGEST' .github/workflows/publish-server-image.yml
 check "nothing rewrites a base pin" lacks 'sed -i' scripts/refresh-pins.sh
-check "Containerfile installs the public key" has 'image/cosign.pub /etc/pki/containers/smortress.pub' image/Containerfile
-check "Containerfile masks Podman auto-update" has 'podman-auto-update.timer' image/Containerfile
-check "Containerfile masks bootc auto-update" has 'bootc-fetch-apply-updates.timer' image/Containerfile
-check "Containerfile sets the default firewall zone to drop" has '--set-default-zone=drop' image/Containerfile
+check "Containerfile installs the public key" has 'bootc/server/cosign.pub /etc/pki/containers/smortress.pub' bootc/server/Containerfile
+check "Containerfile masks Podman auto-update" has 'podman-auto-update.timer' bootc/server/Containerfile
+check "Containerfile masks bootc auto-update" has 'bootc-fetch-apply-updates.timer' bootc/server/Containerfile
+check "Containerfile sets the default firewall zone to drop" has '--set-default-zone=drop' bootc/server/Containerfile
 
 # No Cloudflare SSH route (design #767 T6). SSH is tailnet-only, so the connector
 # unit, its release pin, its build step, its token and the tofu objects that
 # fronted it must not come back: each assertion here fails on a re-introduction.
 check "no tunnel connector unit ships" test ! -e units/systemd/smortress-cloudflared.service
-check "the image enables no tunnel connector" lacks 'smortress-cloudflared' image/Containerfile
-check "no release pin installs a tunnel connector" lacks 'CLOUDFLARED' image/pins.env
-check "the build fetches no tunnel connector" lacks 'cloudflared' image/Containerfile
+check "the image enables no tunnel connector" lacks 'smortress-cloudflared' bootc/server/Containerfile
+check "no release pin installs a tunnel connector" lacks 'CLOUDFLARED' bootc/lib/pins.env
+check "the build fetches no tunnel connector" lacks 'cloudflared' bootc/server/Containerfile
 check "the build script passes no tunnel connector pin" lacks 'CLOUDFLARED' scripts/build-image.sh
 check "no tunnel ciphertext ships" test ! -e secrets/cloudflared-tunnel.yaml
 check "the decrypt manifest lists no tunnel ciphertext" \
-  test -z "$(grep -E '^cloudflared-tunnel\.yaml[[:space:]]' image/rootfs/usr/share/smortress/secrets.manifest)"
+  test -z "$(grep -E '^cloudflared-tunnel\.yaml[[:space:]]' bootc/server/rootfs/usr/share/smortress/secrets.manifest)"
 check "no tofu object plans an ssh tunnel" lacks 'ssh_tunnel' tofu
 check "no tofu object routes an ssh hostname" \
   test -z "$(grep -rE 'uri[[:space:]]*=[[:space:]]*"ssh\.\$\{var\.domain\}"' tofu)"
@@ -99,7 +99,7 @@ check "no ssh service token is authored" lacks '"cloudflare_zero_trust_access_se
 # sshd reads its config twice, and the second pass re-reads only the matching
 # Match blocks with first-obtained-value semantics, so a file sorting after 90-
 # cannot undo uCore's `PasswordAuthentication yes` for loopback.
-sshd_dir=image/rootfs/etc/ssh/sshd_config.d
+sshd_dir=bootc/server/rootfs/etc/ssh/sshd_config.d
 sshd_dropin=$sshd_dir/05-tailnet-ssh.conf
 sshd_dropins=("$sshd_dir"/*.conf)
 check "sshd ships exactly one drop-in" test "${#sshd_dropins[@]}" -eq 1
@@ -178,7 +178,7 @@ check "the loopback block comes last and re-denies passwords" test \
 # token in the operator's pocket.
 ak_path=$(sed -nE 's/^AuthorizedKeysFile[[:space:]]+([^[:space:]]+)$/\1/p' "$sshd_dropin")
 check "the drop-in names one authorised-keys file" test "$(printf '%s\n' "$ak_path" | grep -c .)" -eq 1
-keys_file=image/rootfs$ak_path
+keys_file=bootc/server/rootfs$ak_path
 check "the image ships the file the drop-in points at" test -s "$keys_file"
 if grep -qvE '^ssh-ed25519 [A-Za-z0-9+/]+[=]{0,2}([[:space:]].*)?$' "$keys_file"; then
   bad "the shipped key file carries only ed25519 key lines"
@@ -193,9 +193,9 @@ fi
 check "the shipped set is one key" test "$(grep -c '^ssh-ed25519 ' "$keys_file")" -eq 1
 # The build refuses the same two mistakes, so a bad edit never reaches a host
 # whose only other way in is the console.
-check "the build refuses an empty key file" has 'test -s /etc/ssh/authorized_keys.d/smores' image/Containerfile
+check "the build refuses an empty key file" has 'test -s /etc/ssh/authorized_keys.d/smores' bootc/server/Containerfile
 check "the build refuses a FIDO handle in the key file" \
-  has "! grep -q 'sk-ssh-ed25519' /etc/ssh/authorized_keys.d/smores" image/Containerfile
+  has "! grep -q 'sk-ssh-ed25519' /etc/ssh/authorized_keys.d/smores" bootc/server/Containerfile
 # Nothing delivers a key through Ignition any more. The operator's rollback key
 # in smortress.bu is a different path and stays.
 check "ignition no longer writes an authorised-keys file" lacks 'path: /var/lib/homelab/.ssh' ignition/smortress.bu
@@ -203,7 +203,7 @@ check "the Ignition key source is gone" test ! -e ignition/smortress-authorized-
 # /var/lib/homelab keeps 0711 for its other tenants (the age identity, app and
 # Tailscale state); no key path lives under it now.
 check "the state directory keeps its traversal mode" \
-  has 'd /var/lib/homelab 0711 root root -' image/rootfs/etc/tmpfiles.d/smortress.conf
+  has 'd /var/lib/homelab 0711 root root -' bootc/server/rootfs/etc/tmpfiles.d/smortress.conf
 check "the enrollment unit creates the state directory at the same mode" \
   has 'install -d -m 0711 /var/lib/homelab' units/systemd/smortress-tailscale-up.service
 # git grep searches tracked files in the working tree, so the exclusion is only the check's own pattern and
@@ -213,8 +213,8 @@ check "the enrollment unit creates the state directory at the same mode" \
 # first means clean: reading both as ok would pass a tree the grep never read.
 sk_status=0
 git grep -qF -- 'sk-ssh-ed25519@openssh.com' -- . \
-  ':(exclude)scripts/check-server-image.sh' ':(exclude)scripts/check/image/*' \
-  ':(exclude)image/rootfs/etc/ssh/sudo_authorized_keys' || sk_status=$?
+  ':(exclude)scripts/check-server-image.sh' ':(exclude)scripts/check/server/*' \
+  ':(exclude)bootc/server/rootfs/etc/ssh/sudo_authorized_keys' || sk_status=$?
 case $sk_status in
   1) ok "no sk- handle is committed anywhere but the sudo key file" ;;
   0) bad "a sk- handle is committed outside the sudo key file" ;;
@@ -252,7 +252,7 @@ check "the preference is re-asserted after enrollment" grep -qE '^After=.*smortr
 # enrollment unit's own exec is what creates it.
 check "the preference is not set before there is a state file" \
   has 'ConditionPathExists=/var/lib/tailscale/tailscaled.state' "$tailscale_off"
-check "image enables the preference unit" has 'smortress-tailscale-ssh-off.service' image/Containerfile
+check "image enables the preference unit" has 'smortress-tailscale-ssh-off.service' bootc/server/Containerfile
 if grep -qE '^ExecStart=.*tailscale (up|set).*--ssh(=true)?([[:space:]]|$)' "$tailscale_off"; then
   bad "the preference unit only ever disables Tailscale SSH"
 else
@@ -266,7 +266,7 @@ fi
 # pam_unix, and only a failed password reaches authfail. A bare `sufficient` on
 # the touch row would terminate dispatch before authsucc ran and leave the
 # faillock tally uncleared forever, so the counts are not cosmetic.
-pam_sudo=image/rootfs/etc/pam.d/sudo
+pam_sudo=bootc/server/rootfs/etc/pam.d/sudo
 expected_pam='auth required pam_faillock.so preauth deny=5 unlock_time=300
 auth [success=2 default=ignore] libpam_rssh.so auth_key_file=/etc/ssh/sudo_authorized_keys cue
 auth [success=1 default=ignore] pam_unix.so try_first_pass
@@ -306,13 +306,13 @@ check "no console break-glass row remains" lacks 'pam_succeed_if' "$pam_sudo"
 # pam_authenticate, so the touch, the password and the tally all stop applying;
 # the build deletes the file and the guard above refuses a regression.
 check "the build deletes the base's NOPASSWD grant" \
-  has 'rm -f /etc/sudoers.d/coreos-sudo-group' image/Containerfile
+  has 'rm -f /etc/sudoers.d/coreos-sudo-group' bootc/server/Containerfile
 check "the NOPASSWD guard still inspects the finished tree" \
-  has "grep -rhvE '^[[:space:]]*#' /etc/sudoers /etc/sudoers.d" image/Containerfile
+  has "grep -rhvE '^[[:space:]]*#' /etc/sudoers /etc/sudoers.d" bootc/server/Containerfile
 check "the agent socket is kept for pam_rssh" \
-  has 'Defaults env_keep += "SSH_AUTH_SOCK"' image/rootfs/etc/sudoers.d/10-human-gate
+  has 'Defaults env_keep += "SSH_AUTH_SOCK"' bootc/server/rootfs/etc/sudoers.d/10-human-gate
 check "no other variable is kept across the sudo boundary" \
-  test "$(grep -c '^Defaults env_keep' image/rootfs/etc/sudoers.d/10-human-gate)" = 1
+  test "$(grep -c '^Defaults env_keep' bootc/server/rootfs/etc/sudoers.d/10-human-gate)" = 1
 check "the PIN database is gone from the stack" lacks 'pam_userdb' "$pam_sudo"
 check "the account phase is still declared" grep -qE '^account[[:space:]]+include[[:space:]]+system-auth$' "$pam_sudo"
 check "the password phase is still declared" grep -qE '^password[[:space:]]+include[[:space:]]+system-auth$' "$pam_sudo"
@@ -321,7 +321,7 @@ check "the session phase is still declared" grep -qE '^session[[:space:]]+includ
 # account whose password the fallback takes.
 check "the only login account is smores" grep -qE '^[[:space:]]*- name: smores$' ignition/smortress.bu
 
-sudoers_dropin=image/rootfs/etc/sudoers.d/10-human-gate
+sudoers_dropin=bootc/server/rootfs/etc/sudoers.d/10-human-gate
 expected_sudoers='Defaults timestamp_timeout=30
 Defaults timestamp_type=tty
 Defaults log_subcmds
@@ -333,41 +333,41 @@ else
   bad "the sudoers gate is the reviewed four defaults in order"
   printf '     got: %s\n' "$(printf '%s' "$actual_sudoers" | tr '\n' ';')" >&2
 fi
-check "the sudoers drop-in is installed 0440" has 'chmod 0440 /etc/sudoers.d/10-human-gate' image/Containerfile
-check "the sudoers drop-in is parsed at build time" has 'visudo -cf /etc/sudoers.d/10-human-gate' image/Containerfile
-check "the sops env drop-in is installed 0440" has 'chmod 0440 /etc/sudoers.d/10-human-gate /etc/sudoers.d/20-sops-env' image/Containerfile
-check "the sops env drop-in is parsed at build time" has 'visudo -cf /etc/sudoers.d/20-sops-env' image/Containerfile
-check "the sops env drop-in drops every identity source" grep -q '^Defaults env_delete += ' image/rootfs/etc/sudoers.d/20-sops-env
+check "the sudoers drop-in is installed 0440" has 'chmod 0440 /etc/sudoers.d/10-human-gate' bootc/server/Containerfile
+check "the sudoers drop-in is parsed at build time" has 'visudo -cf /etc/sudoers.d/10-human-gate' bootc/server/Containerfile
+check "the sops env drop-in is installed 0440" has 'chmod 0440 /etc/sudoers.d/10-human-gate /etc/sudoers.d/20-sops-env' bootc/server/Containerfile
+check "the sops env drop-in is parsed at build time" has 'visudo -cf /etc/sudoers.d/20-sops-env' bootc/server/Containerfile
+check "the sops env drop-in drops every identity source" grep -q '^Defaults env_delete += ' bootc/server/rootfs/etc/sudoers.d/20-sops-env
 # Nothing proves the base ships no NOPASSWD grant unless the build asserts it, so
 # the Containerfile carries the grep and this check refuses a build that lost it.
 # A NOPASSWD line would bypass pam_authenticate: no touch, no password, no tally.
 check "the build fails on a NOPASSWD grant" \
-  has "! grep -rhvE '^[[:space:]]*#' /etc/sudoers /etc/sudoers.d | grep -q 'NOPASSWD'" image/Containerfile
+  has "! grep -rhvE '^[[:space:]]*#' /etc/sudoers /etc/sudoers.d | grep -q 'NOPASSWD'" bootc/server/Containerfile
 # The tailnet is the only route in, so a drop-in sshd refuses to
 # parse would cost a console recovery; the build parses the shipped config
 # instead of leaving the host to find out at boot.
-check "the sshd configuration is parsed at build time" has 'sshd -t -o HostKey=' image/Containerfile
+check "the sshd configuration is parsed at build time" has 'sshd -t -o HostKey=' bootc/server/Containerfile
 
 # pam_rssh is not packaged for Fedora, so the image builds it: the tag it clones
 # and the commit it must land on are both pinned, the agent submodule is required
 # (the crate vendors its protocol there) and the cdylib lands where PAM looks.
-check "the image builds pam_rssh in a build stage" has 'AS sudo-build' image/Containerfile
-check "the build pins a pam_rssh tag" has 'PAM_RSSH_VERSION' image/pins.env
+check "the image builds pam_rssh in a build stage" has 'AS sudo-build' bootc/server/Containerfile
+check "the build pins a pam_rssh tag" has 'PAM_RSSH_VERSION' bootc/lib/pins.env
 if [[ ${PAM_RSSH_COMMIT:-} =~ ^[0-9a-f]{40}$ ]]; then ok "PAM_RSSH_COMMIT format"; else bad "PAM_RSSH_COMMIT format"; fi
-check "the build refuses a retagged release" has 'rev-parse HEAD^{commit}' image/Containerfile
-check "the build takes the agent submodule" has '--recurse-submodules' image/Containerfile
-check "the build uses the committed lockfile" has 'cargo build --release --locked' image/Containerfile
-check "the build installs the build dependencies" has 'openssl-devel pam-devel' image/Containerfile
-check "the module lands where PAM loads it" has '/usr/lib64/security/libpam_rssh.so' image/Containerfile
-check "the build fails if libpam_rssh is missing" has 'test -f /usr/lib64/security/libpam_rssh.so' image/Containerfile
+check "the build refuses a retagged release" has 'rev-parse HEAD^{commit}' bootc/server/Containerfile
+check "the build takes the agent submodule" has '--recurse-submodules' bootc/server/Containerfile
+check "the build uses the committed lockfile" has 'cargo build --release --locked' bootc/server/Containerfile
+check "the build installs the build dependencies" has 'openssl-devel pam-devel' bootc/server/Containerfile
+check "the module lands where PAM loads it" has '/usr/lib64/security/libpam_rssh.so' bootc/server/Containerfile
+check "the build fails if libpam_rssh is missing" has 'test -f /usr/lib64/security/libpam_rssh.so' bootc/server/Containerfile
 # Both are `required` rows of the sudo stack, so their absence fails closed and
 # leaves every non-root account unable to escalate at all.
-check "the build fails if the failure counter is missing" has 'test -f /usr/lib64/security/pam_faillock.so' image/Containerfile
-check "the build fails if the password fallback is missing" has 'test -f /usr/lib64/security/pam_unix.so' image/Containerfile
+check "the build fails if the failure counter is missing" has 'test -f /usr/lib64/security/pam_faillock.so' bootc/server/Containerfile
+check "the build fails if the password fallback is missing" has 'test -f /usr/lib64/security/pam_unix.so' bootc/server/Containerfile
 # The retired TOTP module must not come back through a stale package layer.
-check "no package installs pam_oath" lacks 'install pam_oath' image/Containerfile
-check "the build fails if the OATH module is present" has '! test -f /usr/lib64/security/pam_oath.so' image/Containerfile
-check "no pam_userdb assert remains" lacks 'pam_userdb' image/Containerfile
-check "no gdbmtool assert remains" lacks 'gdbmtool' image/Containerfile
+check "no package installs pam_oath" lacks 'install pam_oath' bootc/server/Containerfile
+check "the build fails if the OATH module is present" has '! test -f /usr/lib64/security/pam_oath.so' bootc/server/Containerfile
+check "no pam_userdb assert remains" lacks 'pam_userdb' bootc/server/Containerfile
+check "no gdbmtool assert remains" lacks 'gdbmtool' bootc/server/Containerfile
 check "tmpfiles no longer creates a sudo usersfile directory" \
-  lacks '/var/lib/homelab/sudo' image/rootfs/etc/tmpfiles.d/smortress.conf
+  lacks '/var/lib/homelab/sudo' bootc/server/rootfs/etc/tmpfiles.d/smortress.conf

@@ -276,7 +276,7 @@ done
 @test "every secret the deploy path reads has a manifest line and a runbook step" {
     seeded=0
     while IFS= read -r secret; do
-        grep -qE "^${secret//./\\.}[[:space:]]" image/rootfs/usr/share/smortress/secrets.manifest || {
+        grep -qE "^${secret//./\\.}[[:space:]]" bootc/server/rootfs/usr/share/smortress/secrets.manifest || {
             printf '%s is read by the deploy path but is not in the decrypt manifest\n' "$secret" >&2
             seeded=1
         }
@@ -285,7 +285,7 @@ done
             seeded=1
         }
     done < <(grep -rhoE '(webhook-secret(-next)?|deploy-ping-url)\.yaml' \
-        scripts image/rootfs/usr/libexec | sort -u)
+        scripts bootc/server/rootfs/usr/libexec | sort -u)
     [[ $seeded -eq 0 ]]
 }
 

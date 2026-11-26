@@ -19,7 +19,7 @@ load ../helpers
 
 poll=scripts/deploy-poll.sh
 lib=scripts/deploy-state.sh
-verify=image/rootfs/usr/libexec/deploy-verify.py
+verify=bootc/server/rootfs/usr/libexec/deploy-verify.py
 timer=units/systemd/smortress-deploy-poll.timer
 service=units/systemd/smortress-deploy-poll.service
 ping_url=http://ping.test/deploy
@@ -567,5 +567,5 @@ seed_full_queue() {
 }
 
 @test "the image enables the poll timer" {
-    assert grep -qF 'smortress-deploy-poll.timer' image/Containerfile
+    assert grep -qF 'smortress-deploy-poll.timer' bootc/server/Containerfile
 }

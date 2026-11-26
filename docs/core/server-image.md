@@ -15,8 +15,8 @@ rollback path. Operator-only actions are in `docs/manual-steps.md#install-a-host
 | `/etc/containers/policy.json` | Default-reject policy; trusts the uCore keys by path and `ghcr.io/smores56/homelab-platform` through `/etc/pki/containers/smortress.pub`. |
 | `/etc/containers/registries.d/ghcr.io-smortress.yaml` | Enables cosign signature lookup for our GHCR repository. |
 | `/etc/pki/containers/smortress.pub` | Public half of the operator cosign key. The private half is an environment secret and a recovery-kit item. |
-| `/usr/bin/{sops,age,age-keygen,restic}` | Hash-pinned release binaries from `image/pins.env`; no distribution drift. |
-| `/var/lib/smortress/secrets/*.json` | The SOPS bundles `boot.json`, `apps.json` and `agents.json`, root-only (`0700` dir, `0600` files), on `/var` so an image never overwrites it. `image/rootfs/usr/share/smortress/secrets.manifest` fixes each output's bundle, dotted key, decrypted owner, group, mode and format; the seed copies it over `/etc/smortress/secrets.manifest` at every boot, because bootc keeps a host's `/etc` across a rebase. The image also carries a copy of the ciphertext under `/etc/smortress/secrets`, which only seeds a host that has none yet (`scripts/smortress-secrets-seed.sh`). |
+| `/usr/bin/{sops,age,age-keygen,restic}` | Hash-pinned release binaries from `bootc/lib/pins.env`; no distribution drift. |
+| `/var/lib/smortress/secrets/*.json` | The SOPS bundles `boot.json`, `apps.json` and `agents.json`, root-only (`0700` dir, `0600` files), on `/var` so an image never overwrites it. `bootc/server/rootfs/usr/share/smortress/secrets.manifest` fixes each output's bundle, dotted key, decrypted owner, group, mode and format; the seed copies it over `/etc/smortress/secrets.manifest` at every boot, because bootc keeps a host's `/etc` across a rebase. The image also carries a copy of the ciphertext under `/etc/smortress/secrets`, which only seeds a host that has none yet (`scripts/smortress-secrets-seed.sh`). |
 | `/usr/lib/systemd/system/zfs-ready@.service` | One readiness instance per recovery group; verifies the mount, not the directory. |
 | `/usr/lib/systemd/system/sops-decrypt.service` | Boot-ordered decrypt into `/run/smortress/secrets`. |
 | `/usr/lib/systemd/system/smortress-password.service` | Re-applies the `smores` account password hash through `chpasswd -e` at every boot from `/run/smortress/secrets/smores-password-hash.yaml`; bootc never reconciles `/var`, so `/etc/shadow` would otherwise be whatever the install left there. |
@@ -29,7 +29,7 @@ rollback path. Operator-only actions are in `docs/manual-steps.md#install-a-host
 | `/usr/lib/systemd/system/smortress-tailscale-ssh-off.service` | Re-asserts `tailscale set --ssh=false` at every boot; tailscaled persists the preference, so removing the flag from the enrollment unit is not enough. Tailscale SSH is retired. |
 | `/etc/pam.d/sudo` and `/etc/sudoers.d/10-human-gate` | The sudo gate (design #767, T8): a touch on the YubiKey held by the client, with the account password behind it. `pam_faillock` preauth, `libpam_rssh.so` against `/etc/ssh/sudo_authorized_keys` with `cue` (`success=2` reaches `authsucc`; a bare `sufficient` would end dispatch there and the faillock tally would never clear), `pam_unix try_first_pass` as the fallback behind it (`success=1` reaches the same `authsucc`, so either factor clears the tally), then `authfail` and `authsucc`. Every non-success from `pam_rssh` — no `SSH_AUTH_SOCK`, a dead socket, an absent key, a refused touch, and never `PAM_IGNORE` — is ignored and lands on the password, which is the break-glass everywhere: there is no console row any more. A 30-minute ticket per TTY and `log_subcmds`. `Defaults env_keep += "SSH_AUTH_SOCK"` is required: sudo drops the socket from the environment before the PAM stack runs, so without the keep `pam_rssh` finds no agent, logs "SSH agent socket address not configured", and every escalation silently falls back to the password (verified on the host 2026-11-20). The base's `/etc/sudoers.d/coreos-sudo-group` (`%sudo ALL=(ALL) NOPASSWD: ALL`) is deleted by the build, because a `NOPASSWD` line reaches `authsucc` without consulting `pam_authenticate` and would void the touch, the password fallback and the tally together; what remains is the base's own `%wheel ALL=(ALL) ALL`, and `smores` is in `wheel`, so the gate governs every escalation. The build fails if `NOPASSWD` reappears anywhere in `/etc/sudoers` or `/etc/sudoers.d`. `docs/manual-steps.md` section 44 enrolls the credential on each key, proves the tap and the fallback, and carries the AVC drill. |
 | `/etc/ssh/sudo_authorized_keys` | The sudo credentials' public halves only, root-owned `0600`: `sk-ssh-ed25519` lines, never `no-touch-required`, because the touch option is fixed at enrollment. Root-owned and not `AuthorizedKeysFile`, so the login credential cannot satisfy sudo and the sudo credential cannot satisfy ssh. Empty until the owner enrolls the keys; an empty list is `PAM_AUTH_ERR`, so the password works in the meantime. |
-| `/usr/lib64/security/libpam_rssh.so` | `z4yx/pam_rssh` at the tag and commit pinned in `image/pins.env`, built in the image's `sudo-build` stage with the `dep/ssh-agent.rs` submodule and `--locked`, linking the base's openssl and libpam. Not packaged for Fedora, so a cdylib copied from anywhere else would be an ABI mismatch at the first prompt. |
+| `/usr/lib64/security/libpam_rssh.so` | `z4yx/pam_rssh` at the tag and commit pinned in `bootc/lib/pins.env`, built in the image's `sudo-build` stage with the `dep/ssh-agent.rs` submodule and `--locked`, linking the base's openssl and libpam. Not packaged for Fedora, so a cdylib copied from anywhere else would be an ABI mismatch at the first prompt. |
 | `/usr/share/smortress/quadlet/pattern.container` | Quadlet base pattern; not enabled, no `[Install]`. |
 | `/usr/share/containers/systemd/*.container` | The application Quadlets (T5). A quadlet is a generated unit, so `[Install]` is what starts it; the image never runs `systemctl enable` for one. |
 | `/usr/lib/systemd/system/smortress-app-secrets.service` | Turns the decrypted application secrets into Podman secrets before any container that declares one starts. |
@@ -65,7 +65,7 @@ and start from their own `[Install]` section; see `docs/core/applications.md`.
 
 ## Base pin
 
-`image/pins.env` holds every external reference the image consumes. The base is
+`bootc/lib/pins.env` holds every external reference the image consumes. The base is
 not pinned to a digest: it tracks the multi-arch uCore stream tag
 
 ```text
@@ -98,7 +98,7 @@ hash-pinned release binaries instead of layering distribution packages.
 
 The image layers no distribution package. sudo's touch factor is `pam_rssh`,
 which Fedora does not package, so it is built in a `sudo-build` stage from the tag
-and commit pinned in `image/pins.env` and arrives as a `.so`. It cannot be copied
+and commit pinned in `bootc/lib/pins.env` and arrives as a `.so`. It cannot be copied
 from elsewhere: the module links the base's openssl and libpam, so a foreign
 build is an ABI mismatch waiting for the first sudo prompt. No local SELinux
 policy ships — sudo runs `unconfined_t` on this base, so there is nothing to
@@ -120,10 +120,10 @@ digest that matters is the one a build actually used, and that is on the image
 and in the run summary.
 
 CI is `.github/workflows/publish-server-image.yml`: a push to `main` touching
-`image/`, `units/`, `secrets/` or `scripts/`, or a manual dispatch. The job:
+`bootc/server/`, `units/`, `secrets/` or `scripts/`, or a manual dispatch. The job:
 
 1. verifies that `secrets.COSIGN_PRIVATE_KEY` corresponds to the committed
-   `image/cosign.pub` before building anything;
+   `bootc/server/cosign.pub` before building anything;
 2. resolves the base digest — `skopeo inspect --format '{{.Digest}}'
    docker://ghcr.io/ublue-os/ucore:stable-nvidia` — fails the job if that fails,
    exports it as `BASE_DIGEST` and prints the reference in the run summary;
@@ -149,7 +149,7 @@ Signing key handling: the private key is an environment secret on the
 `server-image` environment and a file in the offline recovery kit. It is never
 committed, never in an image layer, and never in a rendered Ignition file.
 Rotating it means re-signing the running digest before replacing
-`image/cosign.pub`, otherwise `bootc` rejects the next switch.
+`bootc/server/cosign.pub`, otherwise `bootc` rejects the next switch.
 
 ## Signature enforcement
 
@@ -725,7 +725,7 @@ HOME=/tmp/podman-home scripts/build-image.sh
 Successfully tagged ghcr.io/smores56/homelab-platform/server:sha-0c53b3f4c5a9
 ```
 
-The build used the operator public key committed at `image/cosign.pub`; with that
+The build used the operator public key committed at `bootc/server/cosign.pub`; with that
 file absent, `build-image.sh` fails closed, which is what a fresh clone does
 until section 37 step 1 installs the key. The built image was inspected
 with `podman run`: policy, registries.d, sops/age/restic versions, enabled and
@@ -782,7 +782,7 @@ or re-apply with the client's `devices:core` scope. The tailnet Service needs
 
 ### Tailnet-only sshd
 
-`image/rootfs/etc/ssh/sshd_config.d/05-tailnet-ssh.conf` is the only drop-in: no
+`bootc/server/rootfs/etc/ssh/sshd_config.d/05-tailnet-ssh.conf` is the only drop-in: no
 `ListenAddress`, and `AuthorizedKeysFile` points at
 `/etc/ssh/authorized_keys.d/smores`, the one `ssh-ed25519` line shipped in the image.
 The network half is firewalld: default zone `drop`, `tailscale0` alone in the
@@ -830,11 +830,11 @@ tailscale debug prefs | jq -r .RunSSH    # expect: false
 `ssh -A smortress` forwards the client's agent, which holds a touch-required
 `sk-ssh-ed25519` resident credential, and `/etc/pam.d/sudo` asks the key in the
 laptop for a signature; the account password sits behind it as the fallback. The
-image carries `image/rootfs/etc/pam.d/sudo` (`pam_faillock` preauth,
+image carries `bootc/server/rootfs/etc/pam.d/sudo` (`pam_faillock` preauth,
 `libpam_rssh.so` against `/etc/ssh/sudo_authorized_keys`, `pam_unix` as the
-fallback), `image/rootfs/etc/ssh/sudo_authorized_keys`, the `sudo-build` stage that
-compiles `pam_rssh` at the pin in `image/pins.env`, and
-`image/rootfs/etc/sudoers.d/10-human-gate` (`timestamp_timeout=30`,
+fallback), `bootc/server/rootfs/etc/ssh/sudo_authorized_keys`, the `sudo-build` stage that
+compiles `pam_rssh` at the pin in `bootc/lib/pins.env`, and
+`bootc/server/rootfs/etc/sudoers.d/10-human-gate` (`timestamp_timeout=30`,
 `timestamp_type=tty`, `log_subcmds`, and `Defaults env_keep += "SSH_AUTH_SOCK"` —
 without the last one every escalation falls back to the password). There is no
 host-local secret; the retired TOTP usersfile under `/var/lib/homelab/sudo` can be
@@ -846,7 +846,7 @@ the **sudo** credential.
 
 ```sh
 ssh-keygen -t ed25519-sk -O resident -C "smores-sudo-key1" -f ~/.ssh/id_smortress_sudo_1
-cat ~/.ssh/id_smortress_sudo_*.pub >>    image/rootfs/etc/ssh/sudo_authorized_keys
+cat ~/.ssh/id_smortress_sudo_*.pub >>    bootc/server/rootfs/etc/ssh/sudo_authorized_keys
 scripts/check-server-image.sh     # refuses anything but sk lines, no no-touch-required
 ```
 

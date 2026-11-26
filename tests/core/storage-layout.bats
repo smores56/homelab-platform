@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# bats file_tags=core
 # Offline checks for the storage table (SDLC #701, data plane).
 #
 # The host half — real devices, a real pool, real mounts — is the install in

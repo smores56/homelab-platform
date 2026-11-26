@@ -187,6 +187,12 @@ stopped the tenant) but its numeric name meant it would silently stop applying
 the moment the uid moved, which is the failure this design rejects; a name-based
 equivalent is a system unit that gates the tenant's manager by account name.
 
+A host that acquires one anyway cannot stage a deploy: `deploy-platform prepare`
+refuses while any `/etc/systemd/system/user@*.service.d/` exists, journals the
+paths as `deploy-drift`, and the drain keeps the entry queued as `host-drift`.
+The image checks only prove what a build ships, and the file that did this
+survived a week on the host while six apps applies reverted (#152).
+
 Limits are properties of each rendered app unit, not of `user-<uid>.slice`:
 every Quadlet carries `MemoryHigh`, `MemoryMax`, `CPUQuota` and `TasksMax` in
 its `[Service]` section, which the generator puts in the service it starts. The
@@ -218,7 +224,7 @@ receiver (#798) is the only thing that runs it: `deploy-apps apply --commit
 undone. Nothing on the host pulls `homelab-apps` on its own.
 
 **Verification first, on the host.**
-`image/rootfs/usr/libexec/deploy-verify.py --repo homelab-apps --commit <sha>`
+`bootc/server/rootfs/usr/libexec/deploy-verify.py --repo homelab-apps --commit <sha>`
 refuses the commit unless it is off the denylist, is the tip of `main` *now*,
 is not the deployed commit, and `compare/<deployed>...<commit>` answers `ahead`
 — descendancy in one request, against the ancestor `state.json` records. No

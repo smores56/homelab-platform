@@ -44,7 +44,7 @@
 #
 # Knobs: TAILNET_NAMES_TIMEOUT (10 s), TAILNET_NAMES_MIN_DAYS (14),
 # TAILNET_NAMES_SUFFIX, TAILNET_NAMES_CAFILE, TAILSCALE_BIN, CURL_BIN,
-# OPENSSL_BIN and GETENT_BIN (tests/tailnet-names/check.sh drives the same code).
+# OPENSSL_BIN and GETENT_BIN (tests/tailnet-names/check.bats drives the same code).
 set -uo pipefail
 
 # <app> -> the status class its `GET /` answers with, read off the live Services

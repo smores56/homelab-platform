@@ -1,7 +1,7 @@
 # Builds, pushes, signs and verifies the smortress derived bootc image.
 #
 # The signing key is an environment secret; the public half is committed at
-# image/cosign.pub and baked into the image and its Ignition policy. This
+# bootc/server/cosign.pub and baked into the image and its Ignition policy. This
 # workflow is push/workflow_dispatch only: a pull_request run never sees it.
 name: publish-server-image
 
@@ -14,7 +14,7 @@ on:
     # its own publish workflow), and a path that no COPY reads only made every
     # app commit rebuild the OS and reboot the host.
     paths:
-      - "image/**"
+      - "bootc/**"
       - "units/**"
       - "secrets/**"
       - "scripts/**"
@@ -46,7 +46,7 @@ jobs:
       - name: install pinned cosign
         run: |
           set -euo pipefail
-          . image/pins.env
+          . bootc/lib/pins.env
           mkdir -p "$RUNNER_TEMP/bin"
           curl -fsSLo "$RUNNER_TEMP/bin/cosign" \
             "https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/cosign-linux-amd64"
@@ -59,9 +59,9 @@ jobs:
           COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
         run: |
           set -euo pipefail
-          test -s image/cosign.pub
+          test -s bootc/server/cosign.pub
           cosign public-key --key env://COSIGN_PRIVATE_KEY >"$RUNNER_TEMP/cosign.pub"
-          diff -u image/cosign.pub "$RUNNER_TEMP/cosign.pub"
+          diff -u bootc/server/cosign.pub "$RUNNER_TEMP/cosign.pub"
       - name: permit the base pull for the builder
         # The runtime policy is the one that matters and is baked into the image.
         # The builder has no uCore public key and the base is a uCore stream tag,
@@ -78,7 +78,7 @@ jobs:
         # on. The tag moves, so this digest is a record, not a pin.
         run: |
           set -euo pipefail
-          . image/pins.env
+          . bootc/lib/pins.env
           base=$UCORE_IMAGE
           digest=$(skopeo inspect --format '{{.Digest}}' "docker://$base")
           if [[ ! $digest =~ ^sha256:[0-9a-f]{64}$ ]]; then
@@ -103,7 +103,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          . image/pins.env
+          . bootc/lib/pins.env
           tag="sha-${GITHUB_SHA::12}"
           image="${IMAGE_REPO}:${tag}"
           authfile="$RUNNER_TEMP/auth.json"
@@ -122,7 +122,7 @@ jobs:
           cosign sign --key env://COSIGN_PRIVATE_KEY --yes "$image@$digest"
           # The lookaside tag is <repo>:<sha256-hex>.sig, not repo:tag:<hex>.sig.
           skopeo inspect --raw "docker://${IMAGE_REPO}:${digest/:/-}.sig" >/dev/null
-          cosign verify --key image/cosign.pub "$image@$digest"
+          cosign verify --key bootc/server/cosign.pub "$image@$digest"
           # `latest` is the operator's manual handle for `bootc switch` and
           # `bootc upgrade`; the install path and the deploy receiver stay
           # digest-only. It moves only after the digest is signed and verified,

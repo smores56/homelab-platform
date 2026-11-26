@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# bats file_tags=core
 # Offline checks for the application Quadlets (SDLC #708, T5).
 #
 # The host half — real containers, a real restore, a real tailnet — is in
@@ -22,7 +23,7 @@ load ../helpers
 # makes a check pass without reading anything, so each one names its own tables.
 #
 # `register` is a @test bats only understands as a loop: its description is the
-# text the shell suite printed after `ok `, which tests/parity.sh diffs. bats
+# text the shell suite printed after `ok `, which the conversion compared by name. bats
 # also refuses two tests with the same description and the same body, and this
 # suite registers one check over one item more than once -- one image in two
 # stages of a unit, one readiness instance for three volumes of a facade -- so
@@ -88,7 +89,7 @@ quadlet_sets() { # quadlet key=value
 }
 
 image_enables() { # unit basename
-  grep -qF "$1" image/Containerfile
+  grep -qF "$1" bootc/server/Containerfile
 }
 
 image_is_pinned_in_the_table() { # image reference
@@ -275,7 +276,7 @@ built_row_probe() {
 #     left out of the Containerfile makes the generator drop the container that
 #     requests it, and opdshelf.network did exactly that on the first T5 boot.
 image_installs() { # unit basename
-  grep -qF "units/quadlet/$1" image/Containerfile
+  grep -qF "units/quadlet/$1" bootc/server/Containerfile
 }
 
 for _u in units/quadlet/*.container units/quadlet/*.network; do
@@ -399,7 +400,7 @@ secret_is_created_from_a_decrypted_file() { # secret
 }
 
 secret_has_a_decrypt_manifest_entry() { # secret
-  grep -qE "^${1//./\\.}\.yaml[[:space:]]" image/rootfs/usr/share/smortress/secrets.manifest
+  grep -qE "^${1//./\\.}\.yaml[[:space:]]" bootc/server/rootfs/usr/share/smortress/secrets.manifest
 }
 
 declared=$(grep -h '^Secret=' "${app_quadlets[@]}" | cut -d= -f2 | cut -d, -f1 | sort -u)
@@ -469,7 +470,7 @@ unset _port route_port
 }
 
 @test "firewall permits 22000 on the tailscale zone only" {
-  local zone=image/rootfs/etc/firewalld/zones/tailscale.xml
+  local zone=bootc/server/rootfs/etc/firewalld/zones/tailscale.xml
   grep -q '<port port="22000" protocol="tcp"/>' "$zone" &&
     grep -q '<port port="22000" protocol="udp"/>' "$zone" &&
     grep -q '<interface name="tailscale0"/>' "$zone"
@@ -491,7 +492,7 @@ done
 unset _q
 
 @test "no application unit is enabled at build time" {
-  ! grep -qE 'systemctl enable (immich|opdshelf|syncthing)' image/Containerfile
+  ! grep -qE 'systemctl enable (immich|opdshelf|syncthing)' bootc/server/Containerfile
 }
 
 # 2. Every published port is loopback only, and the Serve route matches the host
@@ -618,7 +619,7 @@ unset _dump_at _r2_at
 instances=$( (source scripts/storage-layout.sh; printf '%s\n' "${dataset_order[@]}") | tr / -)
 
 image_enables_readiness_instance() { # instance
-  grep -q "zfs-ready@$1.service" image/Containerfile
+  grep -q "zfs-ready@$1.service" bootc/server/Containerfile
 }
 
 backup_driver_waits_for_readiness_instance() { # instance
@@ -635,7 +636,7 @@ unset _instance
 # 8. The trust boundary itself: no upstream application registry may creep into
 #    the policy just to make a pull succeed.
 policy_does_not_trust_upstream() { # registry
-  ! grep -q "\"$1\"" image/rootfs/etc/containers/policy.json
+  ! grep -q "\"$1\"" bootc/server/rootfs/etc/containers/policy.json
 }
 
 _registries=' '
@@ -659,7 +660,7 @@ unset _row _name _upstream _digest _registry _registries
 #    'smores': Unknown user") and podman then fails the unit with
 #    "statfs <path>: no such file or directory", which is how the second T5 boot
 #    lost immich-machine-learning and syncthing.
-readonly tmpfiles=image/rootfs/etc/tmpfiles.d/smortress.conf
+readonly tmpfiles=bootc/server/rootfs/etc/tmpfiles.d/smortress.conf
 
 tmpfiles_creates_for_uid_1000() { # dir
   local line mode owner group
@@ -676,7 +677,7 @@ unset _dir
 known_tmpfiles_owners() {
   printf '%s\n' root 0 1000
   local conf
-  for conf in image/rootfs/etc/sysusers.d/*.conf; do
+  for conf in bootc/server/rootfs/etc/sysusers.d/*.conf; do
     if [[ ! -f $conf ]]; then
       continue
     fi
@@ -724,8 +725,8 @@ readonly agent_local=units/quadlet/agent-local.container
 readonly agent_general=units/quadlet/agent-general.container
 readonly agent_model=units/quadlet/agent-model.container
 readonly agent_proxy=units/quadlet/agent-proxy.container
-readonly agent_templates=(image/rootfs/etc/smortress/agent/local-config.yaml
-  image/rootfs/etc/smortress/agent/general-config.yaml)
+readonly agent_templates=(bootc/server/rootfs/etc/smortress/agent/local-config.yaml
+  bootc/server/rootfs/etc/smortress/agent/general-config.yaml)
 
 # `Internal=true` cannot be the personal side's answer: netavark skips port
 # forwarding entirely for internal networks, so the gateway and the web UI would
@@ -818,7 +819,7 @@ unset _q
 # before the model server starts.
 @test "the rule that lets the model server map the GPU ships" {
   grep -qF '(allow nvidia_container_t container_file_t (chr_file (map)))' \
-    image/rootfs/usr/share/selinux/smortress/agent-nvidia-map.cil
+    bootc/server/rootfs/usr/share/selinux/smortress/agent-nvidia-map.cil
 }
 
 @test "the rule is loaded before the model server starts" {
@@ -866,7 +867,7 @@ each_model_slot_is_pinned() {
   local model_context slot_parallel config_context
   model_context=$(sed -n 's/^Exec=.*-c \([0-9]*\).*/\1/p' "$agent_model")
   slot_parallel=$(sed -n 's/^Exec=.*--parallel \([0-9]*\).*/\1/p' "$agent_model")
-  config_context=$(sed -n 's/^  context_length: //p' image/rootfs/etc/smortress/agent/local-config.yaml)
+  config_context=$(sed -n 's/^  context_length: //p' bootc/server/rootfs/etc/smortress/agent/local-config.yaml)
   if [[ -z $model_context || -z $slot_parallel || $slot_parallel -le 0 ]] ||
     ((model_context % slot_parallel != 0)) ||
     ((model_context / slot_parallel != config_context)) || ((config_context < 64000)); then
@@ -875,7 +876,7 @@ each_model_slot_is_pinned() {
   fi
 }
 
-_model_context=$(sed -n 's/^  context_length: //p' image/rootfs/etc/smortress/agent/local-config.yaml)
+_model_context=$(sed -n 's/^  context_length: //p' bootc/server/rootfs/etc/smortress/agent/local-config.yaml)
 registered "each model slot is pinned to $_model_context tokens like the config" each_model_slot_is_pinned
 unset _model_context
 
@@ -885,7 +886,7 @@ unset _model_context
 
 personal_config_disables_toolset() { # toolset
   local disabled
-  disabled=$(sed -n '/^  disabled_toolsets:/,/^[^ -]/p' image/rootfs/etc/smortress/agent/local-config.yaml)
+  disabled=$(sed -n '/^  disabled_toolsets:/,/^[^ -]/p' bootc/server/rootfs/etc/smortress/agent/local-config.yaml)
   grep -qE "^[[:space:]]+- $1$" <<<"$disabled"
 }
 
@@ -900,19 +901,19 @@ unset _toolset
 # it adds concurrency, not authority. The cap is what keeps it inside four llama.cpp
 # slots, and the flat depth is what stops a spawn tree.
 @test "the personal config enables subagents" {
-  grep -qE '^delegation:$' image/rootfs/etc/smortress/agent/local-config.yaml
+  grep -qE '^delegation:$' bootc/server/rootfs/etc/smortress/agent/local-config.yaml
 }
 
 @test "the personal subagents are capped at two concurrent and one level" {
   local delegation
-  delegation=$(sed -n '/^delegation:/,/^[^ ]/p' image/rootfs/etc/smortress/agent/local-config.yaml)
+  delegation=$(sed -n '/^delegation:/,/^[^ ]/p' bootc/server/rootfs/etc/smortress/agent/local-config.yaml)
   grep -qE '^  max_concurrent_children: [1-2]$' <<<"$delegation" &&
     grep -qE '^  max_spawn_depth: 1$' <<<"$delegation"
 }
 
 @test "the general subagents are capped at three concurrent and one level" {
   local delegation
-  delegation=$(sed -n '/^delegation:/,/^[^ ]/p' image/rootfs/etc/smortress/agent/general-config.yaml)
+  delegation=$(sed -n '/^delegation:/,/^[^ ]/p' bootc/server/rootfs/etc/smortress/agent/general-config.yaml)
   grep -qE '^  max_concurrent_children: [1-3]$' <<<"$delegation" &&
     grep -qE '^  max_spawn_depth: 1$' <<<"$delegation"
 }
@@ -1103,7 +1104,7 @@ facade_port() { # spec
   printf '%s\n' "${1##*:}"
 }
 facade_template() { # spec
-  printf 'image/rootfs/etc/smortress/agent/%s-config.yaml\n' "$(facade_state "$1")"
+  printf 'bootc/server/rootfs/etc/smortress/agent/%s-config.yaml\n' "$(facade_state "$1")"
 }
 
 facade_is_on_its_own_network() { # spec
@@ -1369,7 +1370,7 @@ readonly personal_dir=/run/smortress/agent-shell-personal
 # already mounted; 0710 with the facade's gid is the traversal, and the parent
 # /run/smortress stays root 0700 so no host uid reaches either path.
 @test "tmpfiles owns both socket directories, 0710 root:1000 under a root 0700 parent" {
-  local shell_tmpfiles=image/rootfs/etc/tmpfiles.d/smortress-agent-shell.conf
+  local shell_tmpfiles=bootc/server/rootfs/etc/tmpfiles.d/smortress-agent-shell.conf
   grep -qx "d $general_dir 0710 root 1000 -" "$shell_tmpfiles" &&
     grep -qx "d $personal_dir 0710 root 1000 -" "$shell_tmpfiles" &&
     grep -qx 'd /run/smortress 0700 root root -' "$tmpfiles"
@@ -1380,7 +1381,7 @@ readonly personal_dir=/run/smortress/agent-shell-personal
 # unconfined system service's socket without a rule. One rule covers both bridges
 # (same two domains), and each bridge orders itself after the unit that loads it.
 @test "one CIL rule permits both socket connects and each bridge loads it first" {
-  local shell_cil=image/rootfs/usr/share/selinux/smortress/agent-shell.cil
+  local shell_cil=bootc/server/rootfs/usr/share/selinux/smortress/agent-shell.cil
   local shell_selinux_unit=units/systemd/smortress-selinux-agent-shell.service
   local head_of_cil
   head_of_cil=$(head -3 "$shell_cil" 2>/dev/null || true)
@@ -1955,7 +1956,7 @@ readonly stream=units/systemd/smortress-agent-mail-stream.service
 }
 
 @test "the image enables the mail stream" {
-  grep -qF 'smortress-agent-mail-stream.service' image/Containerfile
+  grep -qF 'smortress-agent-mail-stream.service' bootc/server/Containerfile
 }
 
 # 8d. The egress gate: an internal network with exactly two peers, and a policy
@@ -1967,7 +1968,7 @@ readonly stream=units/systemd/smortress-agent-mail-stream.service
 }
 
 @test "the egress policy is a document that grants exactly the sync host" {
-  python3 - image/rootfs/etc/smortress/agent/egress-policy.json <<'PYJSON'
+  python3 - bootc/server/rootfs/etc/smortress/agent/egress-policy.json <<'PYJSON'
 import json, sys
 document = json.load(open(sys.argv[1], encoding="utf-8"))
 allow = document["sources"]["brave"]["allow"]
@@ -2024,11 +2025,11 @@ unset _gate _unit _base
 }
 
 @test "the collector network ships in the image" {
-  grep -qF 'units/quadlet/agent-collect.network' image/Containerfile
+  grep -qF 'units/quadlet/agent-collect.network' bootc/server/Containerfile
 }
 
 secret_has_a_strict_manifest_entry() { # secret
-  grep -qE "^${1//./\\.}\.yaml[[:space:]]" image/rootfs/usr/share/smortress/secrets.manifest
+  grep -qE "^${1//./\\.}\.yaml[[:space:]]" bootc/server/rootfs/usr/share/smortress/secrets.manifest
 }
 
 secret_becomes_a_podman_secret() { # secret
@@ -2173,7 +2174,7 @@ unset _flag
 }
 
 @test "the image enables the seed unit" {
-  grep -qF 'smortress-agent-brave-seed.service' image/Containerfile
+  grep -qF 'smortress-agent-brave-seed.service' bootc/server/Containerfile
 }
 
 @test "units/systemd/smortress-agent-collect-brave.service exists" {
@@ -2269,7 +2270,7 @@ unset _module
 
 @test "brave-sync-seed has a decrypt manifest entry" {
   grep -qE '^brave-sync-seed\.yaml[[:space:]]+[^[:space:]]+[[:space:]]+[^[:space:]]+[[:space:]]+root[[:space:]]+root[[:space:]]+0400[[:space:]]+value' \
-    image/rootfs/usr/share/smortress/secrets.manifest
+    bootc/server/rootfs/usr/share/smortress/secrets.manifest
 }
 
 @test "brave-sync-seed becomes a Podman secret" {
@@ -2284,7 +2285,7 @@ unset _module
 # and are skipped.
 @test "every smortress unit the image enables declares [Install]" {
   local enable_block never_starts=() unit
-  enable_block=$(sed -n '/systemctl enable \\$/,/;[[:space:]]*\\$/p' image/Containerfile)
+  enable_block=$(sed -n '/systemctl enable \\$/,/;[[:space:]]*\\$/p' bootc/server/Containerfile)
   while read -r unit; do
     if [[ $unit == *@* ]]; then
       continue

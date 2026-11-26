@@ -23,7 +23,7 @@
 # server's log, not a passing check.
 load ../helpers
 
-verify=image/rootfs/usr/libexec/deploy-verify.py
+verify=bootc/server/rootfs/usr/libexec/deploy-verify.py
 lib=scripts/deploy-state.sh
 drain=scripts/deploy-drain.sh
 
@@ -988,6 +988,24 @@ unclearable_gate_entry() {
 @test "the gate failure is journaled as a deferral" {
     unclearable_gate_entry
     assert_equal "$(journal_field deferred '.reason')" snapshot-gate-exit-4
+}
+
+drifted_host_entry() {
+    scenario .
+    seed_state "$deployed" >/dev/null
+    queue_seed "$id_e" homelab-platform "$commit"
+    drain_once FAKE_PLATFORM_EXIT=6
+}
+
+@test "a host manager drop-in defers the entry under its own name" {
+    drifted_host_entry
+    assert_drain_ok
+    assert_equal "$(journal_field deferred '.reason')" host-drift
+}
+
+@test "a drift-deferred entry stays queued" {
+    drifted_host_entry
+    assert_equal "$(queue_count)" 1
 }
 
 # An apps commit has no reboot: it goes straight to the apps apply, and that

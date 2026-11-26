@@ -22,8 +22,8 @@
 
 ## Platform conventions
 
-- One immutable uCore bootc host, configured by this repository alone: `image/`
-  builds it, `units/` and `image/rootfs/` are what boots (`docs/core/server-image.md`).
+- One immutable uCore bootc host, configured by this repository alone: `bootc/server/`
+  builds it, `units/` and `bootc/server/rootfs/` are what boots (`docs/core/server-image.md`).
   There is no configuration-management layer beside the image.
 - Podman Quadlets are the only container control plane. A deployment change is
   an image change plus a maintenance-window reboot; stateful Quadlets never
@@ -44,12 +44,15 @@
 ## Before you commit
 
 ```sh
-bats --jobs "$(nproc)" $(git ls-files 'tests/*.bats' 'tests/*/*.bats') # everything
-tests/tags.sh --changed | xargs -r bats --jobs "$(nproc)"             # what this branch touches
-tests/tags.sh --changed                                               # just the suite list
+# every suite, tracked or not
+BATS_TEST_TIMEOUT=120 git ls-files -z --cached --others --exclude-standard \
+    'tests/*.bats' 'tests/*/*.bats' | xargs -0 bats --jobs "$(nproc)"
+# the suites this branch touches -- and what the pre-push hook runs
+tests/tags.sh --changed
 ```
 
-The pre-push hook runs the second one (`git config core.hooksPath .githooks`).
+`git config core.hooksPath .githooks` installs the pre-push hook, which runs the
+suites `tests/tags.sh --changed` prints.
 `tests/tags.tsv` maps changed paths to suites and is the only selector: a path
 no row claims selects every suite, so a new file cannot fall through to a green
 run that tested nothing. `tests/tags.bats` holds the table to the tree, and its
