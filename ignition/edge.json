@@ -1,0 +1,75 @@
+{
+  "ignition": {
+    "version": "3.6.0"
+  },
+  "passwd": {
+    "users": [
+      {
+        "name": "root",
+        "sshAuthorizedKeys": [
+          "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAII0MkBZMtuoEWjEFb3BKoUhKxxcAigUjJI8qm9KW7Jvn smores@smortress"
+        ]
+      }
+    ]
+  },
+  "storage": {
+    "directories": [
+      {
+        "path": "/etc/ucore-autorebase",
+        "mode": 492
+      }
+    ],
+    "files": [
+      {
+        "overwrite": true,
+        "path": "/etc/hostname",
+        "contents": {
+          "compression": "",
+          "source": "data:,smoresnet"
+        },
+        "mode": 420
+      },
+      {
+        "overwrite": true,
+        "path": "/etc/pki/containers/smortress.pub",
+        "contents": {
+          "compression": "",
+          "source": "data:,-----BEGIN%20PUBLIC%20KEY-----%0AMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE8ZFt1lTqG7cL2dSu2Q3D%2FZPIhg%2BI%0AxJeGvLcTIctg6wL2sFownM4HgzkUwu4SBH2dhXv3HIVFwRMuFl1VkWSjPg%3D%3D%0A-----END%20PUBLIC%20KEY-----%0A"
+        },
+        "mode": 420
+      },
+      {
+        "overwrite": true,
+        "path": "/etc/containers/policy.json",
+        "contents": {
+          "compression": "gzip",
+          "source": "data:;base64,H4sIAAAAAAAC/+SVQY/TMBCF7/0Vkc91coJDb4uEKrRCqhYuCPUwcWYT08RjxhOEtep/R0lKd0vSZRcJQbo9uePx9H2vT/bdIkmSRBV4C20tapV87gvd5+646lskelSrRDF+QSPquLnvV9vlMEgYXPDEEtTqwQRVkNkhn9T6OmNpg3BMwRgMIWUsKpDUUHOiZVrTSFuwpcPiTVTL6b4dxo+H1vVmfY0xPNK5Aam6zgzFZH5nM/aNLn2Z3Wze6/Vmra/fftKDXs1YIwRUo2H7k8p2eYb+gG3pJVB/bSGmljIhqvPv2jZQYvhD8CDE+KE34DlQhpyAdcghO6jRJ2pS3+bn5g12vyvQiZU4ivSk0gbEVDfoKVghjmryxP6ZPpaV4c7HNq9b1PT3LZz+hWPXlLs/tT1i6G/P6hzMrvX9iMkJ27n8U6EhxvDqdVZRgzXk2tcgt8TNP0t/p0i4u3n/y8TfvzLLX98SXQA25EbOjbWps7F9Aod1AU3LeGUMerlyUSrryqfibBfT+w8CokCosWb+HPep0l0uocT5MxWW5w9Bxl4EhAY2lf12CbEabrCL4RHgHOp6piCL4ft+8SMAAP//8o1k3w0NAAA="
+        },
+        "mode": 420
+      },
+      {
+        "overwrite": true,
+        "path": "/etc/containers/registries.d/ghcr.io-smortress.yaml",
+        "contents": {
+          "compression": "gzip",
+          "source": "data:;base64,H4sIAAAAAAAC/0TPvW7rMAzF8d1PcYAMd7mykaEdsgbox1SgS2dGpiU1khiQVIG+feEM7cKJ+P1xDnhijxlRrKSO/ZAPZYO5KK8gw9v5Fcf5COWNVVkNC2YrCU7JsKk0PL+c3+fpgI/iWYbDc7H/iNKdSme1pTRKvAvD2OCCKnLFJgrP/JcFOahWUF+nAy4iHv8ZQuC+iUYOv2Kwkm5SS/yG8idHN8hQrKzli1fcc/O0SryyniYg5ahzkcWaKNvD45KlcaVLuFXyTbTtT8Aw3uX79kDuFHPj7naC6+DpJwAA///Ml5cJLgEAAA=="
+        },
+        "mode": 420
+      }
+    ]
+  },
+  "systemd": {
+    "units": [
+      {
+        "contents": "[Unit]\nDescription=uCore autorebase to the edge unsigned OCI reference and reboot\nConditionPathExists=!/etc/ucore-autorebase/unverified\nConditionPathExists=!/etc/ucore-autorebase/signed\nAfter=network-online.target\nWants=network-online.target\n[Service]\nType=oneshot\nStandardOutput=journal+console\nExecStart=/usr/bin/rpm-ostree rebase --bypass-driver ostree-unverified-registry:ghcr.io/smores56/homelab-platform/edge@sha256:d5993873c8de0c9b96962abcd4a2e4b1d69651218ffab41f3663742913558555\nExecStart=/usr/bin/touch /etc/ucore-autorebase/unverified\nExecStart=/usr/bin/systemctl disable ucore-unsigned-autorebase.service\nExecStart=/usr/bin/systemctl reboot\n[Install]\nWantedBy=multi-user.target\n",
+        "enabled": true,
+        "name": "ucore-unsigned-autorebase.service"
+      },
+      {
+        "contents": "[Unit]\nDescription=uCore autorebase to the edge signed OCI reference and reboot\nConditionPathExists=/etc/ucore-autorebase/unverified\nConditionPathExists=!/etc/ucore-autorebase/signed\nAfter=network-online.target\nWants=network-online.target\n[Service]\nType=oneshot\nStandardOutput=journal+console\nExecStart=/usr/bin/rpm-ostree rebase --bypass-driver ostree-image-signed:docker://ghcr.io/smores56/homelab-platform/edge@sha256:d5993873c8de0c9b96962abcd4a2e4b1d69651218ffab41f3663742913558555\nExecStart=/usr/bin/touch /etc/ucore-autorebase/signed\nExecStart=/usr/bin/systemctl disable ucore-signed-autorebase.service\nExecStart=/usr/bin/systemctl reboot\n[Install]\nWantedBy=multi-user.target\n",
+        "enabled": true,
+        "name": "ucore-signed-autorebase.service"
+      }
+    ]
+  }
+}
