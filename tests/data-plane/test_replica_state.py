@@ -386,6 +386,68 @@ class ReplicaStateTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             state.put("a", b"x", {"when": object()})
 
+    def test_update_changes_metadata_without_writing_bytes_again(self) -> None:
+        state = self._state()
+        state.put("a", b"hello", {"flags": []})
+        state.commit(complete=True, captured_at=CAPTURED)
+        digest = hashlib.sha256(b"hello").hexdigest()
+        path = self.root / "objects" / digest[:2] / digest
+        before = path.stat().st_mtime_ns
+
+        state.update("a", {"flags": ["\\Seen"]})
+        stats = state.commit(complete=True, captured_at=CAPTURED)
+
+        self.assertEqual(stats.written, 1)
+        self.assertEqual(path.stat().st_mtime_ns, before)
+        row = state.get("a")
+        self.assertEqual(row["metadata"]["flags"], ["\\Seen"])
+        self.assertEqual(row["sha256"], digest)
+        self.assertEqual(state.read("a"), b"hello")
+
+    def test_seen_accounts_for_a_held_row_and_writes_only_a_moved_field(self) -> None:
+        state = self._state()
+        state.put("a", b"hello", {"flags": []})
+        state.commit(complete=True, captured_at=CAPTURED)
+        row = state.get("a")
+
+        state.seen(row)
+        stats = state.commit(complete=True, captured_at=CAPTURED)
+        self.assertEqual(stats.written, 0)
+        self.assertEqual(state.version, 2)
+
+        state.seen(row, {"flags": ["\\Seen"]})
+        stats = state.commit(complete=True, captured_at=CAPTURED)
+        self.assertEqual(stats.written, 1)
+        self.assertEqual(state.get("a")["metadata"]["flags"], ["\\Seen"])
+
+    def test_seen_of_a_tombstone_is_refused(self) -> None:
+        state = self._state()
+        state.put("a", b"hello", {})
+        state.commit(complete=True, captured_at=CAPTURED)
+        state.tombstone("a", "provider expunge")
+        state.commit(complete=False, captured_at=CAPTURED)
+        with self.assertRaises(ManifestError):
+            state.seen(state.get("a"))
+
+    def test_update_of_an_unknown_object_is_refused(self) -> None:
+        state = self._state()
+        with self.assertRaises(ManifestError):
+            state.update("missing", {"flags": []})
+
+    def test_live_rows_filter_by_prefix_and_skip_tombstones(self) -> None:
+        state = self._state()
+        state.put("mail::INBOX::1", b"one", {"folder": "INBOX"})
+        state.put("mail::INBOX::2", b"two", {"folder": "INBOX"})
+        state.put("mail::Sent::9", b"nine", {"folder": "Sent"})
+        state.commit(complete=True, captured_at=CAPTURED)
+        state.tombstone("mail::INBOX::2", "provider expunge")
+        state.commit(complete=False, captured_at=CAPTURED)
+
+        rows = state.live_rows("mail::INBOX::")
+        self.assertEqual([row["object_id"] for row in rows], ["mail::INBOX::1"])
+        self.assertEqual(len(state.live_rows("mail::")), 2)
+        self.assertEqual(len(state.live_rows()), 2)
+
     def test_rows_are_ordered_and_complete(self) -> None:
         state = self._state()
         state.put("b", b"two", {})

@@ -135,13 +135,23 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def _identity(meta: str) -> dict:
+def _serialize(metadata: dict) -> str:
+    if not isinstance(metadata, dict):
+        raise ValidationError("object metadata must be a dict")
+    try:
+        return json.dumps(metadata, sort_keys=True, separators=(",", ":"))
+    except (TypeError, ValueError) as exc:
+        raise ValidationError("object metadata is not JSON serializable") from exc
+
+
+def _without_volatile(metadata: Mapping[str, Any]) -> dict:
     """A row's metadata without the fields that change on every pass."""
 
-    value = json.loads(meta)
-    for key in _VOLATILE_META:
-        value.pop(key, None)
-    return value
+    return {key: value for key, value in metadata.items() if key not in _VOLATILE_META}
+
+
+def _identity(meta: str) -> dict:
+    return _without_volatile(json.loads(meta))
 
 
 class ReplicaState:
@@ -170,6 +180,7 @@ class ReplicaState:
         self._dry_run = dry_run
         self._pass_started_at = time.time()
         self._puts: dict[str, tuple[str, int, str]] = {}
+        self._seen: set[str] = set()
         self._tombstones: dict[str, str] = {}
         self._closed = False
         self._connection: sqlite3.Connection | None = None
@@ -246,18 +257,53 @@ class ReplicaState:
         _check_object_id(object_id)
         if not isinstance(data, bytes):
             raise ValidationError("object data must be bytes")
-        if not isinstance(metadata, dict):
-            raise ValidationError("object metadata must be a dict")
-        try:
-            meta = json.dumps(metadata, sort_keys=True, separators=(",", ":"))
-        except (TypeError, ValueError) as exc:
-            raise ValidationError("object metadata is not JSON serializable") from exc
+        meta = _serialize(metadata)
 
         digest = hashlib.sha256(data).hexdigest()
         if not self._dry_run:
             self._write_object(digest, data)
         self._puts[object_id] = (digest, len(data), meta)
+        self._seen.add(object_id)
         self._tombstones.pop(object_id, None)
+
+    def seen(self, row: Mapping[str, Any], metadata: dict | None = None) -> None:
+        """Record that this pass still holds ``row``, which it read already.
+
+        A complete pass has to account for every live row, and a mailbox pass
+        accounts for all of them at once: taking the row from :meth:`live_rows`
+        costs one set insert per message instead of one query per message. The
+        row is only queued for a write when its metadata actually moved, which
+        makes a flag change one row and an unchanged message none.
+        """
+
+        self._require_writable()
+        if not isinstance(row, Mapping) or "object_id" not in row:
+            raise ValidationError("seen needs a row from live_rows or get")
+        object_id = row["object_id"]
+        _check_object_id(object_id)
+        if not row["present"]:
+            raise ManifestError(f"{object_id!r} is not a live object")
+        clean = {
+            key: value
+            for key, value in (metadata if metadata is not None else row["metadata"]).items()
+            if key not in (ABSENT_SINCE, ABSENCE_REASON)
+        }
+        self._seen.add(object_id)
+        self._tombstones.pop(object_id, None)
+        if row["absent_since"] is not None or _without_volatile(clean) != _without_volatile(
+            row["metadata"]
+        ):
+            self._puts[object_id] = (row["sha256"], row["size"], _serialize(clean))
+
+    def update(self, object_id: str, metadata: dict) -> None:
+        """Record new metadata for an object whose bytes have not changed."""
+
+        self._require_writable()
+        _check_object_id(object_id)
+        row = self.get(object_id)
+        if row is None:
+            raise ManifestError(f"replica state has no live object {object_id!r}")
+        self.seen(row, metadata)
 
     def tombstone(self, object_id: str, reason: str) -> None:
         """Name an object as deleted, on evidence the provider supplied."""
@@ -317,7 +363,7 @@ class ReplicaState:
                     "SELECT id FROM object WHERE present = 1"
                 )
             }
-            seen = set(self._puts) | set(self._tombstones)
+            seen = set(self._puts) | set(self._tombstones) | self._seen
             unseen = live - seen
             if complete and unseen and absence_reason is None:
                 raise PublishError(
@@ -379,6 +425,7 @@ class ReplicaState:
 
         collected = self._collect_garbage() if complete else 0
         self._puts.clear()
+        self._seen.clear()
         self._tombstones.clear()
         self._pass_started_at = time.time()
         return CommitStats(
@@ -430,6 +477,23 @@ class ReplicaState:
             "SELECT id, sha256, size, meta, present, absent_since, "
             "absence_reason, updated_at FROM object ORDER BY id"
         )
+        return tuple(self._row(row) for row in cursor)
+
+    def live_rows(self, prefix: str = "") -> tuple[Mapping[str, Any], ...]:
+        """Every live row whose object id starts with ``prefix``, in id order."""
+
+        if not isinstance(prefix, str):
+            raise ValidationError("prefix must be a string")
+        statement = (
+            "SELECT id, sha256, size, meta, present, absent_since, "
+            "absence_reason, updated_at FROM object WHERE present = 1"
+        )
+        parameters: tuple = ()
+        if prefix:
+            # substr, not LIKE: an object id may contain "%" or "_".
+            statement += " AND substr(id, 1, ?) = ?"
+            parameters = (len(prefix), prefix)
+        cursor = self._database().execute(statement + " ORDER BY id", parameters)
         return tuple(self._row(row) for row in cursor)
 
     def live_object_ids(self) -> tuple[str, ...]:
