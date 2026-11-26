@@ -404,6 +404,13 @@ while :; do
             say "$repo $commit: deploy held"
             held=$((held + 1))
             ;;
+          6)
+            # The host carries a drop-in the image does not ship, and staging
+            # would reboot into a host whose apps apply cannot land (#152). The
+            # gate journaled the paths; the entry keeps its place until an
+            # operator removes them.
+            defer_entry "$id" "host-drift"
+            ;;
           *)
             defer_entry "$id" "snapshot-gate-exit-$gate_rc"
             ;;

@@ -155,6 +155,9 @@ setup() {
     export DEPLOY_STATE_DIR=$state_dir
     export DEPLOY_LOCK_FILE=$work/deploy.lock
     export DEPLOY_PING_SECRET=$work/deploy-ping-url.yaml
+    # The drift check reads a glob; a test that wants drift creates the directory
+    # under $work, so no check ever looks at the runner's own /etc.
+    export DEPLOY_MANAGER_DROPINS="$work/etc/user@*.service.d"
     export STUB_LOG=$log
     export STUB_VERIFY_DOC=$work/verdict.json
     export FAKE_PING_LOG=$log/curl-urls
@@ -264,6 +267,43 @@ assert_matches() { # <text> <ere>
 # The old suite's `((rc != 0))` with the run's own output as the detail.
 assert_not_green() {
     if ((rc == 0)); then fail "$out"; fi
+}
+
+# --- 1a. a host-local manager drop-in refuses the stage ----------------------
+# The image ships none, and one carrying `Requires=` stops the tenant manager
+# whenever the apps apply restarts the quota applier, which is how six applies
+# reverted (#152). Nothing else inspects the host, so the gate does.
+drifted_host() {
+    install -d -m 0755 "$work/etc/user@972.service.d"
+    printf '[Unit]\nRequires=smortress-apps-quota.service\n' \
+        >"$work/etc/user@972.service.d/50-smortress-apps.conf"
+    run_platform prepare --commit "$commit" --digests "$digests"
+}
+
+@test "a host manager drop-in refuses the deploy" {
+    drifted_host
+    assert_equal "$rc" 6
+}
+
+@test "the refusal names the file" {
+    drifted_host
+    assert_contains "$out" "user@972.service.d"
+}
+
+@test "the drift is journaled with its path" {
+    drifted_host
+    assert_matches "$(jq -c 'select(.event == "deploy-drift")' "$state_dir/journal.jsonl")" \
+        'user@972\.service\.d'
+}
+
+@test "a drifted host is never queried for snapshots" {
+    drifted_host
+    assert_empty "$log/verify-calls"
+}
+
+@test "a drifted host stages nothing" {
+    drifted_host
+    assert_absent "$state_dir/pending.json"
 }
 
 # --- 1. a fresh plane is green and writes nothing ----------------------------

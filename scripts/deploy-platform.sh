@@ -31,7 +31,9 @@
 # 2 usage; 4 the gate could not run and nothing was recorded (the caller keeps
 # the request queued), or `bootc switch` / the reboot failed;
 # 5 the deploy is held until an operator releases it (prepare), or the staged
-# digest is not the verified one (stage -- nothing is staged, nothing reboots).
+# digest is not the verified one (stage -- nothing is staged, nothing reboots);
+# 6 the host carries a systemd drop-in the image does not ship (prepare -- nothing
+# is staged), or the host already runs the verified image (stage).
 #
 # Every knob is environment-overridable so tests/deploy/platform.sh can drive
 # this exact code. Production sets none of them: the defaults are the host
@@ -166,6 +168,12 @@ stage_poll_budget=${DEPLOY_STAGE_POLL_BUDGET:-60}
 [[ $stage_poll_attempts =~ ^[0-9]+$ ]] || stage_poll_attempts=30
 [[ $stage_poll_interval =~ ^[0-9]+([.][0-9]+)?$ ]] || stage_poll_interval=1
 [[ $stage_poll_budget =~ ^[0-9]+$ ]] || stage_poll_budget=60
+# A host-local drop-in on the tenant's user manager is drift the image forbids:
+# `Requires=` there propagates a prerequisite restart to the manager, and the
+# apps apply restarts the quota applier on every revision, so the manager dies
+# mid-apply and the apply reverts (#152). Overridable so the tests never read the
+# real /etc.
+manager_dropins=${DEPLOY_MANAGER_DROPINS:-/etc/systemd/system/user@*.service.d}
 bootc_bin=${BOOTC_BIN:-bootc}
 stage_systemctl=${SYSTEMCTL_BIN:-systemctl}
 image_repo=${DEPLOY_IMAGE_REPO:-ghcr.io/smores56/homelab-platform/server}
@@ -303,6 +311,24 @@ cmd_prepare() {
     warn "cannot create $deploy_state_dir"
     return 4
   }
+
+  # Drift the image cannot see: the image check proves what a build ships, not
+  # what a host has acquired since, and a `user@<uid>.service.d` carrying
+  # `Requires=` kills the tenant manager in the middle of every apps apply. The
+  # file that did that survived a week and cost six applies, so this refuses to
+  # stage while one is there, before any budget is spent and with the paths named.
+  local -a dropins=()
+  while IFS= read -r path; do
+    [[ -n $path ]] && dropins+=("$path")
+  done < <(compgen -G "$manager_dropins" || true)
+  if ((${#dropins[@]})); then
+    journal_append deploy-drift "$(jq -nc --arg commit "$commit" --arg digest "$digest" \
+      --arg paths "${dropins[*]}" '{commit:$commit,digest:$digest,reason:"manager-drop-in",paths:($paths|split(" "))}')" ||
+      warn "cannot journal the host drift"
+    warn "the host carries a manager drop-in the image does not ship: ${dropins[*]}"
+    warn "remove it, run systemctl daemon-reload, and let the drain retry"
+    return 6
+  fi
 
   # Break-glass: a release waives the gate for the digest the operator saw held,
   # and for nothing else. Reusing it for a later image would silently ship an
