@@ -13,9 +13,8 @@ selected=$(tests/tags.sh --changed) || exit 2
 [ -n "$selected" ] || exit 0
 # shellcheck disable=SC2086  # one path per line, deliberately unquoted
 # A hung test must fail the push instead of blocking it; the slowest test in the
-# tree is ~12s, the two former monoliths included. Four jobs is what a CI runner
-# has, and bats passes the count down to each file as well, so a bigger number is
-# a fan-out the machine has no cores for: with another run on the box it thrashed
-# instead of finishing.
+# tree is ~12s, the two former monoliths included. The whole matrix is one pool,
+# so the job count is what a big file gets too: app-quadlets' 572 registered
+# tests take 183s at four jobs and 40s at sixteen.
 exec env BATS_TEST_TIMEOUT="${BATS_TEST_TIMEOUT:-120}" \
-    bats --jobs "${BATS_JOBS:-4}" $selected
+    bats --jobs "${BATS_JOBS:-$(nproc)}" $selected
