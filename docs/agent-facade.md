@@ -93,7 +93,10 @@ over an existing file projects nothing -- a facade restart beside a warm
 state with no file pays one projection and writes the file; every search
 after that is a query. It is disposable: a committed snapshot is immutable, so
 the file is named after the snapshot, a new snapshot is a new file, and the
-source's other snapshot files are pruned after the build. The tokenizer is `trigram`, so a hit
+source's other snapshot files are pruned after the build. An unchanged replica
+keeps its snapshot, so an unchanged pass costs no rebuild -- which also makes
+`SCHEMA_VERSION` load-bearing: a change to a projector only reaches a source that
+already has a file when that constant is bumped. The tokenizer is `trigram`, so a hit
 is a substring hit -- `orld` finds `Hello world`, which is why it is not the word
 tokenizer memory uses. Case folding is SQLite's rather than Python's
 `casefold()`, so text a word reaches only through a compatibility character (`ﬁ`

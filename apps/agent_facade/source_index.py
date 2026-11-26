@@ -39,7 +39,10 @@ from data_plane.errors import ValidationError
 from . import contracts
 
 #: Bumped when the table layout or the projection feeding it changes; a file
-#: carrying another version is rebuilt rather than read.
+#: carrying another version is rebuilt rather than read. Because an unchanged
+#: replica keeps its snapshot, this constant is the only thing that retires an
+#: index built by an older projector: change a projection without bumping it and
+#: the old file answers until the source itself changes.
 SCHEMA_VERSION = 2
 #: The suffix that identifies one snapshot's file inside a source directory.
 SUFFIX = ".sqlite"

@@ -236,7 +236,7 @@ class TasksCommandTests(unittest.TestCase):
                 self.assertEqual(state.source_id, "tasks.todo")
                 self.assertEqual(len(state.live_object_ids()), 3)
 
-    def test_a_second_run_advances_the_version_and_writes_no_new_object(self) -> None:
+    def test_a_second_run_writes_no_new_object_and_moves_no_version(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
             directory = root / "todo"
@@ -254,10 +254,16 @@ class TasksCommandTests(unittest.TestCase):
             ]
             self.assertEqual(_run(argv)[0], 0)
             objects = sorted((replica_root / "objects").glob("*/*"))
+            with ReplicaState(replica_root, read_only=True) as state:
+                snapshot = state.snapshot
             code, out, _ = _run(argv)
             self.assertEqual(code, 0)
-            self.assertEqual(json.loads(out)["version"], 2)
+            payload = json.loads(out)
+            self.assertFalse(payload["changed"])
+            self.assertEqual(payload["version"], 1)
             self.assertEqual(sorted((replica_root / "objects").glob("*/*")), objects)
+            with ReplicaState(replica_root, read_only=True) as state:
+                self.assertEqual(state.snapshot, snapshot)
 
     def test_a_missing_directory_is_a_refusal_not_a_traceback(self) -> None:
         with tempfile.TemporaryDirectory() as work:
