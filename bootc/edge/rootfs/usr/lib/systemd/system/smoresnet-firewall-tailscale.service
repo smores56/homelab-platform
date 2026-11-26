@@ -1,0 +1,29 @@
+[Unit]
+# Bind tailscale0 to the `tailscale` zone, which is the only zone that admits ssh
+# and the deploy receiver. firewalld starts long before tailscaled has a control
+# plane connection, and tailscaled creates tailscale0 only when it gets one, so
+# the binding races the interface's creation: the zone file's <interface> is the
+# permanent declaration, and this unit is what applies it to the interface that
+# appeared afterwards.
+#
+# Conditioned on the enrollment marker, not on the state file: a box that has not
+# joined yet has no tailnet interface to bind, so the unit is skipped rather than
+# waiting 120 s and failing on a fresh install. The marker is written only after
+# `tailscale up` succeeds (smoresnet-tailscale-up.service), so a failed join is
+# that unit's failure to report, not this one's.
+Description=Bind tailscale0 to the firewalld tailscale zone
+Requires=firewalld.service tailscaled.service
+After=firewalld.service tailscaled.service smoresnet-tailscale-up.service
+ConditionPathExists=/var/lib/smoresnet/tailscale-enrolled
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# The helper waits up to 120 s for the interface; the unit's own limit is above
+# that so a tailnet that never comes up reports "tailscale0 did not appear"
+# rather than a bare timeout with no line saying what was waited for.
+ExecStart=/usr/libexec/smoresnet-firewall-bind tailscale
+TimeoutStartSec=180
+
+[Install]
+WantedBy=multi-user.target

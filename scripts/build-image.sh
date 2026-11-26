@@ -44,7 +44,10 @@ case $artifact in
     base_image=$EDGE_IMAGE
     target_repo=$EDGE_IMAGE_REPO
     containerfile=bootc/edge/Containerfile
-    # The skeleton takes no tool pins yet; T4 adds what the edge rootfs needs.
+    # No tool build arguments: the edge's one added package is Caddy from
+    # Fedora's repository, and the auth key and Caddy environment file are the
+    # operator's. There is nothing here to hash-pin, and an empty list is what
+    # says so rather than a pin that no COPY consumes.
     pins=()
     next="the edge install path takes it by digest"
     ;;

@@ -1,0 +1,24 @@
+[Unit]
+# Bind the internet-facing interface to the `public` zone, which is the zone that
+# carries 443. The zone is set on the NetworkManager connection, not only on the
+# interface: NM re-asserts its own zone on every activation, so a firewalld-only
+# binding is reset the next time the profile comes up and the three public names
+# go dark -- the failure that lost SSH on smortress's first bring-up, written down
+# in scripts/access-bootstrap.sh.
+#
+# After network-online.target because an interface that does not exist yet cannot
+# be bound, and the NIC is up when the static address is configured. Until this
+# unit runs the interface is in the default zone, which is drop: the edge is
+# closed first and opened deliberately, never the other way round.
+Description=Bind the public interface to the firewalld public zone
+Requires=firewalld.service
+Wants=network-online.target
+After=firewalld.service network-online.target smoresnet-firewall-zones.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/smoresnet-firewall-bind public
+
+[Install]
+WantedBy=multi-user.target
