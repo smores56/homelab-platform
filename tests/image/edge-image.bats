@@ -5,7 +5,7 @@
 # bootc/edge/tests/check.sh carries the static half of provision/edge/verify.sh
 # onto the image: the Caddyfile's shape, the firewalld zones, the sshd policy, the
 # units, plus the Caddyfile's path, the absent secret, the base-tag doctrine and
-# `bootc container lint`. It runs in the `server-image` group, which is what
+# `bootc container lint`. It runs in the `image` area, which is what
 # .github/workflows/server-image-static.yml already runs on a bootc/** pull
 # request; the checker asserts that wiring itself, and case 30 below reverts it.
 #

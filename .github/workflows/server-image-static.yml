@@ -2,8 +2,8 @@
 # Runs on pull requests and holds no secret: the real build/sign job is
 # publish-server-image.yml (publish-edge-image.yml for the edge).
 #
-# The edge's checker, bootc/edge/tests/check.sh, runs in the same `server-image`
-# group: it is the same artifact class, the group already claims bootc/edge/*, and
+# The edge's checker, bootc/edge/tests/check.sh, runs in the same `image`
+# area: it is the same artifact class, the area already claims bootc/edge/*, and
 # a separate workflow would run this one a second time on every bootc/edge/**
 # pull request because both would trigger on that tree. The checker asserts this
 # wiring itself (its "a pull_request workflow runs this checker" row), so a filter
