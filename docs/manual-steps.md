@@ -1482,6 +1482,51 @@ leftover tree:
 sudo rm -rf /var/lib/restic/ssd/drill/ssd-agent-*
 ```
 
+### Cut the replicas over to the store
+
+Before #961 a pass published `<source>/<generation>/`, and the mail replica grew to
+16.4 million paths, which is what broke the backup window. A pass now writes
+content-addressed objects under `objects/<2hex>/<sha256>` and one `state.sqlite`
+beside them (`docs/raw-replicas.md`); the Restic plane is the history the old
+trees carried. Nothing reads the old trees, so they are removed and the
+collectors rebuild the state -- the first mail pass re-downloads every body.
+
+Boot the image that pins the store first ("Move a running host to a newer build").
+Then stop every writer, clear the replica root, and run one pass of each source:
+
+```sh
+sudo systemctl stop smortress-agent-mail-stream.service \
+  smortress-agent-collect-notes.timer smortress-agent-collect-tasks.timer \
+  smortress-agent-collect-finance.timer smortress-agent-collect-calendar.timer \
+  smortress-agent-collect-brave.path smortress-agent-collect-brave.timer \
+  smortress-agent-collect-photos.timer smortress-agent-collect-music.timer
+sudo find /var/lib/agent/local/replica -mindepth 1 -delete
+sudo systemctl unmask smortress-agent-mail-stream.service \
+  smortress-agent-collect-notes.timer smortress-agent-collect-tasks.timer \
+  smortress-agent-collect-finance.timer smortress-agent-collect-calendar.timer \
+  smortress-agent-collect-brave.path smortress-agent-collect-brave.timer \
+  smortress-agent-collect-photos.timer smortress-agent-collect-music.timer
+sudo systemctl start smortress-agent-collect-notes.service \
+  smortress-agent-collect-tasks.service smortress-agent-collect-finance.service \
+  smortress-agent-collect-calendar.service smortress-agent-collect-photos.service \
+  smortress-agent-collect-music.service smortress-agent-mail-stream.service
+```
+
+Each collector `start` runs its pass in the foreground, so a refused pass (a
+missing vault, a vanished sign-in) exits 3 with the reason on stderr instead of
+leaving a timer to report it later; the mail stream starts and stays up. Brave
+advances on the next `History` change or the six-hourly reconcile. Prove one state
+per source and that the bytes are objects:
+
+```sh
+sudo find /var/lib/agent/local/replica -maxdepth 2 -name state.sqlite
+sudo find /var/lib/agent/local/replica -path '*/objects/*' -type f | wc -l
+sudo systemctl list-timers 'smortress-agent-collect-*'
+```
+
+A source with no `state.sqlite` answers `unavailable` and the facade stays up;
+its first `sources.read` or `sources.search` pays one projection over that source.
+
 ## Recover
 
 ### T0: freeze, rescue, verify, and publish the kit
