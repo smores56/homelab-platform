@@ -33,8 +33,19 @@ assert_contains() {
 # `# bats file_tags=` line, which does not cover a test registered this way, so
 # a suite's area is written once. bats resolves the description with `eval`, so
 # it must stay a literal or a value from the tree, never plan or tenant data.
+# The tag is derived from the path, not read from the file: every test of every
+# file sources this file and re-runs its registration loops, so a subprocess here
+# costs one fork per registered test (97 per app-quadlets test, which hung the
+# gate). tests/tags.bats holds this table to the `# bats file_tags=` lines.
 register() {
-    tag=$(sed -n 's/^# bats file_tags=//p' "$BATS_TEST_FILENAME" | head -n1)
+    case $BATS_TEST_FILENAME in
+        */tests/*/*.bats) tag=${BATS_TEST_FILENAME#*tests/}; tag=${tag%%/*} ;;
+        */tests/lint.bats | */tests/tags.bats) tag=lint ;;
+        */tests/docs.bats) tag=docs ;;
+        */tests/actionlint.bats) tag=actionlint ;;
+        */tests/tofu-fmt.bats) tag=tofu ;;
+        *) tag=lint ;;
+    esac
     bats_test_function --tags "$tag" --description "$1" -- "${@:2}"
 }
 

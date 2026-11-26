@@ -157,6 +157,25 @@ suite_tags() {  # the area each suite declares
     assert_equal "$missing" ""
 }
 
+@test "register derives the area each suite declares" {
+    # register() maps a path to a tag without a subprocess; this holds that
+    # table to the `# bats file_tags=` line it replaced.
+    bad=''
+    while IFS= read -r suite; do
+        declared=$(grep -hE '^# bats file_tags=' "$suite" | head -n1 | sed -E 's/.*file_tags=//')
+        case $suite in
+            tests/*/*.bats) expected=${suite#tests/}; expected=${expected%%/*} ;;
+            tests/lint.bats | tests/tags.bats) expected=lint ;;
+            tests/docs.bats) expected=docs ;;
+            tests/actionlint.bats) expected=actionlint ;;
+            tests/tofu-fmt.bats) expected=tofu ;;
+            *) expected=unmapped ;;
+        esac
+        [[ $declared == "$expected" ]] || bad="$bad $suite($declared, not $expected)"
+    done < <(suites)
+    assert_equal "$bad" ""
+}
+
 @test "every test in a suite carries the suite's tag" {
     # The area jobs select by tag, so an untagged test runs in no job. A file's
     # `# bats file_tags=` covers its literal @tests but not the ones register()
