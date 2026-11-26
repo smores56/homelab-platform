@@ -1,0 +1,14 @@
+[Unit]
+Description=Hourly, publish the music library into the personal replica
+
+[Timer]
+# Hourly: a track is added by a download at an unpredictable time, and the pass is
+# a stat-only walk with hard-linked reuse. Persistent, because a missed run is a
+# gap.
+OnCalendar=*-*-* *:50:00
+AccuracySec=1m
+Persistent=true
+Unit=smortress-agent-collect-music.service
+
+[Install]
+WantedBy=timers.target

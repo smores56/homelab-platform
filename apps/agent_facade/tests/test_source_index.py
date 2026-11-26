@@ -1,9 +1,9 @@
-"""Derived source index tests: parity with the scan, one file per generation.
+"""Derived source index tests: parity with the scan, one file per snapshot.
 
-Each case publishes real generations and asks an adapter with an index root the
-same questions as one without: the index is an optimisation, so the two answers
-have to agree, and a generation that publishes something else has to replace the
-file rather than append to it.
+Each case commits real states and asks an adapter with an index root the same
+questions as one without: the index is an optimisation, so the two answers have
+to agree, and a state that commits something else has to replace the file rather
+than append to it.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from unittest import mock
 
 from agent_facade import replica_sources, source_index, sources
 from data_plane.collectors.raw import collect_maildir
-from data_plane.collectors.staging import StagingGeneration
+from data_plane.collectors.state import ReplicaState
 
 CAPTURED = "2026-11-19T00:00:00+00:00"
 
@@ -36,10 +36,10 @@ MESSAGES: Mapping[str, Message] = {
 }
 
 
-def _publish(root: Path, generation_id: str, messages: Mapping[str, Message]) -> Path:
-    """Publish one mail generation under ``root`` and return the replica root."""
+def _commit(root: Path, label: str, messages: Mapping[str, Message]) -> Path:
+    """Commit one mail state under ``root`` and return the replica root."""
 
-    maildir = root / f"maildir-{generation_id}"
+    maildir = root / f"maildir-{label}"
     for spool in ("cur", "new", "tmp"):
         (maildir / spool).mkdir(parents=True, exist_ok=True)
     for name, (subject, body) in messages.items():
@@ -53,9 +53,10 @@ def _publish(root: Path, generation_id: str, messages: Mapping[str, Message]) ->
                 f"{body}\r\n"
             ).encode("utf-8")
         )
-    generation = StagingGeneration(root / "replica", generation_id, source_id="tuta.mail")
-    collect_maildir(maildir, generation, uidvalidity={"INBOX": 7}, captured_at=CAPTURED)
-    generation.commit_next(complete=True)
+    with ReplicaState(root / "replica", source_id="tuta.mail") as state:
+        collect_maildir(
+            maildir, state, uidvalidity={"INBOX": 7}, captured_at=CAPTURED
+        )
     return root / "replica"
 
 
@@ -69,8 +70,13 @@ def _ids(hits) -> set[str]:
     return {hit.id for hit in hits}
 
 
-def _file(index_root: Path, generation_id: str) -> Path:
-    return index_root / "mail" / f"{generation_id}.sqlite"
+def _file(index_root: Path, snapshot: str) -> Path:
+    return index_root / "mail" / f"{snapshot}.sqlite"
+
+
+def _snapshot(replica: Path) -> str:
+    with ReplicaState(replica, read_only=True) as state:
+        return state.snapshot
 
 
 @dataclass(frozen=True)
@@ -85,7 +91,7 @@ class ParityTests(unittest.TestCase):
     def test_index_and_scan_answer_the_same_queries(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
-            replica = _publish(root, "gen-0001", MESSAGES)
+            replica = _commit(root, "pass-1", MESSAGES)
             indexed = _adapter(replica, root / "index")
             scanned = _adapter(replica, None)
 
@@ -109,7 +115,7 @@ class ParityTests(unittest.TestCase):
     def test_a_short_word_scans_instead(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
-            replica = _publish(root, "gen-0001", MESSAGES)
+            replica = _commit(root, "pass-1", MESSAGES)
             indexed = _adapter(replica, root / "index")
 
             hits = indexed.search("boiler tw", 10)
@@ -121,46 +127,47 @@ class ParityTests(unittest.TestCase):
             # The same adapter still indexes the next, longer query: the fallback
             # is per query, not a switch that disables the adapter's index.
             indexed.search("boiler", 10)
-            self.assertTrue(_file(root / "index", "gen-0001").is_file())
+            self.assertTrue(_file(root / "index", _snapshot(replica)).is_file())
 
     def test_the_match_is_substring_shaped(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
-            replica = _publish(root, "gen-0001", {"aaa": ("Hello world", "Body text.")})
+            replica = _commit(root, "pass-1", {"aaa": ("Hello world", "Body text.")})
             indexed = _adapter(replica, root / "index")
 
             self.assertEqual(_ids(indexed.search("orld", 5)), {"mail::INBOX::aaa"})
-            self.assertTrue(_file(root / "index", "gen-0001").is_file())
+            self.assertTrue(_file(root / "index", _snapshot(replica)).is_file())
 
 
-class GenerationTests(unittest.TestCase):
-    def test_a_new_generation_is_a_new_file_and_the_old_one_is_gone(self) -> None:
+class StateTests(unittest.TestCase):
+    def test_a_new_snapshot_is_a_new_file_and_the_old_one_is_gone(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
-            replica = _publish(root, "gen-0001", {"aaa": MESSAGES["aaa"]})
+            replica = _commit(root, "pass-1", {"aaa": MESSAGES["aaa"]})
             _adapter(replica, root / "index").search("boiler", 5)
-            self.assertTrue(_file(root / "index", "gen-0001").is_file())
+            first = _snapshot(replica)
+            self.assertTrue(_file(root / "index", first).is_file())
 
-            replica = _publish(root, "gen-0002", {"ddd": ("Fresh subject", "New content.")})
+            replica = _commit(root, "pass-2", {"ddd": ("Fresh subject", "New content.")})
             second = _adapter(replica, root / "index")
-            self.assertEqual(second.replica.generation_id, "gen-0002")
+            self.assertEqual(second.replica.snapshot, _snapshot(replica))
             self.assertEqual(_ids(second.search("fresh", 5)), {"mail::INBOX::ddd"})
 
-            self.assertTrue(_file(root / "index", "gen-0002").is_file())
-            self.assertFalse(_file(root / "index", "gen-0001").is_file())
+            self.assertTrue(_file(root / "index", _snapshot(replica)).is_file())
+            self.assertFalse(_file(root / "index", first).is_file())
 
     def test_the_index_is_rebuilt_not_appended(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
-            replica = _publish(root, "gen-0001", MESSAGES)
+            replica = _commit(root, "pass-1", MESSAGES)
             self.assertEqual(
                 _ids(_adapter(replica, root / "index").search("boiler", 5)),
                 {"mail::INBOX::aaa", "mail::INBOX::bbb"},
             )
 
-            replica = _publish(
+            replica = _commit(
                 root,
-                "gen-0002",
+                "pass-2",
                 {"bbb": MESSAGES["bbb"], "ddd": ("Boiler replaced", "A new boiler.")},
             )
             second = _adapter(replica, root / "index")
@@ -175,7 +182,7 @@ class FallbackTests(unittest.TestCase):
     def test_an_unwritable_index_root_still_answers(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
-            replica = _publish(root, "gen-0001", MESSAGES)
+            replica = _commit(root, "pass-1", MESSAGES)
             index_root = root / "index"
             index_root.mkdir()
             os.chmod(index_root, 0o500)
@@ -189,47 +196,48 @@ class FallbackTests(unittest.TestCase):
 
 
 class ColdStartTests(unittest.TestCase):
-    """An existing file is opened, not rebuilt over the whole generation.
+    """An existing file is opened, not rebuilt over the whole state.
 
-    The file is named after an immutable generation and checked by its ``meta``
-    row, so an existing one for this generation is the answer already. Projecting
+    The file is named after the snapshot and checked by its ``meta`` row, so an
+    existing one for this state is the answer already. Projecting
     every record first is the same bytes written again, and for mail that pass is
     minutes -- the 60 s first search seen live on smortress.
     """
 
-    def test_a_published_index_answers_without_touching_the_generation(self) -> None:
+    def test_a_published_index_answers_without_touching_the_state(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
-            replica = _publish(root, "gen-0001", MESSAGES)
+            replica = _commit(root, "pass-1", MESSAGES)
             warm = _adapter(replica, root / "index")
             expected = {hit.id: hit for hit in warm.search("boiler", 5)}
-            self.assertTrue(_file(root / "index", "gen-0001").is_file())
+            self.assertTrue(_file(root / "index", _snapshot(replica)).is_file())
 
             # A fresh adapter is what a facade restart has: no projection, no
-            # index handle, the same generation and the same file on disk.
+            # index handle, the same state and the same file on disk.
             cold = _adapter(replica, root / "index")
             with mock.patch.object(
-                cold.replica, "entries", side_effect=AssertionError("listed the generation")
+                cold.replica, "entries", side_effect=AssertionError("listed the state")
             ), mock.patch.object(
                 cold.replica, "read", side_effect=AssertionError("read an object")
             ):
                 hits = cold.search("boiler", 5)
             self.assertEqual({hit.id: hit for hit in hits}, expected)
 
-    def test_a_generation_without_a_file_pays_one_build(self) -> None:
+    def test_a_state_without_a_file_pays_one_build(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
-            replica = _publish(root, "gen-0001", MESSAGES)
+            replica = _commit(root, "pass-1", MESSAGES)
             _adapter(replica, root / "index").search("boiler", 5)
+            first = _snapshot(replica)
 
-            # The next generation has no file yet: one pass over it is the
-            # cheapest correct answer, and the file it publishes is what makes
-            # the search after that cheap.
-            second = _publish(root, "gen-0002", {"ddd": ("Boiler replaced", "A new boiler.")})
+            # The next state has no file yet: one pass over it is the cheapest
+            # correct answer, and the file it publishes is what makes the search
+            # after that cheap.
+            second = _commit(root, "pass-2", {"ddd": ("Boiler replaced", "A new boiler.")})
             cold = _adapter(second, root / "index")
             self.assertEqual(_ids(cold.search("boiler", 5)), {"mail::INBOX::ddd"})
-            self.assertTrue(_file(root / "index", "gen-0002").is_file())
-            self.assertFalse(_file(root / "index", "gen-0001").is_file())
+            self.assertTrue(_file(root / "index", _snapshot(second)).is_file())
+            self.assertFalse(_file(root / "index", first).is_file())
 
 
 class IndexFileTests(unittest.TestCase):
@@ -237,8 +245,8 @@ class IndexFileTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
             records = {"r1": _View(title="Hello world", body="Body text.")}
-            source_index.SourceIndex(root, "mail", "gen-0001").build(records)
-            path = _file(root, "gen-0001")
+            source_index.SourceIndex(root, "mail", "pass-1").build(records)
+            path = _file(root, "pass-1")
 
             connection = sqlite3.connect(path)
             try:
@@ -247,14 +255,14 @@ class IndexFileTests(unittest.TestCase):
             finally:
                 connection.close()
 
-            stale = source_index.SourceIndex(root, "mail", "gen-0001")
+            stale = source_index.SourceIndex(root, "mail", "pass-1")
             try:
                 with self.assertRaises(source_index.SourceIndexUnavailable):
                     stale.search(["world"], 10)
             finally:
                 stale.close()
 
-            rebuilt = source_index.SourceIndex(root, "mail", "gen-0001")
+            rebuilt = source_index.SourceIndex(root, "mail", "pass-1")
             try:
                 rebuilt.build(records)
                 self.assertEqual(rebuilt.search(["world"], 10), ("r1",))
@@ -264,7 +272,7 @@ class IndexFileTests(unittest.TestCase):
     def test_query_text_is_never_parsed(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
-            index = source_index.SourceIndex(root, "mail", "gen-0001")
+            index = source_index.SourceIndex(root, "mail", "pass-1")
             try:
                 index.build({"r1": _View(title="Hello world", body="Body text.")})
                 # Words travel as one bound parameter, quoted: FTS5 syntax in a

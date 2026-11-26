@@ -1,0 +1,116 @@
+# Public install config for the edge VPS (design #939, task T9).
+#
+# Unlike ignition/smortress.bu this document is committed to the repository
+# (ignition/edge.json, rendered by `scripts/render-ignition.sh --no-account`):
+# the box takes no console password and no LUKS key, so everything here is public
+# by construction. The operator reads it over raw.githubusercontent.com and pins
+# its sha512 with --ignition-hash, so a hand edit is a hash coreos-installer
+# refuses rather than a silent change to the host that carries public TLS.
+#
+# Deliberately absent, each for a reason:
+#   - any account password. The console is needed for the install alone, and the
+#     operator's public key is the only credential. A password_hash here would
+#     also be the one value the renderer can only obtain from sops or from a
+#     fixture, and a fixture hash committed to a public repository is the failure
+#     this mode exists to make impossible.
+#   - any disk, partition or LUKS section: the live-ISO installer owns the disk,
+#     and this host is BIOS/GRUB, not the smortress FCOS partition scheme.
+#   - networking: the provider hands out a static address that dracut needs
+#     before root exists, so ip=/nameserver=/net.ifnames=0 arrive as kernel
+#     arguments on the install line (docs/manual-steps.md, "Public edge VPS").
+#
+# Derived from ucore/examples/ucore-autorebase.butane at
+# 75ec7d8d10bc8af6fe23a284ea108bacd50f3173, exactly as the smortress template is:
+# stage 1 rebases through the unverified registry reference, stage 2 through the
+# signed one once the edge image's own policy and public key are running. There
+# is no uCore installer-media branch here, so no AUTOREBASE markers: `--stock`
+# is refused with `--no-account`.
+#
+# RESIDUAL, stated rather than hidden: the first running deployment is the
+# unverified stage. The sha512 of this document is what controls the first boot,
+# and the signature is enforced from the second rebase on.
+variant: fcos
+version: 1.7.0
+
+passwd:
+  users:
+    - name: root
+      # The one operator key, from the copy the image already ships (design
+      # #767) and byte-identical to the provision/edge/authorized_keys the
+      # bootstrap appends. Root logs in by key or not at all: the image's
+      # 05-edge-hardening.conf sets PermitRootLogin prohibit-password, and 22 is
+      # reachable on the public interface only until the tailnet join unit closes
+      # it.
+      ssh_authorized_keys_local:
+        - bootc/server/rootfs/etc/ssh/authorized_keys.d/smores
+
+storage:
+  # The autorebase units touch a marker in this directory, so Ignition creates it
+  # once instead of each unit racing `install -d`.
+  directories:
+    - path: /etc/ucore-autorebase
+      mode: 0754
+  # The same three files the image carries, written here so the second rebase
+  # stage (the signed reference) sees a policy, a key and sigstore attachments
+  # before bootc has taken over. Without registries.d the policy rejects the
+  # reference before a signature is ever looked for.
+  files:
+    - path: /etc/hostname
+      mode: 0644
+      overwrite: true
+      contents:
+        inline: smoresnet
+    - path: /etc/pki/containers/smortress.pub
+      mode: 0644
+      overwrite: true
+      contents:
+        local: bootc/server/cosign.pub
+    - path: /etc/containers/policy.json
+      mode: 0644
+      overwrite: true
+      contents:
+        local: bootc/server/rootfs/etc/containers/policy.json
+    - path: /etc/containers/registries.d/ghcr.io-smortress.yaml
+      mode: 0644
+      overwrite: true
+      contents:
+        local: bootc/server/rootfs/etc/containers/registries.d/ghcr.io-smortress.yaml
+
+systemd:
+  units:
+    - name: ucore-unsigned-autorebase.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=uCore autorebase to the edge unsigned OCI reference and reboot
+        ConditionPathExists=!/etc/ucore-autorebase/unverified
+        ConditionPathExists=!/etc/ucore-autorebase/signed
+        After=network-online.target
+        Wants=network-online.target
+        [Service]
+        Type=oneshot
+        StandardOutput=journal+console
+        ExecStart=/usr/bin/rpm-ostree rebase --bypass-driver ostree-unverified-registry:@DERIVED_IMAGE@
+        ExecStart=/usr/bin/touch /etc/ucore-autorebase/unverified
+        ExecStart=/usr/bin/systemctl disable ucore-unsigned-autorebase.service
+        ExecStart=/usr/bin/systemctl reboot
+        [Install]
+        WantedBy=multi-user.target
+    - name: ucore-signed-autorebase.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=uCore autorebase to the edge signed OCI reference and reboot
+        ConditionPathExists=/etc/ucore-autorebase/unverified
+        ConditionPathExists=!/etc/ucore-autorebase/signed
+        After=network-online.target
+        Wants=network-online.target
+        [Service]
+        Type=oneshot
+        StandardOutput=journal+console
+        ExecStart=/usr/bin/rpm-ostree rebase --bypass-driver ostree-image-signed:docker://@DERIVED_IMAGE@
+        ExecStart=/usr/bin/touch /etc/ucore-autorebase/signed
+        ExecStart=/usr/bin/systemctl disable ucore-signed-autorebase.service
+        ExecStart=/usr/bin/systemctl reboot
+        [Install]
+        WantedBy=multi-user.target

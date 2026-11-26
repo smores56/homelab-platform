@@ -1,4 +1,4 @@
-"""Raw mail: one quarantined Maildir becomes one published generation.
+"""Raw mail: one quarantined Maildir becomes one committed replica state.
 
 The input is a Maildir -- a provider sync's output, or the fixture that stands
 in for one -- that nothing else writes while this runs. What is stored is the
@@ -10,17 +10,17 @@ a re-encoded attachment cannot.
 Three refusals matter more than the happy path:
 
 * ``tmp/`` must be empty. A file there is a message being delivered, and
-  publishing a generation while a writer is active would record half a maildir.
+  committing a pass while a writer is active would record half a maildir.
 * Every folder needs a UIDVALIDITY. A far-side UIDVALIDITY change renumbers every
   message and makes "the file with this key is gone" meaningless, so the value is
-  persisted with every generation and a change raises ``EpochError`` instead of
-  publishing a generation that looks like mass deletion.
+  persisted in the replica state and a change raises ``EpochError`` instead of
+  committing a state that looks like mass deletion.
 * Two files that map to one object id are a refusal, not a last-writer-wins.
   That is what a duplicated key looks like, and silently dropping one copy is how
   a replica loses a message while reporting success.
 
 Deletion is recorded only where Maildir records it: a message the previous
-generation held and this one does not, in a folder whose UIDVALIDITY did not
+state held and this one does not, in a folder whose UIDVALIDITY did not
 change, is an expunge -- real provider evidence. The caller names those
 tombstones; ``DBSync``-style absence elsewhere is not enough.
 """
@@ -37,17 +37,11 @@ from typing import Iterable, Mapping
 
 from ...errors import EpochError, PublishError, ValidationError
 from ...model import FidelityLimit
-from ..staging import StagingGeneration
-from .replica import (
-    CollectReport,
-    RawReplica,
-    canonical_json,
-    previous_replica,
-    resolve_source_dir,
-)
+from ..state import ReplicaState
+from .replica import CollectReport, canonical_json, commit_pass, resolve_source_dir
 
 SOURCE_ID = "tuta.mail"
-#: The per-folder epoch map lives in the generation, so a restore carries it.
+#: The per-folder epoch map is a store object, so a restore carries it.
 UIDVALIDITY_OBJECT = "mail::_uidvalidity"
 
 _SPOOL_DIRS = ("cur", "new")
@@ -108,14 +102,33 @@ def _headers(raw: bytes) -> tuple[str, str]:
     return message_id, date
 
 
+def epoch_map(state: ReplicaState) -> dict[str, int]:
+    """The per-folder UIDVALIDITY the last committed pass recorded."""
+
+    if state.dry_run or not state.path.is_file():
+        # Nothing has ever been committed here, and a dry run must not create
+        # the database just to discover that.
+        return {}
+    row = state.get(UIDVALIDITY_OBJECT)
+    if row is None or not row["present"]:
+        return {}
+    try:
+        value = json.loads(state.read(UIDVALIDITY_OBJECT).decode("utf-8"))
+        if not isinstance(value, dict):
+            raise ValueError("not an object")
+        return {str(name): int(epoch) for name, epoch in value.items()}
+    except (ValueError, UnicodeDecodeError, TypeError) as exc:
+        raise PublishError("the replica's uidvalidity map is unreadable") from exc
+
+
 def collect_maildir(
     maildir_root: str | Path,
-    generation: StagingGeneration,
+    state: ReplicaState,
     *,
     uidvalidity: Mapping[str, int],
     captured_at: str,
 ) -> CollectReport:
-    """Enumerate every folder into ``generation``; never commit it.
+    """Enumerate every folder into ``state`` and commit the pass.
 
     ``uidvalidity`` is the provider's per-folder epoch, supplied by the caller
     (``--uidvalidity FOLDER=INT``): this collector will not guess it, because a
@@ -140,9 +153,8 @@ def collect_maildir(
             + ", ".join(extra)
         )
 
-    previous = previous_replica(generation)
-    if previous is not None and UIDVALIDITY_OBJECT in previous.object_ids():
-        earlier = _load_uidvalidity(previous)
+    earlier = epoch_map(state)
+    if earlier:
         for name in sorted(known & set(earlier)):
             if int(earlier[name]) != int(uidvalidity[name]):
                 raise EpochError(
@@ -163,6 +175,7 @@ def collect_maildir(
             )
 
     counts: dict[str, int] = {}
+    produced: set[str] = set()
     for name, path in folders:
         spool_tmp = path / "tmp"
         if spool_tmp.is_dir() and any(spool_tmp.iterdir()):
@@ -189,7 +202,8 @@ def collect_maildir(
                 seen.add(object_id)
                 raw = item.read_bytes()
                 message_id, date = _headers(raw)
-                generation.put(
+                produced.add(object_id)
+                state.put(
                     object_id,
                     raw,
                     {
@@ -208,7 +222,7 @@ def collect_maildir(
                 count += 1
         counts[name] = count
 
-    generation.put(
+    state.put(
         UIDVALIDITY_OBJECT,
         canonical_json({name: int(value) for name, value in uidvalidity.items()}),
         {
@@ -217,29 +231,19 @@ def collect_maildir(
             "captured_at": captured_at,
         },
     )
+    produced.add(UIDVALIDITY_OBJECT)
 
-    deleted = _name_expunges(generation, previous)
-    return CollectReport(
+    _name_expunges(state, produced)
+    return commit_pass(
+        state,
         source_id=SOURCE_ID,
-        generation_id=generation.generation_id,
         objects=sum(counts.values()),
-        carried=0,
-        deleted=deleted,
         details={"folders": counts},
+        captured_at=captured_at,
     )
 
 
-def _load_uidvalidity(previous: RawReplica) -> dict[str, int]:
-    try:
-        value = json.loads(previous.read(UIDVALIDITY_OBJECT).decode("utf-8"))
-    except (ValueError, UnicodeDecodeError) as exc:
-        raise PublishError("the previous generation's uidvalidity map is unreadable") from exc
-    if not isinstance(value, dict):
-        raise PublishError("the previous generation's uidvalidity map is not an object")
-    return {str(name): int(epoch) for name, epoch in value.items()}
-
-
-def _name_expunges(generation: StagingGeneration, previous: RawReplica | None) -> int:
+def _name_expunges(state: ReplicaState, produced: set[str]) -> int:
     """Tombstone what a stable-epoch folder no longer holds.
 
     This is the only place a mail object is deleted, and it is deliberate: a
@@ -247,16 +251,14 @@ def _name_expunges(generation: StagingGeneration, previous: RawReplica | None) -
     that still syncs is an expunge the provider performed.
     """
 
-    if previous is None:
+    if state.dry_run:
         return 0
-    present = {entry["object_id"] for entry in previous.entries()}
     deleted = 0
-    for object_id in sorted(present):
-        if object_id == UIDVALIDITY_OBJECT:
+    for row in state.live_rows("mail::"):
+        object_id = row["object_id"]
+        if object_id in produced:
             continue
-        if generation.has_object(object_id):
-            continue
-        generation.delete(object_id)
+        state.tombstone(object_id, "provider expunge")
         deleted += 1
     return deleted
 

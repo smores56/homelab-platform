@@ -9,9 +9,9 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
-from data_plane.collectors.raw import RawReplica
 from data_plane.collectors.raw import cli as raw_cli
 from data_plane.collectors.raw.cli import EXIT_REFUSED, main
+from data_plane.collectors.state import ReplicaState
 
 CAPTURED = "2026-11-19T00:00:00+00:00"
 
@@ -42,8 +42,6 @@ class MailCommandTests(unittest.TestCase):
                 [
                     "--root",
                     str(root / "replica"),
-                    "--generation",
-                    "gen-0001",
                     "--captured-at",
                     CAPTURED,
                     "mail",
@@ -58,12 +56,10 @@ class MailCommandTests(unittest.TestCase):
             self.assertEqual(payload["source_id"], "tuta.mail")
             self.assertEqual(payload["objects"], 1)
             self.assertFalse(payload["dry_run"])
-            self.assertEqual(
-                RawReplica(root / "replica").generation_id, "gen-0001"
-            )
-            self.assertEqual(
-                RawReplica(root / "replica").source_id, "tuta.mail"
-            )
+            with ReplicaState(root / "replica", read_only=True) as state:
+                self.assertEqual(state.source_id, "tuta.mail")
+                self.assertEqual(state.version, 1)
+                self.assertEqual(len(state.live_object_ids()), 2)
 
     def test_dry_run_publishes_nothing(self) -> None:
         with tempfile.TemporaryDirectory() as work:
@@ -83,7 +79,8 @@ class MailCommandTests(unittest.TestCase):
             )
             self.assertEqual(code, 0, err)
             self.assertIsNone(json.loads(out)["published"])
-            self.assertIsNone(RawReplica.latest_generation(root / "replica"))
+            self.assertIsNone(json.loads(out)["version"])
+            self.assertFalse((root / "replica" / "state.sqlite").exists())
 
     def test_a_bad_uidvalidity_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as work:
@@ -95,7 +92,7 @@ class MailCommandTests(unittest.TestCase):
             self.assertEqual(code, EXIT_REFUSED)
             self.assertIn("uidvalidity", err)
 
-    def test_a_refusal_leaves_no_published_generation(self) -> None:
+    def test_a_refusal_leaves_no_state(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
             maildir = _maildir(root)
@@ -113,23 +110,22 @@ class MailCommandTests(unittest.TestCase):
             )
             self.assertEqual(code, EXIT_REFUSED)
             self.assertIn("being written", err)
-            self.assertIsNone(RawReplica.latest_generation(root / "replica"))
+            self.assertFalse((root / "replica" / "state.sqlite").exists())
 
 
 class NotesCommandTests(unittest.TestCase):
-    def test_publishes_a_notes_generation(self) -> None:
+    def test_writes_the_live_replica_state(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
             vault = root / "vault"
             (vault / "projects").mkdir(parents=True)
             (vault / "index.md").write_text("# Index\n", encoding="utf-8")
             (vault / "projects" / "alpha.md").write_text("Alpha\n", encoding="utf-8")
+            replica_root = root / "replica"
             code, out, err = _run(
                 [
                     "--root",
-                    str(root / "replica"),
-                    "--generation",
-                    "gen-0001",
+                    str(replica_root),
                     "--captured-at",
                     CAPTURED,
                     "notes",
@@ -141,9 +137,54 @@ class NotesCommandTests(unittest.TestCase):
             payload = json.loads(out)
             self.assertEqual(payload["source_id"], "notes.markdown")
             self.assertEqual(payload["objects"], 2)
-            replica = RawReplica(root / "replica")
-            self.assertEqual(replica.source_id, "notes.markdown")
-            self.assertEqual(replica.generation_id, "gen-0001")
+            self.assertEqual(payload["version"], 1)
+            self.assertEqual(payload["published"], str(replica_root / "state.sqlite"))
+            with ReplicaState(replica_root, read_only=True) as state:
+                self.assertEqual(state.source_id, "notes.markdown")
+                self.assertEqual(len(state.live_object_ids()), 2)
+
+    def test_the_generation_flag_is_gone(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            vault = root / "vault"
+            vault.mkdir()
+            with self.assertRaises(SystemExit):
+                _run(
+                    [
+                        "--root",
+                        str(root / "replica"),
+                        "--generation",
+                        "gen-0001",
+                        "notes",
+                        "--entities",
+                        str(vault),
+                    ]
+                )
+
+    def test_a_dry_run_writes_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            vault = root / "vault"
+            vault.mkdir()
+            (vault / "index.md").write_text("# Index\n", encoding="utf-8")
+            replica_root = root / "replica"
+            code, out, err = _run(
+                [
+                    "--root",
+                    str(replica_root),
+                    "--dry-run",
+                    "--captured-at",
+                    CAPTURED,
+                    "notes",
+                    "--entities",
+                    str(vault),
+                ]
+            )
+            self.assertEqual(code, 0, err)
+            payload = json.loads(out)
+            self.assertTrue(payload["dry_run"])
+            self.assertIsNone(payload["version"])
+            self.assertFalse((replica_root / "state.sqlite").exists())
 
     def test_a_missing_vault_is_a_refusal_not_a_traceback(self) -> None:
         with tempfile.TemporaryDirectory() as work:
@@ -159,11 +200,11 @@ class NotesCommandTests(unittest.TestCase):
             )
             self.assertEqual(code, EXIT_REFUSED)
             self.assertIn("is not a directory", err)
-            self.assertIsNone(RawReplica.latest_generation(root / "replica"))
+            self.assertFalse((root / "replica" / "state.sqlite").exists())
 
 
 class TasksCommandTests(unittest.TestCase):
-    def test_publishes_a_tasks_generation(self) -> None:
+    def test_writes_the_live_replica_state(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
             directory = root / "todo"
@@ -174,12 +215,11 @@ class TasksCommandTests(unittest.TestCase):
             (directory / "done.txt").write_text(
                 "x 2026-11-01 call the clinic\n", encoding="utf-8"
             )
+            replica_root = root / "replica"
             code, out, err = _run(
                 [
                     "--root",
-                    str(root / "replica"),
-                    "--generation",
-                    "gen-0001",
+                    str(replica_root),
                     "--captured-at",
                     CAPTURED,
                     "tasks",
@@ -191,10 +231,33 @@ class TasksCommandTests(unittest.TestCase):
             payload = json.loads(out)
             self.assertEqual(payload["source_id"], "tasks.todo")
             self.assertEqual(payload["objects"], 3)
-            replica = RawReplica(root / "replica")
-            self.assertEqual(replica.source_id, "tasks.todo")
-            self.assertEqual(replica.generation_id, "gen-0001")
-            self.assertEqual(len(replica.object_ids()), 3)
+            self.assertEqual(payload["version"], 1)
+            with ReplicaState(replica_root, read_only=True) as state:
+                self.assertEqual(state.source_id, "tasks.todo")
+                self.assertEqual(len(state.live_object_ids()), 3)
+
+    def test_a_second_run_advances_the_version_and_writes_no_new_object(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            directory = root / "todo"
+            directory.mkdir()
+            (directory / "todo.txt").write_text("(A) verify\n", encoding="utf-8")
+            replica_root = root / "replica"
+            argv = [
+                "--root",
+                str(replica_root),
+                "--captured-at",
+                CAPTURED,
+                "tasks",
+                "--entities",
+                str(directory),
+            ]
+            self.assertEqual(_run(argv)[0], 0)
+            objects = sorted((replica_root / "objects").glob("*/*"))
+            code, out, _ = _run(argv)
+            self.assertEqual(code, 0)
+            self.assertEqual(json.loads(out)["version"], 2)
+            self.assertEqual(sorted((replica_root / "objects").glob("*/*")), objects)
 
     def test_a_missing_directory_is_a_refusal_not_a_traceback(self) -> None:
         with tempfile.TemporaryDirectory() as work:
@@ -210,7 +273,7 @@ class TasksCommandTests(unittest.TestCase):
             )
             self.assertEqual(code, EXIT_REFUSED)
             self.assertIn("is not a directory", err)
-            self.assertIsNone(RawReplica.latest_generation(root / "replica"))
+            self.assertFalse((root / "replica" / "state.sqlite").exists())
 
 
 class FinanceCommandTests(unittest.TestCase):
@@ -258,8 +321,6 @@ class FinanceCommandTests(unittest.TestCase):
                 [
                     "--root",
                     str(root / "replica"),
-                    "--generation",
-                    "gen-0001",
                     "finance",
                     "--accountset",
                     str(accountset),
@@ -270,7 +331,8 @@ class FinanceCommandTests(unittest.TestCase):
             )
             self.assertEqual(code, 0, err)
             self.assertEqual(json.loads(out)["source_id"], "finance.ledger")
-            self.assertIsNotNone(RawReplica.latest_generation(root / "replica"))
+            with ReplicaState(root / "replica", read_only=True) as state:
+                self.assertEqual(state.version, 1)
 
 
 class FinanceWindowTests(unittest.TestCase):

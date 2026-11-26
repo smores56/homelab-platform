@@ -1,8 +1,8 @@
-"""Disk-backed sources: a published raw generation answering as one source.
+"""Disk-backed sources: a committed raw replica state answering as one source.
 
 The fixture adapters exist so the facade has a complete, deterministic tool
 surface before any provider plumbing runs. This is the other half: when a
-deployment has a published generation for a source, the same ``SourceAdapter``
+deployment has a committed replica state for a source, the same ``SourceAdapter``
 contract is answered from those objects instead.
 
 Two rules keep the substitution honest:
@@ -13,7 +13,8 @@ Two rules keep the substitution honest:
   holding another deployment's adapter.
 * What is returned is a *projection* -- title and body for search and for a
   readable record -- computed from the raw object. The bytes stay in the
-  generation, where they can be re-read or re-projected; nothing is written back.
+  store's objects, where they can be re-read or re-projected; nothing is written
+  back.
 
 Provenance is exactly the three fields a memory record may cite: the source id
 with the record, the record's revision (the sha256 of the object that produced
@@ -38,8 +39,8 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Callable, Mapping
 
-from data_plane.collectors.raw import RawReplica
-from data_plane.errors import ContractError, ValidationError
+from data_plane.collectors.state import STATE_NAME, ReplicaState
+from data_plane.errors import ContractError, PublishError, ValidationError
 
 from . import contracts, source_index, sources
 
@@ -159,7 +160,7 @@ def _json_object(data: bytes) -> dict[str, Any] | None:
 
     A replica holds whatever a collector published, including an object this
     projector was not written for: one unreadable object must cost the reader
-    that object, not every other record in the generation.
+    that object, not every other record in the state.
     """
 
     try:
@@ -208,7 +209,7 @@ def _project_tasks(metadata: Mapping[str, Any], data: bytes) -> Projection | Non
 def _project_photos(metadata: Mapping[str, Any], data: bytes) -> Projection | None:
     """The file's title, then what the path and the stat prove.
 
-    The media bytes are not in the generation, so a search can only find what the
+    The media bytes are not in the state, so a search can only find what the
     library's own naming says: the filename, the folders it sits in, its format
     and its size. EXIF and album names live in Immich's database, not here.
     """
@@ -269,13 +270,14 @@ ROW_PROJECTORS: Mapping[str, Callable[[Mapping[str, Any], bytes], list[tuple[str
 
 
 class RefreshingReplica:
-    """A replica root that resolves its newest published generation on demand.
+    """A replica root whose committed state is resolved on demand.
 
-    A collector publishes by rename, so a facade that cached the generation id at
-    startup would serve yesterday's bytes until it restarted. This wrapper checks
-    the directory at most once per ``refresh_seconds`` and rebuilds ``RawReplica``
-    only when the newest generation changes. Before the first publication it
-    raises ``SourceUnavailable`` on use, which keeps the facade (and memory) up.
+    A collector commits beside a facade that may already be serving, so one that
+    cached the state at startup would serve yesterday's bytes until it restarted.
+    This wrapper checks at most once per ``refresh_seconds``, and reopens only
+    when the version moved or the database file was replaced underneath it.
+    Before the first commit it raises ``SourceUnavailable`` on use, which keeps
+    the facade (and memory) up.
     """
 
     def __init__(self, root: str | Path, refresh_seconds: float = 2.0) -> None:
@@ -283,27 +285,57 @@ class RefreshingReplica:
             raise ValueError("refresh_seconds must not be negative")
         self._root = Path(root)
         self._refresh_seconds = refresh_seconds
-        self._replica: RawReplica | None = None
+        self._state: ReplicaState | None = None
+        self._identity: tuple[int, int, str, int] | None = None
         self._checked = 0.0
 
-    def current(self) -> RawReplica:
-        now = time.monotonic()
-        if self._replica is not None and now - self._checked < self._refresh_seconds:
-            return self._replica
-        self._checked = now
-        latest = RawReplica.latest_generation(self._root)
-        if latest is None:
-            self._replica = None
+    def _database(self) -> Path:
+        return self._root / STATE_NAME
+
+    def _stat(self) -> tuple[int, int]:
+        try:
+            stat = self._database().stat()
+        except OSError as exc:
             raise sources.SourceUnavailable(
-                f"source has no published generation at {self._root}"
+                f"source has no replica state at {self._root}"
+            ) from exc
+        return stat.st_dev, stat.st_ino
+
+    def current(self) -> ReplicaState:
+        now = time.monotonic()
+        if self._state is not None and now - self._checked < self._refresh_seconds:
+            return self._state
+        self._checked = now
+        try:
+            device, inode = self._stat()
+            if self._state is not None:
+                version, state_id = self._state.version, self._state.state_id
+                if self._identity == (device, inode, state_id, version):
+                    return self._state
+        except (sources.SourceUnavailable, PublishError):
+            self._discard()
+            raise sources.SourceUnavailable(
+                f"source has no readable replica state at {self._root}"
             )
-        if self._replica is None or self._replica.generation_id != latest:
-            self._replica = RawReplica(self._root, latest)
-        return self._replica
+        candidate = ReplicaState(self._root, read_only=True)
+        self._discard()
+        self._state = candidate
+        self._identity = (device, inode, candidate.state_id, candidate.version)
+        return candidate
+
+    def _discard(self) -> None:
+        if self._state is not None:
+            self._state.close()
+            self._state = None
+            self._identity = None
 
     @property
-    def generation_id(self) -> str:
-        return self.current().generation_id
+    def snapshot(self) -> str:
+        return self.current().snapshot
+
+    @property
+    def source_id(self) -> str:
+        return self.current().source_id
 
     def entries(self):
         return self.current().entries()
@@ -313,25 +345,26 @@ class RefreshingReplica:
 
 
 class ReplicaAdapter:
-    """One source answered from one published generation.
+    """One source answered from one committed replica state.
 
-    Records are projected on first use and kept until the published generation
-    changes; a generation is immutable, so a new one is the only reason to
-    rebuild. A ``RefreshingReplica`` is checked on each read/search (bounded by
-    its own TTL) and the caches are dropped when it moves forward.
+    Records are projected on first use and kept until the state changes (its
+    version or snapshot moves); a pass commits a new state rather than rewriting
+    the old one, so a new state is the only reason to rebuild. A
+    ``RefreshingReplica`` is checked on each read/search (bounded by its own TTL)
+    and the caches are dropped when it moves forward.
 
     ``index_root`` adds the derived full-text index (``source_index``): a search
     whose words a trigram can match is answered from that file, which carries the
     projection it was built from, so a facade that restarts next to an existing
-    index searches without projecting the generation at all. Only a generation
-    with no file pays one projection (and writes the file); everything a trigram
+    index searches without projecting the state at all. Only a state with no
+    index file pays one projection (and writes the file); everything a trigram
     cannot match keeps scanning.
     """
 
     def __init__(
         self,
         contract,
-        replica: RawReplica | RefreshingReplica,
+        replica: ReplicaState | RefreshingReplica,
         index_root: str | Path | None = None,
     ) -> None:
         contract.validate()
@@ -343,7 +376,7 @@ class ReplicaAdapter:
         self.contract = contract
         self.replica = replica
         self.index_root = None if index_root is None else Path(index_root)
-        self._generation_id = replica.generation_id if isinstance(replica, RawReplica) else None
+        self._snapshot = None if isinstance(replica, RefreshingReplica) else replica.snapshot
         self._records: dict[str, sources.SourceRecord] | None = None
         self._index: source_index.SourceIndex | None = None
         self._index_attempted = False
@@ -353,14 +386,14 @@ class ReplicaAdapter:
         return self.contract.source_id
 
     def _refresh(self) -> None:
-        """Pick up a newer generation and drop everything derived from the old one."""
+        """Pick up a newer state and drop everything derived from the old one."""
 
         if not isinstance(self.replica, RefreshingReplica):
             return
         current = self.replica.current()
-        if current.generation_id == self._generation_id:
+        if current.snapshot == self._snapshot:
             return
-        self._generation_id = current.generation_id
+        self._snapshot = current.snapshot
         self._records = None
         self._index = None
         self._index_attempted = False
@@ -391,7 +424,7 @@ class ReplicaAdapter:
             except source_index.SourceIndexUnavailable:
                 return self._scan(words, limit)
             # The row is the projection the file was built from, so the hit is
-            # answered here: projecting the generation to re-derive it is the
+            # answered here: projecting the state to re-derive it is the
             # cost this path exists to avoid.
             return tuple(
                 sources.SearchHit(
@@ -404,7 +437,7 @@ class ReplicaAdapter:
         return self._scan(words, limit)
 
     def _scan(self, words: tuple[str, ...], limit: int) -> tuple[sources.SearchHit, ...]:
-        """The whole-generation substring scan: what the adapter did before any index."""
+        """The whole-replica substring scan: what the adapter did before any index."""
 
         hits: list[sources.SearchHit] = []
         for record in self._built().values():
@@ -433,9 +466,9 @@ class ReplicaAdapter:
             return None
         try:
             index = source_index.SourceIndex(
-                self.index_root, self.name, self.replica.generation_id
+                self.index_root, self.name, self.replica.snapshot
             )
-            # The file is named after an immutable generation and checked by its
+            # The file is named after the snapshot and checked by its
             # meta row, so one that is already here is the answer. Building it
             # again would project every record to write the same bytes -- the
             # minutes-long first search after a facade restart.
@@ -515,7 +548,7 @@ def adapters_for(
     The contract comes from the deployment's own table, so the visibility of the
     resulting adapter is not a new decision: it is the one the table already
     made. ``index_root`` is shared: each adapter indexes its own source and
-    generation below it, and none of them needs it to answer.
+    snapshot below it, and none of them needs it to answer.
     """
 
     table = sources.SOURCES_BY_DEPLOYMENT[deployment]

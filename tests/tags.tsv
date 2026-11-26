@@ -31,8 +31,9 @@ apps/ingress	tests/apps/ingress.bats scripts/apps-ingress.sh bootc/server/Contai
 apps/ingress-reconcile	tests/apps/ingress-reconcile.bats scripts/apps-ingress-reconcile.sh units/systemd/smortress-app-ingress-reconcile.service tests/apps/*
 apps/quota	tests/apps/quota.bats scripts/apps-quota.sh scripts/apps-schema.py tests/apps/*
 apps/render	tests/apps/render.bats scripts/apps-schema.py tests/apps/*
-image/ignition-boundary	tests/image/ignition-boundary.bats ignition/smortress.bu scripts/render-ignition.sh scripts/init-data-luks.sh units/systemd/smortress-data-init.service units/systemd/smortress-zpool.service docs/manual-steps.md tests/image/*
-image/server-image	tests/image/server-image.bats scripts/check-server-image.sh scripts/render-ignition.sh scripts/check/server/* scripts/lib/* bootc/server/* ignition/* units/* images/* tests/fixtures/* docs/core/server-image.md tests/image/*
+image/ignition-boundary	tests/image/ignition-boundary.bats ignition/smortress.bu ignition/edge.bu ignition/edge.json scripts/render-ignition.sh scripts/init-data-luks.sh units/systemd/smortress-data-init.service units/systemd/smortress-zpool.service docs/manual-steps.md tests/image/*
+image/edge-image	tests/image/edge-image.bats bootc/edge/tests/check.sh bootc/edge/* bootc/lib/* .github/workflows/publish-edge-image.yml .github/workflows/server-image-static.yml tests/image/*
+image/server-image	tests/image/server-image.bats scripts/check-server-image.sh scripts/render-ignition.sh scripts/check/server/* scripts/lib/* bootc/server/* bootc/edge/* bootc/lib/* ignition/* units/* images/* tests/fixtures/* docs/core/server-image.md tests/image/*
 secrets/bundles	tests/secrets/bundles.bats scripts/secrets-bundle.py scripts/secrets-index.py scripts/sops-decrypt.sh tests/secrets/*
 secrets/cloudflare-derive	tests/secrets/cloudflare-derive.bats scripts/cloudflare-derive.sh tests/secrets/*
 secrets/decrypt	tests/secrets/decrypt.bats scripts/sops-decrypt.sh tests/secrets/*

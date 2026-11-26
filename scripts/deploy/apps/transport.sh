@@ -90,8 +90,8 @@ tenant_remove() { # <path>
 # The machine transport is the system bus's route to the tenant manager, so this
 # works from the drain and from a root shell alike. `runuser -- systemctl --user`
 # races the manager's private socket and inherits the caller's bus address.
-user_ctl() { # <args...>; retry transport failures while the manager starts
-  local i rc out
+user_ctl() { # <args...>; retry transport failures until the window closes
+  local i rc out started=-1
   for ((i = 0; i < ctl_retries; i++)); do
     out=$(bounded "$(cap_of "$ctl_timeout")" "$systemctl_bin" --user \
       --machine="$apps_user@.host" "$@" 2>&1) && {
@@ -102,6 +102,14 @@ user_ctl() { # <args...>; retry transport failures while the manager starts
     case $out in
       *"Transport endpoint is not connected"* | *"Failed to connect to user scope bus"* | \
         *"Connection refused"* | *"Connection reset"* | *"Broken pipe"*)
+        # The window opens at the first failure, not at the call: a slow but
+        # healthy call must not eat the time a starting manager is allowed.
+        if ((started < 0)); then started=$SECONDS; fi
+        if ((SECONDS - started >= ctl_retry_window)); then
+          [[ -n $out ]] && printf '%s\n' "$out" >&2
+          warn "the apps tenant manager user@$apps_uid has not answered in ${ctl_retry_window}s; check systemctl status user@$apps_uid.service and /run/user/$apps_uid"
+          return "$rc"
+        fi
         sleep 1
         ;;
       *)

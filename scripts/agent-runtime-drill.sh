@@ -524,8 +524,8 @@ kind_of() { # kind_of <path> -> dir|file|absent
   esac
 }
 
-published_manifests() { # published_manifests <root>
-  find "$1/replica" -mindepth 4 -maxdepth 4 -type f -name manifest.json -print 2>/dev/null || true
+committed_states() { # committed_states <root>
+  find "$1/replica" -mindepth 2 -maxdepth 2 -type f -name state.sqlite -print 2>/dev/null || true
 }
 
 expect_paths() { # expect_paths <unit> <root>
@@ -585,7 +585,7 @@ expect_content() { # expect_content <unit> <root>
       "no *.json under $root/memory/$profile"
   fi
 
-  manifests=$(published_manifests "$root")
+  manifests=$(committed_states "$root")
   if [[ $side == local ]]; then
     if non_empty "$root/quarantine"; then
       record PASS 'restored collector quarantine is not empty' "$root/quarantine"
@@ -594,11 +594,11 @@ expect_content() { # expect_content <unit> <root>
         'the provider sessions did not come back'
     fi
     if [[ -n $manifests ]]; then
-      record PASS 'restored replica publishes a generation manifest' \
-        "$(printf '%s\n' "$manifests" | wc -l) published generation(s)"
+      record PASS 'restored replica carries a committed state' \
+        "$(printf '%s\n' "$manifests" | wc -l) committed state(s)"
     else
-      record FAIL 'restored replica publishes a generation manifest' \
-        'no replica/*/published/*/manifest.json'
+      record FAIL 'restored replica carries a committed state' \
+        'no replica/*/state.sqlite'
     fi
     if [[ -e $root/index/hledger/finance.journal ]]; then
       record PASS 'restored hledger projection is present' 'the derived journal came back'

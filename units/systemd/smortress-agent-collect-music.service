@@ -1,0 +1,36 @@
+[Unit]
+# One music pass: the library as it is on disk right now becomes the replica state.
+#
+# Same shape as the photos collector: one stage, no network, no secret, the
+# library read-only and the replica tree the only writable mount. The pass only
+# stats, so the audio stays on the music dataset and the state holds the
+# identifiers, titles and the artist/album the directory layout names.
+#
+# A refusal exits 3 and publishes nothing: a library that vanished, or one over
+# the collector's object limit, needs a human, and the timer is the only signal
+# that the replica stopped advancing.
+Description=Publish the music library into the personal replica
+Requires=zfs-ready@state-agent-local.service zfs-ready@raw-music.service
+After=zfs-ready@state-agent-local.service zfs-ready@raw-music.service
+# Nothing to publish before the library is present; until then the timed run is
+# skipped rather than reported as broken.
+ConditionPathExists=/srv/music
+
+[Service]
+Type=oneshot
+UMask=0077
+ExecStart=/usr/bin/podman run --rm --replace --name smortress-agent-collect-music \
+  --network none \
+  --read-only --cap-drop=all --security-opt no-new-privileges \
+  --tmpfs /tmp:rw,size=16m --user 1000:1000 \
+  --volume /srv/music:/entities:ro \
+  --volume /var/lib/agent/local/replica:/replica:z \
+  --env PYTHONPATH=/usr/lib/agent-facade/libs:/usr/lib/agent-facade \
+  --env PYTHONDONTWRITEBYTECODE=1 \
+  --entrypoint python3 \
+  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:6c6964bf94dd2582dac51fe3d68dc5919df58541fbff68d2d0cf58e710d06ac4 \
+  -m data_plane.collectors.raw --root /replica/music \
+  music --entities /entities
+Restart=no
+# A library of many thousand tracks, each stat'ed once.
+TimeoutStartSec=900

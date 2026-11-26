@@ -1,17 +1,19 @@
-"""Run one raw collector: enumerate a provider's output and publish a generation.
+"""Run one raw collector: enumerate a provider's output into its replica state.
 
-The library never commits and never guesses where its input is; this is the
-operator surface that supplies both. It is what a systemd unit runs, and what a
-human runs by hand against a fixture directory.
+The library never guesses where its input is; this is the operator surface that
+supplies it. It is what a systemd unit runs, and what a human runs by hand
+against a fixture directory.
 
-Publication is one step, and it is the last one: the generation is written under
-``.staging``, every object's size and sha256 goes into the manifest, and a single
-rename makes it visible. ``--dry-run`` stops before the rename, so a first run
-against a real provider can be inspected without publishing anything.
+A run is one complete pass: it writes only the bytes the replica does not hold,
+records what it enumerated, and commits the rows, the tombstones and the version
+together into ``ROOT/state.sqlite``. A refusal commits nothing.
+
+``--dry-run`` enumerates and validates, then publishes nothing: no object bytes
+and no database.
 
 Refusals are exit code 3 with the reason on stderr: a partial enumeration, a
 changed UIDVALIDITY, an error list, a database that was still being written. The
-point of the command is that those never become a published generation.
+point of the command is that those never become a committed state.
 """
 
 from __future__ import annotations
@@ -24,7 +26,7 @@ from pathlib import Path
 from typing import Iterable, Mapping
 
 from ...errors import DataPlaneError, ValidationError
-from ..staging import StagingGeneration
+from ..state import ReplicaState
 from .brave import SOURCE_ID as BRAVE_SOURCE
 from .brave import collect_brave_db
 from .calendar import SOURCE_ID as CALENDAR_SOURCE
@@ -39,12 +41,13 @@ from .notes import SOURCE_ID as NOTES_SOURCE
 from .notes import collect_notes
 from .photos import SOURCE_ID as PHOTOS_SOURCE
 from .photos import collect_photos
-from .replica import CollectReport, RawReplica
+from .replica import CollectReport
 from .simplefin import AccessUrl, fetch_accountset
 from .tasks import SOURCE_ID as TASKS_SOURCE
 from .tasks import collect_tasks
 
 EXIT_REFUSED = 3
+
 #: Days of overlap on the provider request, so a boundary transaction is not lost.
 _WINDOW_OVERLAP_DAYS = 7
 #: SimpleFIN answers a longer read with an entry in the AccountSet's `errors`
@@ -69,10 +72,6 @@ def _captured_at() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
-def _generation_id() -> str:
-    return datetime.now(timezone.utc).strftime("gen-%Y%m%dT%H%M%SZ")
-
-
 def _uidvalidity(values: Iterable[str]) -> dict[str, int]:
     mapping: dict[str, int] = {}
     for value in values:
@@ -91,20 +90,13 @@ def _uidvalidity(values: Iterable[str]) -> dict[str, int]:
     return mapping
 
 
-def _publish(generation: StagingGeneration, *, dry_run: bool) -> Path | None:
-    if dry_run:
-        generation.abort()
-        return None
-    return generation.commit_next(complete=True)
-
-
 def _report(report: CollectReport, published: Path | None, *, dry_run: bool) -> dict:
     payload = {
         "source_id": report.source_id,
-        "generation_id": report.generation_id,
         "objects": report.objects,
         "carried": report.carried,
         "deleted": report.deleted,
+        "version": report.version,
         "details": dict(report.details),
         "published": str(published) if published is not None else None,
         "dry_run": dry_run,
@@ -115,14 +107,13 @@ def _report(report: CollectReport, published: Path | None, *, dry_run: bool) -> 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="data_plane.collectors.raw",
-        description="Collect one provider's output into a raw generation.",
+        description="Collect one provider's output into a raw replica state.",
     )
     parser.add_argument(
         "--root",
         required=True,
-        help="replica root; the generation lands in ROOT/published/<generation>",
+        help="replica root; the state lands in ROOT/state.sqlite",
     )
-    parser.add_argument("--generation", default=None, help="generation id (default: now)")
     parser.add_argument(
         "--captured-at",
         default=None,
@@ -131,7 +122,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="enumerate and validate, then discard the staging generation",
+        help="enumerate and validate, then publish nothing",
     )
     subparsers = parser.add_subparsers(dest="source", required=True)
 
@@ -224,35 +215,32 @@ def _fetched_accountset(access: AccessUrl, args: argparse.Namespace) -> Mapping:
 
 
 def run(args: argparse.Namespace) -> int:
-    root = Path(args.root)
-    generation = StagingGeneration(
-        root,
-        args.generation or _generation_id(),
-        source_id=_SOURCE_IDS[args.source],
-    )
-    captured_at = args.captured_at or _captured_at()
+    """One pass of one source, committed into its live replica state."""
 
+    root = Path(args.root)
+    captured_at = args.captured_at or _captured_at()
+    state = ReplicaState(root, source_id=_SOURCE_IDS[args.source], dry_run=args.dry_run)
     try:
-        return _collect(args, generation, captured_at)
-    except DataPlaneError:
-        # A refusal must not leave a staging generation behind: it would be
-        # picked up by nothing, and a run in the same second would write into it.
-        generation.abort()
-        raise
+        report = _collect(args, state, captured_at)
+        published = None if args.dry_run else state.path
+    finally:
+        state.close()
+    print(json.dumps(_report(report, published, dry_run=args.dry_run), sort_keys=True))
+    return 0
 
 
 def _collect(
-    args: argparse.Namespace, generation: StagingGeneration, captured_at: str
-) -> int:
+    args: argparse.Namespace, state: ReplicaState, captured_at: str
+) -> CollectReport:
     if args.source == "mail":
         report = collect_maildir(
             args.maildir,
-            generation,
+            state,
             uidvalidity=_uidvalidity(args.uidvalidity),
             captured_at=captured_at,
         )
     elif args.source == "calendar":
-        report = collect_calendar(args.entities, generation, captured_at=captured_at)
+        report = collect_calendar(args.entities, state, captured_at=captured_at)
     elif args.source == "finance":
         if bool(args.accountset) == bool(args.access_url_file):
             raise ValidationError(
@@ -277,7 +265,7 @@ def _collect(
             )
         report = collect_simplefin(
             accountset,
-            generation,
+            state,
             accountset_url=args.accountset_url,
             captured_at=captured_at,
             include_pending=args.include_pending,
@@ -287,25 +275,23 @@ def _collect(
     elif args.source == "brave":
         report = collect_brave_db(
             args.database,
-            generation,
+            state,
             device=args.device,
             profile=args.profile,
             captured_at=captured_at,
         )
     elif args.source == "notes":
-        report = collect_notes(args.entities, generation, captured_at=captured_at)
+        report = collect_notes(args.entities, state, captured_at=captured_at)
     elif args.source == "tasks":
-        report = collect_tasks(args.entities, generation, captured_at=captured_at)
+        report = collect_tasks(args.entities, state, captured_at=captured_at)
     elif args.source == "photos":
-        report = collect_photos(args.entities, generation, captured_at=captured_at)
+        report = collect_photos(args.entities, state, captured_at=captured_at)
     elif args.source == "music":
-        report = collect_music(args.entities, generation, captured_at=captured_at)
+        report = collect_music(args.entities, state, captured_at=captured_at)
     else:  # pragma: no cover - argparse rejects an unknown subcommand first
         raise ValidationError(f"unknown source {args.source!r}")
 
-    published = _publish(generation, dry_run=args.dry_run)
-    print(json.dumps(_report(report, published, dry_run=args.dry_run), sort_keys=True))
-    return 0
+    return report
 
 
 def main(argv: Iterable[str] | None = None) -> int:
@@ -315,12 +301,6 @@ def main(argv: Iterable[str] | None = None) -> int:
     except DataPlaneError as error:
         print(f"raw-collect: {error}", file=sys.stderr)
         return EXIT_REFUSED
-
-
-def latest(root: str | Path) -> str | None:
-    """The newest published generation under ``root``, for an operator to check."""
-
-    return RawReplica.latest_generation(root)
 
 
 if __name__ == "__main__":

@@ -6,7 +6,7 @@ SimpleFIN has two credentials and they are not interchangeable:
   URL once and the provider answers with an access URL.
 * the **access URL** embeds the account's username and password. It is the
   long-lived credential, and it is the thing that must never be logged, printed
-  in an error, or written into a generation -- which is why every message here
+  in an error, or written into the replica state -- which is why every message here
   names the endpoint by host and path only.
 
 Nothing in this module decides when to collect, how wide the window is or whether
@@ -42,8 +42,8 @@ Opener = Callable[..., Any]
 class AccessUrl:
     """An access URL split into the endpoint and the basic-auth pair.
 
-    ``url`` carries no userinfo, so it is the only form safe to log, store in a
-    generation's metadata, or show in a refusal.
+    ``url`` carries no userinfo, so it is the only form safe to log, store in the
+    replica state's metadata, or show in a refusal.
     """
 
     url: str

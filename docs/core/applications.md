@@ -120,7 +120,7 @@ one Restic snapshot names every dataset the unit restores.
 | OPDShelf | `raw/books` — `/srv/books`, the catalog | `state/opdshelf` — `/var/lib/opdshelf`, edits, annotations and covers | `/books`; `DATA_DIR=/state` |
 | Personal agent | none — no personal source is mounted | `state/agent-local` — `/var/lib/agent/local`, sessions, memory, skills | `/opt/data` |
 | General agent | none — no repository or book tree is mounted | `state/agent-general` — `/var/lib/agent/general`, same shape | `/opt/data` |
-| Personal facade | none — its adapters are in-process fixtures | `state/agent-local` — `/var/lib/agent/local/memory`, the `local` memory profile and its derived index, and `/var/lib/agent/local/index`, the derived full-text index over the replica sources (rebuilt from the generation, disposable); the rest of that dataset is the gateway's | `/memory` and `/index` (both writable); no shell socket, so no `shell.run` |
+| Personal facade | none — its adapters are in-process fixtures | `state/agent-local` — `/var/lib/agent/local/memory`, the `local` memory profile and its derived index, and `/var/lib/agent/local/index`, the derived full-text index over the replica sources (rebuilt from the replica state, disposable); the rest of that dataset is the gateway's | `/memory` and `/index` (both writable); no shell socket, so no `shell.run` |
 | General facade | none | `state/agent-general` — `/var/lib/agent/general/memory`, the `external` profile | `/memory` (writable), and `/run/agent-shell` — the bridge's socket directory, mounted rw because `connect(2)` needs the inode's write bit; the only deployment with one, and so the only one serving `shell.run` |
 | Local model | none | none: `state/agent-model` — `/var/lib/agent/model` is the GGUF file, and it is in no backup | `/models` (read-only) |
 | Syncthing | `raw/files` — `/srv/files`, the vault | `state/syncthing-config` — `/var/lib/syncthing/config`, identity and configuration | `/srv/files`; `/var/syncthing/config` |
@@ -326,6 +326,8 @@ has no route off the host.
 | `smortress-agent-collect-brave.path` → `.service`, plus a six-hourly `.timer` reconcile | `agent-brave.network` for the browser (`agent-brave`); neither collection stage has a network | `state/agent-local/quarantine/brave` (the snapshot) and `state/agent-local/replica/brave` (the collection) | Podman secret `brave-sync-seed`, uid 1000 mode 0400, held by the seed unit only |
 | `smortress-agent-collect-notes.timer` → `.service` | none: it reads `/srv/files/vault` and needs no address | `state/agent-local/replica/notes` | none: the vault is already on this host |
 | `smortress-agent-collect-tasks.timer` → `.service` | none: it reads `/srv/files/notes` | `state/agent-local/replica/tasks` | none |
+| `smortress-agent-collect-photos.timer` → `.service` | none: it reads `/srv/photos` and needs no address | `state/agent-local/replica/photos` (metadata only; the media stays on `raw/photos`) | none |
+| `smortress-agent-collect-music.timer` → `.service` | none: it reads `/srv/music` | `state/agent-local/replica/music` (metadata only; the audio stays on `raw/music`) | none |
 
 Tuta serves no IMAP at all, so `agent-tmail` -- TutaBridge, mirrored and pinned
 like every other application image -- is the mail provider half: it holds the
@@ -338,15 +340,15 @@ processes writing into the personal dataset, and neither can reach a deployment.
 
 `smortress-agent-collect-calendar.service` is two stages like the finance
 collector: the pinned `tuta-calendar` image signs in with its sealed session and
-rewrites the dump, then the collector publishes a generation. The session is the
+rewrites the dump, then the collector commits the replica state. The session is the
 account's access, so it is mounted read-write only into the first stage; the
 collector reads the dump read-only and never sees it.
 
 The finance collector has a third stage that no other unit has: after the
-collection is published, the same pinned image renders the newest generation as
+collection is committed, the same pinned image renders the newest state as
 an hledger journal at `state/agent-local/index/hledger/finance.journal`
 (`docs/raw-replicas.md`, "The hledger projection"). It is one `ExecStart` in the
-same oneshot for a reason: the projection reads a *published* generation, so it
+same oneshot for a reason: the projection reads a *committed* state, so it
 must not be able to run before one exists, and a collection that refuses exits 3
 and stops the unit there. It is given `--network none` -- the exact opposite of
 the collector's egress -- no secret, the replica read-only and the index
@@ -361,9 +363,8 @@ republishes after 30 seconds of quiet, with an hourly reconcile pass. The bridge
 pushes only to the session that selected a folder, so IDLE is per folder: latency
 is exact for an idled folder, and sweep-driven for anything the bridge does not
 push -- a folder past the 32-connection cap, or a message that arrived while the
-socket was down. A changed UIDVALIDITY or a vanished folder aborts the staging
-generation and exits non-zero instead of publishing a generation that looks like
-mass deletion.
+socket was down. A changed UIDVALIDITY or a vanished folder commits nothing and
+exits non-zero instead of recording a state that looks like mass deletion.
 
 ### Collector egress
 
@@ -395,7 +396,7 @@ no business on that segment. A collector unit runs the pinned `agent-runtime`
 digest with `--read-only --cap-drop=all --user 1000:1000` and imports its program
 from `/usr/lib/agent-facade` in that image, so the program that reads an account
 or a database is the one the pin names. A refusal exits 3 and publishes no
-generation; the timers are `Persistent=true`, so a missed run is closed on the next
+state; the timers are `Persistent=true`, so a missed run is closed on the next
 boot instead of leaving a hole in the replica.
 
 The browsing collector is the one pair where the provider half is a process of its
@@ -492,8 +493,8 @@ container: `agent-facade-personal` serves `notes`, `tasks`, `mail`, `calendar`,
 `finance`, `brave`, `photos`, `music` and `workspace`; `agent-facade-general`
 serves `repos` and `books`. A source outside the table is not refused by a policy
 check, it has no adapter in that process at all. The personal deployment serves
-`mail`, `calendar`, `finance`, `brave`, `notes` and `tasks` from published raw
-generations today; the remaining personal sources and the general `repos`/`books`
+`mail`, `calendar`, `finance`, `brave`, `notes` and `tasks` from the committed
+raw replica state today; the remaining personal sources and the general `repos`/`books`
 are still in-process fixtures (`apps/agent_facade/README.md`), so the split proves
 reach for those, not feed.
 
@@ -541,9 +542,9 @@ have no path to either socket, since each directory is a tmpfiles 0710 under a
 root 0700 parent, mounted into one container and published nowhere.
 
 The personal facade also writes `/index`, `state/agent-local/index`: its full-text
-index over the replica sources, one file per source and published generation. It
-is derived from `state/agent-local/replica` and rebuilt from it on the next
-search, so it is a cache of reading a generation, never a second copy of one, and
+index over the replica sources, one file per source and snapshot. It is derived
+from `state/agent-local/replica` and rebuilt from it on the next search, so it is
+a cache of reading a state, never a second copy of one, and
 a restore that skips it costs one rebuild. The finance collector writes the same
 directory (`index/hledger/finance.journal`) and reads the operator's mapping out
 of it, so the only thing in `/index` that is not rebuilt automatically is that
@@ -790,9 +791,15 @@ and restart, not the unit.
 sudo journalctl -u smortress-agent-brave-seed.service -n 5 --no-pager
 sudo podman logs --tail 40 smortress-agent-brave
 sudo journalctl -u agent-egress-proxy.service --since '-30 min' --no-pager | tail -40
-gen=$(sudo ls -1 /var/lib/agent/local/replica/brave/published | tail -n 1)
+object=$(sudo python3 - <<'EOF'
+import sqlite3
+connection = sqlite3.connect("/var/lib/agent/local/replica/brave/state.sqlite")
+print(connection.execute(
+    "select sha256 from object where id = 'brave::table::urls'").fetchone()[0])
+EOF
+)
 sudo jq -r '.rows[] | "\(.[1]) \(.[2])"' \
-  "/var/lib/agent/local/replica/brave/published/$gen/objects/brave%3A%3Atable%3A%3Aurls"
+  "/var/lib/agent/local/replica/brave/objects/${object:0:2}/$object"
 ```
 
 The proxy's journal names `sync-v2.brave.com:443` and nothing else, because
@@ -836,11 +843,11 @@ sudo systemctl start smortress-agent-mail-stream.service
 sudo journalctl -u smortress-agent-mail-stream.service -f
 ```
 
-`smortress-agent-mail-stream.service` is long-running, not a timer: it publishes an
-initial generation whose `details.folders` must contain `INBOX` with a non-zero
-count, then holds one IDLE connection per folder. Sending yourself a message
-produces a second JSON line within a minute, whose `generation_id` sorts after the
-first and whose `objects` grew by one. `uidvalidity changed` or `folders
+`smortress-agent-mail-stream.service` is long-running, not a timer: it commits an
+initial pass whose `details.folders` must contain `INBOX` with a non-zero count,
+then holds one IDLE connection per folder. Sending yourself a message produces a
+second JSON line within a minute, whose `version` is one higher than the first and
+whose `objects` grew by one. `uidvalidity changed` or `folders
 disappeared` is a refusal: the service has exited and needs a fresh sign-in or the
 restore rule below.
 
@@ -909,19 +916,25 @@ sudo systemctl start smortress-agent-collect-finance.service
 sudo journalctl -u smortress-agent-collect-finance.service -n 20 --no-pager
 ```
 
-The run is good when `published` names a generation and `objects` counts the
-transactions; a refusal exits 3, publishes nothing, and names the endpoint by host
-and path, never the credential. Every published generation must be owned by uid
-1000, and a `.staging` directory left behind is safe to remove.
+The run is good when `published` names the replica's `state.sqlite` and
+`objects` counts the transactions; a refusal exits 3, commits nothing, and names
+the endpoint by host and path, never the credential. The replica's state and its
+objects must be owned by uid 1000.
 
-The third stage renders the newest generation as an hledger journal and needs to
+The third stage renders the newest state as an hledger journal and needs to
 know which hledger account each SimpleFIN account is. The file is seeded as `{}`
 and never overwritten, so the edit is one-time per account; an unmapped entry
 renders as `assets:unknown:<id>`:
 
 ```sh
-sudo grep -ho '"object_id": "finance::account::[^"]*"' \
-  /var/lib/agent/local/replica/finance/published/*/manifest.json | sort -u
+sudo python3 - <<'EOF'
+import sqlite3
+connection = sqlite3.connect("/var/lib/agent/local/replica/finance/state.sqlite")
+for (object_id,) in connection.execute(
+    "select id from object where present = 1 and id like 'finance::account::%' order by id"
+):
+    print(object_id)
+EOF
 sudo vi /var/lib/agent/local/index/hledger/accounts.json   # {"<id>": "assets:bank:checking"}
 sudo systemctl start smortress-agent-collect-finance.service
 ```

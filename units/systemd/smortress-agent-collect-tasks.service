@@ -1,5 +1,5 @@
 [Unit]
-# One tasks pass: todo.txt and done.txt become one generation.
+# One tasks pass: todo.txt and done.txt become one committed state.
 #
 # Same shape as the notes pass and for the same reason: two files on disk, no
 # provider, no network, no secret. The directory is mounted read-only and the
@@ -7,7 +7,7 @@
 #
 # A refusal exits 3 and publishes nothing. The collector refuses a directory that
 # holds neither file, so a mistyped or unmounted path stops the replica advancing
-# instead of publishing an empty list that carries every task away.
+# instead of committing an empty list that carries every task away.
 Description=Publish the todo.txt list into the personal replica
 Requires=zfs-ready@state-agent-local.service
 After=zfs-ready@state-agent-local.service
@@ -25,7 +25,7 @@ ExecStart=/usr/bin/podman run --rm --replace --name smortress-agent-collect-task
   --env PYTHONPATH=/usr/lib/agent-facade/libs:/usr/lib/agent-facade \
   --env PYTHONDONTWRITEBYTECODE=1 \
   --entrypoint python3 \
-  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:62f90f0c962bbdb7a09ecbba20efc4d7ffe6c82a7bc085d29bc734ae28f5c09e \
+  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:6c6964bf94dd2582dac51fe3d68dc5919df58541fbff68d2d0cf58e710d06ac4 \
   -m data_plane.collectors.raw --root /replica/tasks \
   tasks --entities /entities
 Restart=no

@@ -463,6 +463,15 @@ backup_with_stale_lock() {
     assert_logged ' unlock' "$log/restic"
 }
 
+# The wait is the other half: a lock a stopped or still-running writer holds is
+# waited on, not failed on, so a stop does not make the repository unusable for
+# the next attempt (#138).
+@test "a write waits for a live lock instead of failing on it" {
+    export STUB_BACKUP_EXIT=0 STUB_BACKUP_ID="waits1"
+    drive "$driver" ssd --unit photos --no-maintenance
+    assert_logged '--retry-lock 2m backup' "$log/restic"
+}
+
 # --- 2. stale staging reconciliation ------------------------------------
 # zfs lists a snapshot the previous run left behind, and it destroys cleanly.
 run_with_stale_staging() {
@@ -604,6 +613,16 @@ run_with_unmounted_repository() {
 @test "retention uses no wildcard bucket and no routine unlock" {
     if grep -qE -- '--keep-last|--keep-within|--keep-tag|unlock' scripts/smortress-restic-*.sh; then
         fail "a retention command keeps a wildcard bucket or unlocks routinely"
+    fi
+}
+
+@test "no restic write bypasses the lock wait" {
+    # restic_with_lock is the only place --retry-lock is passed; a write called
+    # straight through "$restic_bin" would fail on a lock instead of waiting it
+    # out, which is the window that blocked forget and prune on 2026-11-25 (#138).
+    if grep -nE -- '"\$(\{restic_bin\}|restic_bin)" (backup|forget|prune|tag|check)\b' \
+        scripts/smortress-restic-*.sh; then
+        fail "a restic write runs without the lock wait"
     fi
 }
 

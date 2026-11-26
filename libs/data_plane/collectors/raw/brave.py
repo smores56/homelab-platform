@@ -1,4 +1,4 @@
-"""Raw browsing history: one Brave ``History`` copy becomes one generation.
+"""Raw browsing history: one Brave ``History`` copy becomes one committed state.
 
 Chromium takes an exclusive lock on ``History`` and keeps most recent writes in
 its WAL, so the database that is collected is always a *copy* taken while no
@@ -31,14 +31,13 @@ from urllib.parse import quote
 
 from ...errors import PublishError
 from ...model import FidelityLimit
-from ..staging import StagingGeneration
+from ..state import ReplicaState
 from .replica import (
     ABSENCE_RETENTION,
     CollectReport,
+    commit_pass,
     canonical_json,
-    carry_forward,
     file_sha256,
-    previous_replica,
 )
 
 SOURCE_ID = "brave.history"
@@ -121,22 +120,22 @@ def _dump_table(connection: sqlite3.Connection, table: str) -> dict[str, Any]:
 
 def collect_brave_db(
     database: str | Path,
-    generation: StagingGeneration,
+    state: ReplicaState,
     *,
     device: str,
     profile: str,
     captured_at: str,
 ) -> CollectReport:
-    """Enumerate one Brave history copy into ``generation``; never commit it."""
+    """Enumerate one Brave history copy into ``state``; never commit it."""
 
     path = Path(database)
     _refuse_live_or_partial(path)
     if not device.strip() or not profile.strip():
-        raise PublishError("a history generation names its device and profile")
+        raise PublishError("a history pass needs a device and a profile")
 
     raw = path.read_bytes()
     digest = file_sha256(path)
-    generation.put(
+    state.put(
         "brave::db",
         raw,
         {
@@ -169,7 +168,7 @@ def collect_brave_db(
         for table in tables:
             dump = _dump_table(connection, table)
             counts[table] = len(dump["rows"])
-            generation.put(
+            state.put(
                 f"brave::table::{table}",
                 canonical_json(dump),
                 {
@@ -189,18 +188,12 @@ def collect_brave_db(
     finally:
         connection.close()
 
-    carried = carry_forward(
-        generation,
-        previous_replica(generation),
-        reason=ABSENCE_RETENTION,
-        captured_at=captured_at,
-    )
-    return CollectReport(
+    return commit_pass(
+        state,
         source_id=SOURCE_ID,
-        generation_id=generation.generation_id,
         objects=sum(counts.values()),
-        carried=carried,
-        deleted=0,
+        absence_reason=ABSENCE_RETENTION,
+        captured_at=captured_at,
         details={
             "device": device,
             "profile": profile,
@@ -225,7 +218,7 @@ def fidelity_fields() -> Iterable[str]:
 
 
 def declared_columns(report_details: Mapping[str, Any]) -> Iterable[str]:
-    """The tables a generation actually carried, for a fidelity declaration."""
+    """The tables a pass actually carried, for a fidelity declaration."""
 
     tables = report_details.get("tables")
     if not isinstance(tables, Mapping):

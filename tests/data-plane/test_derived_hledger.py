@@ -1,6 +1,6 @@
 """The hledger projection: mapping, sign, status, dates, and the atomic write.
 
-Every case builds a real published generation with ``StagingGeneration`` -- the
+Every case builds a real committed state with ``ReplicaState`` -- the
 manifest, the object hashes and the rename are the collector's own -- and renders
 it. Nothing stands in for the renderer, because the question this module answers
 is exactly what the journal says about the bytes a bank sent.
@@ -19,8 +19,8 @@ import unittest
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from data_plane.collectors.raw.replica import RawReplica, canonical_json
-from data_plane.collectors.staging import StagingGeneration
+from data_plane.collectors.raw.replica import canonical_json
+from data_plane.collectors.state import ReplicaState
 from data_plane.derived.hledger import (
     COUNTER_ACCOUNT,
     EXIT_REFUSED,
@@ -54,18 +54,17 @@ def _publish(
     transactions: Iterable[Mapping[str, Any]] = (),
     *,
     accountset: bool = True,
-    generation: str = "gen-0001",
-) -> RawReplica:
-    """One published generation, written the way the finance collector writes it.
+) -> ReplicaState:
+    """One committed replica state, written the way the finance collector writes it.
 
     A transaction is a mapping of ``account_id`` and ``record``; an explicit
     ``posted`` overrides what the record's own fields would give, which is how a
-    generation that carries no date at all is built.
+    state that carries no date at all is built.
     """
 
-    staging = StagingGeneration(root, generation, source_id="finance.ledger")
+    state = ReplicaState(root, source_id="finance.ledger")
     for account in accounts:
-        staging.put(
+        state.put(
             f"finance::account::{account['id']}",
             canonical_json(dict(account)),
             {
@@ -80,7 +79,7 @@ def _publish(
         record = dict(transaction["record"])
         account_id = str(transaction["account_id"])
         posted = transaction["posted"] if "posted" in transaction else _posted(record)
-        staging.put(
+        state.put(
             f"finance::txn::{account_id}::{record['id']}",
             canonical_json(record),
             {
@@ -95,7 +94,7 @@ def _publish(
             },
         )
     if accountset:
-        staging.put(
+        state.put(
             "finance::accountset",
             canonical_json({"accounts": [dict(account) for account in accounts]}),
             {
@@ -105,8 +104,16 @@ def _publish(
                 "captured_at": CAPTURED,
             },
         )
-    staging.commit_next(complete=True)
-    return RawReplica(root)
+    state.commit(
+        complete=True,
+        absence_reason="provider-window",
+        captured_at=CAPTURED,
+    )
+    return state
+
+
+def _replica(root: Path) -> ReplicaState:
+    return ReplicaState(root, read_only=True)
 
 
 def _postings(text: str) -> list[tuple[str, str, str]]:
@@ -166,7 +173,7 @@ class RenderTests(_Base):
         self.assertIn("assets:bank:checking  -12.34 USD\n", text)
         self.assertNotIn("assets:unknown", text)
         self.assertEqual((report.objects, report.skipped, report.accounts), (1, 0, 2))
-        self.assertEqual(report.generation_id, "gen-0001")
+        self.assertEqual(report.snapshot, replica.snapshot)
 
     def test_an_unmapped_account_falls_back_to_its_sanitized_id(self) -> None:
         replica = _publish(
@@ -363,7 +370,7 @@ class RenderTests(_Base):
         )
         accounts = {"acct-1": "assets:bank:checking"}
         first, _ = render_journal(replica, accounts)
-        second, _ = render_journal(RawReplica(self.replica_root), accounts)
+        second, _ = render_journal(_replica(self.replica_root), accounts)
 
         self.assertEqual(first, second)
         self.assertTrue(first.endswith("\n"))
@@ -412,14 +419,14 @@ class RenderTests(_Base):
         with self.assertRaises(ValidationError):
             render_journal(replica, {"acct-1": "assets:bank:checking"})
 
-    def test_a_generation_of_accounts_only_renders_the_header(self) -> None:
+    def test_a_replica_of_accounts_only_renders_the_header(self) -> None:
         replica = _publish(self.replica_root, [{"id": "acct-1", "currency": "USD"}])
         text, report = render_journal(replica, {"acct-1": "assets:bank:checking"})
 
         self.assertEqual((report.objects, report.skipped, report.accounts), (0, 0, 0))
         self.assertEqual(_postings(text), [])
         self.assertNotIn("account ", text)
-        self.assertIn("generation gen-0001", text)
+        self.assertIn(f"replica {replica.snapshot}", text)
 
 
 class WriteTests(_Base):
@@ -576,7 +583,7 @@ class CliTests(_Base):
         self.assertFalse(self.journal.exists())
         self.assertIn("directive", stderr.getvalue())
 
-    def test_a_missing_generation_exits_3(self) -> None:
+    def test_a_missing_replica_exits_3(self) -> None:
         empty = self.work / "empty-replica"
         empty.mkdir()
         stderr = io.StringIO()
@@ -593,7 +600,7 @@ class CliTests(_Base):
             )
 
         self.assertEqual(code, EXIT_REFUSED)
-        self.assertIn("no published generation", stderr.getvalue())
+        self.assertIn("no replica state", stderr.getvalue())
 
     def test_the_module_entry_point_prints_one_json_line(self) -> None:
         environment = dict(os.environ)

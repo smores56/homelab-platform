@@ -19,8 +19,9 @@ provider SDK. The same code runs in the local and external planes.
 | `backup.restic` | Argv-only restic commands and snapshot parsing; no tags, no shell |
 | `backup.runner` | One recursive ZFS snapshot, staged backup, copies, prune, freshness, check |
 | `collectors.relay` | Authenticated, schema-validated, rate-limited, idempotent ingest |
-| `collectors.staging` | Staging generation, atomic publish, cursors, tombstones, fidelity limits |
+| `collectors.state` | The replica store: content-addressed objects and one `state.sqlite` per source; commit, tombstones, cursors, GC (`docs/raw-replicas.md`) |
 | `collectors.raw` | Raw mail, calendar, finance, Brave, notes and tasks replicas; the absence ledger (`docs/raw-replicas.md`) |
+| `collectors.stream` | Push-based collectors: an IMAP event updates the mail state in place (`docs/raw-replicas.md`) |
 | `derived.hledger` | The finance replica as one hledger journal: the operator's mapping, the provider's own sign, an atomic no-churn write (`docs/raw-replicas.md`) |
 | `memory.file_memory` | Portable per-profile file memory with provenance and tombstones |
 | `migration` | Ordered migration phases and the plan-driven backup gate |

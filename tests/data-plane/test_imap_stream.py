@@ -21,9 +21,8 @@ from dataclasses import dataclass, field
 from unittest import mock
 from pathlib import Path
 
-from data_plane.collectors.raw import RawReplica, previous_replica
 from data_plane.collectors.raw.mail import SOURCE_ID
-from data_plane.collectors.staging import StagingGeneration
+from data_plane.collectors.state import ReplicaState
 from data_plane.collectors.stream import (
     IdleLine,
     Mailbox,
@@ -106,20 +105,17 @@ def _publish(
     root: Path,
     mailbox: Mailbox,
     *,
-    name: str = "gen-0001",
     captured_at: str = CAPTURED,
     progress=None,
 ):
-    generation = StagingGeneration(root, name, source_id=SOURCE_ID)
-    report = collect_mailbox(
-        mailbox, generation, previous_replica(generation), captured_at, progress
-    )
-    generation.commit_next(complete=True)
-    return report
+    """One complete pass, committed the way the service commits it."""
+
+    with ReplicaState(root, source_id=SOURCE_ID) as state:
+        return collect_mailbox(mailbox, state, captured_at, progress)
 
 
 class MailCollectionTests(unittest.TestCase):
-    def test_first_pass_publishes_and_stores_the_epoch_map(self) -> None:
+    def test_first_pass_commits_and_stores_the_epoch_map(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
             mailbox = ScriptedMailbox(
@@ -129,37 +125,32 @@ class MailCollectionTests(unittest.TestCase):
                     )
                 }
             )
-            generation = StagingGeneration(root, "gen-0001", source_id=SOURCE_ID)
-            report = collect_mailbox(
-                mailbox, generation, previous_replica(generation), CAPTURED
-            )
+            report = _publish(root, mailbox)
 
             self.assertEqual(report.source_id, "tuta.mail")
             self.assertEqual(report.objects, 2)
             self.assertEqual(report.carried, 0)
             self.assertEqual(report.deleted, 0)
             self.assertEqual(report.details, {"folders": {"INBOX": 2}})
-            # Collection and publication are separate steps: the collector never
-            # commits, so nothing is visible before the caller does.
-            self.assertIsNone(RawReplica.latest_generation(root))
+            self.assertEqual(report.version, 1)
 
-            generation.commit_next(complete=True)
-            replica = RawReplica(root)
-            self.assertEqual(
-                json.loads(replica.read("mail::_uidvalidity")), {"INBOX": 1}
-            )
-            self.assertEqual(replica.read("mail::INBOX::1"), _message("1"))
-            metadata = replica.metadata("mail::INBOX::2")
-            self.assertEqual(metadata["source_id"], "tuta.mail")
-            self.assertEqual(metadata["folder"], "INBOX")
-            self.assertEqual(metadata["key"], "2")
-            self.assertEqual(metadata["uidvalidity"], 1)
-            self.assertEqual(metadata["message_id"], "<2@example.com>")
-            self.assertEqual(metadata["date"], "Wed, 18 Nov 2026 10:00:00 +0000")
-            self.assertEqual(metadata["captured_at"], CAPTURED)
-            self.assertEqual(metadata["size"], len(_message("2")))
+            with ReplicaState(root, read_only=True) as replica:
+                self.assertEqual(replica.version, 1)
+                self.assertEqual(
+                    json.loads(replica.read("mail::_uidvalidity")), {"INBOX": 1}
+                )
+                self.assertEqual(replica.read("mail::INBOX::1"), _message("1"))
+                metadata = replica.get("mail::INBOX::2")["metadata"]
+                self.assertEqual(metadata["source_id"], "tuta.mail")
+                self.assertEqual(metadata["folder"], "INBOX")
+                self.assertEqual(metadata["key"], "2")
+                self.assertEqual(metadata["uidvalidity"], 1)
+                self.assertEqual(metadata["message_id"], "<2@example.com>")
+                self.assertEqual(metadata["date"], "Wed, 18 Nov 2026 10:00:00 +0000")
+                self.assertEqual(metadata["captured_at"], CAPTURED)
+                self.assertEqual(metadata["size"], len(_message("2")))
 
-    def test_second_pass_fetches_only_new_uids_and_carries_the_rest(self) -> None:
+    def test_second_pass_fetches_only_new_uids_and_keeps_the_rest(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
             first = ScriptedMailbox(
@@ -186,27 +177,28 @@ class MailCollectionTests(unittest.TestCase):
                     )
                 }
             )
-            generation = StagingGeneration(root, "gen-0002", source_id=SOURCE_ID)
-            report = collect_mailbox(
-                second, generation, previous_replica(generation), LATER
-            )
+            report = _publish(root, second, captured_at=LATER)
 
             self.assertEqual(second.fetched, [("INBOX", "3")])
             self.assertEqual(report.objects, 3)
             self.assertEqual(report.carried, 2)
             self.assertEqual(report.deleted, 0)
             self.assertEqual(second.flag_fetches, 1)
+            self.assertEqual(report.version, 2)
 
-            generation.commit_next(complete=True)
-            replica = RawReplica(root)
-            # The carried body and the time it was first captured do not move.
-            self.assertEqual(replica.read("mail::INBOX::2"), _message("2"))
-            self.assertEqual(
-                replica.metadata("mail::INBOX::2")["captured_at"], CAPTURED
-            )
-            # A flag change is metadata, not a re-fetch.
-            self.assertEqual(replica.metadata("mail::INBOX::1")["flags"], ["\\Seen"])
-            self.assertEqual(replica.metadata("mail::INBOX::3")["flags"], ["\\Flagged"])
+            with ReplicaState(root, read_only=True) as replica:
+                # The body and the time it was first captured do not move.
+                self.assertEqual(replica.read("mail::INBOX::2"), _message("2"))
+                self.assertEqual(
+                    replica.get("mail::INBOX::2")["metadata"]["captured_at"], CAPTURED
+                )
+                # A flag change is a row update, not a re-fetch.
+                self.assertEqual(
+                    replica.get("mail::INBOX::1")["metadata"]["flags"], ["\\Seen"]
+                )
+                self.assertEqual(
+                    replica.get("mail::INBOX::3")["metadata"]["flags"], ["\\Flagged"]
+                )
 
     def test_a_vanished_uid_in_a_stable_epoch_is_tombstoned(self) -> None:
         with tempfile.TemporaryDirectory() as work:
@@ -225,24 +217,28 @@ class MailCollectionTests(unittest.TestCase):
             mailbox = ScriptedMailbox(
                 {"INBOX": ScriptedFolder(1, {"1": _message("1")})}
             )
-            generation = StagingGeneration(root, "gen-0002", source_id=SOURCE_ID)
-            report = collect_mailbox(
-                mailbox, generation, previous_replica(generation), LATER
-            )
+            report = _publish(root, mailbox, captured_at=LATER)
             self.assertEqual(report.deleted, 1)
             self.assertEqual(mailbox.fetched, [])
-            generation.commit_next(complete=True)
 
-            replica = RawReplica(root)
-            self.assertNotIn("mail::INBOX::2", replica.object_ids())
-            self.assertIn(
-                {"object_id": "mail::INBOX::2", "tombstone": True},
-                replica.manifest["tombstones"],
-            )
-            with self.assertRaises(ManifestError):
-                replica.read("mail::INBOX::2")
+            with ReplicaState(root, read_only=True) as replica:
+                self.assertEqual(
+                    [
+                        object_id
+                        for object_id in replica.live_object_ids()
+                        if object_id != "mail::_uidvalidity"
+                    ],
+                    ["mail::INBOX::1"],
+                )
+                row = replica.get("mail::INBOX::2")
+                self.assertFalse(row["present"])
+                self.assertEqual(row["absence_reason"], "provider expunge")
+                with self.assertRaises(ManifestError):
+                    replica.read("mail::INBOX::2")
 
-    def test_a_changed_uidvalidity_raises_epoch_error_and_aborts(self) -> None:
+    def test_a_changed_uidvalidity_raises_epoch_error_and_commits_nothing(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
             _publish(
@@ -255,17 +251,68 @@ class MailCollectionTests(unittest.TestCase):
             mailbox = ScriptedMailbox(
                 {"INBOX": ScriptedFolder(2, {"1": _message("1")})}
             )
-            generation = StagingGeneration(root, "gen-0002", source_id=SOURCE_ID)
-            with self.assertRaises(EpochError):
-                collect_mailbox(mailbox, generation, previous_replica(generation), LATER)
-            generation.abort()
+            with ReplicaState(root, source_id=SOURCE_ID) as state:
+                with self.assertRaises(EpochError):
+                    collect_mailbox(mailbox, state, LATER)
 
             self.assertEqual(mailbox.fetched, [])
-            self.assertEqual(RawReplica.latest_generation(root), "gen-0001")
-            self.assertFalse((root / ".staging" / "gen-0002").exists())
-            self.assertEqual(
-                json.loads(RawReplica(root).read("mail::_uidvalidity")), {"INBOX": 1}
+            with ReplicaState(root, read_only=True) as replica:
+                self.assertEqual(replica.version, 1)
+                self.assertEqual(
+                    json.loads(replica.read("mail::_uidvalidity")), {"INBOX": 1}
+                )
+
+    def test_a_uid_absent_from_the_flags_response_keeps_its_flags(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            _publish(
+                root,
+                ScriptedMailbox(
+                    {"INBOX": ScriptedFolder(1, {"1": _message("1")}, {"1": ("\\Seen",)})}
+                ),
             )
+
+            # The provider answered SEARCH with the UID but its FLAGS fetch did
+            # not mention it, which must not be read as "this message is unread".
+            mailbox = ScriptedMailbox(
+                {"INBOX": ScriptedFolder(1, {"1": _message("1")}, {})}
+            )
+            _publish(root, mailbox, captured_at=LATER)
+
+            with ReplicaState(root, read_only=True) as replica:
+                self.assertEqual(
+                    replica.get("mail::INBOX::1")["metadata"]["flags"], ["\\Seen"]
+                )
+
+    def test_a_lost_epoch_map_still_tombstones_an_expunge(self) -> None:
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            _publish(
+                root,
+                ScriptedMailbox(
+                    {
+                        "INBOX": ScriptedFolder(
+                            1, {"1": _message("1"), "2": _message("2")}
+                        )
+                    }
+                ),
+            )
+            with ReplicaState(root, source_id=SOURCE_ID) as state:
+                state.tombstone("mail::_uidvalidity", "operator deleted the map")
+                state.commit(complete=False, captured_at=LATER)
+
+            mailbox = ScriptedMailbox(
+                {"INBOX": ScriptedFolder(1, {"1": _message("1")})}
+            )
+            report = _publish(root, mailbox, captured_at=LATER)
+
+            self.assertEqual(report.deleted, 1)
+            with ReplicaState(root, read_only=True) as replica:
+                row = replica.get("mail::INBOX::2")
+                self.assertFalse(row["present"])
+                self.assertEqual(
+                    json.loads(replica.read("mail::_uidvalidity")), {"INBOX": 1}
+                )
 
     def test_a_vanished_folder_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as work:
@@ -283,14 +330,15 @@ class MailCollectionTests(unittest.TestCase):
             mailbox = ScriptedMailbox(
                 {"INBOX": ScriptedFolder(1, {"1": _message("1")})}
             )
-            generation = StagingGeneration(root, "gen-0002", source_id=SOURCE_ID)
-            with self.assertRaises(PublishError) as refusal:
-                collect_mailbox(mailbox, generation, previous_replica(generation), LATER)
+            with ReplicaState(root, source_id=SOURCE_ID) as state:
+                with self.assertRaises(PublishError) as refusal:
+                    collect_mailbox(mailbox, state, LATER)
             self.assertIn("disappeared", str(refusal.exception))
-            generation.abort()
 
             self.assertEqual(mailbox.fetched, [])
-            self.assertEqual(RawReplica.latest_generation(root), "gen-0001")
+            with ReplicaState(root, read_only=True) as replica:
+                self.assertEqual(replica.version, 1)
+                self.assertEqual(len(replica.live_object_ids()), 3)
 
     def test_object_ids_never_contain_a_slash(self) -> None:
         with tempfile.TemporaryDirectory() as work:
@@ -304,8 +352,9 @@ class MailCollectionTests(unittest.TestCase):
                     }
                 ),
             )
-            for object_id in RawReplica(root).object_ids():
-                self.assertNotIn("/", object_id)
+            with ReplicaState(root, read_only=True) as replica:
+                for object_id in replica.live_object_ids():
+                    self.assertNotIn("/", object_id)
 
     def test_a_nested_folder_collects_under_an_encoded_key(self) -> None:
         with tempfile.TemporaryDirectory() as work:
@@ -315,10 +364,10 @@ class MailCollectionTests(unittest.TestCase):
                 ScriptedMailbox({"Lists/News": ScriptedFolder(1, {"1": _message("1")})}),
             )
             self.assertEqual(report.details["folders"], {"Lists/News": 1})
-            published = RawReplica(root)
-            self.assertIn("mail::%Lists%2FNews::1", published.object_ids())
-            metadata = published.metadata("mail::%Lists%2FNews::1")
-            self.assertEqual(metadata["folder"], "Lists/News")
+            with ReplicaState(root, read_only=True) as replica:
+                self.assertIn("mail::%Lists%2FNews::1", replica.live_object_ids())
+                metadata = replica.get("mail::%Lists%2FNews::1")["metadata"]
+                self.assertEqual(metadata["folder"], "Lists/News")
 
     def test_a_pass_reports_each_folder_as_it_finishes(self) -> None:
         with tempfile.TemporaryDirectory() as work:
@@ -353,7 +402,6 @@ class MailCollectionTests(unittest.TestCase):
             _publish(
                 root,
                 ScriptedMailbox({"INBOX": ScriptedFolder(1, {"1": _message("1")})}),
-                name="gen-0002",
                 progress=lines.append,
             )
             self.assertEqual(len(lines), 2)
@@ -383,10 +431,11 @@ class MailCollectionTests(unittest.TestCase):
                     }
                 ),
             )
-            self.assertEqual(
-                RawReplica(root).metadata("mail::INBOX::1")["flags"],
-                ["\\Flagged", "\\Seen"],
-            )
+            with ReplicaState(root, read_only=True) as replica:
+                self.assertEqual(
+                    replica.get("mail::INBOX::1")["metadata"]["flags"],
+                    ["\\Flagged", "\\Seen"],
+                )
 
 
 class PureRuleTests(unittest.TestCase):
@@ -445,7 +494,7 @@ class IdleParserTests(unittest.TestCase):
 
 
 class CarryTests(unittest.TestCase):
-    """A carried message must cost an inode, not a read of the mailbox."""
+    """A pass over a steady mailbox must cost no body read and no new bytes."""
 
     def test_a_second_pass_reads_no_body_back(self) -> None:
         with tempfile.TemporaryDirectory() as work:
@@ -455,38 +504,48 @@ class CarryTests(unittest.TestCase):
 
             second = ScriptedMailbox({"INBOX": ScriptedFolder(1, {"1": _message("1")})})
             # The epoch map is a small object the pass must read; a message body
-            # is what a carry must never read back.
-            original = RawReplica.read
+            # is what a carried object must never read back.
+            original = ReplicaState.read
 
             def guarded(self, object_id):
                 if object_id.startswith("mail::INBOX::"):
-                    raise AssertionError(f"carry read the body of {object_id}")
+                    raise AssertionError(f"a steady pass read the body of {object_id}")
                 return original(self, object_id)
 
-            with mock.patch.object(RawReplica, "read", guarded):
-                report = _publish(root, second, name="gen-0002")
+            with mock.patch.object(ReplicaState, "read", guarded):
+                report = _publish(root, second, captured_at=LATER)
 
             self.assertEqual(report.objects, 1)
             self.assertEqual(report.carried, 1)
             self.assertEqual(second.fetched, [])
 
-    def test_a_carried_object_shares_the_previous_inode(self) -> None:
+    def test_a_second_pass_writes_no_new_object(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
             _publish(
                 root,
                 ScriptedMailbox({"INBOX": ScriptedFolder(1, {"1": _message("1")})}),
             )
+            before = sorted((root / "objects").glob("*/*"))
+
             _publish(
                 root,
                 ScriptedMailbox({"INBOX": ScriptedFolder(1, {"1": _message("1")})}),
-                name="gen-0002",
+                captured_at=LATER,
             )
 
-            first = root / "published" / "gen-0001" / "objects" / "mail%3A%3AINBOX%3A%3A1"
-            second = root / "published" / "gen-0002" / "objects" / "mail%3A%3AINBOX%3A%3A1"
-            self.assertEqual(first.stat().st_ino, second.stat().st_ino)
-            self.assertEqual(second.read_bytes(), _message("1"))
+            self.assertEqual(sorted((root / "objects").glob("*/*")), before)
+            with ReplicaState(root, read_only=True) as replica:
+                self.assertEqual(replica.version, 2)
+                self.assertEqual(
+                    [
+                        object_id
+                        for object_id in replica.live_object_ids()
+                        if object_id != "mail::_uidvalidity"
+                    ],
+                    ["mail::INBOX::1"],
+                )
+
 
 def _self_signed(directory: Path, san: str) -> Path:
     """A self-signed certificate for ``san``, written to ``directory``."""

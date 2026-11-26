@@ -43,12 +43,12 @@ After=network-online.target zfs-ready@state-agent-local.service sops-decrypt.ser
 Wants=network-online.target
 
 [Container]
-Image=ghcr.io/smores56/homelab-platform/agent-runtime@sha256:62f90f0c962bbdb7a09ecbba20efc4d7ffe6c82a7bc085d29bc734ae28f5c09e
+Image=ghcr.io/smores56/homelab-platform/agent-runtime@sha256:6c6964bf94dd2582dac51fe3d68dc5919df58541fbff68d2d0cf58e710d06ac4
 ContainerName=smortress-agent-facade-personal
 Network=agent-local.network
 User=1000:1000
 Entrypoint=python3
-Exec=-m apps.agent_facade --transport http --deployment personal --token-file /run/secrets/agent-facade-personal-token --memory-root /memory --index-root /index --replica mail=/replica/mail --replica calendar=/replica/calendar --replica finance=/replica/finance --replica brave=/replica/brave --replica notes=/replica/notes --replica tasks=/replica/tasks --host 0.0.0.0 --port 18004 --shell-socket /run/agent-shell/personal.sock
+Exec=-m apps.agent_facade --transport http --deployment personal --token-file /run/secrets/agent-facade-personal-token --memory-root /memory --index-root /index --replica mail=/replica/mail --replica calendar=/replica/calendar --replica finance=/replica/finance --replica brave=/replica/brave --replica notes=/replica/notes --replica tasks=/replica/tasks --replica photos=/replica/photos --replica music=/replica/music --host 0.0.0.0 --port 18004 --shell-socket /run/agent-shell/personal.sock
 Secret=agent-facade-personal-token,type=mount,target=/run/secrets/agent-facade-personal-token,uid=1000,gid=1000,mode=0400
 Environment=PYTHONPATH=/usr/lib/agent-facade/libs:/usr/lib/agent-facade
 # The image layer carrying the code is read-only, so a bytecode cache write can only fail.
@@ -57,15 +57,15 @@ Environment=TZ=UTC
 # No :z here: /usr is a read-only composefs mount, so a relabel fails with EROFS.
 # /usr content is already readable by the container type; only dataset mounts relabel.
 Volume=/var/lib/agent/local/memory:/memory:z
-# The published raw generations the personal facade answers from. Read-only: the
-# collector owns this tree, and a new generation is picked up without a restart
+# The raw replica states the personal facade answers from. Read-only: the
+# collector owns this tree, and a new commit is picked up without a restart
 # (apps/agent_facade/replica_sources.py). It sits inside the same state dataset as
 # memory and the gateway, so a cold restore carries the feed and its index.
 Volume=/var/lib/agent/local/replica:/replica:ro,z
 # The derived source index (apps/agent_facade/source_index.py): one SQLite file per
-# replica source and generation. An existing file is opened, never rebuilt: it
+# replica source and snapshot. An existing file is opened, never rebuilt: it
 # carries the projection it was built from, so a restarted facade searches it
-# without projecting the generation. A new generation has no file yet, so its
+# without projecting the state. A new snapshot has no file yet, so its
 # first search pays one projection and writes it; deleting the tree costs one
 # such build and nothing else. It is not in the memory tree because it answers
 # for the replicas, not for what the agent wrote.

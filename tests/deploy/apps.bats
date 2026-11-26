@@ -440,14 +440,16 @@ fixture() {
     # case is testing it: with it at 0 the window is a single sample.
     export APPS_HEALTH_WAIT_TIMEOUT=2
     export APPS_HEALTH_SETTLE=0
-    # Two knobs the suite has to bend. Transport failures are retried with a
-    # hardcoded `sleep 1` between attempts (scripts/deploy/apps/transport.sh) and
-    # the count is the only knob, so 3 bounds an exhausted retry loop at three
-    # seconds instead of the host's 180; `sleep` itself is not shadowed on PATH,
-    # because the settle window §9e/§9i prove is paced by it -- a fake sleep would
-    # turn that window into a fork storm. The boot gate pauses 4 s before its
-    # rescan on a real boot; that pause is off here.
+    # Three knobs the suite has to bend. Transport failures are retried with a
+    # hardcoded `sleep 1` between attempts (scripts/deploy/apps/transport.sh); 3
+    # bounds an exhausted retry loop at three seconds instead of the host's 180,
+    # and the window stays at the host's default unless a case is proving it;
+    # `sleep` itself is not shadowed on PATH, because the settle window §9e/§9i
+    # prove is paced by it -- a fake sleep would turn that window into a fork
+    # storm. The boot gate pauses 4 s before its rescan on a real boot; that pause
+    # is off here.
     export APPS_CTL_RETRIES=3
+    unset APPS_CTL_RETRY_WINDOW
     export DEPLOY_BOOT_GATE_PAUSE=0
     export DEPLOY_APPS_BIN=$repo_root/$apps
     export DEPLOY_DRAIN_RESCAN_PAUSE=0
@@ -1411,6 +1413,41 @@ apply_through_a_reset() {
     apply_through_a_reset
     assert_equal "$(grep -c 'user restart alpha.service' "$log/actions")" 2
 }
+
+# --- 9n. a manager that never answers is given up on ------------------------
+# The retry is for a manager that is starting, which takes seconds. A manager
+# that is dead answers instantly and forever, so the count alone is 180 attempts
+# per call; one that hangs to its cap on every attempt is hours. The window is
+# what bounds both, and it opens at the first transport failure, not at the call.
+user_ctl_through_a_dead_manager() {
+    fixture
+    run_apply "$c_v1"
+    same "$rc" 0 "the two-app revision applies"
+    set_secrets "$secrets_v1b"
+    export APPS_CTL_RETRIES=20 APPS_CTL_RETRY_WINDOW=2
+    export FAKE_SYSTEMCTL_TRANSPORT='restart alpha.service'
+    run_apply "$c_v2"
+    unset FAKE_SYSTEMCTL_TRANSPORT APPS_CTL_RETRY_WINDOW
+}
+
+@test "a dead manager is given up on inside the window" {
+    user_ctl_through_a_dead_manager
+    # Two call sites reach the manager -- the apply's restart and the revert's --
+    # so the count a count-only loop would make is 2 x APPS_CTL_RETRIES. Inside a
+    # two-second window at `sleep 1` each site stops at three, four with jitter.
+    assert [ "$(grep -c 'user restart alpha.service' "$log/actions")" -le 8 ]
+}
+
+@test "the give-up names the manager unit" {
+    user_ctl_through_a_dead_manager
+    assert grep -qF 'user@1001' <<<"$out"
+}
+
+@test "the give-up is a failure, not a success" {
+    user_ctl_through_a_dead_manager
+    assert [ "$rc" -ne 0 ]
+}
+
 
 # --- 10. a Serve failure after the commit does not revert --------------------
 apply_with_a_failing_serve() {

@@ -1156,7 +1156,7 @@ facade_mounts_only_memory() { # spec
 
 # The derived source index is personal: every raw collector is, so the general
 # deployment has no replica to index and takes neither the flag nor the mount.
-facade_serves_published_generation() { # spec source
+facade_serves_replica_state() { # spec source
   local exec_line
   exec_line=$(facade_exec_line "$1")
   if [[ " $exec_line " != *" --replica $2=/replica/$2 "* ]]; then
@@ -1235,9 +1235,9 @@ for _spec in personal:local:18004 general:general:18005; do
   registered "$_q mounts only the memory subdirectory of the $_state dataset" \
     facade_mounts_only_memory "$_spec"
   if [[ $_deployment == personal ]]; then
-    for _source in mail calendar finance brave notes tasks; do
-      registered "$_q serves $_source from its published generation" \
-        facade_serves_published_generation "$_spec" "$_source"
+    for _source in mail calendar finance brave notes tasks photos music; do
+      registered "$_q serves $_source from its replica state" \
+        facade_serves_replica_state "$_spec" "$_source"
     done
     registered "$_q mounts the personal replica tree read-only" \
       facade_mounts_personal_replica_read_only "$_spec"
@@ -1719,6 +1719,8 @@ unset _case _name _collector _timer _secret _flag _image
 local_collectors=(
   "notes|units/systemd/smortress-agent-collect-notes.service|units/systemd/smortress-agent-collect-notes.timer|/srv/files/vault"
   "tasks|units/systemd/smortress-agent-collect-tasks.service|units/systemd/smortress-agent-collect-tasks.timer|/srv/files/notes"
+  "photos|units/systemd/smortress-agent-collect-photos.service|units/systemd/smortress-agent-collect-photos.timer|/srv/photos"
+  "music|units/systemd/smortress-agent-collect-music.service|units/systemd/smortress-agent-collect-music.timer|/srv/music"
 )
 
 local_collector_field() { # spec field number
@@ -1762,6 +1764,13 @@ local_collector_runs_the_subcommand() { # spec
     grep -qF -- "$(local_collector_field "$1" 1) --entities /entities" "$unit"
 }
 
+local_collector_waits_for_the_replica_dataset() { # spec
+  local unit
+  unit=$(local_collector_field "$1" 2)
+  grep -qE '^Requires=.*zfs-ready@state-agent-local\.service' "$unit" &&
+    grep -qE '^After=.*zfs-ready@state-agent-local\.service' "$unit"
+}
+
 local_collector_timer_runs_and_closes_a_missed_run() { # spec
   local timer
   timer=$(local_collector_field "$1" 3)
@@ -1783,6 +1792,8 @@ for _case in "${local_collectors[@]}"; do
     registered "$_name collector runs with $_flag" local_collector_runs_with "$_case" "$_flag"
   done
   registered "$_name collector holds no secret" local_collector_holds_no_secret "$_case"
+  registered "$_name collector waits for the replica dataset" \
+    local_collector_waits_for_the_replica_dataset "$_case"
   registered "$_name collector runs the collector subcommand" local_collector_runs_the_subcommand "$_case"
   while IFS= read -r _image; do
     registered "$_name collector runs a pinned image from the table" \

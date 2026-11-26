@@ -1,4 +1,4 @@
-"""Push-based mail collection: IMAP IDLE in, one published generation out.
+"""Push-based mail collection: IMAP IDLE in, one committed replica state out.
 
 The far side is TutaBridge (``units/quadlet/agent-tmail.container``), a local IMAP
 server on the collectors' network. It reports the whole mailbox's metadata over
@@ -10,20 +10,21 @@ Three properties matter more than the happy path:
 
 * The UID is the object key. Within one UIDVALIDITY a UID never changes and never
   comes back, so ``mail::<folder>::<uid>`` is stable for as long as "this key is
-  gone" means anything. A UIDVALIDITY that differs from the previous generation
-  raises ``EpochError``: every UID was renumbered, and publishing that as
+  gone" means anything. A UIDVALIDITY that differs from the one the replica
+  recorded raises ``EpochError``: every UID was renumbered, and publishing that as
   deletion would record a mass tombstone that never happened.
-* A body is fetched only when the previous generation does not hold its object.
-  The rest are carried forward from that generation's verified bytes, so a pass
-  over a steady mailbox costs one LIST, one SEARCH and one FLAGS fetch per
-  folder, not a re-download.
+* A body is fetched only when no live row holds its object. The rest are left
+  in place -- the row keeps its bytes, so a pass over a steady mailbox costs one
+  LIST, one SEARCH and one FLAGS fetch per folder, not a re-download. A flag
+  change is a row update, and only when the flags actually moved.
 * A UID that disappeared from a folder whose UIDVALIDITY did not change is an
   expunge, and the only thing this collector tombstones. A whole folder that
   disappeared is a refusal: nothing on this host can remove one, so the mailbox
   was replaced or is half written.
 
-``collect_mailbox`` never commits; the service publishes with
-``commit_next(complete=True)`` and aborts the staging generation on any refusal.
+``collect_mailbox`` commits one complete pass into the replica state: the
+folder's rows, its expunges as explicit tombstones and the next UIDVALIDITY map
+land together or not at all.
 """
 
 from __future__ import annotations
@@ -47,9 +48,9 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 from ...errors import DataPlaneError, EpochError, PublishError, ValidationError
-from ..raw.mail import SOURCE_ID, UIDVALIDITY_OBJECT, _headers, _load_uidvalidity
-from ..raw.replica import CollectReport, RawReplica, canonical_json, previous_replica
-from ..staging import StagingGeneration
+from ..raw.mail import SOURCE_ID, UIDVALIDITY_OBJECT, _headers, epoch_map
+from ..raw.replica import CollectReport, canonical_json
+from ..state import ReplicaState
 
 #: Tuta exposes a handful of folders. One thread and one socket per folder is the
 #: point of IDLE, but it must not scale with a mailbox that somehow grew
@@ -106,7 +107,7 @@ def folder_key(folder: str) -> str:
     """The folder as it appears inside an object id.
 
     A provider nests folders, so the name may contain ``/`` or ``:``; an id may
-    carry neither raw -- ``StagingGeneration`` refuses a ``/`` outright, and a
+    carry neither raw -- the replica's object id refuses a ``/`` outright, and a
     ``::`` inside a folder makes one id match two folders' prefixes, which is
     how a folder gets silently emptied. Such a name is percent-encoded behind a
     leading ``%``, which no plain name can start with, so the encoded and the
@@ -160,14 +161,6 @@ def message_headers(raw: bytes) -> tuple[str, str]:
     return _headers(raw)
 
 
-def _epochs(previous: RawReplica | None) -> dict[str, int]:
-    """The previous generation's per-folder UIDVALIDITY, if it recorded one."""
-
-    if previous is None or UIDVALIDITY_OBJECT not in previous.object_ids():
-        return {}
-    return _load_uidvalidity(previous)
-
-
 # --------------------------------------------------------------------------- #
 # The collector
 # --------------------------------------------------------------------------- #
@@ -216,32 +209,42 @@ class FolderReport:
 def collect_folder(
     mailbox: Mailbox,
     folder: str,
-    generation: StagingGeneration,
-    previous: RawReplica | None,
+    state: ReplicaState,
     captured_at: str,
+    earlier: dict[str, int],
 ) -> FolderReport:
-    """Enumerate one folder into ``generation``; never commit it."""
+    """Write one folder's changes into ``state``; the caller commits."""
 
     validate_folder(folder)
     epoch = mailbox.select(folder)
     if isinstance(epoch, bool) or not isinstance(epoch, int) or epoch < 1:
         raise PublishError(f"folder {folder}: SELECT returned no positive UIDVALIDITY")
 
-    earlier = _epochs(previous)
-    stable = folder in earlier
-    if stable and int(earlier[folder]) != epoch:
+    prefix = f"mail::{folder_key(folder)}::"
+    held = {row["object_id"]: row for row in state.live_rows(prefix)}
+    recorded = {
+        int(row["metadata"]["uidvalidity"])
+        for row in held.values()
+        if isinstance(row["metadata"].get("uidvalidity"), int)
+    }
+    known = earlier.get(folder)
+    if known is not None and known != epoch:
         raise EpochError(
-            f"folder {folder} uidvalidity changed {earlier[folder]} -> {epoch}; "
+            f"folder {folder} uidvalidity changed {known} -> {epoch}; "
             "every UID was renumbered, so reconcile the source as a new epoch"
         )
+    if recorded - {epoch}:
+        raise EpochError(
+            f"folder {folder} holds messages of uidvalidity "
+            f"{sorted(recorded)} but the provider reports {epoch}; reconcile the "
+            "source as a new epoch"
+        )
+    # The map is the authority, but the rows carry the same epoch, so a map that
+    # lost an entry must not turn every expunge into a missing tombstone that
+    # refuses the pass forever.
+    stable = known is not None or bool(recorded)
 
-    prefix = f"mail::{folder_key(folder)}::"
-    previous_ids = set(previous.object_ids()) if previous is not None else set()
-    previous_uids = [
-        object_id[len(prefix) :]
-        for object_id in previous_ids
-        if object_id.startswith(prefix)
-    ]
+    previous_uids = [object_id[len(prefix) :] for object_id in held]
     current = _uids(mailbox.uid_search_all())
     added, removed = uid_diff(previous_uids, current)
     added_set = set(added)
@@ -253,39 +256,46 @@ def collect_folder(
     carried = 0
     for uid in sorted(current, key=_uid_order):
         object_id = prefix + uid
-        if uid in added_set:
-            raw = mailbox.uid_fetch(uid)
-            message_id, date = message_headers(raw)
-            generation.put(
-                object_id,
-                raw,
-                {
-                    "source_id": SOURCE_ID,
-                    "folder": folder,
-                    "key": uid,
-                    "flags": list(flags.get(uid, ())),
-                    "uidvalidity": epoch,
-                    "size": len(raw),
-                    "message_id": message_id,
-                    "date": date,
-                    "captured_at": captured_at,
-                },
-            )
+        wanted = list(flags.get(uid, ()))
+        if uid not in added_set:
+            # The body is the provider's bytes and the capture time is when this
+            # UID first arrived, so neither moves. Flags are the one field an
+            # existing object updates: reading a message has to be visible
+            # without a re-fetch -- and a UID the FLAGS response did not mention
+            # keeps the flags it had rather than being read as flagless.
+            metadata = dict(held[object_id]["metadata"])
+            if uid in flags:
+                metadata["flags"] = wanted
+            # Every row the pass still holds is recorded as seen, so a complete
+            # commit can tell "unchanged" from "gone"; an unchanged row writes
+            # nothing, because the store compares it before it updates.
+            state.seen(held[object_id], metadata)
+            carried += 1
             continue
-        # The body is the provider's bytes and the capture time is when this UID
-        # first arrived, so neither moves. Flags are the one field a carried
-        # object updates: reading a message has to be visible without a re-fetch.
-        metadata = dict(previous.metadata(object_id))
-        metadata["flags"] = list(flags.get(uid, ()))
-        previous.carry_into(generation, object_id, metadata)
-        carried += 1
+        raw = mailbox.uid_fetch(uid)
+        message_id, date = message_headers(raw)
+        state.put(
+            object_id,
+            raw,
+            {
+                "source_id": SOURCE_ID,
+                "folder": folder,
+                "key": uid,
+                "flags": wanted,
+                "uidvalidity": epoch,
+                "size": len(raw),
+                "message_id": message_id,
+                "date": date,
+                "captured_at": captured_at,
+            },
+        )
 
     deleted = 0
     if stable:
         # The epoch did not move, so a key that is gone was expunged by the
         # provider. This is the only tombstone this collector writes.
         for uid in removed:
-            generation.delete(prefix + uid)
+            state.tombstone(prefix + uid, "provider expunge")
             deleted += 1
 
     return FolderReport(
@@ -299,19 +309,18 @@ def collect_folder(
 
 def collect_mailbox(
     mailbox: Mailbox,
-    generation: StagingGeneration,
-    previous: RawReplica | None,
+    state: ReplicaState,
     captured_at: str,
     progress: Callable[[str], None] | None = None,
 ) -> CollectReport:
-    """Enumerate every folder into ``generation``; never commit it.
+    """Enumerate every folder, then commit the pass into ``state``.
 
     ``objects`` counts the messages the mailbox currently holds; ``carried`` is
-    the subset whose body came from the previous generation, so the two numbers
-    describe one pass without being disjoint. ``progress`` is told what each
-    folder produced: the first pass over a real mailbox is tens of thousands of
-    bodies and publishes nothing until the last one lands, so without a line per
-    folder a working pass and a wedged one look alike.
+    the subset the replica already held, so the two numbers describe one pass
+    without being disjoint. ``progress`` is told what each folder produced: the
+    first pass over a real mailbox is tens of thousands of bodies and commits
+    nothing until the last one lands, so without a line per folder a working
+    pass and a wedged one look alike.
     """
 
     folders = [validate_folder(name) for name in mailbox.folders()]
@@ -321,7 +330,7 @@ def collect_mailbox(
         raise PublishError("the mailbox lists a folder twice")
     folders.sort(key=lambda name: (name != "INBOX", name))
 
-    earlier = _epochs(previous)
+    earlier = epoch_map(state)
     vanished = sorted(set(earlier) - set(folders))
     if vanished:
         # Nothing this host does can remove a folder, so its absence means the
@@ -343,7 +352,7 @@ def collect_mailbox(
         started = time.monotonic()
         if progress is not None:
             progress(f"folder {index}/{total} {folder}: collecting")
-        report = collect_folder(mailbox, folder, generation, previous, captured_at)
+        report = collect_folder(mailbox, folder, state, captured_at, earlier)
         epochs[folder] = report.uidvalidity
         counts[folder] = report.objects
         carried += report.carried
@@ -354,7 +363,7 @@ def collect_mailbox(
                 f"{report.carried} carried, {time.monotonic() - started:.1f}s"
             )
 
-    generation.put(
+    state.put(
         UIDVALIDITY_OBJECT,
         canonical_json(epochs),
         {
@@ -364,13 +373,18 @@ def collect_mailbox(
         },
     )
 
+    # Every message row the replica holds was seen in this pass or tombstoned by
+    # an expunge, so no absence reason is needed: anything unaccounted for is a
+    # refusal, and a loud one is what a mailbox that changed shape deserves.
+    stats = state.commit(complete=True, captured_at=captured_at)
+
     return CollectReport(
         source_id=SOURCE_ID,
-        generation_id=generation.generation_id,
         objects=sum(counts.values()),
         carried=carried,
-        deleted=deleted,
+        deleted=stats.tombstoned,
         details={"folders": counts},
+        version=stats.version,
     )
 
 
@@ -624,12 +638,6 @@ def _captured_at() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
-def _generation_id() -> str:
-    # Microseconds: an initial pass and a woken pass can land in the same second,
-    # and the id has to sort after the generation it supersedes.
-    return datetime.now(timezone.utc).strftime("gen-%Y%m%dT%H%M%S%fZ")
-
-
 def backoff_delay(attempt: int) -> float:
     """Reconnect delay: 1, 2, 4, ... capped, because the bridge restarts."""
 
@@ -719,33 +727,29 @@ class StreamCollector:
     # -- passes ------------------------------------------------------------ #
 
     def _pass(self) -> list[str]:
-        generation = StagingGeneration(
-            self._root, _generation_id(), source_id=SOURCE_ID
-        )
+        state = ReplicaState(self._root, source_id=SOURCE_ID)
         try:
-            previous = previous_replica(generation)
             mailbox = self.connect()
             try:
+                # collect_mailbox commits; a refusal leaves the rows and the
+                # epoch map untouched, and only unreferenced bytes behind, which
+                # the next complete pass collects.
                 report = collect_mailbox(
-                    mailbox, generation, previous, _captured_at(), self._progress
+                    mailbox, state, _captured_at(), self._progress
                 )
             finally:
                 mailbox.close()
-            published = generation.commit_next(complete=True)
-        except BaseException:
-            # A refusal must leave no staging tree behind: nothing would ever
-            # pick it up, and the next pass would write into the same directory.
-            generation.abort()
-            raise
+        finally:
+            state.close()
 
         payload = {
             "source_id": report.source_id,
-            "generation_id": report.generation_id,
+            "version": report.version,
             "objects": report.objects,
             "carried": report.carried,
             "deleted": report.deleted,
             "details": dict(report.details),
-            "published": str(published),
+            "published": str(state.path),
         }
         print(json.dumps(payload, sort_keys=True), flush=True)
         return list(report.details.get("folders", {}))
@@ -888,8 +892,8 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="data_plane.collectors.stream",
         description=(
-            "Collect Tuta mail from the local IMAP bridge, publishing one "
-            "generation per pass, woken by IDLE."
+            "Collect Tuta mail from the local IMAP bridge, committing one "
+            "replica pass at a time, woken by IDLE."
         ),
     )
     parser.add_argument("--host", required=True)

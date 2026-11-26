@@ -23,8 +23,8 @@ from apps.tuta_calendar.crypto import Padding
 from apps.tuta_calendar.dump import documents, run_dump, write_documents
 from apps.tuta_calendar.errors import CalendarError
 from apps.tuta_calendar.session import Session, seal
-from data_plane.collectors.raw import RawReplica, collect_calendar
-from data_plane.collectors.staging import StagingGeneration
+from data_plane.collectors.raw import collect_calendar
+from data_plane.collectors.state import ReplicaState
 
 import fixtures
 
@@ -162,13 +162,14 @@ class CollectorIntegrationTest(unittest.TestCase):
     def tearDown(self) -> None:
         self.directory.cleanup()
 
-    def collect(self, name: str):
-        generation = StagingGeneration(self.root / "replica", name, source_id="test.source")
-        report = collect_calendar(self.out, generation, captured_at="2026-11-20T00:00:00+00:00")
-        generation.commit_next(complete=True)
-        return report, RawReplica(self.root / "replica")
+    def collect(self, name: str = ""):
+        with ReplicaState(self.root / "replica", source_id="tuta.calendar") as state:
+            report = collect_calendar(
+                self.out, state, captured_at="2026-11-20T00:00:00+00:00"
+            )
+        return report, ReplicaState(self.root / "replica", read_only=True)
 
-    def test_a_dump_becomes_a_generation_with_both_objects_per_event(self) -> None:
+    def test_a_dump_commits_both_objects_per_event(self) -> None:
         api = FakeApi(
             {
                 "shortList": [

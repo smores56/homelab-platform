@@ -1482,6 +1482,51 @@ leftover tree:
 sudo rm -rf /var/lib/restic/ssd/drill/ssd-agent-*
 ```
 
+### Cut the replicas over to the store
+
+Before #961 a pass published `<source>/<generation>/`, and the mail replica grew to
+16.4 million paths, which is what broke the backup window. A pass now writes
+content-addressed objects under `objects/<2hex>/<sha256>` and one `state.sqlite`
+beside them (`docs/raw-replicas.md`); the Restic plane is the history the old
+trees carried. Nothing reads the old trees, so they are removed and the
+collectors rebuild the state -- the first mail pass re-downloads every body.
+
+Boot the image that pins the store first ("Move a running host to a newer build").
+Then stop every writer, clear the replica root, and run one pass of each source:
+
+```sh
+sudo systemctl stop smortress-agent-mail-stream.service \
+  smortress-agent-collect-notes.timer smortress-agent-collect-tasks.timer \
+  smortress-agent-collect-finance.timer smortress-agent-collect-calendar.timer \
+  smortress-agent-collect-brave.path smortress-agent-collect-brave.timer \
+  smortress-agent-collect-photos.timer smortress-agent-collect-music.timer
+sudo find /var/lib/agent/local/replica -mindepth 1 -delete
+sudo systemctl unmask smortress-agent-mail-stream.service \
+  smortress-agent-collect-notes.timer smortress-agent-collect-tasks.timer \
+  smortress-agent-collect-finance.timer smortress-agent-collect-calendar.timer \
+  smortress-agent-collect-brave.path smortress-agent-collect-brave.timer \
+  smortress-agent-collect-photos.timer smortress-agent-collect-music.timer
+sudo systemctl start smortress-agent-collect-notes.service \
+  smortress-agent-collect-tasks.service smortress-agent-collect-finance.service \
+  smortress-agent-collect-calendar.service smortress-agent-collect-photos.service \
+  smortress-agent-collect-music.service smortress-agent-mail-stream.service
+```
+
+Each collector `start` runs its pass in the foreground, so a refused pass (a
+missing vault, a vanished sign-in) exits 3 with the reason on stderr instead of
+leaving a timer to report it later; the mail stream starts and stays up. Brave
+advances on the next `History` change or the six-hourly reconcile. Prove one state
+per source and that the bytes are objects:
+
+```sh
+sudo find /var/lib/agent/local/replica -maxdepth 2 -name state.sqlite
+sudo find /var/lib/agent/local/replica -path '*/objects/*' -type f | wc -l
+sudo systemctl list-timers 'smortress-agent-collect-*'
+```
+
+A source with no `state.sqlite` answers `unavailable` and the facade stays up;
+its first `sources.read` or `sources.search` pays one projection over that source.
+
 ## Recover
 
 ### T0: freeze, rescue, verify, and publish the kit
@@ -1615,20 +1660,35 @@ Tailscale SSH, and the YubiKey sudo credential and its drills are
 ### The web terminal
 
 `https://terminal.<tailnet>.ts.net/` is zellij's own web client, the only terminal
-that needs neither an SSH key nor an agent. `smortress-zellij-web.service` runs the
-server on `127.0.0.1:8082`, Serve terminates TLS for `svc:terminal`, and the
-sessions live in `/run/zellij` -- the socket directory an SSH login resolves -- so a
-session started over SSH attaches from a browser and a browser-started session is
-visible over SSH. The unit creates `main` at every boot, and no host port, proxy or
+that needs neither an SSH key nor an agent. `zellij-web.service` runs the server on
+`127.0.0.1:8082` in the owner's user manager, Serve terminates TLS for
+`svc:terminal`, and the unit creates `main` at every start. No host port, proxy or
 container is added.
 
-Two dotfiles make the sharing real, and neither is optional: `web_sharing "on"` in
-`~/.config/zellij/config.kdl` is what lets a browser attach to a session an SSH
-login started, and `~/.config/shell/env.d/20-zellij-socket.sh` is what points that
-login at `/run/zellij`. Both reach the host through `mise dotfiles`; before they
-do, SSH sessions use `$XDG_RUNTIME_DIR/zellij` and the browser lists sessions it
-cannot attach to, with no error to say why. `zellij setup --check` accepts the
-config, so it is not the probe either.
+It is a **user** unit, and that is load-bearing rather than tidy: the server execs
+the mise binary and every pane execs the owner's shells, and SELinux denies a
+system service an exec into a home file (`init_t` and even `unconfined_service_t`
+are refused on `user_tmp_t` and `user_home_t`). The user manager runs in the login
+domain, so the server and its panes get what an SSH session gets. The unit and the
+`web_sharing "on"` line in `~/.config/zellij/config.kdl` both arrive with
+`mise dotfiles`, and the manager starts at boot because the image lingers the
+owner.
+
+The socket directory needs no wiring either: the manager and an SSH login both use
+`$XDG_RUNTIME_DIR/zellij`, which is per-user, so they see one session list. Without
+the config line the browser lists a session it cannot attach to, with no error to
+say why; `zellij setup --check` accepts the config, so it is not the probe either.
+
+```sh
+mise dot apply                                      # the unit and the config (alias: d)
+systemctl --user daemon-reload
+systemctl --user enable --now zellij-web.service    # one time, then at every boot
+systemctl --user status zellij-web.service
+```
+
+The host does not create the session for you: `main` exists once the unit has
+started, and a reboot recreates it from scratch (`session_serialization` stays off,
+so layout and scrollback do not survive).
 
 One read-write login token, printed once, is the whole credential: store it in the
 password manager and never in this repository. The token store follows `HOME`
@@ -1654,10 +1714,9 @@ order. `zellij web --status` is not the probe: it exits 0 whether the server is
 running or not.
 
 ```sh
-systemctl is-active smortress-zellij-web.service
+systemctl --user is-active zellij-web.service
 curl -fsS http://127.0.0.1:8082/info/version
-sudo -u smores env ZELLIJ_SOCKET_DIR=/run/zellij \
-  /var/home/smores/.local/share/mise/shims/zellij list-sessions   # main
+zellij list-sessions                               # main
 tailscale serve status --json | jq '.Services["svc:terminal:443"]'
 ```
 
@@ -1788,6 +1847,49 @@ bootstrap, Serve routes, the cutover and the timed rebuild drill — is
 `docs/core/public-edge.md`, "The operator order". The box terminates TLS for
 three names (`photos`, `opds`, `recovery`); `provision/edge/verify.sh` asserts
 exactly those three site blocks and never a fourth.
+
+### Render and commit the edge Ignition
+
+The edge's document is committed to this repository instead of uploaded
+somewhere the install would have to fetch from a bucket: it carries no console
+password and no LUKS key, the repository is public, and the sha512 that pins it
+is computed from the checked-out file rather than transcribed from a CI log. It
+is regenerated when the published edge digest changes, and never with a
+placeholder: the renderer refuses a tag, a missing reference, `--synthetic` and
+`--stock`, and it has no fixture hash to fall back to — `--no-account` never
+reads sops at all.
+
+```sh
+gh workflow run publish-edge-image.yml
+gh run watch "$(gh run list --workflow publish-edge-image.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
+read -r EDGE_REF                     # paste the `pin: ` line: .../edge@sha256:...
+export EDGE_REF
+scripts/render-ignition.sh --no-account --check          # prints: butane accepted
+scripts/render-ignition.sh --no-account                  # writes ignition/edge.json, 0644
+jq -r '.passwd.users[] | has("passwordHash")' ignition/edge.json   # expect: false
+jq -r '.storage.files[].path' ignition/edge.json         # exactly four public paths
+sha512sum ignition/edge.json
+git add ignition/edge.json && git commit -m 'chore(edge): pin the published edge digest in Ignition'
+```
+
+The committed JSON is never edited by hand: a change belongs in
+`ignition/edge.bu`, then a re-render, so the file and its hash cannot disagree
+with the template.
+The install reads the committed file and the hash of that same file: the two
+lines below are the whole console step (BIOS/GRUB disk, so `/dev/vda`; the
+address is static, so dracut gets it as kernel arguments instead of a profile).
+
+```sh
+hash="sha512-$(sha512sum ignition/edge.json | cut -d' ' -f1)"
+url="https://raw.githubusercontent.com/smores56/homelab-platform/$(git rev-parse main)/ignition/edge.json"
+sudo coreos-installer install /dev/vda \
+  --ignition-url "$url" --ignition-hash "$hash" \
+  --append-karg ip=192.236.188.99::192.236.188.65:255.255.255.192:smoresnet:eth0:none \
+  --append-karg nameserver=8.8.8.8 --append-karg net.ifnames=0
+```
+
+The document's only credential is the operator's public key, and 22 is reachable
+on the public interface only until the tailnet join unit closes it.
 
 ## Former section numbers
 

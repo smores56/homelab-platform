@@ -2,7 +2,7 @@
 
 Photos and music are the two sources whose objects are large: one photo is
 megabytes, one track tens of them. The facade answers read and search from
-metadata, so a generation carries identifiers, titles, timestamps and the size
+metadata, so the state carries identifiers, titles, timestamps and the size
 and format the filesystem proves -- the media itself stays on its own dataset
 and is never copied into the agent's state.
 
@@ -36,7 +36,7 @@ from pathlib import Path
 
 from ...errors import PublishError
 
-#: A generation is bounded. Raising this is a deliberate act, not a side effect.
+#: One media pass is bounded. Raising this is a deliberate act, not a side effect.
 MAX_MEDIA_OBJECTS = 100_000
 
 #: Immich keeps the originals in ``library/`` beside the trees it derives from
@@ -82,13 +82,19 @@ def _describe(relative: str, path: Path) -> MediaFile:
         raise PublishError(
             f"{path} could not be read: {exc.strerror or exc}"
         ) from exc
+    try:
+        updated_at = datetime.fromtimestamp(info.st_mtime, tz=timezone.utc).isoformat(
+            timespec="seconds"
+        )
+    except (OverflowError, ValueError) as exc:
+        # A restored or corrupt archive can carry an mtime outside what a datetime
+        # can name; refusing names the file instead of aborting with a traceback.
+        raise PublishError(f"{path} has an mtime that cannot be represented") from exc
     return MediaFile(
         relative=relative,
         path=path,
         size=info.st_size,
-        updated_at=datetime.fromtimestamp(info.st_mtime, tz=timezone.utc).isoformat(
-            timespec="seconds"
-        ),
+        updated_at=updated_at,
         revision=hashlib.sha256(
             f"{info.st_size}:{info.st_mtime_ns}".encode("ascii")
         ).hexdigest(),

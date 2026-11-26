@@ -1,0 +1,154 @@
+# Derived uCore bootc image for the public edge (design #939, task T4). Built by
+# scripts/build-image.sh edge and published by
+# .github/workflows/publish-edge-image.yml.
+#
+# The base doctrine is bootc/server/Containerfile's, unchanged: the base is the
+# uCore `stable` stream tag from bootc/lib/pins.env, not a digest-pinned build.
+# Upstream publishes new streams constantly and ghcr garbage-collects superseded
+# digests within hours, so a pinned digest rots into "manifest unknown" build
+# failures. The build resolves the tag and passes the digest as BASE_DIGEST,
+# which is what the org.opencontainers.image.base.digest label below records:
+# nothing in the repository pins the base, so the built image is the only
+# durable statement of what it was built on.
+#
+# What this image is: Caddy on 443 for the three public names, firewalld with the
+# emptied public zone, sshd hardened and reachable on the tailnet only, and the
+# tailnet join. Everything it ships is configuration under /usr and one sshd
+# drop-in; no secret, signing key, age identity or auth key may ever enter it. The
+# auth key and the Caddy environment file are the operator's, at paths the units
+# name and bootc deliberately does not reconcile.
+
+ARG BASE_IMAGE
+
+FROM ${BASE_IMAGE}
+
+ARG BASE_IMAGE
+# The digest the tag resolved to at build time, passed by scripts/build-image.sh
+# and the publish workflow. The image asserts nothing about its value; it is
+# recorded so a built image still names the exact base it was built on.
+ARG BASE_DIGEST
+
+# base.name is the tag the build asked for and base.digest is what that tag
+# resolved to, both recorded here because nothing in the repository pins them.
+LABEL org.opencontainers.image.title="smoresnet edge image" \
+      org.opencontainers.image.description="Derived uCore bootc image for the public edge" \
+      org.opencontainers.image.source="https://github.com/smores56/homelab-platform" \
+      org.opencontainers.image.base.name="${BASE_IMAGE}" \
+      org.opencontainers.image.base.digest="${BASE_DIGEST}" \
+      org.opencontainers.image.vendor="smores56"
+
+# The one package this image adds, and the one place it departs from the server's
+# no-package-layer rule for a stated reason: uCore minimal carries firewalld,
+# Tailscale, sshd, nftables and Podman, but no Caddy, and the edge's whole job is
+# Caddy. Fedora packages it (2.11.x on f45, above the 2.6 floor the Caddyfile's
+# `tls` block needs -- public-edge.md:19 records why 2.4 cannot parse it), and the
+# package brings the hardened unit this image adapts rather than replaces: Type=notify,
+# User=caddy and the ambient capability for binding 443 are what let a non-root
+# Caddy listen on a privileged port. A hash-pinned release tarball would be the
+# server's doctrine instead, at the cost of hand-rolling that unit, the account
+# and the capability -- for a binary whose config is validated at build time
+# below. The build fails on a Caddy older than 2.6 or without that unit.
+RUN set -eux; \
+    dnf5 -y --setopt=install_weak_deps=False install caddy; \
+    dnf5 clean all; \
+    rm -rf /var/cache/dnf /var/cache/libdnf5
+
+# The whole rootfs: the Caddyfile and the firewalld zones under /usr/share, the
+# firewall helpers under /usr/libexec, the units under /usr/lib/systemd/system and
+# the one sshd drop-in under /etc/ssh. `COPY <dir>/ /` keeps every path the tree
+# names, so the tree is the whole delivery -- the same shape as the server image's
+# rootfs, and the reason the publish workflow's path filter has to cover
+# everything this Containerfile reads.
+COPY bootc/edge/rootfs/ /
+
+RUN set -eux; \
+    chmod 0755 /usr/libexec/smoresnet-firewall-zones /usr/libexec/smoresnet-firewall-bind; \
+    chmod 0644 /usr/share/smoresnet/Caddyfile /usr/share/smoresnet/firewalld/zones/public.xml /usr/share/smoresnet/firewalld/zones/tailscale.xml; \
+    chmod 0644 /etc/ssh/sshd_config.d/05-edge-hardening.conf; \
+    chmod 0644 /usr/lib/systemd/system/caddy.service.d/10-smoresnet.conf; \
+    rm -f /etc/caddy/Caddyfile; \
+    systemctl enable \
+      caddy.service \
+      firewalld.service \
+      smoresnet-firewall-zones.service \
+      smoresnet-firewall-public.service \
+      smoresnet-firewall-tailscale.service \
+      smoresnet-tailscale-up.service \
+      tailscaled.service
+
+# firewalld has to parse the shipped zones before this image can boot, and the one
+# thing that proves it is firewalld's own validator: the zones are staged into
+# /etc only for the check and then removed, because a zone file the image leaves
+# in /etc is one bootc will never update again -- smoresnet-firewall-zones.service
+# is what puts them there on every boot, from /usr/share.
+RUN set -eux; \
+    install -d -m 0755 /etc/firewalld/zones; \
+    install -m 0644 /usr/share/smoresnet/firewalld/zones/public.xml /etc/firewalld/zones/public.xml; \
+    install -m 0644 /usr/share/smoresnet/firewalld/zones/tailscale.xml /etc/firewalld/zones/tailscale.xml; \
+    firewall-offline-cmd --set-default-zone=drop; \
+    firewall-offline-cmd --check-config; \
+    rm -f /etc/firewalld/zones/public.xml /etc/firewalld/zones/tailscale.xml
+
+# The Caddyfile is parsed here, not on the box: `caddy validate` loads the config
+# without provisioning certificates, and the three operator values it substitutes
+# are supplied as placeholders so a syntax error fails this build rather than
+# crash-looping caddy.service on a public box. HOME and the XDG paths point at
+# /tmp because caddy validates as a user whose home is created at first boot.
+RUN set -eux; \
+    EDGE_ACME_EMAIL=acme@example.invalid \
+    IMMICH_UPSTREAM=https://immich.example.invalid \
+    OPDS_UPSTREAM=https://opds.example.invalid \
+    HOME=/tmp XDG_CONFIG_HOME=/tmp/caddy-config XDG_DATA_HOME=/tmp/caddy-data \
+      caddy validate --config /usr/share/smoresnet/Caddyfile --adapter caddyfile
+
+# sshd's policy is the only route into this box, so a drop-in it refuses to parse
+# would take the host off the network with no recovery but the provider's VNC
+# console. A build carries no host keys yet and sshd refuses to start without one,
+# so the check runs against a throwaway key that is deleted in the same layer. The
+# two -T queries are what prove the policy itself, not just that it parses: one
+# arrival from a public address and one from loopback, both key-only. The keyword
+# match is case-insensitive because OpenSSH 10 prints CamelCase names, and a
+# lowercase comparison would read "no output" as success.
+RUN set -eux; \
+    mkdir -p /run/sshd; \
+    tmp=$(mktemp -d); \
+    ssh-keygen -q -t ed25519 -N '' -f "$tmp/hostkey"; \
+    sshd -t -o HostKey="$tmp/hostkey"; \
+    for addr in 203.0.113.7 127.0.0.1; do \
+      test "$(sshd -T -o HostKey="$tmp/hostkey" -C addr="$addr",user=root | awk 'tolower($1) == "passwordauthentication" { print tolower($2) }')" = no || { \
+        echo "sshd accepts a password from $addr; the edge is keys only" >&2; exit 1; }; \
+      test "$(sshd -T -o HostKey="$tmp/hostkey" -C addr="$addr",user=root | awk 'tolower($1) == "permitrootlogin" { print tolower($2) }')" = prohibit-password || { \
+        echo "sshd permits more than a key login for root from $addr" >&2; exit 1; }; \
+    done; \
+    rm -rf "$tmp"
+
+# Fail the build if the base is not a stream tag, or if the rootfs did not arrive
+# whole. Each assertion is a property the edge's checks and the deploy gate
+# predicate on, and every one of them is cheap here and expensive on a box whose
+# console is a provider's VNC page.
+RUN set -eux; \
+    case "${BASE_IMAGE}" in \
+      *:latest) echo "BASE_IMAGE must be a stream tag, not :latest: ${BASE_IMAGE}" >&2; exit 1 ;; \
+      *@sha256:*) echo "BASE_IMAGE must be a stream tag, not a digest: ${BASE_IMAGE}" >&2; exit 1 ;; \
+      *:*) ;; \
+      *) echo "BASE_IMAGE must be a tagged reference: ${BASE_IMAGE}" >&2; exit 1 ;; \
+    esac; \
+    test -n "${BASE_DIGEST}" || { echo "BASE_DIGEST is empty: the image would not record the base it was built on" >&2; exit 1; }; \
+    test -f /usr/bin/caddy || { echo "caddy is missing: the edge has nothing to serve with" >&2; exit 1; }; \
+    test -f /usr/lib/systemd/system/caddy.service || { echo "the caddy package no longer ships caddy.service; 10-smoresnet.conf has no unit to modify" >&2; exit 1; }; \
+    test -f /usr/lib/systemd/system/caddy.service.d/10-smoresnet.conf || { echo "the caddy drop-in is missing: Caddy would read a Caddyfile this image does not ship" >&2; exit 1; }; \
+    grep -qF -- '--config /usr/share/smoresnet/Caddyfile' /usr/lib/systemd/system/caddy.service.d/10-smoresnet.conf || { echo "the caddy unit does not pass --config for the image's Caddyfile" >&2; exit 1; }; \
+    test ! -e /etc/caddy/Caddyfile || { echo "/etc/caddy/Caddyfile exists: bootc keeps a host's /etc, so it would shadow the image's config on a running box" >&2; exit 1; }; \
+    test -x /usr/libexec/smoresnet-firewall-zones || { echo "the zones helper is not executable: smoresnet-firewall-zones.service would fail 203/EXEC" >&2; exit 1; }; \
+    test -x /usr/libexec/smoresnet-firewall-bind || { echo "the bind helper is not executable: the firewall units would fail 203/EXEC" >&2; exit 1; }; \
+    test -f /usr/share/smoresnet/firewalld/zones/public.xml || { echo "the public zone is missing" >&2; exit 1; }; \
+    ! grep -q '<service' /usr/share/smoresnet/firewalld/zones/public.xml || { echo "the public zone carries a service list; stock public ships ssh, which would publish sshd on the internet" >&2; exit 1; }; \
+    grep -q '<port port="443" protocol="tcp"/>' /usr/share/smoresnet/firewalld/zones/public.xml; \
+    grep -q '<port port="41641" protocol="udp"/>' /usr/share/smoresnet/firewalld/zones/public.xml; \
+    grep -q '<icmp-block name="echo-request"/>' /usr/share/smoresnet/firewalld/zones/public.xml; \
+    grep -q '<interface name="tailscale0"/>' /usr/share/smoresnet/firewalld/zones/tailscale.xml; \
+    ! grep -rlE '^[[:space:]]*PasswordAuthentication[[:space:]]+yes' /etc/ssh/sshd_config.d | grep -qv '90-enable-localhost-passwords.conf' || { echo "a password-auth sshd drop-in shipped: the edge is keys only" >&2; exit 1; }; \
+    grep -qF -- '--ssh=false' /usr/lib/systemd/system/smoresnet-tailscale-up.service || { echo "the join unit does not turn Tailscale SSH off" >&2; exit 1; }; \
+    grep -qF -- 'LoadCredential=tailscale-authkey' /usr/lib/systemd/system/smoresnet-tailscale-up.service || { echo "the join unit does not read its key from a credential" >&2; exit 1; }; \
+    test ! -e /etc/smoresnet/tailscale-authkey || { echo "an auth key is in the image: it is the operator's, and never image content" >&2; exit 1; }; \
+    test ! -e /etc/caddy/edge.env || { echo "the Caddy environment file is in the image: its upstreams are the operator's" >&2; exit 1; }

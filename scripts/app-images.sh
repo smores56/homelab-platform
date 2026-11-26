@@ -47,8 +47,12 @@ app_images=(
   'agent-model|ghcr.io/ggml-org/llama.cpp:server-cuda|sha256:26f89ebd3bf17a5ecf6caee62bdabfa55abea3058150879f6f07b1fc786baa2d'
   # d773 is the first build whose facade can bind the `notes` and `tasks`
   # replicas: the previous pin has their contracts and no projector, so the
-  # personal quadlet's flags made the facade refuse to start.
-  'agent-runtime|built:images/agent-runtime/Containerfile|sha256:62f90f0c962bbdb7a09ecbba20efc4d7ffe6c82a7bc085d29bc734ae28f5c09e'
+  # personal quadlet's flags made the facade refuse to start. 9cd82 is the same
+  # for `photos` and `music`. 6c696 is the build from fb39b0e: every collector
+  # and every reader keeps one replica state (objects plus `state.sqlite`) and
+  # the generation layer is gone, so the units, the facade flags and the drill
+  # only mean anything with this pin or later.
+  'agent-runtime|built:images/agent-runtime/Containerfile|sha256:6c6964bf94dd2582dac51fe3d68dc5919df58541fbff68d2d0cf58e710d06ac4'
   # Built by this repository (SDLC #775), not mirrored: upstream's entrypoint
   # installs its Python dependencies from PyPI at container start, which a sealed
   # deployment can never do. The digest is the publish-agent-webui run for the

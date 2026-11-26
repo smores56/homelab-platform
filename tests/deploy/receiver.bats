@@ -478,19 +478,36 @@ quiet_listener() { # -> quiet_base, quiet_state
 # A sender that connects and stalls holds a read slot for at most the read
 # timeout; past the cap the answer is immediate, so a flood costs the listener a
 # short-lived thread per connection instead of an unbounded body buffer.
-stall() { # <port> <seconds>; sets stall_pid
-    python3 - "$1" "$2" <<'PYSTALL' &
+stall() { # <port> <seconds> [<ready-file>]; sets stall_pid
+    python3 - "$1" "$2" "${3-}" <<'PYSTALL' &
 import socket
 import sys
 import time
 
 sock = socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=5)
 sock.sendall(b"POST /v1/deploy HTTP/1.1\r\nHost: flood\r\nContent-Length: 64\r\n\r\n")
+if sys.argv[3]:
+    open(sys.argv[3], "w").close()
 time.sleep(float(sys.argv[2]))
 sock.close()
 PYSTALL
     stall_pid=$!
     pids+=("$stall_pid")
+}
+
+# The sentinel, not a sleep, is what says a stall is holding a slot: the receiver
+# takes the slot before the first body byte, so the headers having been sent is
+# the earliest moment the cap can be full. Racing that against the flood is what
+# made this case flaky on a loaded runner (`main`, 2026-11-26).
+wait_stalled() { # <file...>
+    local file
+    for file in "$@"; do
+        for _ in $(seq 1 100); do
+            [[ -e $file ]] && break
+            sleep 0.05
+        done
+        [[ -e $file ]] || fail "a stall never reached the listener: $file"
+    done
 }
 
 # A listener with two read slots: each assertion about the cap needs its own, so
@@ -507,11 +524,13 @@ capped_listener() { # -> flood_base, flood_signature, flood body
     printf '%s' "$accepted" >"$BATS_TEST_TMPDIR/flood-body"
 }
 
-stall_two() { # the two senders that take the capped listener's read slots
-    stall "$flood_port" 6
+stall_two() { # [<seconds>]: the two senders that take the capped listener's read slots
+    local secs=${1:-6}
+    stall "$flood_port" "$secs" "$BATS_TEST_TMPDIR/stall-1.ready"
     stall_pids+=("$stall_pid")
-    stall "$flood_port" 6
+    stall "$flood_port" "$secs" "$BATS_TEST_TMPDIR/stall-2.ready"
     stall_pids+=("$stall_pid")
+    wait_stalled "$BATS_TEST_TMPDIR/stall-1.ready" "$BATS_TEST_TMPDIR/stall-2.ready"
 }
 
 flood_code() {
@@ -527,14 +546,19 @@ flood_code() {
 
 @test "a request past the concurrency cap is refused at once" {
     capped_listener
-    stall_two
+    # Both slots are provably held before the first flood, and they outlive the
+    # retry window so a slow first answer cannot outlast the saturation.
+    stall_two 60
     flooded=''
-    for _ in $(seq 1 60); do
+    for _ in $(seq 1 100); do
         flooded=$(flood_code)
         if [[ $flooded == 503 ]]; then break; fi
         sleep 0.1
     done
-    assert_equal "$flooded" 503
+    # 401 is the other refusal this body can earn: it means the flood was let
+    # in, i.e. the cap was never full, so name the listener's own view of it.
+    assert_equal "$flooded" 503 ||
+        fail "the cap was never full: $(tail -n 5 "$BATS_TEST_TMPDIR/flood.log")"
 }
 
 # The dead-man asks /healthz, so it must not queue behind a saturated listener.

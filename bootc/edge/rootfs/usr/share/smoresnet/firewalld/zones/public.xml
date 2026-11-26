@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<zone>
+  <short>Public</short>
+  <description>The internet side of the edge. The stock public zone ships ssh, mdns and dhcpv6-client, which on a box whose whole job is publishing two names would put sshd on the internet; the service list here is emptied on purpose, and the three entries below are the whole of what the edge accepts: 443 for Caddy, 41641/udp so the tailnet keeps a direct WireGuard path to smortress instead of relaying every proxied byte through DERP, and ICMP echo for path-MTU diagnosis. Nothing binds this zone at build time because the public NIC's name is not knowable then; smoresnet-firewall-public.service adds every interface that is neither loopback nor tailscale0 on each boot, and the default zone is drop, so an interface that unit has not reached yet is refused rather than published.</description>
+  <!-- ICMP echo, stated the only way firewalld can state it: inversion turns
+       icmp-blocks into an allow list, so echo-request is the one type accepted
+       and everything else falls to the zone's policy. ICMP errors for an
+       established flow are "related" and pass without being named. This is the
+       nftables edge ruleset's `icmp type echo-request limit rate 10/second`
+       without the rate limit firewalld cannot express (provision/edge/nftables.conf). -->
+  <icmp-block-inversion/>
+  <icmp-block name="echo-request"/>
+  <port port="443" protocol="tcp"/>
+  <port port="41641" protocol="udp"/>
+</zone>

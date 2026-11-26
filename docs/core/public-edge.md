@@ -211,6 +211,13 @@ Both halves are outside the repository's own checks, and
 - `provision/edge/verify.sh` on the box: firewall shape, sshd, no port 80,
   Caddy listening, tailnet up with `tag:vps`; and with `EXPECT_UPSTREAM=1`, both
   upstream certificates, both Service names and the 443 refusal.
+- `bootc/edge/tests/check.sh` in CI's `server-image` group
+  (`.github/workflows/server-image-static.yml`, on any `bootc/**` pull request):
+  the image's half of this list, carried onto `bootc/edge/rootfs` (design #939,
+  T5) — the Caddyfile's shape and its path outside `/etc`, the emptied public
+  zone and the tailnet-only sshd, the units, no secret in the image, and the base
+  being a stream tag. `bootc container lint` is part of it but runs inside the
+  built image; outside one the checker reports it as a skip.
 - `scripts/verify-public-edge.sh` from anywhere, after the cutover: all three
   names over valid TLS with life above 14 days, and each path answering as its own
   application — Immich's HTML shell, OPDShelf's 401 challenge, Backrest's own

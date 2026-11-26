@@ -70,7 +70,7 @@ class RecordSchema:
 
 
 class Relay:
-    """The only path from a collector process into a replica generation."""
+    """The only path from a collector process into a replica state."""
 
     def __init__(
         self,

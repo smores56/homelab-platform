@@ -1,14 +1,14 @@
 [Unit]
 # One calendar pass: the exporter signs in with its sealed session and rewrites
-# the entity directory, then the collector publishes it as a generation. Two
+# the entity directory, then the collector commits it to the replica state. Two
 # ExecStart lines rather than two units because the second only makes sense after
 # the first exited successfully, and because a half-written entity directory must
-# never become a generation.
+# never be committed.
 #
 # The exporter talks to Tuta on the collectors' network; the collector reads the
 # dump and writes only the personal replica. Neither can reach a deployment, the
 # facades, the model or a UI.
-Description=Dump Tuta calendar entities and publish one generation
+Description=Dump Tuta calendar entities into the personal replica
 Requires=zfs-ready@state-agent-local.service sops-decrypt.service smortress-app-secrets.service smortress-agent-config.service agent-collect-network.service
 After=zfs-ready@state-agent-local.service sops-decrypt.service smortress-app-secrets.service smortress-agent-config.service agent-collect-network.service network-online.target
 Wants=network-online.target
@@ -33,7 +33,7 @@ ExecStart=/usr/bin/podman run --rm --replace --name smortress-agent-calendar-dum
   --env HOME=/tmp \
   ghcr.io/smores56/homelab-platform/tuta-calendar@sha256:c2eb3babf933250fefc9ead2cf993e5dd7c4b009e1ed00138315d46c44822111 \
   dump --store /data --out /entities
-# Stage 2: publish what the dump wrote. The collector derives the ICS projection
+# Stage 2: commit what the dump wrote. The collector derives the ICS projection
 # itself and carries a vanished event forward with an absence reason: the SDK
 # lists events and never says one was deleted, so silence is not a tombstone.
 ExecStart=/usr/bin/podman run --rm --replace --name smortress-agent-collect-calendar \
@@ -45,7 +45,7 @@ ExecStart=/usr/bin/podman run --rm --replace --name smortress-agent-collect-cale
   --env PYTHONPATH=/usr/lib/agent-facade/libs:/usr/lib/agent-facade \
   --env PYTHONDONTWRITEBYTECODE=1 \
   --entrypoint python3 \
-  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:62f90f0c962bbdb7a09ecbba20efc4d7ffe6c82a7bc085d29bc734ae28f5c09e \
+  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:6c6964bf94dd2582dac51fe3d68dc5919df58541fbff68d2d0cf58e710d06ac4 \
   -m data_plane.collectors.raw --root /replica/calendar \
   calendar --entities /entities
 # A refusal exits 3 and publishes nothing. That is a failed unit on purpose, as

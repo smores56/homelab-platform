@@ -52,7 +52,7 @@ class StaleError(DataPlaneError):
 
 
 class PublishError(DataPlaneError):
-    """A staging generation cannot be published atomically."""
+    """A replica pass cannot be committed; nothing was published."""
 
 
 class ManifestError(DataPlaneError):

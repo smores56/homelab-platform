@@ -268,7 +268,6 @@ RUN set -eux; \
       smortress-apps-egress.service \
       smortress-app-ingress-reconcile.service \
       smortress-tailscale-serve.service \
-      smortress-zellij-web.service \
       smortress-deploy-listener.service \
       smortress-deploy.path \
       smortress-boot-gate.service \
@@ -285,6 +284,8 @@ RUN set -eux; \
       smortress-agent-collect-brave.timer \
       smortress-agent-collect-notes.timer \
       smortress-agent-collect-tasks.timer \
+      smortress-agent-collect-photos.timer \
+      smortress-agent-collect-music.timer \
       var-lib-restic-ssd.mount \
       var-lib-restic-hdd.mount \
       smortress-restic-init.service \

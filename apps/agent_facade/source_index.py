@@ -1,10 +1,10 @@
-"""The derived full-text index over one generation's projections.
+"""The derived full-text index over one committed state's projections.
 
-A published generation is immutable, so its index is a pure function of the
-generation: one SQLite file per ``(source, generation)``, named after the
-generation, and a new generation is a new file rather than an update. That is
+A committed state is immutable until the next pass, so its index is a pure
+function of the snapshot: one SQLite file per ``(source, snapshot)``, named
+after the snapshot, and a new snapshot is a new file rather than an update. That is
 what makes the file disposable instead of a second store -- deleting it costs one
-rebuild, and the projections it was built from are still in the generation.
+rebuild, and the projections it was built from are still in the state.
 
 Two properties keep it a cache and never an authority:
 
@@ -40,8 +40,8 @@ from . import contracts
 
 #: Bumped when the table layout or the projection feeding it changes; a file
 #: carrying another version is rebuilt rather than read.
-SCHEMA_VERSION = 1
-#: The suffix that identifies one generation's file inside a source directory.
+SCHEMA_VERSION = 2
+#: The suffix that identifies one snapshot's file inside a source directory.
 SUFFIX = ".sqlite"
 #: The shortest word a trigram can match. A shorter one is a scan's job.
 MIN_WORD_CHARS = 3
@@ -55,7 +55,7 @@ _INSERT_INDEX = "INSERT INTO records (record_id, title, body) VALUES (?, ?, ?)"
 _INSERT_META = "INSERT INTO meta (key, value) VALUES (?, ?)"
 _MATCH = "SELECT record_id FROM records WHERE records MATCH ? ORDER BY rank, record_id LIMIT ?"
 #: A hit is answered from the file: the title and body are the projection that
-#: built it, so a search never has to project the generation again.
+#: built it, so a search never has to project the state again.
 _MATCH_ROWS = (
     "SELECT record_id, title, body FROM records "
     "WHERE records MATCH ? ORDER BY rank, record_id LIMIT ?"
@@ -80,24 +80,24 @@ def _plain(name: str) -> bool:
 
 
 class SourceIndex:
-    """One source's index of one published generation."""
+    """One source's index of one committed state."""
 
-    def __init__(self, root: str | os.PathLike[str], source_id: str, generation_id: str) -> None:
-        if not _plain(source_id) or not _plain(generation_id):
+    def __init__(self, root: str | os.PathLike[str], source_id: str, snapshot: str) -> None:
+        if not _plain(source_id) or not _plain(snapshot):
             raise SourceIndexUnavailable(
-                f"no index path for source {source_id!r} generation {generation_id!r}"
+                f"no index path for source {source_id!r} state {snapshot!r}"
             )
         self.root = Path(root).expanduser().resolve()
         self.source_id = source_id
-        self.generation_id = generation_id
+        self.snapshot = snapshot
         self.directory = self.root / source_id
-        self.path = self.directory / f"{generation_id}{SUFFIX}"
+        self.path = self.directory / f"{snapshot}{SUFFIX}"
         self._connection: sqlite3.Connection | None = None
 
     def build(self, records: Mapping[str, RecordView]) -> None:
-        """Write this generation's file, or keep the one already published.
+        """Write this snapshot's file, or keep the one already published.
 
-        The file is named after an immutable generation and records what it was
+        The file is named after a snapshot and records what it was
         built from, so an existing file with this schema version is the answer
         already: rewriting it on every process start would cost a full rebuild to
         produce the same bytes.
@@ -112,7 +112,7 @@ class SourceIndex:
         try:
             self.directory.mkdir(parents=True, exist_ok=True)
             descriptor, temporary = tempfile.mkstemp(
-                dir=self.directory, prefix=f".{self.generation_id}.", suffix=".tmp"
+                dir=self.directory, prefix=f".{self.snapshot}.", suffix=".tmp"
             )
             os.close(descriptor)
             connection = sqlite3.connect(temporary)
@@ -124,7 +124,7 @@ class SourceIndex:
                     [
                         ("schema_version", str(SCHEMA_VERSION)),
                         ("source_id", self.source_id),
-                        ("generation_id", self.generation_id),
+                        ("snapshot", self.snapshot),
                     ],
                 )
                 connection.executemany(
@@ -140,8 +140,8 @@ class SourceIndex:
             if temporary is not None:
                 Path(temporary).unlink(missing_ok=True)
             raise SourceIndexUnavailable(
-                f"source index for {self.source_id!r} generation "
-                f"{self.generation_id!r} could not be built: {error}"
+                f"source index for {self.source_id!r} state "
+                f"{self.snapshot!r} could not be built: {error}"
             ) from error
         self._prune()
 
@@ -149,7 +149,7 @@ class SourceIndex:
         """Record ids matching every word, best first, or why the index cannot say.
 
         ``limit`` is the caller's, not a candidate window: the files hold one
-        generation, so the rows are already the answer set.
+        snapshot, so the rows are already the answer set.
         """
 
         return tuple(row[0] for row in self.rows(words, limit))
@@ -158,7 +158,7 @@ class SourceIndex:
         """``(record_id, title, body)`` for the matching records, best first.
 
         The row carries the projection the file was built from, so a caller can
-        answer a hit without projecting the generation: that pass is the cost this
+        answer a hit without projecting the state: that pass is the cost this
         file exists to avoid.
         """
 
@@ -179,7 +179,7 @@ class SourceIndex:
         return tuple((str(row[0]), str(row[1]), str(row[2])) for row in rows)
 
     def published(self) -> bool:
-        """Whether this generation's file is already here at this schema version.
+        """Whether this snapshot's file is already here at this schema version.
 
         A caller that only needs to search asks this first: ``build`` rewrites the
         file from a projection, and a file that is already the answer makes that
@@ -200,7 +200,7 @@ class SourceIndex:
             return self._connection
         if not self.path.is_file():
             raise SourceIndexUnavailable(
-                f"no source index for {self.source_id!r} generation {self.generation_id!r}"
+                f"no source index for {self.source_id!r} state {self.snapshot!r}"
             )
         try:
             connection = sqlite3.connect(f"{self.path.as_uri()}?mode=ro", uri=True)
@@ -209,14 +209,14 @@ class SourceIndex:
         if not self._is_current(connection):
             connection.close()
             raise SourceIndexUnavailable(
-                f"source index for {self.source_id!r} generation "
-                f"{self.generation_id!r} is not this schema version"
+                f"source index for {self.source_id!r} state "
+                f"{self.snapshot!r} is not this schema version"
             )
         self._connection = connection
         return connection
 
     def _published(self) -> bool:
-        """Whether the file already is this generation's index at this version."""
+        """Whether the file already is this snapshot's index at this version."""
 
         if not self.path.is_file():
             return False
@@ -238,14 +238,14 @@ class SourceIndex:
         return meta == {
             "schema_version": str(SCHEMA_VERSION),
             "source_id": self.source_id,
-            "generation_id": self.generation_id,
+            "snapshot": self.snapshot,
         }
 
     def _prune(self) -> None:
-        """Delete this source's other generation files: one index, one generation.
+        """Delete this source's other files: one index, one snapshot.
 
         A failed unlink is left alone on purpose: the next build that publishes a
-        newer generation tries again, and a file that could not be removed costs
+        newer snapshot tries again, and a file that could not be removed costs
         disk, not correctness.
         """
 
