@@ -407,6 +407,40 @@ class MailCollectionTests(unittest.TestCase):
             self.assertEqual(len(lines), 2)
             self.assertTrue(lines[1].startswith("folder 1/1 INBOX: 1 messages, 1 carried, "))
 
+    def test_a_long_folder_reports_its_fetches_as_they_land(self) -> None:
+        # A real Archive folder takes hours, and the pass commits nothing until
+        # the last body lands, so the closing line per folder cannot tell a slow
+        # pass from a wedged one.
+        count = 1200
+        with tempfile.TemporaryDirectory() as work:
+            lines: list[str] = []
+            _publish(
+                Path(work),
+                ScriptedMailbox(
+                    {
+                        "INBOX": ScriptedFolder(
+                            1,
+                            {
+                                str(uid): _message(str(uid))
+                                for uid in range(1, count + 1)
+                            },
+                        )
+                    }
+                ),
+                progress=lines.append,
+            )
+            # The elapsed field is real time, so only the rest is asserted.
+            elapsed = re.compile(r", [0-9.]+s$")
+            self.assertEqual(
+                [elapsed.sub("", line) for line in lines],
+                [
+                    "folder 1/1 INBOX: collecting",
+                    "folder 1/1 INBOX: 500/1200 fetched",
+                    "folder 1/1 INBOX: 1000/1200 fetched",
+                    "folder 1/1 INBOX: 1200 messages, 0 carried",
+                ],
+            )
+
     def test_the_package_is_the_entry_point(self) -> None:
         # `-m data_plane.collectors.stream` must run the same main as the module,
         # and must not re-execute imap.py under __main__ the way `-m …stream.imap`

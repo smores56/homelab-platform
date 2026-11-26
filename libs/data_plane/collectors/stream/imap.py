@@ -41,6 +41,7 @@ import sys
 import threading
 import time
 from abc import ABC, abstractmethod
+from functools import partial
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from urllib.parse import quote
@@ -73,6 +74,12 @@ PUBLISH_POLL = 0.5
 
 BACKOFF_BASE = 1.0
 BACKOFF_CAP = 60.0
+
+#: How many newly fetched bodies between progress lines. The first pass over a
+#: real mailbox is tens of thousands of fetches and commits nothing until the
+#: last one lands, so one line per folder leaves an hour-long folder looking
+#: exactly like a wedged one.
+FETCH_PROGRESS = 500
 
 _LIST_NAME = re.compile(rb'"((?:[^"\\]|\\.)*)"\s*$')
 _LIST_ESCAPE = re.compile(rb"\\(.)")
@@ -195,6 +202,14 @@ class Mailbox(ABC):
         """Every UID in the selected folder mapped to its flags."""
 
 
+def _announce(
+    progress: Callable[[str], None], heading: str, text: str
+) -> None:
+    """Hand ``progress`` a line that keeps the folder it belongs to."""
+
+    progress(f"{heading}: {text}")
+
+
 @dataclass(frozen=True)
 class FolderReport:
     """What one folder contributed to a pass."""
@@ -212,8 +227,13 @@ def collect_folder(
     state: ReplicaState,
     captured_at: str,
     earlier: dict[str, int],
+    progress: Callable[[str], None] | None = None,
 ) -> FolderReport:
-    """Write one folder's changes into ``state``; the caller commits."""
+    """Write one folder's changes into ``state``; the caller commits.
+
+    ``progress`` is told how far a fetch sweep has got, every ``FETCH_PROGRESS``
+    new bodies.
+    """
 
     validate_folder(folder)
     epoch = mailbox.select(folder)
@@ -254,6 +274,8 @@ def collect_folder(
     flags = {uid: normalize_flags(values) for uid, values in mailbox.uid_flags().items()}
 
     carried = 0
+    fetched = 0
+    sweep_started = time.monotonic()
     for uid in sorted(current, key=_uid_order):
         object_id = prefix + uid
         wanted = list(flags.get(uid, ()))
@@ -289,6 +311,12 @@ def collect_folder(
                 "captured_at": captured_at,
             },
         )
+        fetched += 1
+        if progress is not None and fetched % FETCH_PROGRESS == 0:
+            progress(
+                f"{fetched}/{len(current)} fetched, "
+                f"{time.monotonic() - sweep_started:.1f}s"
+            )
 
     deleted = 0
     if stable:
@@ -350,16 +378,21 @@ def collect_mailbox(
     total = len(folders)
     for index, folder in enumerate(folders, start=1):
         started = time.monotonic()
+        heading = f"folder {index}/{total} {folder}"
+        folder_progress = None
         if progress is not None:
-            progress(f"folder {index}/{total} {folder}: collecting")
-        report = collect_folder(mailbox, folder, state, captured_at, earlier)
+            progress(f"{heading}: collecting")
+            folder_progress = partial(_announce, progress, heading)
+        report = collect_folder(
+            mailbox, folder, state, captured_at, earlier, folder_progress
+        )
         epochs[folder] = report.uidvalidity
         counts[folder] = report.objects
         carried += report.carried
         deleted += report.deleted
         if progress is not None:
             progress(
-                f"folder {index}/{total} {folder}: {report.objects} messages, "
+                f"{heading}: {report.objects} messages, "
                 f"{report.carried} carried, {time.monotonic() - started:.1f}s"
             )
 
