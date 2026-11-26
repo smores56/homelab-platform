@@ -41,18 +41,29 @@ expect "a workflow change selects lint and actionlint" $'lint\nactionlint' \
   "$(selected .github/workflows/ci.yml)"
 expect "a docs change selects the docs group" "docs" \
   "$(selected README.md docs/broker.md)"
-expect "an image change selects the server-image group" "server-image" \
+expect "an image change selects the server-image group" $'server-image\ncore' \
   "$(selected bootc/server/Containerfile)"
 expect "an edge image change selects the server-image group" "server-image" \
   "$(selected bootc/edge/Containerfile)"
-expect "a unit change selects the server-image group" "server-image" \
+# The quadlet suites are the invariants a unit change can break, and only the
+# core row runs them; the image row alone was a green run that tested neither
+# (#168). Both rows claim the tree, so both groups run.
+expect "a quadlet change selects the server-image and core groups" $'server-image\ncore' \
   "$(selected units/quadlet/pattern.container)"
+expect "a systemd unit change selects the server-image and core groups" $'server-image\ncore' \
+  "$(selected units/systemd/smortress-app-ingress@.service)"
 expect "a secret change selects the secrets group" "secrets" \
   "$(selected secrets/boot.json)"
 expect "a config change selects secrets and lint" $'secrets\nlint' \
   "$(selected .sops.yaml)"
 expect "every tracked file is claimed" "0" \
   "$(scripts/check-all.sh --check-claims >/dev/null; echo $?)"
+# The driver is a script, and its own test lives in the lint group, so a change
+# to the table locally runs the selection logic it changes.
+expect "a driver change selects lint" "lint" "$(selected scripts/check-all.sh)"
+expect "a tags-table change selects the core suites and lint" $'core\nlint' \
+  "$(selected tests/tags.tsv)"
+
 expect "an unclaimed path selects every group" "$groups" \
   "$(selected brand/new-thing | wc -l | tr -d ' ')"
 expect "--list names each group once" "$groups" \
