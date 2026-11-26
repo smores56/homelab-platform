@@ -102,7 +102,7 @@ So the operator step for this retirement was one merge and one apply
   removes them.
 
 The Cloudflare SSH route went earlier (#767 T6) for the same reason: sshd
-answers the tailnet and the firewall is the filter. `tests/tofu/check.sh`
+answers the tailnet and the firewall is the filter. `tests/tofu/check.bats`
 asserts the absence of everything above — records, tunnels, applications,
 policies, service-token credentials and the variables that gated them — so a
 plan that offers to create any of them is a re-introduction, not a migration.
@@ -315,7 +315,7 @@ that domain in an `issue` value. It runs daily in
 `.github/workflows/verify-public-edge.yml`, so a carve-out that stops renewal
 fails there before the certificate expires. An empty set is a notice rather than
 a failure: the check reports the served issuer and passes, and the two records
-above are asserted statically by `tests/tofu/check.sh`.
+above are asserted statically by `tests/tofu/check.bats`.
 
 ## Retired hostnames
 
@@ -353,7 +353,7 @@ Two consequences worth knowing:
 environment and the operator's secret store. It is never a variable in
 `tofu/`, never in a manifest, and never in a workflow file. The agent holds no
 Cloudflare token at all: it has no Cloudflare egress through the broker and no
-service-token secret, and `tests/tofu/check.sh` asserts that no shipped tree
+service-token secret, and `tests/tofu/check.bats` asserts that no shipped tree
 names one.
 
 ## Verifying
@@ -361,7 +361,7 @@ names one.
 Static half — no credentials, what CI runs:
 
 ```sh
-tests/tofu/check.sh
+tests/tofu/check.bats
 ```
 
 Expected: `tofu: 224 passed, 0 failed` with `tofu` on `PATH`; two fewer without
