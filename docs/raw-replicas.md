@@ -413,6 +413,63 @@ place, so the object id is a digest of the line's bytes.
 `smortress-agent-collect-tasks.timer` runs it hourly, with no network and no
 secret.
 
+## Photos
+
+`collect_photos(entities_dir, generation, *, captured_at=...)`
+
+The input is the photo library, mounted read-only: the Immich media location
+(`raw/photos`, `/srv/photos`). Immich keeps the originals in `library/` there,
+beside the trees it derives from them (`thumbs/`, `encoded-video/`, `profile/`,
+`upload/`), so the collector walks `library/` when it exists and the given root
+otherwise -- a thumbnail or a transcode must never become a second object for one
+asset. One object per media file, keyed by the URL-quoted originals-relative path,
+so a re-upload is a new revision of the same id.
+
+- The generation is **metadata only**: the path, the filename without its suffix
+  as the title, the format, the size and the mtime. The media bytes never enter
+  the replica; the collector stats each file and never opens it, so a revision is
+  `size:mtime_ns` hashed rather than a content hash.
+- EXIF, albums and dimensions are not collected. They live in Immich's own
+  database, and reading a second application's schema would make every Immich
+  migration a collector outage; a derived reader can reach for them later
+  without changing what was published here.
+- Symlinked files and directories are refused, a library over
+  `MAX_MEDIA_OBJECTS` (100 000) is refused rather than truncated, and so is an
+  empty walk: a silent prefix would publish something that is not the library,
+  and an empty generation would carry every previous object forward as absent.
+  A directory the walk cannot read is a refusal too -- `os.walk` would otherwise
+  skip it and publish a partial library with a green unit.
+- Files whose suffix is not a photo or video are skipped and counted under
+  `skipped` in the report, so a format the allowlist lacks is visible rather
+  than silently missing.
+- A file that vanished is carried forward with `ABSENCE_NO_TOMBSTONE`: a partial
+  mount is not deletion evidence, and Restic is the record of what was deleted.
+
+`smortress-agent-collect-photos.timer` runs it hourly, with no network and no
+secret; unchanged objects are hard-linked from the previous generation.
+
+## Music
+
+`collect_music(entities_dir, generation, *, captured_at=...)`
+
+The input is the music library itself, mounted read-only, the same tree Navidrome
+serves from (`raw/music`, `/srv/music`). One object per audio file, keyed by the
+URL-quoted library-relative path.
+
+- The generation is **metadata only**, for the same reason as photos: title, the
+  artist and album the directory layout names, a leading track number, the
+  format, the size and the mtime. Tags inside the audio are not read.
+- `Artist/Album/Track` is the layout the artist and album come from. A file with
+  fewer than two directories above it claims neither, so a `singles/` or
+  `Compilations/` folder is not published as an artist. `01 - Title`,
+  `02 Title` and `3.Title` yield the title and the track number;
+  a name that starts with a bare number (`1979`) keeps its name.
+- Symlinks, the object limit and an empty walk are the same refusals as photos;
+  files whose suffix is not audio are counted under `skipped`.
+
+`smortress-agent-collect-music.timer` runs it hourly, with no network and no
+secret.
+
 ## Who reads a generation
 
 `apps/agent_facade/replica_sources.py` projects a published generation into the

@@ -205,6 +205,45 @@ def _project_tasks(metadata: Mapping[str, Any], data: bytes) -> Projection | Non
     return Projection(title=text, body=_clip(body))
 
 
+def _project_photos(metadata: Mapping[str, Any], data: bytes) -> Projection | None:
+    """The file's title, then what the path and the stat prove.
+
+    The media bytes are not in the generation, so a search can only find what the
+    library's own naming says: the filename, the folders it sits in, its format
+    and its size. EXIF and album names live in Immich's database, not here.
+    """
+
+    photo = _json_object(data)
+    if photo is None:
+        return None
+    title = photo.get("title")
+    if not isinstance(title, str):
+        return None
+    parts = [
+        str(photo[key])
+        for key in ("path", "format", "size", "updated_at")
+        if photo.get(key) is not None
+    ]
+    return Projection(title=title, body=_clip("\n".join(parts)))
+
+
+def _project_music(metadata: Mapping[str, Any], data: bytes) -> Projection | None:
+    """The track's title, with the artist and album the path named in the body."""
+
+    track = _json_object(data)
+    if track is None:
+        return None
+    title = track.get("title")
+    if not isinstance(title, str):
+        return None
+    parts = [
+        str(track[key])
+        for key in ("artist", "album", "path", "format")
+        if track.get(key)
+    ]
+    return Projection(title=title, body=_clip("\n".join(parts)))
+
+
 #: Keyed by the contract's source id, which for a facade source is its name in
 #: the deployment table (``mail``, ``notes``) -- not the collector's own
 #: ``SOURCE_ID`` (``tuta.mail``, ``notes.markdown``), which only travels in the
@@ -217,6 +256,8 @@ _PROJECTORS: Mapping[str, Callable[[Mapping[str, Any], bytes], Projection | None
             "finance": _project_finance,
             "notes": _project_notes,
             "tasks": _project_tasks,
+            "photos": _project_photos,
+            "music": _project_music,
         }
     )
 )
