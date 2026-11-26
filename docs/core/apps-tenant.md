@@ -126,12 +126,27 @@ path is the machine user's PAT through the shell, measured above.
   plan before it creates either end. A container restart destroys the namespace
   it joined, the unit exits, and systemd restarts it against the new pid.
 
+  The instance **set** is reconciled from the plan at boot by
+  `smortress-app-ingress-reconcile.service` (`scripts/apps-ingress-reconcile.sh`):
+  it starts one instance per app the plan names and stops the instances of a
+  name the plan dropped. The template is static, so an apps apply is the only
+  other thing that starts an instance, and without this reconcile a reboot
+  restores the tenant's containers and leaves every `/apps/<name>` route
+  answering nothing — measured on 2026-11-25, where the route stayed dead across
+  six boots until a human started the unit (issue #150).
+
 ## Boot order
 
     sysusers -> smortress-apps-deny -> smortress-apps-egress
              -> smortress-apps-user
              -> zfs-ready@raw-apps -> smortress-apps-quota
              -> systemd-logind -> user@<uid> (lingering) -> tenant units
+             -> smortress-app-ingress-reconcile (one ingress per planned app)
+
+The reconcile is ordered after `systemd-logind` rather than after the tenant
+manager, which a system unit cannot name: the helper it starts waits up to a
+minute for its container to appear, so the manager's own start is the wait,
+not a race.
 
 The egress boundary is fail-closed, and what makes it so is a table, not only an
 ordering. `smortress-apps-deny.service` loads a placeholder ruleset first: the
