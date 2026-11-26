@@ -47,7 +47,8 @@ scripts/install-ci-tools.sh ~/.local/bin # bats, GNU parallel, the pinned tools;
 
 # every suite, tracked or not
 BATS_TEST_TIMEOUT=120 git ls-files -z --cached --others --exclude-standard \
-    'tests/*.bats' 'tests/*/*.bats' | xargs -0 bats --jobs "$(nproc)"
+    'tests/*.bats' 'tests/*/*.bats' |
+    xargs -0 bats --jobs "$(nproc)" --no-parallelize-within-files
 # only the suites this branch touches (the pre-push hook runs these)
 tests/tags.sh --changed
 

@@ -16,5 +16,10 @@ selected=$(tests/tags.sh --changed) || exit 2
 # tree is ~12s, the two former monoliths included. The whole matrix is one pool,
 # so the job count is what a big file gets too: app-quadlets' 572 registered
 # tests take 183s at four jobs and 40s at sixteen.
+# Within-file parallelism is off: bats distributes the jobs over the files, and
+# with every file asking for the whole pool at once the 572-test Quadlet suite
+# starved while the others finished (a fifteen-minute wait for a 23s file).
+# Across files is where the parallelism is; 55 files finish in 334s, the long
+# ones (boot, the Quadlets) taking their turn.
 exec env BATS_TEST_TIMEOUT="${BATS_TEST_TIMEOUT:-120}" \
-    bats --jobs "${BATS_JOBS:-$(nproc)}" $selected
+    bats --jobs "${BATS_JOBS:-$(nproc)}" --no-parallelize-within-files $selected

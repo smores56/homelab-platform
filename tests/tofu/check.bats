@@ -1427,5 +1427,5 @@ EOF
 }
 
 @test "ci.yml runs this check" {
-    grep -qF -- "--filter-tags 'image||tofu||actionlint'" .github/workflows/ci.yml
+    grep -qF -- '--filter-tags tofu' .github/workflows/ci.yml
 }
