@@ -1,5 +1,13 @@
-# Static checks for the core server image. Runs on pull requests and holds no
-# secret: the real build/sign job is publish-server-image.yml.
+# Static checks for both bootc images: the core server's and the public edge's.
+# Runs on pull requests and holds no secret: the real build/sign job is
+# publish-server-image.yml (publish-edge-image.yml for the edge).
+#
+# The edge's checker, bootc/edge/tests/check.sh, runs in the same `server-image`
+# group: it is the same artifact class, the group already claims bootc/edge/*, and
+# a separate workflow would run this one a second time on every bootc/edge/**
+# pull request because both would trigger on that tree. The checker asserts this
+# wiring itself (its "a pull_request workflow runs this checker" row), so a filter
+# that stops covering the edge fails there rather than in a stale image.
 name: server-image-static
 
 on:
@@ -12,6 +20,7 @@ on:
       - "scripts/**"
       - "images/agent-runtime/**"
       - "tests/fixtures/**"
+      - "tests/image/**"
       - "docs/core/server-image.md"
       - ".github/workflows/server-image-static.yml"
   push:
@@ -24,6 +33,7 @@ on:
       - "scripts/**"
       - "images/agent-runtime/**"
       - "tests/fixtures/**"
+      - "tests/image/**"
       - "docs/core/server-image.md"
       - ".github/workflows/server-image-static.yml"
 

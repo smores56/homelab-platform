@@ -20,7 +20,7 @@ load helpers
 
 @test "every shell script passes shellcheck" {
     # shellcheck disable=SC2046
-    run shellcheck scripts/*.sh provision/*/*.sh scripts/lib/*.sh scripts/deploy/apps/*.sh scripts/check/server/*.sh scripts/legacy/*.sh backrest/scripts/*.sh backrest/container/entrypoint.sh .githooks/* $(git ls-files 'tests/*.sh' 'tests/*/*.sh' 'tests/*.bash' 'tests/*/*.bash')
+    run shellcheck scripts/*.sh provision/*/*.sh scripts/lib/*.sh scripts/deploy/apps/*.sh scripts/check/server/*.sh scripts/legacy/*.sh backrest/scripts/*.sh backrest/container/entrypoint.sh .githooks/* $(git ls-files 'tests/*.sh' 'tests/*/*.sh' 'tests/*.bash' 'tests/*/*.bash' 'bootc/*/tests/*.sh')
     assert_success
 }
 
