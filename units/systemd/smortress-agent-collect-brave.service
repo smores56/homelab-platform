@@ -1,4 +1,4 @@
-# One browsing pass: snapshot the live profile, then publish the copy.
+# One browsing pass: snapshot the live profile, then commit the copy.
 #
 # Two stages rather than two units for the same reason the calendar pass has two:
 # the collector refuses a database that is still being written (a `-wal` or
@@ -7,7 +7,7 @@
 # SQLite's backup API against a read-only connection, and -- when the live artifact
 # cannot be backed up that way -- a copy of `History` with its sidecars into a
 # staging directory whose write-ahead log is folded in before anything is
-# published. Either way the collector is handed one file with no sibling.
+# committed. Either way the collector is handed one file with no sibling.
 #
 # `quarantine/brave/History` is the published copy, replaced by rename, so a
 # collection never reads a half-written one. It is disposable: every pass replaces
@@ -28,7 +28,7 @@
 # A refusal exits 3 and publishes nothing: a snapshot that could not be taken, a
 # database that fails `integrity_check`, a replica that cannot be written. That is
 # a failed unit on purpose -- the timer is the only signal that the replica stopped
-# advancing, and a red unit is better than a generation that looks like the user
+# advancing, and a red unit is better than a state that looks like the user
 # deleted everything.
 [Unit]
 Description=Snapshot and collect Brave browsing history into the personal replica

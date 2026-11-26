@@ -1,15 +1,15 @@
 [Unit]
-# One photos pass: the library as it is on disk right now becomes a generation.
+# One photos pass: the library as it is on disk right now becomes the replica state.
 #
 # One stage, no network and no secret, like the vault collectors: a photo library
 # is a directory tree, the collector is the only process, the library is mounted
 # read-only and the replica tree is the one writable mount. Being on no network
 # is what makes the pass harmless to repeat hourly.
 #
-# The pass only stats: the generation carries identifiers, titles, timestamps and
+# The pass only stats: the state carries identifiers, titles, timestamps and
 # the size and format of each file, and the media bytes stay on the photo
-# dataset. Unchanged objects are hard-linked from the previous generation, so a
-# run that changes one photo costs one object.
+# dataset. An unchanged file is already an object, so a run that changes one
+# photo writes one object.
 #
 # A refusal exits 3 and publishes nothing. That is a failed unit on purpose: a
 # library that vanished, or one over the collector's object limit, needs a human,

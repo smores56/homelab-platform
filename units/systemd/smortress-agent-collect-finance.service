@@ -11,13 +11,13 @@
 # bounded read and one directory it owns. It cannot reach the gateway, the facade
 # or the model, because it is on its own network.
 #
-# The third stage is the projection: it turns the newest *published* generation
-# into `index/hledger/finance.journal`, which is a view of those objects and never
-# a second copy of them. It runs here, after the collector, and not on a timer of
-# its own because a generation has to exist and be published first: a projection
-# that ran ahead of its input would either find nothing or render yesterday's
-# bytes as if they were today's. A refused collection exits 3, systemd stops the
-# unit at that stage, and the journal keeps the last generation it could read.
+# The third stage is the projection: it turns the newest committed state into
+# `index/hledger/finance.journal`, which is a view of those objects and never a
+# second copy of them. It runs here, after the collector, and not on a timer of
+# its own because a committed state has to exist first: a projection that ran
+# ahead of its input would either find nothing or render yesterday's bytes as if
+# they were today's. A refused collection exits 3, systemd stops the unit at that
+# stage, and the journal keeps the last state it could read.
 Description=Collect one SimpleFIN AccountSet into the personal replica and project it
 Requires=zfs-ready@state-agent-local.service sops-decrypt.service smortress-app-secrets.service smortress-agent-config.service agent-collect-network.service
 After=zfs-ready@state-agent-local.service sops-decrypt.service smortress-app-secrets.service smortress-agent-config.service agent-collect-network.service network-online.target
@@ -49,8 +49,8 @@ ExecStart=/usr/bin/podman run --rm --name smortress-agent-collect-finance \
   -m data_plane.collectors.raw --root /replica/finance \
   finance --access-url-file /run/secrets/simplefin-access-url --include-pending
 # The projection stage. It has no network (`--network none`, not the collector's),
-# no secret, and the replica read-only: its whole input is the published
-# generation, and its whole output is one file under the personal index dataset.
+# no secret, and the replica read-only: its whole input is the committed state,
+# and its whole output is one file under the personal index dataset.
 # The account mapping is the operator's -- `accounts.json` is seeded once and
 # edited in place (docs/manual-steps.md section 40.14) -- and an account it does
 # not name still renders, as `assets:unknown:<id>`.

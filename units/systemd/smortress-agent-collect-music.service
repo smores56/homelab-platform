@@ -1,9 +1,9 @@
 [Unit]
-# One music pass: the library as it is on disk right now becomes a generation.
+# One music pass: the library as it is on disk right now becomes the replica state.
 #
 # Same shape as the photos collector: one stage, no network, no secret, the
 # library read-only and the replica tree the only writable mount. The pass only
-# stats, so the audio stays on the music dataset and the generation holds the
+# stats, so the audio stays on the music dataset and the state holds the
 # identifiers, titles and the artist/album the directory layout names.
 #
 # A refusal exits 3 and publishes nothing: a library that vanished, or one over

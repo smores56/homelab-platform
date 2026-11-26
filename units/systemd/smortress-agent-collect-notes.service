@@ -1,5 +1,5 @@
 [Unit]
-# One notes pass: the vault as it is on disk right now becomes a generation.
+# One notes pass: the vault as it is on disk right now becomes the replica state.
 #
 # One stage, no network and no secret. Unlike the provider collectors there is
 # nothing to dump or snapshot first: a vault is a directory of files, so the
@@ -7,8 +7,8 @@
 # tree is the one writable mount. Being on no network is what makes the pass
 # harmless to repeat hourly.
 #
-# The pass is cheap: unchanged files are hard-linked from the previous generation
-# instead of rewritten, so a run that changes one note costs one object.
+# The pass is cheap: an unchanged file is already an object under its own hash,
+# so a run that changes one note writes one object.
 #
 # A refusal exits 3 and publishes nothing. That is a failed unit on purpose, as
 # for the other collectors: a vault that vanished or turned into something the

@@ -3,7 +3,7 @@ Description=Every six hours, reconcile a missed Brave browsing pass
 
 [Timer]
 # The path unit is the real trigger; this only closes a missed one. Six hours is
-# long enough that a quiet browser does not rewrite the same generation all day and
+# long enough that a quiet browser does not commit the same objects all day and
 # short enough that a broken watcher is visible within a day. Persistent, because a
 # missed run is a gap in the replica.
 OnCalendar=*-*-* 00/6:20:00
