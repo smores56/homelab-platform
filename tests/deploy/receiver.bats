@@ -18,6 +18,10 @@ receiver=bootc/server/rootfs/usr/libexec/deploy-receiver.py
 lib=scripts/deploy-state.sh
 
 commit_ok=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+# A commit no other test names: the burst-refusal case must be able to say its
+# own window carried exactly one line, and a commit an earlier test already
+# queued or marked deployed can add a line of its own (issue #156).
+burst_only=1111111111111111111111111111111111111111
 denied=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 deployed=cccccccccccccccccccccccccccccccccccccccc
 apps_deployed=dddddddddddddddddddddddddddddddddddddddd
@@ -142,6 +146,17 @@ wait_for() { # <port> <expected-code>
 # (`000`) rather than a test abort.
 status_of() { # <url>
     curl -sS --max-time 5 -o /dev/null -w '%{http_code}' "$1" 2>/dev/null || true
+}
+
+# journal_lines: the journal's line count, zero when the file is absent. Earlier
+# tests in the file create it, so a filtered run must not read the difference
+# from a missing file (#156).
+journal_lines() {
+    if [[ -f $state_dir/journal.jsonl ]]; then
+        wc -l <"$state_dir/journal.jsonl" | tr -d ' '
+    else
+        printf '0\n'
+    fi
 }
 
 # Every request needs a nonce the ring has not seen: a reused one would exercise
@@ -403,20 +418,27 @@ state_fixture() {
 }
 
 @test "a burst of refusals writes only the queued request's line" {
-    journal_before=$(wc -l <"$state_dir/journal.jsonl")
+    local before new
+    before=$(journal_lines)
     burst_pids=()
     for _ in $(seq 1 20); do
         (post "$base" "$accepted" "${secret}wrong" >/dev/null 2>&1) &
         burst_pids+=("$!")
     done
-    request=$(body homelab-apps "$commit_ok" "$now" "$(nonce)")
+    request=$(body homelab-apps "$burst_only" "$now" "$(nonce)")
     code=$(post "$base" "$request" "$secret")
     wait "${burst_pids[@]}" 2>/dev/null || true
     guard "$code" 202 "the valid request was not queued"
     # One line for the request that was queued, nothing for the twenty that were
     # refused: the difference is what an unauthenticated caller can make the
-    # receiver write.
-    assert_equal "$(($(wc -l <"$state_dir/journal.jsonl") - journal_before))" 1
+    # receiver write. The event is named because a count alone cannot tell a
+    # refusal that got journaled from an unrelated line: this test reported "1,
+    # got 2" on CI and had no way to say which event it was (#156). The commit is
+    # one no earlier test touches, so nothing else in this window can journal.
+    new=$(sed -n "$((before + 1)),\$p" "$state_dir/journal.jsonl" 2>/dev/null || true)
+    assert_equal "$(grep -c . <<<"$new" | tr -d ' ')" "1"
+    assert_equal "$(jq -r '.event' <<<"$new")" "queue-enqueued"
+    assert_equal "$(jq -r '.commit' <<<"$new")" "$burst_only"
 }
 
 @test "a refused signature is never journaled" {
