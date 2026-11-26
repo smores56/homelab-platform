@@ -45,7 +45,7 @@ _KEY = re.compile(r"[a-z]+")
 _DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
-def _parse(line: str) -> dict[str, Any]:
+def parse(line: str) -> dict[str, Any]:
     """The todo.txt fields this replica understands, from the line verbatim."""
 
     done = line.startswith("x ")
@@ -130,7 +130,7 @@ def collect_tasks(
                 duplicates += 1
                 continue
             seen.add(object_id)
-            parsed = _parse(line)
+            parsed = parse(line)
             state.put(
                 object_id,
                 canonical_json(

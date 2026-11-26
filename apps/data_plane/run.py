@@ -20,8 +20,9 @@ import os
 import sqlite3
 import sys
 import threading
+from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any
 
 from data_plane.approval import (
     MAX_APPROVAL_TTL_SECONDS,
@@ -33,6 +34,7 @@ from data_plane.broker import Broker
 from data_plane.broker_journal import BrokerJournal
 from data_plane.collectors.relay import Relay
 from data_plane.confirmation import ConfirmationGate, NormalizedOperation
+from data_plane.effects import NotesAdapter, TasksAdapter
 from data_plane.errors import DataPlaneError
 from data_plane.event_log import EventLog
 from data_plane.identity import IdentityIssuer
@@ -41,8 +43,8 @@ from data_plane.model import (
     Authority,
     Capability,
     EffectClass,
-    FieldAuthority,
     FidelityLimit,
+    FieldAuthority,
     IntentState,
     SourceContract,
     Visibility,
@@ -99,6 +101,12 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--schema", default=_env("DATA_PLANE_SCHEMA"))
     parser.add_argument("--catalog", default=_env("DATA_PLANE_CATALOG"))
+    parser.add_argument(
+        "--notes-root", default=_env("DATA_PLANE_NOTES_ROOT")
+    )
+    parser.add_argument(
+        "--tasks-root", default=_env("DATA_PLANE_TASKS_ROOT")
+    )
     parser.add_argument(
         "--operator-token-file",
         default=_env("DATA_PLANE_OPERATOR_TOKEN_FILE")
@@ -298,6 +306,39 @@ class FixtureAdapter:
         return {"applied": len(operation.targets)}
 
 
+NOTES_SOURCE = "notes.markdown"
+TASKS_SOURCE = "tasks.todo"
+
+
+def build_adapters(
+    sources: Mapping[str, SourceContract],
+    *,
+    notes_root: str | None = None,
+    tasks_root: str | None = None,
+) -> dict[str, Any]:
+    """One adapter per catalog source, real where a root is configured.
+
+    A configured root that the catalog does not declare, or that cannot be
+    opened, fails the process. Falling back to the fixture would answer writes
+    successfully while the file it claims to change is untouched, which is the
+    failure this seam exists to remove.
+    """
+
+    adapters: dict[str, Any] = {
+        source_id: FixtureAdapter(contract) for source_id, contract in sources.items()
+    }
+    owners = ((NOTES_SOURCE, notes_root, NotesAdapter), (TASKS_SOURCE, tasks_root, TasksAdapter))
+    for source_id, root, factory in owners:
+        if not root:
+            continue
+        if source_id not in adapters:
+            raise ConfigError(
+                f"a root is configured for {source_id} but the catalog has no such source"
+            )
+        adapters[source_id] = factory(root)
+    return adapters
+
+
 class JournalRecorder:
     """Effect recorder that appends to the local event log."""
 
@@ -401,10 +442,9 @@ def _run_broker(args: argparse.Namespace) -> int:
             approval_verifier = SignedApprovalVerifier(
                 approval_key, approval_store, max_ttl=args.approval_ttl
             )
-        adapters = {
-            source_id: FixtureAdapter(contract)
-            for source_id, contract in sources.items()
-        }
+        adapters = build_adapters(
+            sources, notes_root=args.notes_root, tasks_root=args.tasks_root
+        )
         broker = Broker(
             sources,
             adapters,

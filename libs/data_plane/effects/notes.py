@@ -18,7 +18,7 @@ between leaves evidence of an intent, never of a completed deletion.
 from __future__ import annotations
 
 import hashlib
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import quote, unquote
 
@@ -37,7 +37,7 @@ _WRITABLE = ("body",)
 
 
 def _now() -> str:
-    return datetime.now(tz=timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(tz=UTC).isoformat(timespec="seconds")
 
 
 def _encode(text: str, relative: str) -> bytes:
@@ -81,6 +81,7 @@ class NotesAdapter:
 
     def __init__(self, root: str | Path) -> None:
         self._root = ConfinedRoot(root, label="vault", suffix=".md")
+        self._root.check()
         self._tombstones = TombstoneLog(root, source_id=SOURCE_ID)
 
     def revision(self, target: str) -> str | None:
@@ -128,13 +129,13 @@ class NotesAdapter:
             data = _encode(_body(operation), relative)
             try:
                 revision = self._root.create(relative, data)
-            except ValidationError as refusal:
+            except ValidationError:
                 # The file appeared between the broker's revision check and this
                 # write. The same bytes mean this write already landed; other
                 # bytes are a different write and must not be overwritten.
                 snapshot = self._root.read_optional(relative)
                 if snapshot is None or snapshot.data != data:
-                    raise refusal
+                    raise
                 revision = hashlib.sha256(data).hexdigest()
             return {**effect, "revision": revision}
         if operation.capability == "update":
@@ -176,7 +177,7 @@ class NotesAdapter:
             "heading": heading(text, Path(relative).stem),
             "tags": [],
             "updated_at": datetime.fromtimestamp(
-                snapshot.modified, tz=timezone.utc
+                snapshot.modified, tz=UTC
             ).isoformat(timespec="seconds"),
             "body": text,
         }

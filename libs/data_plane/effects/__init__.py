@@ -6,6 +6,7 @@ a caller; see :mod:`data_plane.effects.confine` for why.
 
 from .confine import ConfinedRoot, Snapshot
 from .notes import NotesAdapter
+from .tasks import TasksAdapter
 from .tombstones import TombstoneLog
 
-__all__ = ["ConfinedRoot", "NotesAdapter", "Snapshot", "TombstoneLog"]
+__all__ = ["ConfinedRoot", "NotesAdapter", "Snapshot", "TasksAdapter", "TombstoneLog"]

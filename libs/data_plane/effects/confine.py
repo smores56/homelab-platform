@@ -21,10 +21,10 @@ import os
 import posixpath
 import secrets
 import stat
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
 
 from ..errors import StaleError, ValidationError
 
@@ -77,6 +77,11 @@ class ConfinedRoot:
     @property
     def path(self) -> Path:
         return self._path
+
+    def check(self) -> None:
+        """Fail now if the root cannot be used, not at the first write."""
+
+        os.close(self._open_root())
 
     def components(self, relative: object) -> tuple[str, ...]:
         """The checked components of ``relative``, or a refusal naming why not."""

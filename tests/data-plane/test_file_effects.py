@@ -18,6 +18,7 @@ from data_plane.broker_journal import BrokerJournal
 from data_plane.confirmation import ConfirmationGate, FieldChange
 from data_plane.effects.confine import ConfinedRoot
 from data_plane.effects.notes import NotesAdapter
+from data_plane.effects.tasks import TasksAdapter
 from data_plane.effects.tombstones import TombstoneLog
 from data_plane.errors import (
     ConfirmationError,
@@ -463,6 +464,103 @@ class BrokerFileEffectTests(TreeTest):
         )
         with self.assertRaises(ValidationError):
             self.broker.propose(claims, write)
+
+
+class TasksAdapterTests(TreeTest):
+    def setUp(self) -> None:
+        super().setUp()
+        self.adapter = TasksAdapter(self.root)
+        self.line = "buy milk +groceries @home"
+        self.target = f"tasks::{digest(self.line.encode())[:16]}"
+
+    def apply(self, capability: str, **values: object) -> dict:
+        from data_plane.confirmation import NormalizedOperation
+
+        operation = NormalizedOperation(
+            intent_id="intent-1",
+            source_id="tasks.todo",
+            capability=capability,
+            targets=(self.target,),
+            base_revision=values.get("base_revision"),  # type: ignore[arg-type]
+            field_diff=tuple(
+                FieldChange(field=name, before=None, after=value)
+                for name, value in values.items()
+                if name != "base_revision"
+            ),
+            affected_count=1,
+            epoch=1,
+        )
+        return self.adapter.apply(operation, "key-1")
+
+    def test_read_reports_the_line_and_its_parsed_fields(self) -> None:
+        self.write("todo.txt", self.line + "\n")
+        record = self.adapter.read(self.target)
+        self.assertEqual(record["text"], self.line)
+        self.assertEqual(record["file"], "todo.txt")
+        self.assertEqual(record["projects"], ["groceries"])
+        self.assertEqual(record["contexts"], ["home"])
+        self.assertFalse(record["done"])
+        self.assertEqual(record["revision"], digest(self.line.encode()))
+        self.assertEqual(self.adapter.revision(self.target), digest(self.line.encode()))
+
+    def test_create_appends_to_todo_and_creates_it_when_missing(self) -> None:
+        self.apply("create", text=self.line)
+        self.assertEqual((self.root / "todo.txt").read_text(), self.line + "\n")
+        self.assertEqual(self.adapter.read(self.target)["text"], self.line)
+
+    def test_create_keeps_the_existing_lines_and_their_blank_lines(self) -> None:
+        self.write("todo.txt", "first\n\nsecond")
+        self.apply("create", text=self.line)
+        self.assertEqual(
+            (self.root / "todo.txt").read_text(),
+            "first\n\nsecond\n" + self.line + "\n",
+        )
+
+    def test_create_of_a_line_that_already_exists_is_refused(self) -> None:
+        self.write("done.txt", self.line + "\n")
+        with self.assertRaises(ValidationError):
+            self.apply("create", text=self.line)
+
+    def test_delete_removes_every_occurrence_in_both_files(self) -> None:
+        self.write("todo.txt", self.line + "\nkeep me\n" + self.line + "\n")
+        self.write("done.txt", self.line + "\n")
+        effect = self.apply("delete", base_revision=digest(self.line.encode()))
+        self.assertEqual(effect["removed"], 3)
+        self.assertEqual((self.root / "todo.txt").read_text(), "keep me\n")
+        self.assertEqual((self.root / "done.txt").read_text(), "")
+        self.assertTrue(self.adapter.read(self.target)["tombstone"])
+
+    def test_a_second_delete_is_a_no_op(self) -> None:
+        self.apply("create", text=self.line)
+        self.apply("delete", base_revision=digest(self.line.encode()))
+        self.apply("delete", base_revision=None)
+        self.assertTrue(self.adapter.read(self.target)["tombstone"])
+
+    def test_delete_of_an_absent_task_is_a_no_op(self) -> None:
+        self.apply("delete", base_revision=None)
+        self.assertEqual(self.adapter.read(self.target), {})
+
+    def test_update_is_not_a_capability_of_a_line_identified_task(self) -> None:
+        self.apply("create", text=self.line)
+        with self.assertRaises(ValidationError):
+            self.apply("update", text="buy oat milk")
+
+    def test_a_multi_line_text_is_refused(self) -> None:
+        with self.assertRaises(ValidationError):
+            self.apply("create", text="first\nsecond")
+
+    def test_a_target_that_is_not_a_digest_is_refused(self) -> None:
+        for target in ("tasks::zz", "tasks::" + "0" * 15, "done::" + "0" * 16):
+            with self.subTest(target=target):
+                with self.assertRaises(ValidationError):
+                    self.adapter.read(target)
+
+    def test_search_finds_and_dedupes_across_both_files(self) -> None:
+        self.write("todo.txt", self.line + "\n")
+        self.write("done.txt", self.line + "\nx  old thing\n")
+        found = self.adapter.search("milk")
+        self.assertEqual([record["task_id"] for record in found], [self.target])
+        self.assertEqual(len(self.adapter.search("thing")), 1)
 
 
 class _Recorder:

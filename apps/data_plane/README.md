@@ -17,10 +17,14 @@ so the endpoint contracts can be exercised before a deployment exists.
 Backups are not a service: the host runs the `data_plane` CLI (`backup-run`,
 `backup-freshness`, ...) over one recursive ZFS snapshot instead.
 
-The notes source has a real adapter. `libs/data_plane/effects/` implements the
-broker's four calls over one confined vault, with descriptor-relative path
-handling, an atomic replace, and a target-keyed tombstone ledger. No unit selects
-it yet; until one does, the broker still answers from the fixture.
+The notes and tasks sources have real adapters. `libs/data_plane/effects/`
+implements the broker's four calls over one confined root, with descriptor-
+relative path handling, an atomic replace, and a target-keyed tombstone ledger.
+`run.py` builds them instead of a fixture when `DATA_PLANE_NOTES_ROOT` or
+`DATA_PLANE_TASKS_ROOT` names a directory, and stops at startup when that root
+is unusable or the catalog does not declare the source: a broker that answered
+a write from a dict while the file stayed untouched is the failure this seam
+exists to remove.
 
 Nothing here issues a secret, and no secret is stored in the repository. A
 secret is read once from a file named on the command line or in the
@@ -44,7 +48,8 @@ python -m apps.data_plane.run confirmation --db state/intents.db --catalog catal
 
 Every flag also has an environment variable: `DATA_PLANE_HOST`,
 `DATA_PLANE_PORT`, `DATA_PLANE_DB`, `DATA_PLANE_SECRET_FILE`,
-`DATA_PLANE_SCHEMA`, `DATA_PLANE_CATALOG`, `DATA_PLANE_OPERATOR_KEY_FILE`,
+`DATA_PLANE_SCHEMA`, `DATA_PLANE_CATALOG`, `DATA_PLANE_NOTES_ROOT`, `DATA_PLANE_TASKS_ROOT`,
+`DATA_PLANE_OPERATOR_KEY_FILE`,
 `DATA_PLANE_OPERATOR_TOKEN_FILE`, `DATA_PLANE_APPROVAL_DB`,
 `APPROVAL_TTL_SECONDS`, and `DATA_PLANE_MAX_BODY_BYTES`. Logs go to stderr.
 The default bind is `127.0.0.1:8080`; a container sets `DATA_PLANE_HOST=0.0.0.0`

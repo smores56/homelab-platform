@@ -113,6 +113,56 @@
       ],
       "fidelity_limits": [],
       "notes": "General source: both profiles may read it; writes require the write broker."
+    },
+    {
+      "source_id": "notes.markdown",
+      "visibility": "personal",
+      "version": 1,
+      "epoch": 1,
+      "recovery_group": "notes",
+      "stable_id_fields": ["note_id"],
+      "revision_field": "revision",
+      "tombstone_field": "tombstone",
+      "attachment_hash_fields": [],
+      "capabilities": [
+        {"name": "read", "effect": "read", "requires_confirmation": false, "reversible": true},
+        {"name": "search", "effect": "search", "requires_confirmation": false, "reversible": true},
+        {"name": "create", "effect": "create", "requires_confirmation": false, "reversible": true},
+        {"name": "update", "effect": "update", "requires_confirmation": false, "reversible": true},
+        {"name": "delete", "effect": "delete", "requires_confirmation": true, "reversible": false, "description": "Parks for human confirmation and leaves a tombstone before unlinking."}
+      ],
+      "authority": [
+        {"field": "body", "authority": "portable_file", "exportable": true, "note": "The file's text is authoritative."},
+        {"field": "path", "authority": "portable_file", "exportable": true, "note": "The vault-relative path is the identity."},
+        {"field": "heading", "authority": "portable_file", "exportable": true, "note": "Derived from the body; never written."}
+      ],
+      "fidelity_limits": [
+        {"field": "remote_embeds", "reason": "Remote images and embeds are never fetched; only their text remains."},
+        {"field": "resolved_wikilinks", "reason": "Wiki-links stay unresolved text so the vault remains portable."}
+      ],
+      "notes": "Writable through the broker: the vault is the person's own file tree, and delete requires confirmation."
+    },
+    {
+      "source_id": "tasks.todo",
+      "visibility": "personal",
+      "version": 1,
+      "epoch": 1,
+      "recovery_group": "notes",
+      "stable_id_fields": ["task_id"],
+      "revision_field": "revision",
+      "tombstone_field": "tombstone",
+      "attachment_hash_fields": [],
+      "capabilities": [
+        {"name": "read", "effect": "read", "requires_confirmation": false, "reversible": true},
+        {"name": "search", "effect": "search", "requires_confirmation": false, "reversible": true},
+        {"name": "create", "effect": "create", "requires_confirmation": false, "reversible": true},
+        {"name": "delete", "effect": "delete", "requires_confirmation": true, "reversible": false, "description": "Removes every occurrence of the line and leaves a tombstone."}
+      ],
+      "authority": [
+        {"field": "text", "authority": "portable_file", "exportable": true, "note": "The whole todo.txt line; its digest is the identity."}
+      ],
+      "fidelity_limits": [],
+      "notes": "Writable through the broker: create appends to todo.txt; an edited line is delete plus create."
     }
   ]
 }
