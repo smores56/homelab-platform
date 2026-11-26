@@ -22,9 +22,10 @@ implements the broker's four calls over one confined root, with descriptor-
 relative path handling, an atomic replace, and a target-keyed tombstone ledger.
 `run.py` builds them instead of a fixture when `DATA_PLANE_NOTES_ROOT` or
 `DATA_PLANE_TASKS_ROOT` names a directory, and stops at startup when that root
-is unusable or the catalog does not declare the source: a broker that answered
-a write from a dict while the file stayed untouched is the failure this seam
-exists to remove.
+is unusable, when the catalog does not declare the source, or when any source
+the catalog makes writable has no root at all. A broker that answered a write
+from a dict while the file stayed untouched is the failure this seam exists to
+remove, so the shipped catalog cannot be served by fixtures.
 
 Nothing here issues a secret, and no secret is stored in the repository. A
 secret is read once from a file named on the command line or in the

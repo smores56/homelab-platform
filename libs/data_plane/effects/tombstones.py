@@ -40,8 +40,13 @@ def _tail(stream) -> bytes:
     info = os.fstat(stream.fileno())
     if info.st_size <= MAX_LEDGER_BYTES:
         return stream.read()
-    stream.seek(info.st_size - MAX_LEDGER_BYTES)
+    offset = info.st_size - MAX_LEDGER_BYTES
+    stream.seek(offset)
     raw = stream.read()
+    stream.seek(offset - 1)
+    if stream.read(1) == b"\n":
+        # The window happens to start on a line boundary; the first line is whole.
+        return raw
     newline = raw.find(b"\n")
     return b"" if newline < 0 else raw[newline + 1 :]
 
@@ -145,7 +150,11 @@ class TombstoneLog:
 
         root = self._open_root()
         try:
-            os.close(self._control_directory(root))
+            directory = self._control_directory(root)
+            try:
+                os.close(self._open_ledger(directory))
+            finally:
+                os.close(directory)
         finally:
             os.close(root)
 

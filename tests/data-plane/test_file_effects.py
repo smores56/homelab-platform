@@ -13,6 +13,7 @@ import stat
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from data_plane.broker import MAX_FIELD_BYTES, Broker, WriteRequest
 from data_plane.broker_journal import BrokerJournal
@@ -261,6 +262,23 @@ class TombstoneLogTests(TreeTest):
 
 
 
+    def test_a_ledger_window_on_a_line_boundary_keeps_its_first_line(self) -> None:
+        log = TombstoneLog(self.root, source_id=SOURCE_ID)
+        log.declare(
+            target="notes::boundary.md",
+            revision="rB",
+            pre_image_sha256="0" * 64,
+            deleted_at="tB",
+        )
+        ledger = self.root / ".data-plane" / "tombstones.jsonl"
+        entry = ledger.read_bytes()
+        filler = b'{"a":1}\n'
+        with mock.patch.object(tombstones, "MAX_LEDGER_BYTES", len(entry)):
+            ledger.write_bytes(filler * 4 + entry)
+            found = log.lookup("notes::boundary.md")
+        assert found is not None
+        self.assertEqual(found["revision"], "rB")
+
     def test_an_old_ledger_stays_readable_past_the_bound(self) -> None:
         log = TombstoneLog(self.root, source_id=SOURCE_ID)
         log.declare(
@@ -404,6 +422,14 @@ class NotesAdapterTests(TreeTest):
         with self.assertRaises(StaleError):
             self.apply("delete", base_revision=revision)
         self.assertEqual(path.read_text(), "v2 worth keeping")
+
+    def test_a_note_named_like_the_control_directory_is_ordinary(self) -> None:
+        self.write(".data-plane.md", "not the ledger")
+        record = self.adapter.read("notes::.data-plane.md")
+        self.assertEqual(record["body"], "not the ledger")
+        self.assertEqual(
+            [hit["path"] for hit in self.adapter.search("ledger")], [".data-plane.md"]
+        )
 
     def test_search_finds_body_and_heading_and_skips_the_ledger(self) -> None:
         self.apply("create", body="# Espresso\n\nwater and beans\n")
@@ -622,6 +648,10 @@ class TasksAdapterTests(TreeTest):
         self.apply("create", text=self.line)
         with self.assertRaises(ValidationError):
             self.apply("update", text="buy oat milk")
+
+    def test_a_unicode_line_separator_is_refused(self) -> None:
+        with self.assertRaises(ValidationError):
+            self.apply("create", text="milk\u2028eggs")
 
     def test_a_multi_line_text_is_refused(self) -> None:
         with self.assertRaises(ValidationError):

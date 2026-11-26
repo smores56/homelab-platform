@@ -37,6 +37,10 @@ _ID_LENGTH = 16
 
 _ALLOWED_CONTROL = frozenset("\t")
 
+#: Characters ``str.splitlines`` treats as a line break. A task that carried one
+#: would be written as one line and read back as two tasks, so none is allowed.
+_LINE_BREAKS = frozenset("\n\r\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029")
+
 #: Every terminator ``str.splitlines`` recognises, longest first. A line's
 #: identity is the text the replica saw, so the rewrite must strip exactly the
 #: terminator the reader stripped; anything else leaves a line that can be read
@@ -106,7 +110,8 @@ def _line(operation: NormalizedOperation) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValidationError("a task text must be a non-blank line")
     if any(
-        (ord(character) < 0x20 and character not in _ALLOWED_CONTROL)
+        character in _LINE_BREAKS
+        or (ord(character) < 0x20 and character not in _ALLOWED_CONTROL)
         or 0x7F <= ord(character) <= 0x9F
         for character in value
     ):
@@ -220,7 +225,7 @@ class TasksAdapter:
             if line is not None:
                 result["removed"] = counts.get(line, 0)
                 result["deleted"] = result["removed"] > 0
-        return {"applied": sum(int(item["removed"]) for item in results), "results": results}
+        return {"applied": len(results), "results": results}
 
     def _append(self, name: str, line: str) -> None:
         snapshot = self._root.read_optional(name)
@@ -259,28 +264,22 @@ class TasksAdapter:
                 )
         if not rewrites:
             raise StaleError(f"no occurrence of {sorted(wanted)!r} is left")
-        # Both base revisions are checked before either file is written, and a
-        # failure between the two writes restores the first: the pair is not
-        # one atomic unit on this filesystem, so the smallest possible window and
-        # a rollback are the honest guarantee.
+        # The pair is not one atomic unit on this filesystem. Both base
+        # revisions are checked first, and a failure restores every file that
+        # holds the new bytes -- including the one whose write raised, which may
+        # have landed before its fsync did.
         for name, _, base, _ in rewrites:
             if self._root.revision(name) != base:
                 raise StaleError(f"{name} moved before the rewrite")
-        written: list[tuple[str, str, bytes]] = []
         try:
             for name, _, base, body in rewrites:
                 self._root.write(name, body, base_revision=base)
-                written.append((name, _digest_bytes(body), body))
         except BaseException:
-            for name, original, _, _ in rewrites[: len(written)]:
+            for name, original, _, body in rewrites:
                 try:
-                    self._root.write(
-                        name,
-                        original,
-                        base_revision=next(
-                            base for written_name, base, _ in written if written_name == name
-                        ),
-                    )
+                    written = _digest_bytes(body)
+                    if self._root.revision(name) == written:
+                        self._root.write(name, original, base_revision=written)
                 except (ValidationError, StaleError):
                     pass
             raise

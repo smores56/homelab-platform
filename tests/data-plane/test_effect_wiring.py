@@ -17,8 +17,8 @@ for candidate in (str(ROOT), str(ROOT / "libs")):
     if candidate not in sys.path:
         sys.path.insert(0, candidate)
 
-from data_plane.effects import NotesAdapter, TasksAdapter  # noqa: E402
-from data_plane.errors import ValidationError  # noqa: E402
+from data_plane.effects import NotesAdapter, TasksAdapter
+from data_plane.errors import ValidationError
 
 from apps.data_plane import run
 
@@ -56,20 +56,34 @@ class AdapterSelectionTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.directory.cleanup()
 
-    def test_without_a_root_every_source_is_a_fixture(self) -> None:
-        adapters = run.build_adapters(self.sources)
-        self.assertIsInstance(adapters["notes.markdown"], run.FixtureAdapter)
-        self.assertIsInstance(adapters["tasks.todo"], run.FixtureAdapter)
+    def test_a_writable_source_without_a_root_is_refused(self) -> None:
+        # The shipped catalog makes notes and tasks writable, so a fixture
+        # answering them is the failure this seam exists to remove.
+        with self.assertRaises(run.ConfigError):
+            run.build_adapters(self.sources)
 
-    def test_a_notes_root_selects_the_real_owner_and_leaves_the_rest_alone(self) -> None:
-        adapters = run.build_adapters(self.sources, notes_root=str(self.root))
+    def test_a_half_configured_pair_is_refused(self) -> None:
+        with self.assertRaises(run.ConfigError):
+            run.build_adapters(self.sources, notes_root=str(self.root))
+
+    def test_both_roots_select_the_real_owners_and_leave_the_rest_alone(self) -> None:
+        adapters = run.build_adapters(
+            self.sources, notes_root=str(self.root), tasks_root=str(self.root)
+        )
         self.assertIsInstance(adapters["notes.markdown"], NotesAdapter)
-        self.assertIsInstance(adapters["tasks.todo"], run.FixtureAdapter)
-
-    def test_a_tasks_root_selects_the_real_owner_and_leaves_the_rest_alone(self) -> None:
-        adapters = run.build_adapters(self.sources, tasks_root=str(self.root))
         self.assertIsInstance(adapters["tasks.todo"], TasksAdapter)
-        self.assertIsInstance(adapters["notes.markdown"], run.FixtureAdapter)
+        self.assertIsInstance(adapters["brave.history"], run.FixtureAdapter)
+
+    def test_a_read_only_catalog_still_answers_from_fixtures(self) -> None:
+        sources = {
+            source_id: contract
+            for source_id, contract in self.sources.items()
+            if not contract.writable
+        }
+        adapters = run.build_adapters(sources)
+        self.assertTrue(
+            all(isinstance(adapter, run.FixtureAdapter) for adapter in adapters.values())
+        )
 
     def test_a_root_the_catalog_does_not_declare_is_refused(self) -> None:
         sources = {"books.opds": self.sources["books.opds"]}

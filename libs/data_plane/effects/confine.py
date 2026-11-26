@@ -113,7 +113,7 @@ class ConfinedRoot:
                 raise ValidationError(
                     f"{self._label} target {relative!r} names a version-control path"
                 )
-            if part.startswith(CONTROL_ROOT):
+            if part == CONTROL_ROOT:
                 raise ValidationError(
                     f"{self._label} target {relative!r} names the effect owner's control"
                     " directory"
@@ -168,6 +168,13 @@ class ConfinedRoot:
         ``must_exist`` is what separates an update from a create: with no base
         revision, a missing file is a legitimate create only when the caller is
         creating.
+
+        No filesystem primitive can compare-and-swap a name, so the guarantee is
+        two-layered: the base bytes are hashed through a descriptor that is
+        verified against the stat, and the leaf's inode is re-checked
+        immediately before the rename. A save that lands between those two
+        instants is still lost -- the window is one syscall, not the length of a
+        read.
         """
 
         if len(data) > MAX_FILE_BYTES:
@@ -193,39 +200,19 @@ class ConfinedRoot:
                 data,
                 relative,
                 mode=None if info is None else stat.S_IMODE(info.st_mode),
+                expected=info,
             )
             return hashlib.sha256(data).hexdigest()
 
     def create(self, relative: object, data: bytes) -> str:
-        """Write a file that must not exist yet, without ever replacing one.
-
-        ``os.link`` is the guard, not the ``stat`` above it: a rename has replace
-        semantics, so a file that appeared between the check and the write would
-        be destroyed. A hard link refuses an existing name atomically, and the
-        staged file is then unlinked.
-        """
+        """Write a file that must not exist yet, without ever replacing one."""
 
         if len(data) > MAX_FILE_BYTES:
             raise ValidationError(
                 f"{relative!r} is larger than {MAX_FILE_BYTES} bytes"
             )
         with self.parent(relative) as (directory, leaf):
-            temporary = self._stage(directory, data, relative, mode=None)
-            try:
-                try:
-                    os.link(temporary, leaf, src_dir_fd=directory, dst_dir_fd=directory)
-                except FileExistsError as error:
-                    raise ValidationError(f"{relative!r} already exists") from error
-                except OSError as error:
-                    raise ValidationError(
-                        f"{relative!r} cannot be created: {_reason(error)}"
-                    ) from error
-            finally:
-                try:
-                    os.unlink(temporary, dir_fd=directory)
-                except OSError:
-                    pass
-            os.fsync(directory)
+            self._replace(directory, leaf, data, relative, mode=None, expected=None)
             return hashlib.sha256(data).hexdigest()
 
     def remove(
@@ -233,9 +220,10 @@ class ConfinedRoot:
     ) -> str | None:
         """Delete the file and return the digest it had, or ``None`` if absent.
 
-        ``expect_revision`` is checked against the bytes the unlink will actually
-        remove, under the same descriptor, so a version written between the
-        caller's read and this call is refused instead of destroyed.
+        ``expect_revision`` is checked against the bytes about to be unlinked,
+        and the leaf's inode is re-checked immediately before the unlink. An
+        unlink names a path, so a save that lands in that one-system-call window
+        is still lost; nothing in this process can close it.
         """
 
         with self.parent(relative) as (directory, leaf):
@@ -247,6 +235,12 @@ class ConfinedRoot:
                 raise StaleError(
                     f"{relative!r} is at revision {digest!r}, not {expect_revision!r}"
                 )
+            try:
+                now = os.stat(leaf, dir_fd=directory, follow_symlinks=False)
+            except FileNotFoundError as error:
+                raise StaleError(f"{relative!r} vanished before it could be removed") from error
+            if (now.st_dev, now.st_ino) != (info.st_dev, info.st_ino):
+                raise StaleError(f"{relative!r} moved before it could be removed")
             try:
                 os.unlink(leaf, dir_fd=directory)
             except OSError as error:
@@ -275,7 +269,7 @@ class ConfinedRoot:
             if stat.S_ISLNK(info.st_mode):
                 continue
             if stat.S_ISDIR(info.st_mode):
-                if name in CONTROL_COMPONENTS or name.startswith(CONTROL_ROOT):
+                if name in CONTROL_COMPONENTS or name == CONTROL_ROOT:
                     continue
                 try:
                     child = os.open(name, _OPEN_DIRECTORY, dir_fd=directory)
@@ -425,10 +419,50 @@ class ConfinedRoot:
         relative: object,
         *,
         mode: int | None = None,
+        expected: os.stat_result | None = None,
     ) -> None:
+        """Stage the bytes, then claim the name.
+
+        ``expected is None`` means "this name must be free", and ``os.link``
+        enforces it without replace semantics -- a rename would silently destroy
+        a file that appeared after the caller's check. Otherwise the leaf's inode
+        is compared to the one whose bytes were hashed, so a version that arrived
+        after the read is refused instead of overwritten.
+        """
+
         temporary = cls._stage(directory, data, relative, mode=mode)
         try:
-            os.replace(temporary, leaf, src_dir_fd=directory, dst_dir_fd=directory)
+            if expected is None:
+                try:
+                    os.link(temporary, leaf, src_dir_fd=directory, dst_dir_fd=directory)
+                except FileExistsError as error:
+                    raise ValidationError(f"{relative!r} already exists") from error
+                except OSError as error:
+                    raise ValidationError(
+                        f"{relative!r} cannot be created: {_reason(error)}"
+                    ) from error
+                try:
+                    os.unlink(temporary, dir_fd=directory)
+                except OSError as error:
+                    raise ValidationError(
+                        f"{relative!r} was created but its staging link survived:"
+                        f" {_reason(error)}"
+                    ) from error
+            else:
+                try:
+                    current = os.stat(leaf, dir_fd=directory, follow_symlinks=False)
+                except FileNotFoundError as error:
+                    raise StaleError(
+                        f"{relative!r} vanished before it could be written"
+                    ) from error
+                if (current.st_dev, current.st_ino) != (
+                    expected.st_dev,
+                    expected.st_ino,
+                ):
+                    raise StaleError(
+                        f"{relative!r} moved between the read and the write"
+                    )
+                os.replace(temporary, leaf, src_dir_fd=directory, dst_dir_fd=directory)
         except BaseException:
             try:
                 os.unlink(temporary, dir_fd=directory)

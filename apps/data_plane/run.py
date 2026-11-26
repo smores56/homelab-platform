@@ -336,6 +336,12 @@ def build_adapters(
                 f"a root is configured for {source_id} but the catalog has no such source"
             )
         adapters[source_id] = factory(root)
+    for source_id, contract in sources.items():
+        if contract.writable and isinstance(adapters[source_id], FixtureAdapter):
+            raise ConfigError(
+                f"{source_id} declares write capabilities but no root is configured;"
+                " a fixture would report a write that never reached a file"
+            )
     return adapters
 
 
