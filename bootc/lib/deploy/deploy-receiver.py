@@ -36,6 +36,7 @@ import hmac
 import json
 import os
 import signal
+import stat
 import sys
 import threading
 import time
@@ -245,21 +246,48 @@ def parse_secret(path: str) -> bytes | None:
     return None
 
 
+def secret_mode_problem(path: str) -> str | None:
+    """A secret anyone but its owner can read, or None.
+
+    The edge keeps its deploy secrets in plaintext (design #939 section 4), and a
+    plaintext HMAC key readable by a group or the world is that key published: the
+    box's only second factor for a webhook that reboots it. sops-decrypt writes
+    0400 and the operator's files are 0600, so the rule is "no group or other
+    bit" rather than one exact mode, and an absent file is left to load_secrets,
+    which names it.
+    """
+    try:
+        mode = stat.S_IMODE(os.stat(path).st_mode)
+    except OSError:
+        return None
+    if mode & 0o077:
+        return f"{path} is mode {mode:04o}; a deploy secret must be 0600 or stricter"
+    return None
+
+
 def load_secrets() -> list[bytes]:
     """Both rotation slots, or a refusal to start.
 
     The current secret is not optional: a listener that started with none would
     answer 202 to a request it never authenticated, and every caller would
-    believe a deploy had been queued.
+    believe a deploy had been queued. A secret the wrong process can read is the
+    same failure with a quieter cause, so the mode is checked before the scalar
+    is, and both refusals name the file.
     """
-    current = parse_secret(os.path.join(SECRETS_DIR, CURRENT_SECRET))
+    current_path = os.path.join(SECRETS_DIR, CURRENT_SECRET)
+    following_path = os.path.join(SECRETS_DIR, NEXT_SECRET)
+    for path in (current_path, following_path):
+        problem = secret_mode_problem(path)
+        if problem:
+            raise SystemExit(f"deploy-receiver: refusing to start: {problem}")
+    current = parse_secret(current_path)
     if not current:
         raise SystemExit(
-            f"deploy-receiver: refusing to start: {os.path.join(SECRETS_DIR, CURRENT_SECRET)} "
+            f"deploy-receiver: refusing to start: {current_path} "
             "is missing or empty; a listener with no secret would accept anything"
         )
     secrets = [current]
-    following = parse_secret(os.path.join(SECRETS_DIR, NEXT_SECRET))
+    following = parse_secret(following_path)
     if following:
         secrets.append(following)
     return secrets

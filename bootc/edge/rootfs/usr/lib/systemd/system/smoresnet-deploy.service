@@ -1,0 +1,68 @@
+[Unit]
+Description=Drain the deploy queue on the public edge
+# No sops-decrypt here, on purpose: the edge has no SOPS plane and no age identity
+# at all (design #939 section 4). The only secret this plane reads is the deploy
+# ping URL, plaintext 0600 under /etc/smoresnet, written by the operator's
+# edge-bootstrap. A dependency on a unit this image does not ship would leave the
+# queue undrained for ever.
+After=systemd-tmpfiles-setup.service
+After=network-online.target
+# A drain that ran while the boot gate was still deciding would verify against a
+# state.json the gate had not written yet. After= only: a gate that held must not
+# stop the queue from draining, it is the retry that carries it.
+After=edge-boot-gate.service
+# A wedged drain must not hold the shutdown path.
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/deploy-drain-edge
+# The longest honest run: the verifier's own 1200 s deadline (the 600 s switch
+# pull plus the HTTP calls around it) and one reboot, with a parked deferral in
+# front. The default would be 90 s, which is shorter than one pull.
+TimeoutStartSec=3600
+UMask=0077
+User=root
+# The deploy lock's own directory, never /etc/smoresnet: that tree holds the
+# plaintext secrets and must stay read-only to every deploy unit. Preserve=yes so
+# the gate's own runtime directory is not unlinked by this oneshot exiting.
+RuntimeDirectory=smortress-deploy
+# bootc creates a temporary containers-storage at /run/bootc/storage while it
+# stages a pull; ProtectSystem=strict leaves /run read-only, so PID 1 creates that
+# one directory writable instead of opening all of /run.
+RuntimeDirectory=bootc
+# ostree opens its runtime auth file at /run/ostree/auth.json on every pull;
+# without it the switch fails with "Function not implemented".
+RuntimeDirectory=ostree
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+
+# The drain writes state.json, the queue, the journal and pending.json, and the
+# verifier it runs stages a boot entry.
+ProtectSystem=strict
+ReadWritePaths=/var/lib/homelab/deploy
+# `bootc switch` remounts /sysroot writable before it writes anything, and
+# ProtectSystem=strict would turn that remount into "Initializing storage:
+# Read-only file system". /boot is where the boot entry lands.
+ReadWritePaths=/boot
+ReadWritePaths=/sysroot
+# bootc probes its SELinux install_t policy by writing a temporary file under
+# /tmp, and staging does the same under /var/tmp; PrivateTmp=yes keeps the first
+# private to this unit, so opening it back up gives bootc a scratch tree.
+ReadWritePaths=/tmp
+ReadWritePaths=/var/tmp
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# No [Install] section: nothing starts this drain yet. T11's dispatch-only notify
+# and its 03:00 poll are the triggers, and until they land the drain runs by hand
+# or by `systemctl start smoresnet-deploy.service`.

@@ -1,0 +1,44 @@
+[Unit]
+Description=Ping the deploy check when the edge's receiver is alive and its queue is moving
+# No sops-decrypt: /etc/smoresnet holds the ping URL in plaintext, 0600, and this
+# unit must page on a host where no decrypt unit exists at all.
+After=network-online.target
+# Ordering only: the listener is Restart=always, so a beat that ran before it
+# started would page for a host one second into its boot.
+After=smoresnet-deploy-listener.service
+After=systemd-tmpfiles-setup.service
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/deploy-heartbeat
+# The edge's honest worst wait is not the server's. There is no snapshot gate and
+# no tenant apply here: one entry can only be behind the verifier's own 1200 s
+# deadline and one reboot, so half an hour sits above the slowest honest deploy and
+# still pages a wedged queue long before the server's two hours would. A host with
+# no snapshot and no boot counting is the one that can least afford to sit on a
+# stuck queue.
+Environment=DEPLOY_QUEUE_MAX_AGE=1800
+# The page is the operator's capability URL, plaintext at rest on this box, written
+# by edge-bootstrap. Absent, every beat journals notify-skipped instead of failing.
+Environment=DEPLOY_PING_SECRET=/etc/smoresnet/deploy-ping-url
+# The health probe is bounded to 5 s and the ping to 10 s; this is the net under a
+# run that hangs anyway, and it has to stay well inside the timer's own period.
+TimeoutStartSec=120
+UMask=0077
+User=root
+# Read-only apart from the journal line it appends: the heartbeat must not be able
+# to touch the queue it is judging.
+ProtectSystem=strict
+ReadWritePaths=/var/lib/homelab/deploy
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
