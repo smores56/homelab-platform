@@ -1505,50 +1505,43 @@ leftover tree:
 sudo rm -rf /var/lib/restic/ssd/drill/ssd-agent-*
 ```
 
-### Cut the replicas over to the store
+### The replica store cutover (already done)
 
 Before #961 a pass published `<source>/<generation>/`, and the mail replica grew to
-16.4 million paths, which is what broke the backup window. A pass now writes
-content-addressed objects under `objects/<2hex>/<sha256>` and one `state.sqlite`
-beside them (`docs/raw-replicas.md`); the Restic plane is the history the old
-trees carried. Nothing reads the old trees, so they are removed and the
-collectors rebuild the state -- the first mail pass re-downloads every body.
+16.4 million paths over 304,478 inodes, which is what broke the backup window. A
+pass now writes content-addressed objects under `objects/<2hex>/<sha256>` and one
+`state.sqlite` beside them (`docs/raw-replicas.md`); the Restic plane is the history
+the old trees carried.
 
-Boot the image that pins the store first ("Move a running host to a newer build").
-Then stop every writer, clear the replica root, and run one pass of each source:
+The cutover ran on smortress on 2026-11-26 from the image built at `263e6ab`
+(agent-runtime `6c6964bf94dd…`), after the front ends were signed in again: writers
+stopped, the replica root cleared, collectors unmasked and one pass started each.
+All eight sources publish a store, and the first mail pass re-downloaded every body:
+74,479 objects committed at 22:06, six and a half hours after it started, with
+`INBOX` at 684.
 
-```sh
-sudo systemctl stop smortress-agent-mail-stream.service \
-  smortress-agent-collect-notes.timer smortress-agent-collect-tasks.timer \
-  smortress-agent-collect-finance.timer smortress-agent-collect-calendar.timer \
-  smortress-agent-collect-brave.path smortress-agent-collect-brave.timer \
-  smortress-agent-collect-photos.timer smortress-agent-collect-music.timer
-sudo find /var/lib/agent/local/replica -mindepth 1 -delete
-sudo systemctl unmask smortress-agent-mail-stream.service \
-  smortress-agent-collect-notes.timer smortress-agent-collect-tasks.timer \
-  smortress-agent-collect-finance.timer smortress-agent-collect-calendar.timer \
-  smortress-agent-collect-brave.path smortress-agent-collect-brave.timer \
-  smortress-agent-collect-photos.timer smortress-agent-collect-music.timer
-sudo systemctl start smortress-agent-collect-notes.service \
-  smortress-agent-collect-tasks.service smortress-agent-collect-finance.service \
-  smortress-agent-collect-calendar.service smortress-agent-collect-photos.service \
-  smortress-agent-collect-music.service smortress-agent-mail-stream.service
-```
+Do not repeat it. The wipe was only correct for sources that had never published a
+store; the same `find /var/lib/agent/local/replica -mindepth 1 -delete` now throws
+away live state and costs a full re-collection, mail included (hours, and one Tuta
+sign-in to keep). A single stale source is a single directory: stop its writer,
+remove only that one, start the pass again.
 
-Each collector `start` runs its pass in the foreground, so a refused pass (a
-missing vault, a vanished sign-in) exits 3 with the reason on stderr instead of
-leaving a timer to report it later; the mail stream starts and stays up. Brave
-advances on the next `History` change or the six-hourly reconcile. Prove one state
-per source and that the bytes are objects:
+Two mail passes after the cutover carried 74,478 and 74,483 objects in a couple of
+minutes each, and the third committed one new message, so a live stream proves
+itself with a line whose `version` rises and whose `carried` is close to `objects`.
+
+How the store should look — one state per source and nothing else at the root:
 
 ```sh
 sudo find /var/lib/agent/local/replica -maxdepth 2 -name state.sqlite
-sudo find /var/lib/agent/local/replica -path '*/objects/*' -type f | wc -l
-sudo systemctl list-timers 'smortress-agent-collect-*'
+sudo find /var/lib/agent/local/replica -path '*/objects/*' -type f \
+  | awk -F/ '{print $7}' | sort | uniq -c
 ```
 
-A source with no `state.sqlite` answers `unavailable` and the facade stays up;
-its first `sources.read` or `sources.search` pays one projection over that source.
+Brave's file count is small on purpose: one `brave::db` object plus one per table,
+while its report's `objects` is the row count across those tables. A source with no
+`state.sqlite` answers `unavailable` and the facade stays up; its first
+`sources.read` or `sources.search` pays one projection over that source.
 
 ## Recover
 
