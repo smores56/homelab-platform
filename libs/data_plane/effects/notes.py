@@ -13,6 +13,12 @@ than ``body`` is refused: ``heading`` and ``updated_at`` are functions of the
 body and the file, and accepting them would promise a value the next read could
 not reproduce. A delete declares its tombstone before it unlinks, so a crash in
 between leaves evidence of an intent, never of a completed deletion.
+
+One residual is the broker's, not this module's: a bulk create writes its targets
+one after another, so a failure partway leaves the earlier ones on disk and the
+broker records the intent as an outcome it cannot confirm. That is the same
+answer the broker gives any adapter, and settling it by hand is the intended
+cost of a bulk effect.
 """
 
 from __future__ import annotations

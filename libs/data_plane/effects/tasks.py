@@ -12,6 +12,11 @@ plus create, and the second op needs its own approval. And a delete removes
 every occurrence from both files, because the replica collapsed duplicate lines
 into one id: removing one would leave the target alive and turn a completed
 mutation into an unknown outcome.
+
+The pair is not one atomic unit on this filesystem. A delete checks both base
+revisions before either write and restores any file that already holds the new
+bytes when a later write fails, which bounds the damage but cannot remove it: a
+power loss between the two writes leaves one file rewritten.
 """
 
 from __future__ import annotations

@@ -14,6 +14,11 @@ not look at the file — which is why the read path looks first.
 It lives in ``<root>/.data-plane/``: both file collectors ignore that name (the
 notes pass collects only ``*.md``, the tasks pass reads only its two files), so
 the ledger produces no replica object.
+
+A lookup reads the newest window of the file, because the newest entry wins and
+an unbounded ledger must stay readable. Past that window a target reads as never
+deleted, which the file itself corrects while it exists; the ledger is an aid to
+read-back, not a history.
 """
 
 from __future__ import annotations
