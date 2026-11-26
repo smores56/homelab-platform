@@ -1137,11 +1137,21 @@ class PhotosTests(unittest.TestCase):
             root = Path(work)
             library = self._library(root)
             future = library / "2026" / "11" / "harbour-sunset.jpg"
-            year_10000 = 253_402_300_800
-            os.utime(future, ns=(year_10000 * 10**9,) * 2)
+            # The filesystem is not the subject here: ext4 clamps a year-10000
+            # utime back into range, so a real mtime only reproduces on hosts
+            # whose fs accepts it. Present the unrepresentable value directly.
+            real_stat = Path.stat
+            future_stat = mock.Mock(wraps=real_stat(future), st_mtime=253_402_300_800.0)
+
+            def stat(path: Path, **kwargs: object) -> os.stat_result:
+                if path == future:
+                    return future_stat
+                return real_stat(path, **kwargs)
+
             generation = _generation(root / "replica")
-            with self.assertRaises(PublishError):
-                collect_photos(library, generation, captured_at=CAPTURED)
+            with mock.patch.object(Path, "stat", stat):
+                with self.assertRaises(PublishError):
+                    collect_photos(library, generation, captured_at=CAPTURED)
             self.assertFalse(any((root / "replica").glob("published/*")))
 
     def test_the_report_counts_the_files_it_skipped(self) -> None:
