@@ -14,7 +14,7 @@
 #   tests/deploy/receiver.bats
 load ../helpers
 
-receiver=bootc/server/rootfs/usr/libexec/deploy-receiver.py
+receiver=bootc/lib/deploy/deploy-receiver.py
 lib=scripts/deploy-state.sh
 
 commit_ok=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
