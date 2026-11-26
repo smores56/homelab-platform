@@ -36,6 +36,7 @@ case $artifact in
     target_repo=$IMAGE_REPO
     containerfile=bootc/server/Containerfile
     pins=(SOPS_VERSION SOPS_SHA256 AGE_VERSION AGE_SHA256 RESTIC_VERSION RESTIC_SHA256 \
+      BACKREST_VERSION BACKREST_SHA256 \
       PAM_RSSH_VERSION PAM_RSSH_COMMIT)
     next="pin it in ignition/operator/derived-image"
     ;;

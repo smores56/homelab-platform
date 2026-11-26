@@ -99,7 +99,7 @@ the opds name is renamed|Caddy serves opds.sammohr.dev|bootc/edge/rootfs/usr/sha
 the recovery name is renamed|Caddy serves recovery.sammohr.dev|bootc/edge/rootfs/usr/share/smoresnet/Caddyfile|sed|s#^recovery\.sammohr\.dev#recovery.example.dev#
 Immich proxies the host instead of its Service|Caddy proxies Immich to the Service upstream|bootc/edge/rootfs/usr/share/smoresnet/Caddyfile|sed|s#reverse_proxy \{\$IMMICH_UPSTREAM\}#reverse_proxy https://smortress.example#
 OPDShelf proxies the host instead of its Service|Caddy proxies OPDShelf to the Service upstream|bootc/edge/rootfs/usr/share/smoresnet/Caddyfile|sed|s#reverse_proxy \{\$OPDS_UPSTREAM\}#reverse_proxy https://smortress.example#
-recovery proxies off the box|Caddy proxies the recovery name to the loopback guard|bootc/edge/rootfs/usr/share/smoresnet/Caddyfile|sed|s#reverse_proxy http://127.0.0.1:9898#reverse_proxy https://smortress.example#
+recovery proxies to a reader on the box|Caddy proxies the recovery name to the Service upstream|bootc/edge/rootfs/usr/share/smoresnet/Caddyfile|sed|s#reverse_proxy \{\$RECOVERY_UPSTREAM\}#reverse_proxy http://127.0.0.1:9898#
 the HTTP-01 challenge comes back|Caddy never answers the HTTP-01 challenge|bootc/edge/rootfs/usr/share/smoresnet/Caddyfile|sed|\#disable_http_challenge#d
 the admin API comes back|Caddy has no admin API|bootc/edge/rootfs/usr/share/smoresnet/Caddyfile|sed|\#admin off#d
 a fourth public name is added|Caddy serves exactly the three public names|bootc/edge/rootfs/usr/share/smoresnet/Caddyfile|append|fourth.sammohr.dev {

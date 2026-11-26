@@ -1,0 +1,12 @@
+[Unit]
+Description=Run the recovery reader watchdog every five minutes
+# The reader runs on this host now, so the probe is local and cheap; five minutes
+# is what the edge's timer used.
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

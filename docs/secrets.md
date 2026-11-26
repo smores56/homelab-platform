@@ -127,7 +127,10 @@ orders are the public edge's alone. `tailnet-dns-api-token` may stay in the
 source file until the operator revokes it; nothing reads it any more. The backup
 write pair reaches the data-plane host through
 `unpack-host-secrets.py --cloudflare`, and the backup read pair is installed in
-`/etc/backrest/env` on the edge.
+`/etc/backrest/env` on smortress, the host the recovery reader runs on (SDLC
+#953). No restic or R2 credential is on the public edge at all: the edge proxies
+`recovery.sammohr.dev` to the reader's `svc:recovery` Service over the tailnet,
+which is the reason the reader moved.
 
 `secrets/660-host.yaml` is the host-plane bundle: a freshly generated restic
 password, the event and broker tokens, and `consumers_json`. The R2 pair is not

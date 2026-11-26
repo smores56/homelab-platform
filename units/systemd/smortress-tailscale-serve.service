@@ -12,13 +12,18 @@
 # with Wants rather than Requires, because a missing library may cost that one
 # route, never the three application routes.
 #
+# The recovery reader's Service (SDLC #953) is ordered after its unit for the
+# same shape of reason: `smortress-backrest.service` is a daemon, so the ordering
+# costs no boot time, and the Service is a Wants because a reader with no
+# /etc/backrest/env must cost its own route at most, never the edge's.
+#
 # This unit needs an enrolled tailnet. Without one it fails visibly rather than
 # skipping, because a host whose applications answer on no route is a fault, not
 # a configuration choice.
 Description=Declare Tailscale Serve routes for the applications
 Requires=tailscaled.service
-After=network-online.target tailscaled.service smortress-tailscale-up.service zfs-ready@raw-wallpapers.service
-Wants=network-online.target smortress-tailscale-up.service zfs-ready@raw-wallpapers.service
+After=network-online.target tailscaled.service smortress-tailscale-up.service zfs-ready@raw-wallpapers.service smortress-backrest.service
+Wants=network-online.target smortress-tailscale-up.service zfs-ready@raw-wallpapers.service smortress-backrest.service
 
 [Service]
 Type=oneshot

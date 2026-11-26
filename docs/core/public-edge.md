@@ -5,7 +5,7 @@ The box that serves `photos.sammohr.dev`, `opds.sammohr.dev` and
 (SDLC #833 retired every Access application and tunnel). It exists so the media
 names can leave Cloudflare's data path: the atoms of the design are a tagged
 tailnet node, Caddy on 443 with a Let's Encrypt certificate, and a tailnet ACL
-that admits two Services and nothing else.
+that admits three Services and nothing else.
 
 Operator commands live in `docs/manual-steps.md#public-edge-vps`; this document is
 the shape, the failure modes and the rebuild.
@@ -36,7 +36,7 @@ Tailscale are OS infrastructure on a box whose only application is a TLS proxy.
 
 | Piece | Declared in | Purpose |
 | --- | --- | --- |
-| Caddy | `provision/edge/Caddyfile` | TLS for the three names: `photos` and `opds` proxy to the `svc:immich` and `svc:opds` Tailscale Services, `recovery` to the Backrest guard on loopback |
+| Caddy | `provision/edge/Caddyfile` | TLS for the three names: `photos`, `opds` and `recovery` each proxy to a Tailscale Service on smortress (`svc:immich`, `svc:opds`, `svc:recovery`). No application process runs on this box |
 | nftables | `provision/edge/nftables.conf` | 443 and udp/41641 public, 22 on `tailscale0` only |
 | sshd | `provision/edge/05-edge-hardening.conf` + `authorized_keys` | keys only, no password, no root password login; `05-` so it beats cloud-init's `50-cloud-init.conf` |
 | tailscale | `provision/edge/bootstrap.sh` | joins once as `tag:vps` with hostname `smoresnet` (the panel name, the OS name and the tailnet name are one word), tags set key expiry off; the bootstrap realigns an existing node's name |
@@ -71,9 +71,11 @@ Neither name is hardcoded: the bootstrap strips the first label off
 writes `IMMICH_UPSTREAM` and `OPDS_UPSTREAM` to `/etc/caddy/edge.env`, which is
 what the Caddyfile names and what `verify.sh` probes.
 
-`recovery` involves no tailnet upstream at all: Backrest runs on this box and
-Caddy proxies to its guard on `127.0.0.1:9898`, so the tailnet carries no
-recovery traffic and the ACL needs no rule for it.
+`recovery` is a Service like the other two since SDLC #953. Backrest ran on this
+box from #725 T2, which put the corpus-read credential on a box anybody can
+reach; it now runs on smortress behind its guard, Caddy proxies
+`https://recovery.<tailnet>.ts.net` (`$RECOVERY_UPSTREAM`), and the ACL admits
+`tag:vps -> svc:recovery:443`. A popped edge yields no corpus access at all.
 
 ### Certificates
 
@@ -90,7 +92,7 @@ challenge failed (`Cannot negotiate ALPN protocol "acme-tls/1"`). Caddy keeps
 retrying, and the first successful order is seconds after the record appears —
 which is why a new box, or a `edge_ipv4` change, is followed by a wait rather
 than a config edit. The on-box proof that does not need public DNS is `verify.sh`
-with `EXPECT_UPSTREAM=1`: firewall, both Service names answering on 443, and
+with `EXPECT_UPSTREAM=1`: firewall, all three Service names answering on 443, and
 this box unable to reach the host's own 443 at all.
 
 The ACME account key and the certificates live in Caddy's data directory
@@ -156,6 +158,7 @@ photo allowance, and a null-route would then take both roles down at once.
 | every name dead, tailnet fine | panel null-route, suspension, or host down | ctrl panel; reboot; console |
 | new IP after rebuild | a replacement VPS, not an OS reinstall | update `edge_ipv4`, apply, re-run the probe |
 | 404s where an app should answer | ACL, firewalld on smortress, or the Serve route | `tailscale ping`, then the host's `tailscale serve status` |
+| `recovery` answers 502 while `photos` works | smortress's reader, its guard or `svc:recovery` — never this box | `systemctl status smortress-backrest.service` and `journalctl -u smortress-backrest-watchdog.service` on smortress; `tests/backrest/check.bats` owns the shape |
 
 ## The boot gate
 
@@ -258,9 +261,9 @@ the rebuild, run once and timed before the cutover:
 4. Reconnect over the tailnet and run `provision/edge/verify.sh` with
    `EXPECT_UPSTREAM=1`.
 5. If the IPv4 changed, update `edge_ipv4` and apply; otherwise nothing to do.
-6. Record the elapsed time. The reader runs here (#725 T2), so a rebuild is also
-   the recovery reader's outage: minutes is the budget, and a longer one goes in
-   the kit as a finding rather than a footnote.
+6. Record the elapsed time. The reader no longer runs here (SDLC #953), so a
+   rebuild costs `recovery.sammohr.dev` only for the seconds Caddy spends ordering
+   its certificate: the reader itself and its credential stay on smortress.
 
 Restoring the Caddy data directory before step 3 shortens the wait for
 certificates; it is optional, and the ACME account it carries is the same one,
@@ -293,7 +296,7 @@ Both halves are outside the repository's own checks, and
 
 - `provision/edge/verify.sh` on the box: firewall shape, sshd, no port 80,
   Caddy listening, tailnet up with `tag:vps`; and with `EXPECT_UPSTREAM=1`, both
-  upstream certificates, both Service names and the 443 refusal.
+  upstream certificates, all three Service names and the 443 refusal.
 - `bootc/edge/tests/check.sh` in CI's `server-image` group
   (`.github/workflows/server-image-static.yml`, on any `bootc/**` pull request):
   the image's half of this list, carried onto `bootc/edge/rootfs` (design #939,
@@ -376,10 +379,11 @@ waits for the retirement gate and the origin-parity comparison, not for the box.
    ssh root@smoresnet EXPECT_UPSTREAM=1 /root/edge/verify.sh
    ```
 
-   Expect the previous routes unchanged plus `svc:immich` → `http://127.0.0.1:2283`
-   and `svc:opds` → `http://127.0.0.1:8083`, and a green upstream run: the firewall
-   shape, both Service names answering on 443, both upstream certificates
-   verifying, and this box unable to reach the host's own 443.
+   Expect the previous routes unchanged plus `svc:immich` → `http://127.0.0.1:2283`,
+   `svc:opds` → `http://127.0.0.1:8083` and `svc:recovery` → `http://127.0.0.1:9898`,
+   and a green upstream run: the firewall shape, all three Service names answering
+   on 443, all three upstream certificates verifying, and this box unable to reach
+   the host's own 443.
 7. **The names.** The cutover is done, so this step is the address only: record
    30 days of `photos` + `opds` transfer from before the cutover against the ctrl
    panel's graph now, and stop to size the plan if the traffic is a meaningful

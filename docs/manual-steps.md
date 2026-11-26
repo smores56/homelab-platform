@@ -1616,7 +1616,76 @@ pre-reboot snapshot the deploy gate took.
 
 The reader's gate repository, deploy and matrix are `docs/core/backrest.md`,
 "Operator order"; the read-only boundary, the gate matrix and where the reader
-runs are that document's own sections.
+runs are that document's own sections. The reader runs on smortress since SDLC
+#953 (`units/systemd/smortress-backrest.service`), and its credential is the one
+thing here the image does not carry: `/etc/backrest/env`, root-only, written once
+from the operator store and never committed.
+
+```sh
+# The two login hashes are base64(bcrypt), and the script that makes them runs a
+# throwaway container, so they are computed first and pasted into the file below.
+read -rsp 'backrest operator password: ' OPERATOR_PW
+printf '%s' "$OPERATOR_PW" | backrest/scripts/hash-password.sh   # BACKREST_OPERATOR_BCRYPT
+printf '%s' "$OPERATOR_PW" | backrest/scripts/hash-password.sh   # BACKREST_BOOTSTRAP_BCRYPT
+unset OPERATOR_PW
+
+sudo install -d -m 0700 /etc/backrest
+sudo install -m 0600 /dev/null /etc/backrest/env
+read -rsp 'restic password: ' RESTIC_PASSWORD
+{
+  printf 'RESTIC_PASSWORD=%s\n' "$RESTIC_PASSWORD"
+  printf 'R2_ACCESS_KEY_ID=%s\n' \
+    "$(mise x -- sops -d --extract '["restic-backup-ro-access-key-id"]' secrets/cloudflare.yaml)"
+  printf 'R2_SECRET_ACCESS_KEY=%s\n' \
+    "$(mise x -- sops -d --extract '["restic-backup-ro-secret-access-key"]' secrets/cloudflare.yaml)"
+  printf 'BACKREST_INSTANCE=smortress\n'
+  printf 'BACKREST_REPO_ID=r2\n'
+  printf 'BACKREST_REPO_URI=%s\n' \
+    "s3:https://385f7d47e2e8438fbda5d6f76d760434.r2.cloudflarestorage.com/homelab-restic/smortress"
+  printf 'BACKREST_REPO_GUID=%s\n' "<the 64-character restic repository id>"
+  printf 'BACKREST_OPERATOR_USER=smores56\n'
+  printf 'BACKREST_OPERATOR_BCRYPT=%s\n' "<the first hash>"
+  printf 'BACKREST_BOOTSTRAP_USER=bootstrap\n'
+  printf 'BACKREST_BOOTSTRAP_BCRYPT=%s\n' "<the second hash>"
+} | sudo tee /etc/backrest/env >/dev/null
+unset RESTIC_PASSWORD
+```
+
+The environment file is the whole credential: no restic or R2 value is in the
+image, in this repository, or on the public edge, which proxies the name over the
+tailnet to the reader's Service instead. The two hashes are the reader's own
+logins (`backrest/scripts/hash-password.sh` prints `base64(bcrypt)`); the
+bootstrap user exists so the guard can index snapshots.
+
+```sh
+sudo systemctl enable --now smortress-backrest.service
+sudo systemctl restart smortress-tailscale-serve.service
+sudo systemctl start smortress-backrest-watchdog.timer
+sudo ss -ltnp 'sport = :9898 or sport = :9899'    # guard on 9898, Backrest on 9899, both loopback
+curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:9898/   # 200: the guard answers
+tailscale serve status | grep recovery             # svc:recovery -> http://127.0.0.1:9898
+journalctl -u smortress-backrest.service -n 20 --no-pager
+```
+
+The watchdog's dead-man ping is optional and is one more root-only line: without
+it the timer still restarts the reader, it just reports to nobody.
+
+```sh
+sudo install -m 0600 /dev/null /etc/backrest/healthcheck-url
+read -rsp 'healthchecks ping url: ' HC_URL
+printf '%s\n' "$HC_URL" | sudo tee /etc/backrest/healthcheck-url >/dev/null
+unset HC_URL
+```
+
+Then prove the public path from anywhere:
+
+```sh
+curl -sS -o /dev/null -w '%{http_code}\n' https://recovery.sammohr.dev/   # 200, Backrest's login form
+scripts/verify-public-edge.sh                                            # all three names green
+```
+
+If the edge answers 502, the reader or its Service is down on smortress: `photos`
+and `opds` working while `recovery` fails is that case and nothing else.
 
 ## Tailnet and access
 

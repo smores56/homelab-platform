@@ -56,6 +56,7 @@ set +a
 # to the Service names, and Caddy would refuse the config outright.
 : "${IMMICH_UPSTREAM:?/etc/caddy/edge.env has no IMMICH_UPSTREAM}"
 : "${OPDS_UPSTREAM:?/etc/caddy/edge.env has no OPDS_UPSTREAM}"
+: "${RECOVERY_UPSTREAM:?/etc/caddy/edge.env has no RECOVERY_UPSTREAM}"
 
 # The config on disk is the config that will load.
 check "the installed Caddyfile validates" \
@@ -69,6 +70,12 @@ check "Caddy proxies Immich to the Service upstream" \
   grep -qF "reverse_proxy {\$IMMICH_UPSTREAM}" /etc/caddy/Caddyfile
 check "Caddy proxies OPDShelf to the Service upstream" \
   grep -qF "reverse_proxy {\$OPDS_UPSTREAM}" /etc/caddy/Caddyfile
+# The reader runs on smortress (SDLC #953): this box proxies the third name to a
+# Service like the other two, and a loopback reader here would be the credential
+# back on the public box.
+check "Caddy proxies the reader to the Service upstream" \
+  grep -qF "reverse_proxy {\$RECOVERY_UPSTREAM}" /etc/caddy/Caddyfile
+check_not "no reader listens on this box" grep -qF '127.0.0.1:9898' /etc/caddy/Caddyfile
 check "Caddy never answers HTTP-01" grep -qF 'disable_http_challenge' /etc/caddy/Caddyfile
 check "Caddy has no admin API" grep -qF 'admin off' /etc/caddy/Caddyfile
 # Exactly the three site blocks the design publishes, never a fourth: a site
@@ -79,9 +86,9 @@ eq "$(grep -E '^[a-z0-9.-]+[[:space:]]*\{' /etc/caddy/Caddyfile \
   'opds.sammohr.dev photos.sammohr.dev recovery.sammohr.dev ' \
   "Caddy serves exactly the three names"
 check_not "no site proxies 443" grep -qF ':443' /etc/caddy/Caddyfile
-# Anchored: an `http://` *upstream* inside a TLS site is expected, because the
-# recovery guard listens on loopback. What must not exist is a site whose address
-# starts with `http://`, which is a listener with no TLS at all.
+# Anchored: what must not exist is a site whose address starts with `http://`,
+# which is a listener with no TLS at all. Every upstream here is an `https://`
+# Service name, so an unanchored match would now catch nothing at all.
 check_not "no site answers plain HTTP" grep -qE '^http://' /etc/caddy/Caddyfile
 eq "$(stat -c '%a' /etc/caddy/edge.env)" 640 "the Caddy environment file is root-readable only"
 # Without a writable home Caddy cannot store or load a certificate, and the
@@ -138,8 +145,8 @@ direct_path() {
 check "the path to smortress is direct" direct_path
 
 # The upstream half is a property of the pair, not of this box, and until the
-# image that advertises `svc:immich` and `svc:opds` is on smortress it cannot
-# pass. It is therefore opt-in and explicit: EXPECT_UPSTREAM=1 is the gate before
+# image that advertises `svc:immich`, `svc:opds` and `svc:recovery` is on
+# smortress it cannot pass. It is therefore opt-in and explicit: EXPECT_UPSTREAM=1 is the gate before
 # a cutover, and an ordinary bootstrap run does not pretend to have proven it.
 if [[ ${EXPECT_UPSTREAM:-0} == 1 ]]; then
     # Each Service terminates TLS for its own `<service>.<tailnet>.ts.net` name,
@@ -158,6 +165,15 @@ if [[ ${EXPECT_UPSTREAM:-0} == 1 ]]; then
       "$IMMICH_UPSTREAM/"
     check "svc:opds fronts OPDShelf" curl -sS -o /dev/null --max-time 10 \
       "$OPDS_UPSTREAM/"
+    # The reader is on smortress now, behind its guard: any answer at all is the
+    # proof that the Service exists and is approved, and the guard is what would
+    # refuse its write RPCs (tests/backrest/guard.sh proves those).
+    recovery_name=${RECOVERY_UPSTREAM#https://}
+    upstream_cert=$(openssl s_client -connect "$recovery_name:443" \
+      -servername "$recovery_name" -verify_return_error </dev/null 2>&1 || true)
+    check "the recovery Service certificate verifies" grep -qF 'Verify return code: 0 (ok)' <<<"$upstream_cert"
+    check "svc:recovery fronts the reader" curl -sS -o /dev/null --max-time 10 \
+      "$RECOVERY_UPSTREAM/"
     check_not "the edge cannot reach the host on 443" curl -sS -o /dev/null --max-time 5 \
       "https://$SMORTRESS_FQDN:443/"
 else

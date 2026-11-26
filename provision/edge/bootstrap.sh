@@ -27,8 +27,8 @@ say() { printf 'edge: %s\n' "$*"; }
 : "${EDGE_ACME_EMAIL:?set EDGE_ACME_EMAIL for ACME expiry notices}"
 
 # Each application answers on a Tailscale Service of its own (`svc:immich`,
-# `svc:opds`), so the upstream is `<service>.<tailnet>.ts.net` and never the
-# host's own name: the host's 443 also carries the agent gateway APIs and
+# `svc:opds`, `svc:recovery`), so the upstream is `<service>.<tailnet>.ts.net` and
+# never the host's own name: the host's 443 also carries the agent gateway APIs and
 # /wallpapers, and a Service publishes one application with no path prefix.
 # The tailnet domain is derived, not hardcoded: the first label of
 # SMORTRESS_FQDN is the host and the rest is the tailnet.
@@ -39,6 +39,9 @@ tailnet_domain=${SMORTRESS_FQDN#*.}
   || die "SMORTRESS_FQDN '$SMORTRESS_FQDN' has no tailnet domain (want smortress.<tailnet>.ts.net)"
 IMMICH_UPSTREAM=https://immich.$tailnet_domain
 OPDS_UPSTREAM=https://opds.$tailnet_domain
+# The recovery reader runs on smortress (SDLC #953), so the third name is a
+# tailnet proxy too and this box holds no repository credential.
+RECOVERY_UPSTREAM=https://recovery.$tailnet_domain
 
 here=$(cd -- "$(dirname -- "$0")" && pwd)
 # shellcheck source=/dev/null
@@ -172,6 +175,7 @@ SMORTRESS_FQDN=$SMORTRESS_FQDN
 EDGE_ACME_EMAIL=$EDGE_ACME_EMAIL
 IMMICH_UPSTREAM=$IMMICH_UPSTREAM
 OPDS_UPSTREAM=$OPDS_UPSTREAM
+RECOVERY_UPSTREAM=$RECOVERY_UPSTREAM
 EOF
 )
 chgrp caddy /etc/caddy/edge.env
@@ -201,34 +205,9 @@ systemctl restart caddy
 systemctl enable --now unattended-upgrades
 timedatectl set-ntp true
 
-# The reader's watchdog: one restart when the guard stops answering, then a
-# dead-man ping if that did not help. `Restart=always` covers a container that
-# exits, not one that stays up and answers nothing. The script exits early on a
-# box that does not host the reader, so this is safe everywhere.
-install -m 0755 "$here/backrest-watchdog.sh" /usr/local/bin/backrest-watchdog
-cat >/etc/systemd/system/backrest-watchdog.service <<'UNIT'
-[Unit]
-Description=Probe the recovery reader and restart it when it stops answering
-After=backrest.service
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/backrest-watchdog
-UNIT
-cat >/etc/systemd/system/backrest-watchdog.timer <<'UNIT'
-[Unit]
-Description=Run the recovery reader watchdog every five minutes
-
-[Timer]
-OnBootSec=2min
-OnUnitActiveSec=5min
-AccuracySec=30s
-
-[Install]
-WantedBy=timers.target
-UNIT
-systemctl daemon-reload
-systemctl enable --now backrest-watchdog.timer
+# No reader and no watchdog here. Backrest runs on smortress behind its guard
+# (SDLC #953), its watchdog moved with it, and nothing on this box holds a restic
+# or R2 credential: the corpus-read one never leaves the tailnet.
 
 say "provisioned; proving it"
 exec "$here/verify.sh"
