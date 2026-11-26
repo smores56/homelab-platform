@@ -84,11 +84,15 @@ COPY scripts/deploy-state.sh /usr/libexec/deploy-state
 COPY bootc/lib/deploy/deploy-receiver.py /usr/libexec/deploy-receiver.py
 COPY bootc/lib/deploy/drain.sh /usr/libexec/deploy/drain.sh
 COPY scripts/deploy-heartbeat.sh /usr/libexec/deploy-heartbeat
+# The poll backstop, under the name its timer runs it by (design #939, T11). It is
+# the server's program unmodified: the two hosts differ in what the unit around it
+# is allowed to do, not in what a poll is.
+COPY scripts/deploy-poll.sh /usr/libexec/deploy-poll
 
 RUN set -eux; \
     chmod 0755 /usr/libexec/smoresnet-firewall-zones /usr/libexec/smoresnet-firewall-bind; \
     chmod 0755 /usr/libexec/edge-boot-gate /usr/libexec/deploy-drain-edge; \
-    chmod 0755 /usr/libexec/deploy-heartbeat; \
+    chmod 0755 /usr/libexec/deploy-heartbeat /usr/libexec/deploy-poll; \
     chmod 0644 /usr/share/smoresnet/Caddyfile /usr/share/smoresnet/firewalld/zones/public.xml /usr/share/smoresnet/firewalld/zones/tailscale.xml; \
     chmod 0644 /usr/share/smoresnet/deploy-units.txt; \
     chmod 0644 /etc/ssh/sshd_config.d/05-edge-hardening.conf; \
@@ -99,7 +103,9 @@ RUN set -eux; \
       edge-boot-gate.service \
       firewalld.service \
       smoresnet-deploy-listener.service \
+      smoresnet-deploy.path \
       smoresnet-deploy-heartbeat.timer \
+      smoresnet-deploy-poll.timer \
       smoresnet-firewall-zones.service \
       smoresnet-firewall-public.service \
       smoresnet-firewall-tailscale.service \
@@ -194,4 +200,16 @@ RUN set -eux; \
     ! grep -qE '^(Requires|Wants)=.*sops-decrypt' /usr/lib/systemd/system/smoresnet-deploy-listener.service || { echo "the edge listener depends on a sops unit this image does not ship: it would never start" >&2; exit 1; }; \
     grep -qxF 'Environment=DEPLOY_SECRETS_DIR=/etc/smoresnet' /usr/lib/systemd/system/smoresnet-deploy-listener.service || { echo "the edge listener does not read its secret from /etc/smoresnet" >&2; exit 1; }; \
     test ! -e /etc/smoresnet/webhook-secret.yaml || { echo "a webhook secret is in the image: it is the operator's, written by edge-bootstrap" >&2; exit 1; }; \
-    test ! -e /etc/caddy/edge.env || { echo "the Caddy environment file is in the image: its upstreams are the operator's" >&2; exit 1; }
+    test ! -e /etc/caddy/edge.env || { echo "the Caddy environment file is in the image: its upstreams are the operator's" >&2; exit 1; }; \
+    test -x /usr/libexec/deploy-poll || { echo "the deploy poll is missing or not executable: smoresnet-deploy-poll.service would fail 203/EXEC and a release nobody dispatched would never land" >&2; exit 1; }; \
+    test -f /usr/lib/systemd/system/smoresnet-deploy-poll.timer || { echo "the poll timer is missing: nothing would run the backstop" >&2; exit 1; }; \
+    grep -qxF 'ExecStart=/usr/libexec/deploy-poll' /usr/lib/systemd/system/smoresnet-deploy-poll.service || { echo "the poll unit does not run the installed program" >&2; exit 1; }; \
+    grep -qxF 'After=edge-boot-gate.service' /usr/lib/systemd/system/smoresnet-deploy-poll.service || { echo "the poll is not ordered after the boot gate: a missed window would enqueue the deployment the host is already running" >&2; exit 1; }; \
+    ! grep -qE '^(Requires|Wants)=.*sops-decrypt' /usr/lib/systemd/system/smoresnet-deploy-poll.service || { echo "the edge poll depends on a sops unit this image does not ship: the backstop would never run" >&2; exit 1; }; \
+    grep -qxF 'ReadWritePaths=/var/lib/homelab/deploy' /usr/lib/systemd/system/smoresnet-deploy-poll.service || { echo "the poll cannot write the queue it is meant to fill" >&2; exit 1; }; \
+    grep -qxF 'Environment=DEPLOY_POLL_REPOS=homelab-platform' /usr/lib/systemd/system/smoresnet-deploy-poll.service || { echo "the poll polls a repository this box does not deploy: an apps request would take one of the 32 queue slots" >&2; exit 1; }; \
+    grep -qxF 'OnCalendar=*-*-* 03:00:00 America/New_York' /usr/lib/systemd/system/smoresnet-deploy-poll.timer || { echo "the poll window is not the operator's 03:00 local" >&2; exit 1; }; \
+    test -e /etc/systemd/system/timers.target.wants/smoresnet-deploy-poll.timer || { echo "the poll timer is not enabled: the backstop would never fire" >&2; exit 1; }; \
+    grep -qxF 'DirectoryNotEmpty=/var/lib/homelab/deploy/queue' /usr/lib/systemd/system/smoresnet-deploy.path || { echo "the queue does not start the drain: a trigger would enqueue a request nothing consumes" >&2; exit 1; }; \
+    grep -qxF 'Unit=smoresnet-deploy.service' /usr/lib/systemd/system/smoresnet-deploy.path || { echo "the path unit does not start the edge drain" >&2; exit 1; }; \
+    test -e /etc/systemd/system/paths.target.wants/smoresnet-deploy.path || { echo "the queue path unit is not enabled: both triggers would enqueue into a queue nobody drains" >&2; exit 1; }

@@ -81,10 +81,24 @@ locals {
         # receiver's tailnet-served TCP forward on loopback and, through the
         # grants below, one port on each of the six Services the probe reads.
         # Every other port on the host stays owner-only, and the deny test below
-        # keeps it that way.
+        # keeps it that way. The edge's receiver is the same shape and has its
+        # own rule below (design #939, T11).
         action = "accept"
         src    = ["tag:deploy"]
         dst    = ["tag:smortress:8484"]
+      },
+      {
+        # The edge's deploy receiver (design #939, T11). This is the whole of the
+        # widening: the lowest-trust identity in the tailnet -- an ephemeral CI
+        # node -- gains reach on the public box, on one port and no other, where
+        # before it could reach none of the edge. The HMAC secret is the second
+        # factor: without it the receiver answers 401 and queues nothing, so this
+        # rule is admission to a port and not authentication to a deploy. The
+        # deny tests below pin every other port on the edge to the owner, and
+        # tag:deploy's own deny keeps the edge login shut.
+        action = "accept"
+        src    = ["tag:deploy"]
+        dst    = ["tag:vps:8484"]
       },
       {
         # Syncthing syncs between the laptops and the host. It is not HTTP, so
@@ -279,36 +293,42 @@ locals {
         accept = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:vps:22", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443", "svc:terminal:443"]
       },
       {
-        # The owner reaches the edge login, never the deploy receiver: 8484
-        # belongs to tag:deploy. A rule that widened it would fail here.
+        # The owner reaches the edge login, never either deploy receiver: the two
+        # 8484s belong to tag:deploy. A rule that widened it would fail here.
         src  = var.tailscale_login
-        deny = ["tag:smortress:8484"]
+        deny = ["tag:smortress:8484", "tag:vps:8484"]
       },
       {
         src  = "tag:untrusted"
-        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:vps:22", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443", "svc:terminal:443", "svc:recovery:443"]
+        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:vps:22", "tag:vps:8484", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443", "svc:terminal:443", "svc:recovery:443"]
       },
       {
-        # The edge reaches no host port at all. Its two destinations are Service
+        # The edge reaches no host port at all. Its three destinations are Service
         # names from the grants above, and a Service destination cannot be named in
         # `acl` or in a test, so this deny of every other host port and edge login is
-        # the whole guard: a rule that gave the tag a port would fail here.
+        # the whole guard: a rule that gave the tag a port would fail here. The
+        # edge's own 8484 belongs to tag:deploy for the same reason as the
+        # server's, so it is named here too.
         src  = "tag:vps"
-        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8484", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443", "svc:terminal:443"]
+        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8484", "tag:vps:8484", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443", "svc:terminal:443"]
       },
       {
-        # The deploy node reaches the receiver and, through the grants above, one
-        # port on each of the six Services the names probe reads; those seven are
-        # the whole admitted set for the tag. Another destination has to be added
-        # here or this list fails the policy save.
+        # The deploy node reaches both receivers -- the server's and, since T11,
+        # the edge's -- and, through the grants above, one port on each of the six
+        # Services the names probe reads; those eight are the whole admitted set for
+        # the tag. Another destination has to be added here or this list fails the
+        # policy save.
         src    = "tag:deploy"
-        accept = ["tag:smortress:8484", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443", "svc:opds:443"]
+        accept = ["tag:smortress:8484", "tag:vps:8484", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443", "svc:opds:443"]
       },
       {
         # Everything else stays closed to tag:deploy. A deny test may not name a
-        # destination a grant admits, so no Service destination appears here: all
-        # eight are admitted to some source, six of them to this tag. The
-        # remaining entries are every host port and edge login any rule admits.
+        # destination a grant admits, so neither Service destination nor the two
+        # 8484s appear here: the first eight are admitted to some source, six of
+        # them to this tag, and both receivers to this tag alone. The remaining
+        # entries are every host port and edge login any rule admits -- the edge's
+        # login included, which is what keeps the one port T11 opened from being
+        # the first of several.
         src  = "tag:deploy"
         deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:vps:22"]
       },

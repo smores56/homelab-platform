@@ -1,0 +1,57 @@
+[Unit]
+Description=Poll GitHub for a newer main on the public edge and enqueue a deploy
+# No sops-decrypt here, on purpose: the edge has no SOPS plane and no age identity
+# at all (design #939 section 4). The poll reads no secret to poll, and the one it
+# reads to page is plaintext 0600 under /etc/smoresnet, written by edge-bootstrap.
+# A dependency on a unit this image does not ship would retire the backstop
+# silently, which is the one failure a backstop cannot afford.
+After=network-online.target
+Wants=network-online.target
+After=systemd-tmpfiles-setup.service
+# A run that started while the boot gate was still deciding would poll against a
+# state.json the gate had not written yet, and enqueue a request for the
+# deployment the host is already running. After= only: a gate that held must not
+# stop the poll, which is how the day after a hold still deploys a fix.
+After=edge-boot-gate.service
+# A wedged poll must not hold the shutdown path.
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/deploy-poll
+# The role's allowlist, stated where the poll can be affected by it: the edge
+# receiver admits homelab-platform and nothing else (design #939 section 5). The
+# poll writes straight into the queue, so an apps request would take one of the 32
+# slots a platform deploy needs and be refused downstream -- the exact lockout the
+# receiver's own allowlist exists to prevent. It is not a second allowlist: the
+# receiver remains the enforcer, and this only stops the poll asking.
+Environment=DEPLOY_POLL_REPOS=homelab-platform
+# The page on a denylisted tip or an exhausted anonymous budget is the operator's
+# capability URL, plaintext at rest on this box. Absent, the page journals
+# notify-skipped instead of failing the poll.
+Environment=DEPLOY_PING_SECRET=/etc/smoresnet/deploy-ping-url
+# One repository, one GitHub call with a 30 s deadline: ten minutes is the same
+# net the server's unit sets, and the gap under it is a single call rather than
+# two. A hung TLS read must not keep the unit active until the next tick.
+TimeoutStartSec=600
+UMask=0077
+User=root
+# The poll writes one queue entry and its own cache under the state tree, and
+# nothing else: it takes no deploy lock, records no deployment and removes no
+# entry, so the drain remains the only writer of the queue's *decision*.
+ProtectSystem=strict
+ReadWritePaths=/var/lib/homelab/deploy
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# No [Install] section: the timer is what schedules this, and enabling the timer
+# is what makes the backstop real.
