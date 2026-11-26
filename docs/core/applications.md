@@ -863,6 +863,27 @@ sudo systemctl restart sops-decrypt.service smortress-app-secrets.service
 `stage` restarts `sops-decrypt.service` itself; `smortress-app-secrets.service` is
 `RemainAfterExit`, so only a restart recreates the Podman secret.
 
+The password therefore travels three hops and a stale middle one looks like a
+bridge that will not sign in: `stage` rewrites the ciphertext, `sops-decrypt`
+re-renders `/run/smortress/secrets/tmail-bridge-password.yaml`,
+`smortress-app-secrets` copies that file into the Podman secret, and the stream
+mounts the secret when its container is created. Skip the copy or the restart and
+`init`'s new password sits in the ciphertext while the old one stays in the secret:
+LOGIN fails with `AUTHENTICATIONFAILED` and the restarts then park the unit in
+`start-limit-hit`. Prove the two copies agree first (`tr` drops the newline, which
+is not part of the password, and the bare `inspect` would hash its JSON envelope):
+
+```sh
+sudo podman exec smortress-agent-tmail password | tr -d '\n' | sha256sum
+sudo podman secret inspect --showsecret -f '{{.SecretData}}' \
+  tmail-bridge-password | tr -d '\n' | sha256sum
+```
+
+An `init` that exits `Login failed: ApiCall: ServerResponseError: Not
+authenticated` before it asks for a code saved nothing; run it again and keep the
+transcript (`-e RUST_LOG=debug` with `2>&1 | tee /tmp/tb-init.log`) so a repeat
+failure names the step it died on.
+
 ```sh
 sudo systemctl start smortress-agent-mail-stream.service
 sudo journalctl -u smortress-agent-mail-stream.service -f
