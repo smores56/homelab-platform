@@ -2078,6 +2078,17 @@ journalctl -u smoresnet-deploy.service -n 50 --no-pager
 journalctl -u edge-boot-gate.service -b -n 50 --no-pager
 ```
 
+A request resolves against the **tip of `main`**, and the edge image is published
+only for the commits that touch its tree, so a request that lands on a tip which
+did not rebuild is `no-artifact`: the verifier holds it, the drain keeps the
+entry, and the next request supersedes it. That is the design — a merge that does
+not change the image has nothing to deploy — and it is why a release is
+dispatched from a commit that did touch the edge. The same holds immediately
+after the install: until `edge-bootstrap` has seeded
+`/var/lib/homelab/deploy/state.json` every request is `bootstrap-required`, and
+until a commit that changes the edge has published there is no artifact for the
+tip to name.
+
 ## Former section numbers
 
 Scripts, units and the image still quote the pre-rewrite numbering; this is where
