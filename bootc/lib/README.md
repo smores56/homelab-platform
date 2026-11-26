@@ -20,7 +20,7 @@ only in the policy each passes in.
 | `deploy/deploy-receiver.py` | the server's listener (`/usr/libexec/deploy-receiver.py`) and the edge's (design #939) |
 | `deploy/decisions.py` | both verifiers, both receivers, both drains: the repo allowlist per role, the tag name, the digest and label shapes, descendancy, the journal vocabulary, the coalesce key, the state and denylist records |
 | `deploy/drain.sh` | both drains: the FIFO/pop/retry loop, with the role's gate and action as hooks |
-| `deploy/fixtures/` | both verifiers: one JSON document per accept/hold/refuse outcome, compared byte for byte by `tests/deploy/fixtures.bats` |
+| `deploy/fixtures/` | both verifiers: one JSON document per accept/hold/refuse outcome, replayed by `tests/deploy/fixtures.bats` (the server's programs) and `tests/deploy/edge-verify.bats` (the same documents through both verifiers, which is what makes the set a contract between the roles rather than a description of one) |
 
 The image installs `deploy/` at `/usr/libexec/deploy/` and the receiver at
 `/usr/libexec/deploy-receiver.py`, the name the listener unit already runs; each
