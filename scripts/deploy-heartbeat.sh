@@ -17,7 +17,7 @@
 # Exit codes: 0 the check was pinged green (or the ping URL is absent, which is a
 # journaled skip on a host mid-bootstrap), 1 the check was pinged red.
 #
-# Every knob is environment-overridable so tests/deploy/heartbeat.bats can drive this
+# Every knob is environment-overridable so tests/deploy/heartbeat.sh can drive this
 # exact code. Production sets none of them.
 #
 # shellcheck disable=SC2154  # deploy-state.sh assigns these at source time

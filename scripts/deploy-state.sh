@@ -423,7 +423,7 @@ clamp_timeout() {
 # uuid would let coalescing drop the newer commit and deploy the older one.
 #
 # The queue-directory contract, shared with the Python receiver (which cannot
-# source this file) and asserted by tests/deploy/receiver.bats: an entry is a
+# source this file) and asserted by tests/deploy/receiver.sh: an entry is a
 # regular file directly inside $deploy_queue_dir whose name ends in `.json`.
 # Anything else -- a subdirectory, a temporary file, a non-JSON name -- is not an
 # entry. Each entry is one JSON object carrying schema, id, repo, commit,
