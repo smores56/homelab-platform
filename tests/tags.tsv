@@ -28,6 +28,7 @@ deploy/poll	tests/deploy/poll.bats scripts/deploy-poll.sh scripts/deploy-state.s
 deploy/verify	tests/deploy/verify.bats image/rootfs/usr/libexec/deploy-verify.py scripts/deploy-state.sh scripts/deploy-drain.sh
 apps/check	tests/apps/check.bats scripts/apps-schema.py
 apps/ingress	tests/apps/ingress.bats scripts/apps-ingress.sh image/Containerfile units/systemd/smortress-app-ingress@.service
+apps/ingress-reconcile	tests/apps/ingress-reconcile.bats scripts/apps-ingress-reconcile.sh units/systemd/smortress-app-ingress-reconcile.service
 apps/quota	tests/apps/quota.bats scripts/apps-quota.sh scripts/apps-schema.py
 apps/render	tests/apps/render.bats scripts/apps-schema.py
 image/ignition-boundary	tests/image/ignition-boundary.bats ignition/smortress.bu scripts/render-ignition.sh scripts/init-data-luks.sh units/systemd/smortress-data-init.service units/systemd/smortress-zpool.service docs/manual-steps.md

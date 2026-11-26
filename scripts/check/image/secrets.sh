@@ -322,7 +322,8 @@ fi
 # A unit that reads the tenant's plan must not be judged here: both of them exit 1
 # on an app definition, and `is-failed` on one would denylist the platform digest
 # and roll a healthy host back for an app's fault.
-for unit in smortress-tailscale-serve.service smortress-apps-quota.service; do
+for unit in smortress-tailscale-serve.service smortress-apps-quota.service \
+  smortress-app-ingress-reconcile.service; do
   check "the gate judges no unit that reads the tenant's plan: $unit" lacks "$unit" "$units_file"
 done
 # The prober is the other half of the same split, and it must fail safe: the
@@ -542,6 +543,7 @@ while IFS= read -r unit; do
   # candidate here; this case states that for the service the filter now reaches.
   case $unit in
     smortress-tailscale-serve.service | smortress-apps-quota.service | \
+      smortress-app-ingress-reconcile.service | \
       smortress-apps-health.service) continue ;;
   esac
   consulted[$unit]=1

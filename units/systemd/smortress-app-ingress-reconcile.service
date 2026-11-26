@@ -1,0 +1,24 @@
+[Unit]
+Description=Start the root ingress for every app in the tenant plan
+# The tenant's containers come back at boot under its lingering manager; the
+# `smortress-app-ingress@<name>` instances that answer their loopback ports do
+# not, because that template is static and only an apps apply starts one. Without
+# this unit a reboot restores the containers and leaves every `/apps/<name>` route
+# answering nothing (issue #150: six boots on 2026-11-25, the route dead each
+# time until a human started the unit).
+#
+# The prerequisites are themselves ordered before systemd-logind, so they are in
+# place before the tenant's manager exists. The manager starts behind logind and
+# the helper waits up to a minute for its container to appear, so ordering after
+# both is what gives it a container to find rather than a race to lose.
+After=smortress-apps-quota.service systemd-logind.service
+Wants=smortress-apps-quota.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/apps-ingress-reconcile
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target
