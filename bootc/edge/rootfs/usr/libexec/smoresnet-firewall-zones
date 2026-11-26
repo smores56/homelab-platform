@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Put the edge's firewalld zones where firewalld reads them, and reassert the
+# default zone. Run by smoresnet-firewall-zones.service before firewalld.service.
+#
+# The zones ship under /usr/share/smoresnet/firewalld/zones, not in
+# /etc/firewalld/zones, because bootc merges a host's /etc once and keeps what it
+# finds there: a zone file the image shipped under /etc would be frozen at the
+# install's version, and a later image that emptied a service list or closed a
+# port would never reach the running box. Writing them here on every boot is what
+# makes the shipped file the one answer to "what does this box accept". It also
+# overwrites a hand edit, which is the point: the box's firewall is reviewed in
+# git, not on the box.
+#
+# The default zone is the same argument in a non-XML file: firewalld keeps it in
+# /etc/firewalld/firewalld.conf, which is host state after the first boot, so the
+# Containerfile sets it for a fresh install and this rewrites it on every boot for
+# everyone else. `drop` is the default because the public zone's binding is
+# added at runtime (smoresnet-firewall-public.service) and the tailnet's after
+# tailscaled is up: an interface firewalld has not been told about yet lands in
+# drop, not in a zone that accepts something.
+set -euo pipefail
+
+zones=/usr/share/smoresnet/firewalld/zones
+conf=/etc/firewalld/firewalld.conf
+
+for zone in public tailscale; do
+  install -D -m 0644 "$zones/$zone.xml" "/etc/firewalld/zones/$zone.xml"
+done
+
+install -d -m 0755 "$(dirname "$conf")"
+if grep -q '^DefaultZone=' "$conf" 2>/dev/null; then
+  sed -i 's/^DefaultZone=.*/DefaultZone=drop/' "$conf"
+else
+  printf 'DefaultZone=drop\n' >>"$conf"
+fi

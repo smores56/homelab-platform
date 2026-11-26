@@ -1,0 +1,71 @@
+# The edge's Caddyfile (design #939, T4), carried from provision/edge/Caddyfile
+# unchanged apart from the admin comment below.
+#
+# It ships under /usr/share rather than /etc/caddy, and caddy.service is told so
+# through /usr/lib/systemd/system/caddy.service.d/10-smoresnet.conf: bootc merges
+# a host's /etc once and keeps what it finds there, so a Caddyfile under /etc
+# would be frozen at the install's version and a route change would never reach
+# a running box. /usr is the image's, so a deploy that bumps the image bumps this
+# file. The three environment values it substitutes are the operator's, in
+# /etc/caddy/edge.env (0640 root:caddy, written by edge-bootstrap), which is also
+# what provision/edge/verify.sh reads on a hand-provisioned box.
+{
+	# One ACME address for both names; Let's Encrypt uses it for expiry notices
+	# only. The zone's `CAA` pin is at the CA level, `letsencrypt.org` for both
+	# tags (design #842), so this account is authorized the moment it orders and a
+	# rebuild's fresh account needs no zone change.
+	email {$EDGE_ACME_EMAIL}
+
+	# No admin API. This file is image content now, so changing it is a commit and
+	# a deploy, not a restart on the box: with the API off there is no second
+	# answer to "what is Caddy serving" and `caddy reload` has nothing to reach,
+	# which is why the unit declares no ExecReload.
+	admin off
+
+	# Port 80 is never opened, at the panel or at the host firewall. Without this
+	# Caddy binds :80 to answer HTTP-01 and to redirect, and both fail closed in
+	# a way that looks like an outage.
+	auto_https disable_redirects
+}
+
+# The public names. Each proxies to its own Tailscale Service on smortress
+# (`svc:immich`, `svc:opds`), never to the host's own name or 443: there, 443
+# also carries the agent gateway APIs and /wallpapers, and none of these names
+# may publish them. A Service answers on `<service>.<tailnet>.ts.net` with a
+# Let's Encrypt certificate of that name, so Caddy verifies it against the same
+# public roots and relays bytes; it terminates nothing for the host. The names
+# come from the environment, derived in bootstrap.sh, so no tailnet domain is
+# hardcoded here.
+photos.sammohr.dev {
+	tls {
+		issuer acme {
+			disable_http_challenge
+		}
+	}
+	encode zstd gzip
+	reverse_proxy {$IMMICH_UPSTREAM}
+}
+
+opds.sammohr.dev {
+	tls {
+		issuer acme {
+			disable_http_challenge
+		}
+	}
+	encode zstd gzip
+	reverse_proxy {$OPDS_UPSTREAM}
+}
+
+# The recovery reader (#725 T2). Unlike the two above it proxies to a process on
+# this box, not to smortress: Backrest reads R2 directly, and the guard in front
+# of it is what keeps the admin RPCs and the repository password off the public
+# surface. No tailnet upstream is involved.
+recovery.sammohr.dev {
+	tls {
+		issuer acme {
+			disable_http_challenge
+		}
+	}
+	encode zstd gzip
+	reverse_proxy http://127.0.0.1:9898
+}

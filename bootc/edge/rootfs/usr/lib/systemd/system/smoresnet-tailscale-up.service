@@ -1,0 +1,41 @@
+[Unit]
+# Join the edge to the tailnet as smoresnet, the tagged node the ACL admits to
+# svc:immich and svc:opds and nothing else. This replaces the `tailscale up` line
+# in provision/edge/bootstrap.sh, with one difference that matters: the key is a
+# systemd credential, not a shell argument and not a file the command names.
+#
+# LoadCredential= reads /etc/smoresnet/tailscale-authkey as root and hands the
+# service a 0400 copy under $CREDENTIALS_DIRECTORY, so the key never appears in
+# the unit file, in the command line (where `ps` would show it) or in the
+# environment. edge-bootstrap writes that file from stdin (design #939 section 4),
+# and the ConditionPathExists below is what makes a host that has no key yet skip
+# this unit instead of running `tailscale up` with an empty credential.
+#
+# --ssh=false because sshd is the edge's sshd, reached through the tailscale zone
+# and hardening: tailscaled's SSH would start the shell outside PAM and outside
+# the login key, and the preference would otherwise be whatever a previous node
+# state carried.
+#
+# The marker is written last, so a failed join re-runs on the next boot; it is
+# also what smoresnet-firewall-tailscale.service conditions on.
+Description=Join the edge to the tailnet
+Requires=firewalld.service tailscaled.service
+Wants=network-online.target
+After=network-online.target firewalld.service tailscaled.service
+ConditionPathExists=/etc/smoresnet/tailscale-authkey
+ConditionPathExists=!/var/lib/smoresnet/tailscale-enrolled
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+LoadCredential=tailscale-authkey:/etc/smoresnet/tailscale-authkey
+# --advertise-tags is the tag the preauthorized key was minted for (tag:vps); a
+# re-enrollment with an untagged key would need this line and a key allowed to
+# apply the tag. --accept-routes stays off: the edge serves the internet, it does
+# not route for the tailnet.
+ExecStart=/usr/bin/tailscale up --hostname=smoresnet --advertise-tags=tag:vps --accept-routes=false --ssh=false --auth-key=file:${CREDENTIALS_DIRECTORY}/tailscale-authkey
+ExecStart=/usr/bin/install -d -m 0700 /var/lib/smoresnet
+ExecStart=/usr/bin/touch /var/lib/smoresnet/tailscale-enrolled
+
+[Install]
+WantedBy=multi-user.target

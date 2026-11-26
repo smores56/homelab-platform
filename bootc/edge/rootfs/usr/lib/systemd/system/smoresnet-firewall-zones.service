@@ -1,0 +1,20 @@
+[Unit]
+# The edge's two zones, and the default zone, installed where firewalld reads
+# them. Ordered before firewalld on purpose: firewalld comes up already holding
+# the emptied public zone rather than the stock one, whose service list includes
+# ssh. A firewalld reload would otherwise be the first thing that closed sshd off
+# the internet, and a reload is a step nobody would think to run at boot.
+#
+# WantedBy=firewalld.service, not multi-user.target, so enabling firewalld is
+# enough to bring this with it and a host that disabled firewalld does not run a
+# unit that writes files nothing reads.
+Description=Install the edge's firewalld zones and default zone
+Before=firewalld.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/smoresnet-firewall-zones
+
+[Install]
+WantedBy=firewalld.service

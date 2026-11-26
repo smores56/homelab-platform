@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# Bind the edge's interfaces to the zones that admit their traffic.
+#
+#   smoresnet-firewall-bind public      # the internet-facing interface
+#   smoresnet-firewall-bind tailscale   # tailscale0, once the tailnet is up
+#
+# Two subcommands because the two bindings happen at points in boot that cannot be
+# ordered against each other: the public side exists as soon as the NIC does, and
+# 443 is the box's whole job, so it must not wait for a tailnet that may be down;
+# the tailnet side exists only after tailscaled reaches the control plane.
+set -euo pipefail
+
+mode=${1:-}
+
+# bind <zone> <interface>: bind idempotently, so a boot where firewalld already
+# has it (a reload, or a second start of the unit) is not a failure.
+bind() {
+  local zone=$1 iface=$2
+  if firewall-cmd --zone="$zone" --query-interface="$iface" >/dev/null 2>&1; then
+    return 0
+  fi
+  firewall-cmd --zone="$zone" --add-interface="$iface"
+}
+
+case $mode in
+  public)
+    # NetworkManager owns the interface's zone and re-asserts it from the
+    # connection profile on every activation, which silently undoes a
+    # firewalld-only binding -- that is how smortress's first bring-up lost SSH
+    # (scripts/access-bootstrap.sh, and the comment in
+    # units/systemd/smortress-access-bootstrap.service). So the zone goes on the
+    # profile, the device is reapplied, and the reload makes firewalld apply it.
+    while IFS= read -r uuid; do
+      nmcli connection modify "$uuid" connection.zone public
+    done < <(nmcli -t -f UUID,TYPE connection show |
+      awk -F: '$2 == "802-3-ethernet" { print $1 }')
+    while IFS=: read -r device type _; do
+      [[ $type == ethernet ]] || continue
+      nmcli device reapply "$device" || true
+    done < <(nmcli -t -f DEVICE,TYPE device status)
+    # The reload re-reads the permanent zone files, tailscale0's binding
+    # included, so it does not matter whether this unit or
+    # smoresnet-firewall-tailscale.service ran first: whichever order, the
+    # tailnet binding is either re-applied here or added there afterwards.
+    firewall-cmd --reload
+    # An interface with no NetworkManager profile (a NIC NM has not imported, or
+    # one configured by hand) still has to land somewhere other than drop, so the
+    # fallback binds what the topology says is public: everything that is neither
+    # loopback, nor the tailnet, nor a container bridge.
+    for path in /sys/class/net/*; do
+      iface=${path##*/}
+      case $iface in
+        lo | tailscale* | veth* | podman* | docker* | cni* | br-*) continue ;;
+      esac
+      bind public "$iface"
+    done
+    ;;
+  tailscale)
+    # tailscaled creates tailscale0 only when it reaches the control plane, which
+    # needs the network and the auth key, so the interface can be seconds away
+    # from the unit that binds it. Wait for it, but bounded: a box whose tailnet
+    # never comes up must fail this unit visibly instead of hanging the boot.
+    for _ in $(seq 60); do
+      if [[ -e /sys/class/net/tailscale0 ]]; then break; fi
+      sleep 2
+    done
+    if [[ ! -e /sys/class/net/tailscale0 ]]; then
+      printf '%s: tailscale0 did not appear within 120s; the tailnet is not up\n' "${0##*/}" >&2
+      exit 1
+    fi
+    bind tailscale tailscale0
+    ;;
+  *)
+    printf 'usage: %s public|tailscale\n' "${0##*/}" >&2
+    exit 2
+    ;;
+esac

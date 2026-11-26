@@ -21,11 +21,18 @@ name: publish-edge-image
 on:
   push:
     branches: [main]
-    # The edge Containerfile, the pins it reads, and the two files its build and
-    # its signature depend on. `units/`, `secrets/`, `apps/` and `scripts/**` are
-    # absent on purpose: the skeleton COPYs none of them, and a path that no COPY
-    # reads must not rebuild the image. T4 widens this once the rootfs consumes
-    # those trees.
+    # Every path the edge Containerfile reads, and nothing else. The tree it
+    # copies is bootc/edge/rootfs, so the rootfs and every unit in it arrive
+    # under the first entry; the rest is the pins file the build sources, the one
+    # signing key the image is verified against (the repository has a single
+    # key, shared with the server) and the build script itself.
+    #
+    # The set is asserted, not trusted: tests/image/server-image.bats derives the
+    # COPY sources from the Containerfile and fails when one of them is not
+    # covered by a filter here. That is the failure this listing has to prevent --
+    # a tree the Containerfile copies and this filter does not name keeps
+    # publishing the last build that happened to touch something else, so the
+    # image is silently stale instead of absent.
     paths:
       - "bootc/edge/**"
       - "bootc/lib/**"
