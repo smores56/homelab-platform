@@ -349,6 +349,63 @@ pull_request_runs_this_checker() {
   return 1
 }
 
+# --- the deploy triggers (T11) ------------------------------------------------
+
+poll_service=$root/usr/lib/systemd/system/smoresnet-deploy-poll.service
+poll_timer=$root/usr/lib/systemd/system/smoresnet-deploy-poll.timer
+queue_path=$root/usr/lib/systemd/system/smoresnet-deploy.path
+
+# The backstop is the server's program under the edge's own limits: no SOPS unit to
+# wait for, the ping URL from /etc/smoresnet, the one repository this box deploys,
+# and the operator's 03:00 local window. One row, because half of these is a poll
+# that never runs -- or one that asks for a deploy the receiver will refuse.
+poll_backstop_ships() {
+  # The program arrives from scripts/ through the Containerfile, like the server's,
+  # so a tree that has it must have it executable and a checkout states the COPY
+  # and the mode that make it so. Inside the image the file itself is the proof.
+  if [[ -e $root/usr/libexec/deploy-poll && ! -x $root/usr/libexec/deploy-poll ]]; then
+    return 1
+  fi
+  if $doctrine; then
+    grep -qF 'COPY scripts/deploy-poll.sh /usr/libexec/deploy-poll' "$containerfile" || return 1
+    grep -qF 'chmod 0755 /usr/libexec/deploy-heartbeat /usr/libexec/deploy-poll' "$containerfile" || return 1
+  fi
+  grep -qxF 'ExecStart=/usr/libexec/deploy-poll' "$poll_service" || return 1
+  grep -qxF 'After=edge-boot-gate.service' "$poll_service" || return 1
+  if grep -qE '^(Requires|Wants)=.*sops-decrypt' "$poll_service"; then return 1; fi
+  grep -qxF 'ReadWritePaths=/var/lib/homelab/deploy' "$poll_service" || return 1
+  grep -qxF 'Environment=DEPLOY_POLL_REPOS=homelab-platform' "$poll_service" || return 1
+  grep -qxF 'Environment=DEPLOY_PING_SECRET=/etc/smoresnet/deploy-ping-url' "$poll_service" || return 1
+  grep -qxF 'OnCalendar=*-*-* 03:00:00 America/New_York' "$poll_timer" || return 1
+  grep -qxF 'Persistent=false' "$poll_timer" || return 1
+  grep -qxF 'WantedBy=timers.target' "$poll_timer" || return 1
+  $doctrine || return 0
+  grep -qE '^[[:space:]]+smoresnet-deploy-poll\.timer \\$' "$containerfile"
+}
+
+# A trigger that enqueues into a queue nobody drains is not a trigger: this is the
+# rule that turns a request into a run, and the drain itself installs nothing --
+# a unit that also started at boot would drain a queue nobody had filled.
+queue_starts_the_drain() {
+  grep -qxF 'DirectoryNotEmpty=/var/lib/homelab/deploy/queue' "$queue_path" || return 1
+  grep -qxF 'Unit=smoresnet-deploy.service' "$queue_path" || return 1
+  grep -qxF 'WantedBy=paths.target' "$queue_path" || return 1
+  if grep -qxF '[Install]' "$root/usr/lib/systemd/system/smoresnet-deploy.service"; then return 1; fi
+  $doctrine || return 0
+  grep -qE '^[[:space:]]+smoresnet-deploy\.path \\$' "$containerfile"
+}
+
+# The event trigger is the workflow's. What the image can state about it is that it
+# is a dispatch and not a push: the edge is the host with the least rollback, so a
+# merge touching the image must not reboot it.
+notify_is_a_main_dispatch() {
+  grep -qE '^  notify:$' "$publish_workflow" || return 1
+  grep -qxF "    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'" \
+    "$publish_workflow" || return 1
+  grep -qxF '    environment: deploy-notify' "$publish_workflow" || return 1
+  grep -qxF '    permissions: {}' "$publish_workflow"
+}
+
 # --- run ----------------------------------------------------------------------
 
 check 'the Caddyfile validates at build and before every start' caddyfile_validated
@@ -380,6 +437,9 @@ check 'every unit the edge needs is enabled' units_enabled
 check_build 'no secret, key or operator file is in the image' no_secret_in_the_image
 check_build 'the base is a stream tag and the build records its digest' base_is_a_stream_tag
 check_build 'a pull_request workflow runs this checker on the edge tree' pull_request_runs_this_checker
+check 'the 03:00 poll backstop ships and its timer is enabled' poll_backstop_ships
+check 'the queue starts the drain when a request lands' queue_starts_the_drain
+check_build 'the edge is told to deploy by a main dispatch, never by a push' notify_is_a_main_dispatch
 
 # The two verify.sh invariants the image cannot state, kept visible so the port is
 # not mistaken for the whole of the provisioned box's proof.

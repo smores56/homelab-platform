@@ -63,6 +63,7 @@ ProtectKernelModules=yes
 ProtectControlGroups=yes
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 
-# No [Install] section: nothing starts this drain yet. T11's dispatch-only notify
-# and its 03:00 poll are the triggers, and until they land the drain runs by hand
-# or by `systemctl start smoresnet-deploy.service`.
+# No [Install] section: the queue starts this drain, not the boot. A run is owed to
+# a request -- the dispatch-notified POST or the 03:00 poll enqueued one -- and
+# smoresnet-deploy.path fires on the first file. A unit that also started at boot
+# would drain a queue nobody had filled, which is a reboot nobody asked for.

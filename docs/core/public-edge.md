@@ -231,9 +231,14 @@ the drain (`smoresnet-deploy.service`, `deploy-drain-edge`) runs the shared
 sits, records `pending.json` and reboots into the digest the verifier's `bootc
 switch` already staged; the heartbeat (`smoresnet-deploy-heartbeat.service` on a
 five-minute timer) pings the deploy check green only while `/healthz` answers and
-no queue entry is older than 1800 s. T11 adds the triggers — a dispatch-only
-notify and a 03:00 poll — and until then the drain is `systemctl start
-smoresnet-deploy.service`.
+no queue entry is older than 1800 s. The triggers are the server's two, and
+neither deploys on a push: `publish-edge-image.yml`'s notify job posts a signed
+body to the receiver only on a `main` dispatch, and `smoresnet-deploy-poll.timer`
+asks GitHub for the tip at 03:00 local as the backstop for a release nobody
+dispatched. Both only enqueue; `smoresnet-deploy.path` starts the drain on the
+first file in the queue, so a hand-run (`systemctl start
+smoresnet-deploy.service`) is the same path an operator can take while the
+listener is down.
 
 The secrets are the operator's, never image content, plaintext and 0600 under
 `/etc/smoresnet` (a `tmpfiles.d` line creates the 0700 directory): the webhook

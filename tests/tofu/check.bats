@@ -1054,14 +1054,24 @@ done
     has '"tag:smortress:8484"'
 }
 
+# The edge's receiver is the same program on the other host, so the CI identity
+# that notifies smortress notifies the public box as well (design #939, T11).
+@test "the policy admits the deploy node to the edge's receiver" {
+    has 'src[[:space:]]*=[[:space:]]*\["tag:deploy"\]'
+    has 'dst[[:space:]]*=[[:space:]]*\["tag:vps:8484"\]'
+}
+
 @test "the deploy tag is owned by the owner group" {
     has '"tag:deploy"[[:space:]]*=[[:space:]]*\["group:owner"\]'
 }
 
-@test "a test proves the deploy node reaches the receiver and the six Service names" {
-    has 'accept[[:space:]]*=[[:space:]]*\["tag:smortress:8484", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443", "svc:opds:443"\]'
+@test "a test proves the deploy node reaches both receivers and the six Service names" {
+    has 'accept[[:space:]]*=[[:space:]]*\["tag:smortress:8484", "tag:vps:8484", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443", "svc:opds:443"\]'
 }
 
+# The edge login is the one host port on the public box that is not the receiver,
+# so it staying in this list is what keeps T11's grant a widening of exactly one
+# port rather than the first of several.
 @test "a test proves the deploy node reaches no other host port" {
     has 'deny[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:vps:22"\]'
 }
@@ -1074,8 +1084,15 @@ done
     has 'accept[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:vps:22", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443", "svc:terminal:443"\]'
 }
 
-@test "a test proves the owner does not reach the deploy receiver" {
-    has 'deny[[:space:]]*=[[:space:]]*\["tag:smortress:8484"\]'
+@test "a test proves the owner does not reach either deploy receiver" {
+    has 'deny[[:space:]]*=[[:space:]]*\["tag:smortress:8484", "tag:vps:8484"\]'
+}
+
+# Five places and no more: the grant, the deploy node's accept, the two denies
+# that keep the owner and an untagged device off it, and the edge's own deny of
+# every host port. A sixth line is a second port opened on the public box.
+@test "the edge's receiver is granted once and denied to everyone else" {
+    eq "$(count_fixed 'tag:vps:8484')" 5
 }
 
 # One test entry for the edge, and it denies: the two Service destinations come
@@ -1086,11 +1103,11 @@ done
 }
 
 @test "a test proves a tagged device reaches none of them" {
-    has 'deny[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:vps:22", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443", "svc:terminal:443", "svc:recovery:443"\]'
+    has 'deny[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:vps:22", "tag:vps:8484", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443", "svc:terminal:443", "svc:recovery:443"\]'
 }
 
 @test "a test proves the edge does not reach the other Services" {
-    has 'deny[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8484", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443", "svc:terminal:443"\]'
+    has 'deny[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8484", "tag:vps:8484", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443", "svc:terminal:443"\]'
 }
 
 # --- the Services -----------------------------------------------------------
