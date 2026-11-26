@@ -54,16 +54,16 @@ while IFS='|' read -r name cmd pathlist; do
   cmds+=("$cmd")
   paths+=("$pathlist")
 done <<'EOF'
-broker|python3 -m unittest discover -s apps/broker/tests -t apps/broker|apps/broker/*
-webhook|python3 -m unittest discover -s apps/webhook/tests -t apps/webhook|apps/webhook/*
-agent-proxy|python3 -m unittest discover -s apps/agent_proxy/tests -t apps/agent_proxy|apps/agent_proxy/*
-agent-facade|python3 -m unittest discover -s apps/agent_facade/tests -t apps|apps/agent_facade/*
+broker|bats --jobs 4 tests/python/broker.bats|apps/broker/*
+webhook|bats --jobs 4 tests/python/webhook.bats|apps/webhook/*
+agent-proxy|bats --jobs 4 tests/python/agent-proxy.bats|apps/agent_proxy/*
+agent-facade|bats --jobs 4 tests/python/agent-facade.bats|apps/agent_facade/*
 agent-shell-bridge|tests/agent-shell-bridge/check.sh|tests/agent-shell-bridge/*,scripts/agent-shell-bridge.py
 backrest|if ! npm --version >/dev/null 2>&1; then d="${XDG_CACHE_HOME:-$HOME/.cache}/check-all/node"; mkdir -p "$d"; for t in node npm npx; do printf '#!/bin/sh\nexec mise x node@22.23.5 -- %s "$@"\n' "$t" > "$d/$t"; chmod +x "$d/$t"; done; PATH="$d:$PATH"; export PATH; fi; npm ci --prefix backrest && npm --prefix backrest run typecheck && npm --prefix backrest test && tests/backrest/check.sh|backrest/*
 tofu-check|tests/tofu/check.sh|tests/tofu/*,tofu/*,scripts/check-tofu-providers.py
-tofu-fmt|tofu fmt -check -recursive tofu|tofu/*
+tofu-fmt|bats --jobs 4 tests/tofu-fmt.bats|tofu/*
 provision|tests/provision/check.sh|tests/provision/*,provision/*
-docs|python3 scripts/check-doc-refs.py|*.md,docs/*,scripts/check-doc-refs.py,scripts/doc-refs-baseline.txt
+docs|bats --jobs 4 tests/docs.bats|*.md,docs/*,scripts/check-doc-refs.py,scripts/doc-refs-baseline.txt
 secrets|bats --jobs 4 tests/secrets/policy.bats && bats --jobs 4 tests/secrets/migration.bats && bats --jobs 4 tests/secrets/decrypt.bats && bats --jobs 4 tests/secrets/bundles.bats && bats --jobs 4 tests/secrets/rotate.bats && bats --jobs 4 tests/secrets/cloudflare-derive.bats && python3 scripts/sops-policy.py check --repo . && python3 scripts/secrets-check.py --shadow && python3 scripts/secrets-check.py|secrets/*,.sops.yaml,scripts/sops-policy.py,scripts/secrets-check.py,scripts/secrets-index.py,scripts/secrets-bundle.py,scripts/secrets-bundles.json,scripts/secret.sh,scripts/cloudflare-derive.sh,scripts/smortress-secrets-seed.sh,image/rootfs/usr/share/smortress/secrets.manifest,tests/secrets/*
 server-image|bats --jobs 4 tests/image/server-image.bats && bats --jobs 4 tests/image/ignition-boundary.bats|scripts/lib/*,scripts/check/image/*,image/*,ignition/*,units/*,images/*,tests/fixtures/*,docs/core/server-image.md,scripts/check-server-image.sh,tests/image/*
 edge|tests/edge/check.sh|tests/edge/*,scripts/verify-public-edge.sh,scripts/verify-caa.sh
@@ -75,8 +75,8 @@ data-plane|scripts/render-source-schemas.py --check && tests/data-plane/check.sh
 tuta-calendar|venv="${XDG_CACHE_HOME:-$HOME/.cache}/check-all/tuta-calendar"; if [ ! -x "$venv/bin/python" ]; then python3 -m venv "$venv" && "$venv/bin/pip" install -q --disable-pip-version-check -r images/tuta-calendar/requirements.lock; fi; PATH="$venv/bin:$PATH" tests/tuta-calendar/check.sh|tests/tuta-calendar/*,apps/tuta_calendar/*
 agent-egress|tests/agent-egress/check.sh|tests/agent-egress/*,apps/agent_egress/*
 brave|tests/brave/check.sh|tests/brave/*,apps/brave_ingest/*
-lint|yamllint -c .yamllint.yaml $(git ls-files '*.yaml' '*.yml') provision/smortress/user-data && shellcheck scripts/*.sh $(git ls-files 'tests/tofu/*.sh') tests/tuta-calendar/*.sh tests/agent-egress/*.sh tests/agent-shell-bridge/*.sh $(git ls-files 'tests/brave/*.sh') provision/*/*.sh $(git ls-files 'tests/provision/*.sh') scripts/lib/*.sh scripts/deploy/apps/*.sh scripts/check/image/*.sh scripts/legacy/*.sh $(git ls-files 'tests/core/*.sh') tests/*.sh tests/*.bash backrest/scripts/*.sh backrest/container/entrypoint.sh $(git ls-files 'tests/backrest/*.sh') $(git ls-files 'tests/deploy/*.sh') $(git ls-files 'tests/edge/*.sh') tests/tailnet-names/*.sh tests/check-all/*.sh .githooks/* && shellcheck --severity=warning -e SC2030,SC2031,SC2034,SC2154 $(git ls-files '*.bats') && scripts/check-action-pins.sh && scripts/check-pr-secret-boundary.sh && scripts/check-codeowners.sh && tests/check-all/ci-parity.sh && if git rev-parse --verify -q "${BASE:-origin/main}" >/dev/null; then git diff --check "${BASE:-origin/main}"; else if ! git diff --check HEAD^1 2>/dev/null; then git diff --check; fi; fi|.github/*,CODEOWNERS,.sops.yaml,.yamllint.yaml,scripts/*,tests/*,provision/*,backrest/*,.githooks/*,recovery/*
-actionlint|actionlint|.github/*
+lint|bats --jobs 4 tests/lint.bats|.github/*,CODEOWNERS,.sops.yaml,.yamllint.yaml,scripts/*,tests/*,provision/*,backrest/*,.githooks/*,recovery/*
+actionlint|bats --jobs 4 tests/actionlint.bats|.github/*
 EOF
 
 if $list; then
