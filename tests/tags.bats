@@ -26,11 +26,10 @@ suites() {  # every suite path under tests/, one per line
     bad=''
     while IFS= read -r suite; do
         selected=$(sh "$tags_sh" "$suite")
-        case " $selected " in
-            # `all` selects the suite too; a row may claim it either way.
-            *" $suite "*|*" all "*) ;;
-            *) bad="$bad $suite" ;;
-        esac
+        # A path may select several rows and the output is one suite per line, so
+        # membership is per line. `all` selects the suite too; either is fine.
+        [[ $selected == all ]] && continue
+        grep -Fqx -- "$suite" <<<"$selected" || bad="$bad $suite"
     done < <(suites)
     assert_equal "$bad" ""
 }
