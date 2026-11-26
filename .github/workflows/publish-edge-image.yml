@@ -1,0 +1,153 @@
+# Builds, pushes, signs and verifies the public edge bootc image (design #939, T3).
+#
+# The doctrine and the signing contract are publish-server-image.yml's: the base
+# is a moving uCore stream tag resolved to a digest per run, that digest is what
+# the image's org.opencontainers.image.base.digest label records, and the pushed
+# digest is signed and verified with the repository's single cosign key from the
+# `server-image` Environment.
+#
+# _publish-image.yml is not the vehicle: it takes no build arguments, so
+# BASE_DIGEST could not reach the Containerfile, and its summary is an apps pin
+# row in scripts/app-images.sh that a bootc artifact does not have. What this job
+# shares with it is the contract, not the file: the Environment, the pinned
+# cosign, the key match, the `.sig` lookaside assertion and the anonymous
+# policy-checked pull.
+#
+# Push and workflow_dispatch only, so a pull_request run never sees this file.
+# The edge does not deploy on push (design #939 section 5): T11 adds the
+# dispatch-only notify job, and until then a publish lands nothing on a box.
+name: publish-edge-image
+
+on:
+  push:
+    branches: [main]
+    # The edge Containerfile, the pins it reads, and the two files its build and
+    # its signature depend on. `units/`, `secrets/`, `apps/` and `scripts/**` are
+    # absent on purpose: the skeleton COPYs none of them, and a path that no COPY
+    # reads must not rebuild the image. T4 widens this once the rootfs consumes
+    # those trees.
+    paths:
+      - "bootc/edge/**"
+      - "bootc/lib/**"
+      # The repository has one signing key and the edge is verified against its
+      # public half, so a change there re-publishes the edge as well.
+      - "bootc/server/cosign.pub"
+      - "scripts/build-image.sh"
+      - ".github/workflows/publish-edge-image.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-edge-image
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: build, push, sign, verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: server-image
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      - name: install podman
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends podman skopeo
+      - name: install pinned cosign
+        run: |
+          set -euo pipefail
+          . bootc/lib/pins.env
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -fsSLo "$RUNNER_TEMP/bin/cosign" \
+            "https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/cosign-linux-amd64"
+          echo "${COSIGN_SHA256}  $RUNNER_TEMP/bin/cosign" | sha256sum -c -
+          chmod 0755 "$RUNNER_TEMP/bin/cosign"
+          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
+      - name: the environment key matches the committed public key
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -s bootc/server/cosign.pub
+          cosign public-key --key env://COSIGN_PRIVATE_KEY >"$RUNNER_TEMP/cosign.pub"
+          diff -u bootc/server/cosign.pub "$RUNNER_TEMP/cosign.pub"
+      - name: permit the base pull for the builder
+        # The runtime policy is the one that matters and arrives with T4's rootfs.
+        # The builder has no uCore public key and the base is a uCore stream tag,
+        # so this bypass is limited to the build container.
+        run: |
+          mkdir -p "$HOME/.config/containers"
+          printf '%s' '{"default":[{"type":"insecureAcceptAnything"}]}' \
+            >"$HOME/.config/containers/policy.json"
+      - name: resolve the base digest
+        # The base tracks the uCore `stable` stream tag, so the digest is whatever
+        # the tag names when the build starts. Resolve it here rather than inside
+        # the build: a registry failure fails the job before anything is built, and
+        # the run summary and the image label both name the digest that build ran
+        # on. The tag moves, so this digest is a record, not a pin.
+        run: |
+          set -euo pipefail
+          . bootc/lib/pins.env
+          base=$EDGE_IMAGE
+          digest=$(skopeo inspect --format '{{.Digest}}' "docker://$base")
+          if [[ ! $digest =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::cannot resolve the base digest of $base: $digest"
+            exit 1
+          fi
+          echo "BASE_DIGEST=$digest" >>"$GITHUB_ENV"
+          {
+            echo "### Base image"
+            echo
+            echo "- \`$base\` (stream tag)"
+            echo "- \`${base}@${digest}\` (resolved by this run)"
+            echo
+          } >>"$GITHUB_STEP_SUMMARY"
+          echo "base: ${base}@${digest}"
+      - name: build the edge artifact
+        run: scripts/build-image.sh edge
+      - name: push, sign and verify the pushed digest
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          . bootc/lib/pins.env
+          tag="sha-${GITHUB_SHA::12}"
+          image="${EDGE_IMAGE_REPO}:${tag}"
+          authfile="$RUNNER_TEMP/auth.json"
+          export DOCKER_CONFIG="$RUNNER_TEMP/docker-config"
+          mkdir -p "$DOCKER_CONFIG"
+          printf '%s' "$GH_TOKEN" | podman login --authfile "$authfile" \
+            ghcr.io -u "${{ github.actor }}" --password-stdin
+          cp "$authfile" "$DOCKER_CONFIG/config.json"
+          podman push --authfile "$authfile" --digestfile "$RUNNER_TEMP/digest" "$image"
+          digest=$(cat "$RUNNER_TEMP/digest")
+          [[ $digest =~ ^sha256:[0-9a-f]{64}$ ]]
+          # bootc/containers-image reads the legacy lookaside tag, not the OCI 1.1
+          # referrer bundle cosign >=3 writes by default. Sign legacy, then prove
+          # the `.sig` tag exists, because `cosign verify` alone reads the bundle
+          # and would pass while the host rejects the image.
+          cosign sign --key env://COSIGN_PRIVATE_KEY --yes "$image@$digest"
+          # The lookaside tag is <repo>:<sha256-hex>.sig, not repo:tag:<hex>.sig.
+          skopeo inspect --raw "docker://${EDGE_IMAGE_REPO}:${digest/:/-}.sig" >/dev/null
+          cosign verify --key bootc/server/cosign.pub "$image@$digest"
+          # No `latest` handle and no deploy trigger. The edge's first install and
+          # every update are digest-only (`bootc switch --enforce-container-sigpolicy`
+          # on a digest, T9 and T10); a moving tag here would be a second answer to
+          # "which image runs".
+          {
+            echo "### Derived edge image"
+            echo
+            echo "- \`$image\`"
+            echo "- \`${EDGE_IMAGE_REPO}@${digest}\`"
+            echo
+            echo "The edge install path takes this digest (T9 and T10)."
+          } >>"$GITHUB_STEP_SUMMARY"
+          echo "pin: ${EDGE_IMAGE_REPO}@${digest}"

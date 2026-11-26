@@ -43,6 +43,8 @@ expect "a docs change selects the docs group" "docs" \
   "$(selected README.md docs/broker.md)"
 expect "an image change selects the server-image group" "server-image" \
   "$(selected bootc/server/Containerfile)"
+expect "an edge image change selects the server-image group" "server-image" \
+  "$(selected bootc/edge/Containerfile)"
 expect "a unit change selects the server-image group" "server-image" \
   "$(selected units/quadlet/pattern.container)"
 expect "a secret change selects the secrets group" "secrets" \
