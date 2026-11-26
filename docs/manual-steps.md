@@ -1960,6 +1960,67 @@ sudo coreos-installer install /dev/vda \
 The document's only credential is the operator's public key, and 22 is reachable
 on the public interface only until the tailnet join unit closes it.
 
+### Bootstrap the fresh edge
+
+The image is the whole host — packages, the Caddyfile, the units, the firewall
+and the sshd policy arrive with it — so what is left for a person is exactly what
+a public repository cannot carry: the values and secrets the box serves with, the
+kit's SSH host key, the tailnet node identity and the first deploy record.
+`scripts/edge-bootstrap.sh` is that one step. It runs on the box as root, refuses
+a bad value before it writes anything, and is idempotent.
+
+The first session is the only one on the public side: sshd accepts the key from
+the Ignition document and nothing else, firewalld publishes 22 there only until
+`smoresnet-tailscale-up.service` has joined the tailnet, and that join needs the
+auth key this step writes.
+
+```sh
+# The script needs no sibling file: the libraries it sources are the image's own,
+# at the paths the image's programs use.
+scp scripts/edge-bootstrap.sh root@192.236.188.99:/root/          # the box's address
+scp <kit>/ssh_host_ed25519_key <kit>/ssh_host_ed25519_key.pub \
+  root@192.236.188.99:/root/kit/
+ssh root@192.236.188.99
+SMORTRESS_FQDN=smortress.stonecat-jazz.ts.net EDGE_ACME_EMAIL=you@example.com \
+  /root/edge-bootstrap.sh <<'EOF'
+TS_AUTHKEY=tskey-auth-…
+WEBHOOK_SECRET=…
+DEPLOY_PING_URL=https://hc-ping.com/…
+EOF
+```
+
+Both secrets are on stdin and never in argv: an argument is in
+`/proc/<pid>/cmdline` for every user on the box and in the shell's history, and a
+here-document is in neither. `TS_AUTHKEY` is the preauthorized `tag:vps` key from
+step 2 of `docs/core/public-edge.md`'s operator order, typed once; the box keeps
+it root-only at `/etc/smoresnet/tailscale-authkey`, because the join unit is
+conditioned on that file and re-runs on every boot until the node has enrolled.
+`WEBHOOK_SECRET` is the HMAC secret the receiver authenticates with — add
+`WEBHOOK_SECRET_NEXT` to the same stdin only for a rotation window, and delete
+that file when the window closes — and `DEPLOY_PING_URL` is the dead-man
+capability URL.
+
+What it refuses, before writing anything: an `SMORTRESS_FQDN` with no tailnet
+domain, a missing `EDGE_ACME_EMAIL`, a key that is not `tskey-`-shaped, a secret
+carrying whitespace, a kit host key whose `.pub` disagrees with the public half
+`ssh-keygen -y` derives, and `caddy validate` on the values about to be installed
+— so a truncated paste leaves the box exactly as it booted.
+
+A re-run — after a rebuild's reinstall, or to fix one input — converges the
+derived files (the Caddy environment, the host key, the node ID, the record) and
+leaves every secret already written alone; a value for a file that holds a
+different one is refused, and `--force` is what rotates it. Nothing else is
+forced: the record is the descendancy anchor every later deploy is checked
+against, the node ID is what the tailnet says rather than a name, and
+`--commit <40-hex>` is only there to supply the one value `bootc status` does not
+report — the revision label of the image config — on a host that carries none.
+
+It ends by saying what remains: `scripts/verify-public-edge.sh` from a checkout
+must be all green, and if this box's public IPv4 is not the one committed in
+`tofu/terraform.tfvars`, update `edge_ipv4` and apply **before** that probe — the
+three names resolve to whatever the records point at, so a probe run first
+measures the old box.
+
 ## Former section numbers
 
 Scripts, units and the image still quote the pre-rewrite numbering; this is where

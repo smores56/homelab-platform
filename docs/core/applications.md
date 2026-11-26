@@ -835,10 +835,35 @@ can use it:
 
 ```sh
 sudo podman exec smortress-agent-tmail password
+```
+
+A fresh `init` regenerates that password, so the ciphertext must be rewritten
+before the collector starts. `edit` runs on the operator machine, where the YubiKey
+is; `stage` writes the ciphertext into `/var/lib/smortress/secrets`, which only the
+host has, so it needs a checkout of this repository there:
+
+```sh
 scripts/secret.sh edit tmail-bridge-password.yaml   # tmail.bridge_password
-scripts/secret.sh stage tmail-bridge-password.yaml
+scripts/secret.sh verify
 git commit -am 'chore(agent): set the TutaBridge password'
 git push
+sudo scripts/secret.sh stage tmail-bridge-password.yaml   # from a checkout on the host
+```
+
+Without a checkout on the host, copy the bundle `edit` rewrote, keep the root-only
+ownership, and restart the units that read it:
+
+```sh
+scp secrets/agents.json smortress:/tmp/agents.json
+sudo install -m 0600 -o root -g root /tmp/agents.json /var/lib/smortress/secrets/agents.json
+rm -f /tmp/agents.json
+sudo systemctl restart sops-decrypt.service smortress-app-secrets.service
+```
+
+`stage` restarts `sops-decrypt.service` itself; `smortress-app-secrets.service` is
+`RemainAfterExit`, so only a restart recreates the Podman secret.
+
+```sh
 sudo systemctl start smortress-agent-mail-stream.service
 sudo journalctl -u smortress-agent-mail-stream.service -f
 ```
@@ -866,8 +891,14 @@ every two hours, and skips the run while the seal is missing
 (`ConditionPathExists=`), so a start that leaves nothing in the journal means the
 sign-in has not run.
 
+The image is the one the unit will run, read out of the installed unit, so the
+sign-in and the collector cannot disagree about the seal. (With a checkout of this
+repository at hand, `image=$(bash -c 'source scripts/app-images.sh; app_image_ref
+tuta-calendar')` names the same reference.)
+
 ```sh
-image=$(bash -c 'source scripts/app-images.sh; app_image_ref tuta-calendar')
+image=$(grep -o 'ghcr\.io/smores56/homelab-platform/tuta-calendar@sha256:[0-9a-f]*' \
+  /usr/lib/systemd/system/smortress-agent-collect-calendar.service | head -1)
 sudo podman run --rm -it \
   -v /var/lib/agent/local/quarantine/tuta-calendar:/data:z \
   "$image" init --store /data          # prints: session for <address> sealed at /data/session.gpg
@@ -884,12 +915,13 @@ sudo podman run --rm \
   -v /var/lib/agent/local/quarantine/tuta-calendar:/data:z \
   -v /var/lib/agent/local/quarantine/calendar:/out:z \
   "$image" dump --store /data --out /out      # one JSON line, exit 0; exit 3 writes nothing
-cd /srv/git/github.com/smores56/homelab-platform/main
-sudo PYTHONPATH=libs python3 -m data_plane.collectors.raw \
-  --root /var/lib/agent/local/replica/calendar calendar \
-  --entities /var/lib/agent/local/quarantine/calendar
 sudo systemctl start smortress-agent-collect-calendar.service
 ```
+
+Run the dump only when you want the entity directory without a commit; the unit's
+second stage is what turns that directory into the replica state, and it runs the
+repository's own collector out of the pinned agent-runtime image, so a manual pass
+needs no checkout on the host.
 
 The report's `objects` must equal the dump's count and `deleted` must be `0`: this
 source has no tombstone, so a missing event is carried forward as absent-unknown.
