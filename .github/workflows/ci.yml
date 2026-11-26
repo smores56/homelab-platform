@@ -8,11 +8,9 @@ on:
 
 permissions: read-all
 
-# A hung test must fail its job instead of holding the runner for the whole
-# timeout; the slowest test in the tree is ~12s, the two former monoliths
-# included.
-env:
-  BATS_TEST_TIMEOUT: "120"
+# No BATS_TEST_TIMEOUT: with --jobs, bats 1.14 leaves the watchdog's `sleep`
+# child behind and the run stops making progress. The job's timeout-minutes is
+# what bounds a hang here.
 
 concurrency:
   group: ci-${{ github.ref }}

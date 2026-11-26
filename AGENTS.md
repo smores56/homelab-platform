@@ -45,7 +45,7 @@
 
 ```sh
 # every suite, tracked or not
-BATS_TEST_TIMEOUT=120 git ls-files -z --cached --others --exclude-standard \
+git ls-files -z --cached --others --exclude-standard \
     'tests/*.bats' 'tests/*/*.bats' |
     xargs -0 bats --jobs "$(nproc)" --no-parallelize-within-files
 # the suites this branch touches -- and what the pre-push hook runs

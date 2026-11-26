@@ -12,14 +12,10 @@ cd "$root" || exit 1
 selected=$(tests/tags.sh --changed) || exit 2
 [ -n "$selected" ] || exit 0
 # shellcheck disable=SC2086  # one path per line, deliberately unquoted
-# A hung test must fail the push instead of blocking it; the slowest test in the
-# tree is ~12s, the two former monoliths included. The whole matrix is one pool,
-# so the job count is what a big file gets too: app-quadlets' 572 registered
-# tests take 183s at four jobs and 40s at sixteen.
-# Within-file parallelism is off: bats distributes the jobs over the files, and
-# with every file asking for the whole pool at once the 572-test Quadlet suite
-# starved while the others finished (a fifteen-minute wait for a 23s file).
-# Across files is where the parallelism is; 55 files finish in 334s, the long
-# ones (boot, the Quadlets) taking their turn.
-exec env BATS_TEST_TIMEOUT="${BATS_TEST_TIMEOUT:-120}" \
-    bats --jobs "${BATS_JOBS:-$(nproc)}" --no-parallelize-within-files $selected
+# Across files, not within them: with every file asking the pool for its own
+# jobs the 572-test Quadlet suite starved while the rest finished (a 23s file
+# did not complete in fifteen minutes). 55 files take 334s this way. No
+# BATS_TEST_TIMEOUT: with --jobs, bats 1.14's watchdog leaves a `sleep 120`
+# child behind and the run stops making progress. A hung test is a hang, and
+# CI's own job timeout is what bounds it there.
+exec bats --jobs "${BATS_JOBS:-$(nproc)}" --no-parallelize-within-files $selected
