@@ -1,7 +1,10 @@
-"""Raw portable replicas: provider bytes, staged and published whole.
+"""Raw portable replicas: provider bytes, kept verbatim.
 
-Each collector enumerates one provider into a ``StagingGeneration`` and returns
-a report; publication is the caller's single ``commit_next(complete=True)``.
+A collector enumerates one provider and returns a report. Notes and tasks write
+the live replica state (``ReplicaState``: content-addressed objects plus one
+transactional index) and commit their own complete pass; the rest still build a
+``StagingGeneration`` that the caller publishes with one ``commit_next``.
+
 Nothing here normalizes a record: a derived index can always be rebuilt from
 these objects, and cannot be rebuilt from a projection that dropped what it did
 not understand.

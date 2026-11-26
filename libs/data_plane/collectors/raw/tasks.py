@@ -4,18 +4,18 @@ A todo.txt line carries no id of its own, and the tools that write the file
 rewrite it in place, so content is the only identity available: the object id is
 a digest of the line's bytes. That choice has two consequences, both accepted:
 
-* An edited line is a new task, and the line it replaced is carried forward as
-  absent rather than tombstoned. There is no provider tombstone here -- a reorder
-  or a rewrite looks exactly like a deletion -- so absence alone is not a
-  deletion this replica can prove, and a task that never returns keeps its last
+* An edited line is a new task, and the line it replaced keeps its bytes with an
+  absence marker rather than a tombstone. There is no provider tombstone here --
+  a reorder or a rewrite looks exactly like a deletion -- so absence alone is not
+  a deletion this replica can prove, and a task that never returns keeps its last
   text as evidence it once existed.
 * Two identical lines are one task. A list of 29 lines is a set of tasks, not a
   multiset, and collapsing them is the only way to keep the id a pure function of
   the line; the collapse is counted in the report rather than hidden.
 
 A directory with neither ``todo.txt`` nor ``done.txt`` is refused: a mistyped
-path would otherwise publish an empty generation, which carries every previous
-task forward as absent and looks like a real, empty list. The two files are read
+path would otherwise commit an empty list, which marks every earlier task absent
+and looks like a real, empty list. The two files are read
 through a symlink if the deployment renders them that way; a symlinked directory
 is still refused by ``resolve_source_dir``.
 """
@@ -28,13 +28,11 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from ...errors import PublishError
-from ..staging import StagingGeneration
+from ..state import ReplicaState
 from .replica import (
     ABSENCE_NO_TOMBSTONE,
     CollectReport,
     canonical_json,
-    carry_forward,
-    previous_replica,
     resolve_source_dir,
 )
 
@@ -100,14 +98,18 @@ def _lines(path: Path) -> list[str]:
 
 def collect_tasks(
     entities_dir: str | Path,
-    generation: StagingGeneration,
+    state: ReplicaState,
     *,
     captured_at: str,
 ) -> CollectReport:
-    """Enumerate ``todo.txt`` then ``done.txt`` into ``generation``; never commit."""
+    """Write one complete pass of ``todo.txt`` then ``done.txt`` and commit it.
+
+    An edited line is a different task id, so the edit writes a new object and
+    the old line is a live row without a tombstone: it gains an absence marker
+    instead of disappearing, because todo.txt supplies no deletion evidence.
+    """
 
     root = resolve_source_dir(entities_dir, "todo directory")
-    previous = previous_replica(generation)
 
     present = [name for name in FILES if (root / name).is_file()]
     if not present:
@@ -129,7 +131,7 @@ def collect_tasks(
                 continue
             seen.add(object_id)
             parsed = _parse(line)
-            generation.put(
+            state.put(
                 object_id,
                 canonical_json(
                     {"task_id": object_id, "text": line, "file": name, **parsed}
@@ -142,23 +144,25 @@ def collect_tasks(
                 },
             )
 
-    carried = carry_forward(
-        generation,
-        previous,
-        reason=ABSENCE_NO_TOMBSTONE,
-        captured_at=captured_at,
+    details = {"files": len(present), "lines": lines, "duplicates": duplicates}
+    if state.dry_run:
+        return CollectReport(
+            source_id=SOURCE_ID,
+            objects=len(seen),
+            carried=0,
+            deleted=0,
+            details=details,
+        )
+    stats = state.commit(
+        complete=True, absence_reason=ABSENCE_NO_TOMBSTONE, captured_at=captured_at
     )
     return CollectReport(
         source_id=SOURCE_ID,
-        generation_id=generation.generation_id,
         objects=len(seen),
-        carried=carried,
-        deleted=0,
-        details={
-            "files": len(present),
-            "lines": lines,
-            "duplicates": duplicates,
-        },
+        carried=stats.absent,
+        deleted=stats.tombstoned,
+        details=details,
+        version=stats.version,
     )
 
 

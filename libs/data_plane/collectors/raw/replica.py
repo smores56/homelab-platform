@@ -31,13 +31,7 @@ from typing import Any, Iterable, Mapping
 
 from ...errors import ManifestError, PublishError, ValidationError
 from ..staging import MANIFEST_NAME, PUBLISHED_DIR, StagingGeneration
-
-#: Set on an object the current enumeration did not see. The value is the first
-#: time any generation saw it missing, so the marker does not move on later runs.
-ABSENT_SINCE = "absent_since"
-#: Why the object is absent. Never a synonym for "deleted": the only deletion
-#: evidence this layer accepts is an explicit provider tombstone.
-ABSENCE_REASON = "absence_reason"
+from ..state import ABSENCE_REASON, ABSENT_SINCE
 
 ABSENCE_PROVIDER_WINDOW = "provider-window"
 ABSENCE_NO_TOMBSTONE = "provider-supplies-no-tombstone"
@@ -53,14 +47,17 @@ class RawObject:
 
 @dataclass(frozen=True)
 class CollectReport:
-    """What one enumeration produced, before anything is published."""
+    """What one enumeration produced."""
 
     source_id: str
-    generation_id: str
     objects: int
     carried: int
     deleted: int
     details: Mapping[str, Any] = field(default_factory=dict)
+    #: The published generation, for a collector that still writes one.
+    generation_id: str = ""
+    #: The committed replica version, for a collector that writes the live store.
+    version: int | None = None
 
 
 class RawReplica:

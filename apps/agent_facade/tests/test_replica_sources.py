@@ -1,8 +1,11 @@
 """Replica-backed source tests: projection, provenance and the structural split.
 
-Each case publishes a real generation with the raw collectors and then asks the
-adapter the same questions the facade tool surface asks: read one record, search
-for words, and describe what the record can cite as provenance.
+Each case publishes a real generation and then asks the adapter the same
+questions the facade tool surface asks: read one record, search for words, and
+describe what the record can cite as provenance. Mail, calendar, finance, photos
+and music are published with their raw collectors; notes and tasks are laid out
+directly, because their collectors write the live replica state and this suite
+tests the generation reader.
 """
 
 from __future__ import annotations
@@ -13,15 +16,19 @@ import re
 import tempfile
 import unittest
 from pathlib import Path
+from urllib.parse import quote
+
 from agent_facade import replica_sources, sources
 from data_plane.collectors.raw import (
+    canonical_json,
+    collect_calendar,
+    collect_maildir,
+    canonical_json,
     collect_calendar,
     collect_maildir,
     collect_music,
-    collect_notes,
     collect_photos,
     collect_simplefin,
-    collect_tasks,
 )
 from data_plane.collectors.staging import StagingGeneration
 from data_plane.errors import ContractError, ValidationError
@@ -111,16 +118,16 @@ def _finance_generation(root: Path) -> None:
 
 
 def _notes_generation(root: Path, junk: bytes | None = None) -> None:
-    vault = root / "vault"
-    (vault / "projects").mkdir(parents=True)
-    (vault / "index.md").write_text(
-        "# Vault index\n\nBuy espresso beans before the roast.\n", encoding="utf-8"
-    )
-    (vault / "projects" / "alpha.md").write_text("No heading here.\n", encoding="utf-8")
     generation = StagingGeneration(
         root / "replica-notes", "gen-0001", source_id="notes.markdown"
     )
-    collect_notes(vault, generation, captured_at=CAPTURED)
+    _note(
+        generation,
+        "index.md",
+        "Vault index",
+        "# Vault index\n\nBuy espresso beans before the roast.\n",
+    )
+    _note(generation, "projects/alpha.md", "alpha", "No heading here.\n")
     if junk is not None:
         generation.put(
             "notes::junk.md",
@@ -130,17 +137,57 @@ def _notes_generation(root: Path, junk: bytes | None = None) -> None:
     generation.commit_next(complete=True)
 
 
-def _tasks_generation(root: Path, junk: bytes | None = None) -> None:
-    directory = root / "todo"
-    directory.mkdir()
-    (directory / "todo.txt").write_text(
-        "(A) renew the boat licence +admin\n", encoding="utf-8"
+def _note(
+    generation: StagingGeneration, relative: str, heading: str, body: str
+) -> None:
+    """One object shaped the way the notes collector writes it."""
+
+    object_id = f"notes::{quote(relative, safe='')}"
+    digest = hashlib.sha256(body.encode("utf-8")).hexdigest()
+    generation.put(
+        object_id,
+        canonical_json(
+            {
+                "note_id": object_id,
+                "revision": digest,
+                "path": relative,
+                "heading": heading,
+                "tags": [],
+                "body": body,
+            }
+        ),
+        {
+            "source_id": "notes.markdown",
+            "captured_at": CAPTURED,
+            "path": relative,
+            "heading": heading,
+            "tags": [],
+            "body_sha256": digest,
+        },
     )
-    (directory / "done.txt").write_text("x 2026-11-01 call the clinic\n", encoding="utf-8")
+
+
+def _tasks_generation(root: Path, junk: bytes | None = None) -> None:
     generation = StagingGeneration(
         root / "replica-tasks", "gen-0001", source_id="tasks.todo"
     )
-    collect_tasks(directory, generation, captured_at=CAPTURED)
+    for line, name in (
+        ("(A) renew the boat licence +admin", "todo.txt"),
+        ("x 2026-11-01 call the clinic", "done.txt"),
+    ):
+        object_id = _task_id(line)
+        generation.put(
+            object_id,
+            canonical_json(
+                {
+                    "task_id": object_id,
+                    "text": line,
+                    "file": name,
+                    "done": line.startswith("x "),
+                }
+            ),
+            {"source_id": "tasks.todo", "captured_at": CAPTURED, "file": name},
+        )
     if junk is not None:
         generation.put(
             "tasks::junk", junk, {"source_id": "tasks.todo", "captured_at": CAPTURED}

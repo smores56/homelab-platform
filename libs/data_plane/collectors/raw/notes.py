@@ -16,9 +16,10 @@ Three limits are deliberate:
   attachment is skipped with the other non-Markdown files. A vault that links
   outside itself must not pull foreign notes into a replica that claims to be
   the vault, and a linked directory skipped in silence would drop notes.
-* A file the previous generation held and this one no longer sees is carried
-  forward with a reason, not tombstoned: a vault copy can be a partial mount or
-  a sync still landing, so absence alone is not a deletion this replica proves.
+* A file an earlier pass held and this one no longer sees keeps its bytes and
+  gains an absence marker, not a tombstone: a vault copy can be a partial mount
+  or a sync still landing, so absence alone is not a deletion this replica
+  proves.
 """
 
 from __future__ import annotations
@@ -30,14 +31,12 @@ from typing import Iterable
 from urllib.parse import quote
 
 from ...errors import PublishError
-from ..staging import StagingGeneration
+from ..state import ReplicaState
 from .replica import (
     ABSENCE_NO_TOMBSTONE,
     CollectReport,
     canonical_json,
-    carry_forward,
     file_sha256,
-    previous_replica,
     resolve_source_dir,
 )
 
@@ -87,14 +86,19 @@ def _markdown_files(root: Path) -> list[tuple[str, Path]]:
 
 def collect_notes(
     entities_dir: str | Path,
-    generation: StagingGeneration,
+    state: ReplicaState,
     *,
     captured_at: str,
 ) -> CollectReport:
-    """Enumerate every Markdown file into ``generation``; never commit it."""
+    """Write one complete pass of the vault and commit it.
+
+    A note whose bytes did not change keeps its object; a note that changed
+    writes a new one and leaves the old unreferenced for the pass's GC. A note
+    that vanished is not a deletion: the provider supplied no tombstone, so its
+    row stays live with an absence marker.
+    """
 
     root = resolve_source_dir(entities_dir, "vault")
-    previous = previous_replica(generation)
 
     files = _markdown_files(root)
     for relative, path in files:
@@ -110,7 +114,7 @@ def collect_notes(
         heading = _heading(body, path.stem)
         updated_at = _updated_at(path)
         object_id = f"notes::{quote(relative, safe='')}"
-        generation.put(
+        state.put(
             object_id,
             canonical_json(
                 {
@@ -134,19 +138,25 @@ def collect_notes(
             },
         )
 
-    carried = carry_forward(
-        generation,
-        previous,
-        reason=ABSENCE_NO_TOMBSTONE,
-        captured_at=captured_at,
+    details = {"files": len(files)}
+    if state.dry_run:
+        return CollectReport(
+            source_id=SOURCE_ID,
+            objects=len(files),
+            carried=0,
+            deleted=0,
+            details=details,
+        )
+    stats = state.commit(
+        complete=True, absence_reason=ABSENCE_NO_TOMBSTONE, captured_at=captured_at
     )
     return CollectReport(
         source_id=SOURCE_ID,
-        generation_id=generation.generation_id,
         objects=len(files),
-        carried=carried,
-        deleted=0,
-        details={"files": len(files)},
+        carried=stats.absent,
+        deleted=stats.tombstoned,
+        details=details,
+        version=stats.version,
     )
 
 

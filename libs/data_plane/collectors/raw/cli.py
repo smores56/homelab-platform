@@ -1,13 +1,17 @@
-"""Run one raw collector: enumerate a provider's output and publish a generation.
+"""Run one raw collector: enumerate a provider's output and publish it.
 
-The library never commits and never guesses where its input is; this is the
-operator surface that supplies both. It is what a systemd unit runs, and what a
-human runs by hand against a fixture directory.
+The library never guesses where its input is; this is the operator surface that
+supplies it. It is what a systemd unit runs, and what a human runs by hand
+against a fixture directory.
 
-Publication is one step, and it is the last one: the generation is written under
+Notes and tasks write the live replica state (``objects/`` plus ``state.sqlite``)
+and commit their own pass. Every other collector still writes a generation:
+publication is one step and the last one -- the generation is staged under
 ``.staging``, every object's size and sha256 goes into the manifest, and a single
-rename makes it visible. ``--dry-run`` stops before the rename, so a first run
-against a real provider can be inspected without publishing anything.
+rename makes it visible.
+
+``--dry-run`` enumerates and validates, then publishes nothing: no rename, and
+for the live state no object bytes and no database.
 
 Refusals are exit code 3 with the reason on stderr: a partial enumeration, a
 changed UIDVALIDITY, an error list, a database that was still being written. The
@@ -25,6 +29,7 @@ from typing import Iterable, Mapping
 
 from ...errors import DataPlaneError, ValidationError
 from ..staging import StagingGeneration
+from ..state import ReplicaState
 from .brave import SOURCE_ID as BRAVE_SOURCE
 from .brave import collect_brave_db
 from .calendar import SOURCE_ID as CALENDAR_SOURCE
@@ -45,6 +50,10 @@ from .tasks import SOURCE_ID as TASKS_SOURCE
 from .tasks import collect_tasks
 
 EXIT_REFUSED = 3
+
+#: Sources that write the live replica state instead of a staged generation.
+_STATE_SOURCES = frozenset({"notes", "tasks"})
+
 #: Days of overlap on the provider request, so a boundary transaction is not lost.
 _WINDOW_OVERLAP_DAYS = 7
 #: SimpleFIN answers a longer read with an entry in the AccountSet's `errors`
@@ -105,6 +114,7 @@ def _report(report: CollectReport, published: Path | None, *, dry_run: bool) -> 
         "objects": report.objects,
         "carried": report.carried,
         "deleted": report.deleted,
+        "version": report.version,
         "details": dict(report.details),
         "published": str(published) if published is not None else None,
         "dry_run": dry_run,
@@ -131,7 +141,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="enumerate and validate, then discard the staging generation",
+        help="enumerate and validate, then publish nothing",
     )
     subparsers = parser.add_subparsers(dest="source", required=True)
 
@@ -225,12 +235,14 @@ def _fetched_accountset(access: AccessUrl, args: argparse.Namespace) -> Mapping:
 
 def run(args: argparse.Namespace) -> int:
     root = Path(args.root)
+    captured_at = args.captured_at or _captured_at()
+    if args.source in _STATE_SOURCES:
+        return _run_state(args, root, captured_at)
     generation = StagingGeneration(
         root,
         args.generation or _generation_id(),
         source_id=_SOURCE_IDS[args.source],
     )
-    captured_at = args.captured_at or _captured_at()
 
     try:
         return _collect(args, generation, captured_at)
@@ -239,6 +251,28 @@ def run(args: argparse.Namespace) -> int:
         # picked up by nothing, and a run in the same second would write into it.
         generation.abort()
         raise
+
+
+def _run_state(args: argparse.Namespace, root: Path, captured_at: str) -> int:
+    """One pass of a file-backed source, committed into the live replica state."""
+
+    if args.generation is not None:
+        raise ValidationError(
+            f"{args.source} writes the live replica state; --generation does not apply"
+        )
+    state = ReplicaState(root, source_id=_SOURCE_IDS[args.source], dry_run=args.dry_run)
+    try:
+        if args.source == "notes":
+            report = collect_notes(args.entities, state, captured_at=captured_at)
+        elif args.source == "tasks":
+            report = collect_tasks(args.entities, state, captured_at=captured_at)
+        else:  # pragma: no cover - _STATE_SOURCES lists the choices
+            raise ValidationError(f"unknown state-backed source {args.source!r}")
+        published = None if args.dry_run else state.path
+    finally:
+        state.close()
+    print(json.dumps(_report(report, published, dry_run=args.dry_run), sort_keys=True))
+    return 0
 
 
 def _collect(
@@ -292,10 +326,6 @@ def _collect(
             profile=args.profile,
             captured_at=captured_at,
         )
-    elif args.source == "notes":
-        report = collect_notes(args.entities, generation, captured_at=captured_at)
-    elif args.source == "tasks":
-        report = collect_tasks(args.entities, generation, captured_at=captured_at)
     elif args.source == "photos":
         report = collect_photos(args.entities, generation, captured_at=captured_at)
     elif args.source == "music":
