@@ -668,6 +668,13 @@ signed with the retired key is a `deploy-rejected` with reason `bad-signature`. 
 listener refuses to start when `["webhook"]["secret"]` is empty or missing, so a
 failed decrypt answers nothing rather than accepting unsigned requests.
 
+The edge's key is a second value and rotates on its own clock: `EDGE_DEPLOY_WEBHOOK_SECRET`
+in this repository's `deploy-notify` Environment, and the box's
+`/etc/smoresnet/webhook-secret.yaml` written by `edge-bootstrap --force` with
+`WEBHOOK_SECRET` (and `WEBHOOK_SECRET_NEXT` for the window the listener accepts
+both). Nothing here touches smortress's `["webhook"]`, which is the point: the
+public box never holds the key that posts to the host.
+
 ## Deploy
 
 ### Publish and pin the platform image
@@ -706,11 +713,27 @@ done
 
 The OAuth client is the tailnet client carrying `tag:deploy`: scopes `auth_keys`
 write and `devices` write, tags `tag:deploy`, nothing else, and the ACL admits that
-tag on `tag:smortress:8484` (the receiver) and on port 443 of each of the six
-Services behind the application names (the daily names probe, below) and nowhere
-else. A compromised notify job can therefore re-tag the
+tag to the two receivers — `tag:smortress:8484` and `tag:vps:8484` — and to port
+443 of each of the six Services behind the application names (the daily names
+probe, below) and nowhere else. A compromised notify job can therefore re-tag the
 smortress device itself; that write cannot be separated from `auth_keys`, and a
 static auth key in the Environment would never expire.
+
+The edge's receiver takes a value of its own instead of
+`["webhook"]["secret"]`, in the same `deploy-notify` Environment of this
+repository under a second name:
+
+```sh
+printf '%s' "$(openssl rand -hex 32)" | GH_TOKEN="$OWNER" \
+  gh secret set EDGE_DEPLOY_WEBHOOK_SECRET --env deploy-notify --repo smores56/homelab-platform
+```
+
+It is a separate key because the edge is the box anybody can reach: with one
+value, a popped edge would hold the key that posts a deploy to smortress, and the
+design's residual — a popped edge can only force a reboot into an already
+published, signed image — would not hold. The value is also what
+`edge-bootstrap`'s `WEBHOOK_SECRET` writes to the box, so the two are entered
+together and nothing derives one from the other.
 
 ### Create the tailnet names check
 
@@ -2020,6 +2043,51 @@ must be all green, and if this box's public IPv4 is not the one committed in
 `tofu/terraform.tfvars`, update `edge_ipv4` and apply **before** that probe — the
 three names resolve to whatever the records point at, so a probe run first
 measures the old box.
+
+### Release and deploy the edge
+
+A push to `main` that touches the image's inputs builds, signs and publishes the
+edge, and stops there: the box with the least rollback is deployed by a dispatch
+and never by a merge (`docs/core/public-edge.md`, "The deploy path"). Review the
+digest the publish run printed, then release it:
+
+```sh
+gh workflow run publish-edge-image.yml --repo smores56/homelab-platform --ref main
+gh run watch "$(gh run list --workflow publish-edge-image.yml --limit 1 \
+  --json databaseId --jq '.[0].databaseId')"
+```
+
+On a dispatch from `main` the workflow's last job joins the tailnet as
+`tag:deploy` and POSTs a body signed with `EDGE_DEPLOY_WEBHOOK_SECRET` to
+`http://smoresnet:8484/v1/deploy`. The receiver verifies the signature and the
+repository, writes one queue entry and exits; `smoresnet-deploy.path` starts
+`smoresnet-deploy.service` on the first file in the queue, the verifier stages the
+digest only after `bootc switch --enforce-container-sigpolicy` accepts it, and the
+drain records `pending.json` and reboots. The boot gate judges the boot; a
+deployment that does not come up is denylisted and the next boot is the previous
+commit.
+
+`smoresnet-deploy-poll.timer` runs the same path at 03:00 local for a release
+nobody dispatched — a merge that published and was forgotten. Both triggers only
+enqueue; the drain is the only thing that decides.
+
+What to read afterwards, on the box:
+
+```sh
+journalctl -u smoresnet-deploy.service -n 50 --no-pager
+journalctl -u edge-boot-gate.service -b -n 50 --no-pager
+```
+
+A request resolves against the **tip of `main`**, and the edge image is published
+only for the commits that touch its tree, so a request that lands on a tip which
+did not rebuild is `no-artifact`: the verifier holds it, the drain keeps the
+entry, and the next request supersedes it. That is the design — a merge that does
+not change the image has nothing to deploy — and it is why a release is
+dispatched from a commit that did touch the edge. The same holds immediately
+after the install: until `edge-bootstrap` has seeded
+`/var/lib/homelab/deploy/state.json` every request is `bootstrap-required`, and
+until a commit that changes the edge has published there is no artifact for the
+tip to name.
 
 ## Former section numbers
 

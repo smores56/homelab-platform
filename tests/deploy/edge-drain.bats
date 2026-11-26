@@ -438,10 +438,11 @@ edge_beat() {
     done
 }
 
-@test "the edge drain unit is not started by anything yet" {
-    # T11 owns the trigger (dispatch-only notify, 03:00 poll). Until then the unit
-    # must exist and be startable, and must not claim an [Install] that would boot
-    # it, which would drain a queue with no listener behind it.
+@test "the edge drain unit is started by the queue, not by boot" {
+    # The trigger is the queue: smoresnet-deploy.path fires on the first request a
+    # notify or the poll enqueued (design #939, T11). The drain itself must exist
+    # and be startable, and must not claim an [Install] that would boot it, which
+    # would drain a queue nobody had filled.
     run grep -q '^\[Install\]' "$drain_unit"
     assert_failure
     contains 'ExecStart=/usr/libexec/deploy-drain-edge' "$drain_unit"
