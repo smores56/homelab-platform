@@ -25,11 +25,11 @@
 # the receiver first lands (docs/manual-steps.md), and a missing deploy secret
 # must page rather than roll the host back onto an image that cannot deploy.
 #
-# The web terminal is absent because it is a session host, not a serving signal:
-# a dead zellij web server costs one browser tab while the sessions it started
-# keep running (KillMode=process). Its route is re-advertised at every boot by
-# smortress-tailscale-serve, which is absent here for the reason above, and no
-# prober reads svc:terminal -- the terminal is the one route without one.
+# The web terminal is absent because it is not an image unit at all: it runs in
+# the owner's user manager, whose unit ships with the dotfiles (SELinux refuses a
+# system service an exec into a home binary). Its route is re-advertised at every
+# boot by smortress-tailscale-serve, which is absent here for the reason above,
+# and no prober reads svc:terminal -- the terminal is the one route without one.
 firewalld.service
 sops-decrypt.service
 tailscaled.service

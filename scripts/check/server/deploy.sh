@@ -125,35 +125,18 @@ fi
 check "the Serve unit is ordered after the wallpapers dataset is ready" \
   grep -qE '^After=.*zfs-ready@raw-wallpapers\.service' units/systemd/smortress-tailscale-serve.service
 
-# The web terminal (#954) is a session host, so the unit has to hide nothing its
-# panes use: the zellij binary, its config and its token database all come from
-# the owner's home, the shims need a writable /tmp, and sudo in a pane needs the
-# setuid bit NoNewPrivileges would block. The socket directory is the one an SSH
-# login resolves, so a browser attaches to the sessions an SSH client started.
-terminal_unit=units/systemd/smortress-zellij-web.service
-check "the image enables the web terminal" \
-  grep -qE '^[[:space:]]+smortress-zellij-web\.service[[:space:]]*\\?$' bootc/server/Containerfile
-check "the terminal listens on loopback only" \
-  has 'web --ip 127.0.0.1 --port 8082' "$terminal_unit"
-check "the terminal shares the fixed socket directory" \
-  has 'Environment=ZELLIJ_SOCKET_DIR=/run/zellij' "$terminal_unit"
-check "the terminal puts the mise shims first on PATH" \
-  has 'Environment=PATH=/var/home/smores/.local/share/mise/shims:' "$terminal_unit"
-check "the terminal creates main after the server starts" \
-  has 'ExecStartPost=-/var/home/smores/.local/share/mise/shims/zellij attach main --create-background' "$terminal_unit"
-check "the terminal keeps session daemons across a restart" \
-  grep -qx 'KillMode=process' "$terminal_unit"
-if grep -qE '^(ProtectHome=(yes|strict|tmpfs)|PrivateTmp=yes|NoNewPrivileges=yes)$' "$terminal_unit"; then
-  bad "the terminal unit hides nothing its panes need"
+# The web terminal (#954) is not a system unit: SELinux refuses a system service
+# an exec into a home binary, and the server has to run the mise binary and the
+# owner's shells. It is a user unit shipped with the dotfiles, so what the image
+# owes it is linger -- without the file the owner's manager never starts at boot
+# and `main` is only created once someone logs in -- and no second system unit.
+check "the image lingers the owner so the terminal starts at boot" \
+  has 'f /var/lib/systemd/linger/smores 0644 root root -' bootc/server/rootfs/etc/tmpfiles.d/smortress.conf
+if [[ -e units/systemd/smortress-zellij-web.service ]]; then
+  bad "the image ships no system unit for the terminal"
 else
-  ok "the terminal unit hides nothing its panes need"
+  ok "the image ships no system unit for the terminal"
 fi
-check "the terminal names the SELinux domain a home binary needs" \
-  has 'SELinuxContext=system_u:system_r:unconfined_service_t:s0' "$terminal_unit"
-check "the terminal owns the socket directory as its runtime directory" \
-  has 'RuntimeDirectory=zellij' "$terminal_unit"
-check "the terminal keeps the socket directory across a stop" \
-  grep -qx 'RuntimeDirectoryPreserve=yes' "$terminal_unit"
 
 # shellcheck source=app-images.sh disable=SC1091
 source scripts/app-images.sh

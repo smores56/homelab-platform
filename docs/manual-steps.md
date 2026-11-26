@@ -1615,20 +1615,34 @@ Tailscale SSH, and the YubiKey sudo credential and its drills are
 ### The web terminal
 
 `https://terminal.<tailnet>.ts.net/` is zellij's own web client, the only terminal
-that needs neither an SSH key nor an agent. `smortress-zellij-web.service` runs the
-server on `127.0.0.1:8082`, Serve terminates TLS for `svc:terminal`, and the
-sessions live in `/run/zellij` -- the socket directory an SSH login resolves -- so a
-session started over SSH attaches from a browser and a browser-started session is
-visible over SSH. The unit creates `main` at every boot, and no host port, proxy or
+that needs neither an SSH key nor an agent. `zellij-web.service` runs the server on
+`127.0.0.1:8082` in the owner's user manager, Serve terminates TLS for
+`svc:terminal`, and the unit creates `main` at every start. No host port, proxy or
 container is added.
 
-Two dotfiles make the sharing real, and neither is optional: `web_sharing "on"` in
-`~/.config/zellij/config.kdl` is what lets a browser attach to a session an SSH
-login started, and `~/.config/shell/env.d/20-zellij-socket.sh` is what points that
-login at `/run/zellij`. Both reach the host through `mise dotfiles`; before they
-do, SSH sessions use `$XDG_RUNTIME_DIR/zellij` and the browser lists sessions it
-cannot attach to, with no error to say why. `zellij setup --check` accepts the
-config, so it is not the probe either.
+It is a **user** unit, and that is load-bearing rather than tidy: the server execs
+the mise binary and every pane execs the owner's shells, and SELinux denies a
+system service an exec into a home file (`init_t` and even `unconfined_service_t`
+are refused on `user_tmp_t` and `user_home_t`). The user manager runs in the login
+domain, so the server and its panes get what an SSH session gets. The unit and the
+`web_sharing "on"` line in `~/.config/zellij/config.kdl` both arrive with
+`mise dotfiles`, and the manager starts at boot because the image lingers the
+owner.
+
+The socket directory needs no wiring either: the manager and an SSH login both use
+`$XDG_RUNTIME_DIR/zellij`, which is per-user, so they see one session list. Without
+the config line the browser lists a session it cannot attach to, with no error to
+say why; `zellij setup --check` accepts the config, so it is not the probe either.
+
+```sh
+mise dotfiles                                        # the unit and the config
+systemctl --user enable --now zellij-web.service    # one time, then at every boot
+systemctl --user status zellij-web.service
+```
+
+The host does not create the session for you: `main` exists once the unit has
+started, and a reboot recreates it from scratch (`session_serialization` stays off,
+so layout and scrollback do not survive).
 
 One read-write login token, printed once, is the whole credential: store it in the
 password manager and never in this repository. The token store follows `HOME`
@@ -1654,10 +1668,9 @@ order. `zellij web --status` is not the probe: it exits 0 whether the server is
 running or not.
 
 ```sh
-systemctl is-active smortress-zellij-web.service
+systemctl --user is-active zellij-web.service
 curl -fsS http://127.0.0.1:8082/info/version
-sudo -u smores env ZELLIJ_SOCKET_DIR=/run/zellij \
-  /var/home/smores/.local/share/mise/shims/zellij list-sessions   # main
+zellij list-sessions                               # main
 tailscale serve status --json | jq '.Services["svc:terminal:443"]'
 ```
 
