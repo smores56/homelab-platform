@@ -57,15 +57,15 @@ Environment=TZ=UTC
 # No :z here: /usr is a read-only composefs mount, so a relabel fails with EROFS.
 # /usr content is already readable by the container type; only dataset mounts relabel.
 Volume=/var/lib/agent/local/memory:/memory:z
-# The published raw generations the personal facade answers from. Read-only: the
-# collector owns this tree, and a new generation is picked up without a restart
+# The raw replica states the personal facade answers from. Read-only: the
+# collector owns this tree, and a new commit is picked up without a restart
 # (apps/agent_facade/replica_sources.py). It sits inside the same state dataset as
 # memory and the gateway, so a cold restore carries the feed and its index.
 Volume=/var/lib/agent/local/replica:/replica:ro,z
 # The derived source index (apps/agent_facade/source_index.py): one SQLite file per
-# replica source and generation. An existing file is opened, never rebuilt: it
+# replica source and snapshot. An existing file is opened, never rebuilt: it
 # carries the projection it was built from, so a restarted facade searches it
-# without projecting the generation. A new generation has no file yet, so its
+# without projecting the state. A new snapshot has no file yet, so its
 # first search pays one projection and writes it; deleting the tree costs one
 # such build and nothing else. It is not in the memory tree because it answers
 # for the replicas, not for what the agent wrote.

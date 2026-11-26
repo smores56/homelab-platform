@@ -135,7 +135,7 @@ def collect_photos(
         except (OSError, UnicodeError) as exc:
             # A name the replica cannot store -- too long once quoted, or not
             # UTF-8 -- must refuse and name the file instead of aborting the run
-            # with a traceback and leaving the staging generation behind.
+            # with a traceback and leaving a half-written state behind.
             raise PublishError(f"{media.relative!r} could not be stored: {exc}") from exc
 
     return commit_pass(

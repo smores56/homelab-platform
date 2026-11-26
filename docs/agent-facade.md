@@ -58,12 +58,12 @@ The table's adapters are fixtures: deterministic in-process records, no network,
 no filesystem walk. They exist so the tool surface is complete and provable before
 any provider plumbing runs, and every tool test uses them.
 
-A published raw generation can answer for a source instead. `--replica
-SOURCE=DIR` (repeatable) builds a `ReplicaAdapter` over the newest published
-generation at `DIR`, and `Catalog.for_deployment(deployment, replacements=...)`
-puts it in the table. The adapter re-resolves the newest generation at most once
-per two seconds and discards its projection when the id changes, so a publication
-is visible without a restart; before the first one the source answers
+A committed raw replica state can answer for a source instead. `--replica
+SOURCE=DIR` (repeatable) builds a `ReplicaAdapter` over the state at `DIR`, and
+`Catalog.for_deployment(deployment, replacements=...)` puts it in the table. The
+adapter re-resolves the state at most once per two seconds and discards its
+projection when the snapshot changes, so a commit is visible without a restart;
+before the first one the source answers
 `unavailable` instead of failing startup. Three properties make that safe:
 
 - The replacement may only take the place of a source the deployment's table
@@ -72,13 +72,13 @@ is visible without a restart; before the first one the source answers
   gain `books` by being pointed at a directory, and the general facade cannot
   gain `mail`.
 - What is projected is title and body for search and for `sources.read`. The
-  bytes stay in the generation, so a record can be re-read or re-projected;
+  bytes stay in the replica state, so a record can be re-read or re-projected;
   nothing is written back. Provenance carries exactly the three fields a memory
   record may cite: `source_id`, `revision` (the sha256 of the object that
   produced the record) and `captured_at` (the collector's stamp).
-- A missing generation is not a startup failure and a newer one is not a restart:
+- A missing state is not a startup failure and a newer one is not a restart:
   the source answers `unavailable` until the first publication, then serves the
-  newest generation on the next read or search.
+  newest state on the next read or search.
 
 Derived objects are not records: the Maildir epoch map, the ICS projection, the
 AccountSet summary and the account/connection objects are skipped, and Brave
@@ -86,13 +86,13 @@ contributes its `urls` rows only. The raw layer is `docs/raw-replicas.md`.
 
 Search does not have to scan. With `--index-root DIR` (`AGENT_FACADE_INDEX_ROOT`,
 `/index` in the personal container) each adapter keeps a derived SQLite FTS5 index
-at `DIR/<source>/<generation>.sqlite` and answers from it instead of projecting
-the generation. The file carries the projection it was built from, so a search
+at `DIR/<source>/<snapshot>.sqlite` and answers from it instead of projecting
+the state. The file carries the projection it was built from, so a search
 over an existing file projects nothing -- a facade restart beside a warm
 `/index` answers the first query in the same time as a warm one. Only a
-generation with no file pays one projection and writes the file; every search
-after that is a query. It is disposable: a published generation is immutable, so
-the file is named after the generation, a new generation is a new file, and the
+state with no file pays one projection and writes the file; every search
+after that is a query. It is disposable: a committed snapshot is immutable, so
+the file is named after the snapshot, a new snapshot is a new file, and the
 source's other generation files are pruned after the build. The tokenizer is `trigram`, so a hit
 is a substring hit -- `orld` finds `Hello world`, which is why it is not the word
 tokenizer memory uses. Case folding is SQLite's rather than Python's
@@ -108,7 +108,7 @@ query stays literal.
 
 The personal Quadlet passes `--replica` for `mail`, `calendar`, `finance`, `brave`,
 `notes`, `tasks`, `photos` and `music` and mounts the replica tree read-only.
-`photos` and `music` are answered from a metadata-only generation: the media bytes
+`photos` and `music` are answered from metadata-only objects: the media bytes
 stay on their own datasets, so a search finds a file by its name, its folders,
 its format and its size rather than by reading it. `workspace` is the last
 personal source that still serves a fixture.
@@ -248,7 +248,7 @@ file, so the token is in no image, no document and no command line.
 
 ## Live general trees
 
-The general deployment's two sources are live, not published generations
+The general deployment's two sources are live, not replica states
 (SDLC #851): `--repo-root /srv/git` and `--books-root /srv/books` mount the two
 trees read-only into that one container and the adapters read them on each call.
 

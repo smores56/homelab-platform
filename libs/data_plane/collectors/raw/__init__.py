@@ -1,9 +1,8 @@
 """Raw portable replicas: provider bytes, kept verbatim.
 
-A collector enumerates one provider and returns a report. Notes and tasks write
-the live replica state (``ReplicaState``: content-addressed objects plus one
-transactional index) and commit their own complete pass; the rest still build a
-``StagingGeneration`` that the caller publishes with one ``commit_next``.
+A collector enumerates one provider, writes the live replica state
+(``ReplicaState``: content-addressed objects plus one transactional index) and
+commits its own complete pass.
 
 Nothing here normalizes a record: a derived index can always be rebuilt from
 these objects, and cannot be rebuilt from a projection that dropped what it did
@@ -25,11 +24,8 @@ from .replica import (
     ABSENCE_RETENTION,
     ABSENT_SINCE,
     CollectReport,
-    RawObject,
-    RawReplica,
     canonical_json,
-    carry_forward,
-    previous_replica,
+    commit_pass,
 )
 from .tasks import collect_tasks
 
@@ -41,10 +37,8 @@ __all__ = [
     "ABSENT_SINCE",
     "MAX_MEDIA_OBJECTS",
     "CollectReport",
-    "RawObject",
-    "RawReplica",
+    "commit_pass",
     "canonical_json",
-    "carry_forward",
     "collect_brave_db",
     "collect_calendar",
     "collect_maildir",
@@ -53,5 +47,4 @@ __all__ = [
     "collect_photos",
     "collect_simplefin",
     "collect_tasks",
-    "previous_replica",
 ]

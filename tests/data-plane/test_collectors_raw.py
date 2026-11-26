@@ -23,8 +23,6 @@ from data_plane.collectors.raw import (
     ABSENCE_RETENTION,
     ABSENT_SINCE,
     MAX_MEDIA_OBJECTS,
-    RawReplica,
-    carry_forward,
     collect_brave_db,
     collect_calendar,
     collect_maildir,
@@ -33,21 +31,11 @@ from data_plane.collectors.raw import (
     collect_photos,
     collect_simplefin,
     collect_tasks,
-    previous_replica,
 )
-from data_plane.collectors.staging import StagingGeneration
 from data_plane.collectors.state import ReplicaState
 from data_plane.errors import EpochError, ManifestError, PublishError, ValidationError
 
 CAPTURED = "2026-11-19T00:00:00+00:00"
-
-
-def _generation(root: Path, name: str = "gen-0001") -> StagingGeneration:
-    return StagingGeneration(root, name, source_id="test.source")
-
-
-def _publish(generation: StagingGeneration) -> Path:
-    return generation.commit_next(complete=True)
 
 
 def _writer(root: Path, name: str = "gen-0001") -> ReplicaState:
@@ -109,129 +97,6 @@ def _message(path: Path, key: str, *, flags: str = "", body: str = "hello") -> N
             f"\r\n{body}\r\n"
         ).encode("utf-8")
     )
-
-
-class ReplicaTests(unittest.TestCase):
-    def test_reads_verified_objects(self) -> None:
-        with tempfile.TemporaryDirectory() as work:
-            root = Path(work)
-            generation = _generation(root)
-            generation.put("a", b"one", {"kind": "test"})
-            published = _publish(generation)
-
-            replica = RawReplica(root)
-            self.assertEqual(replica.generation_id, "gen-0001")
-            self.assertEqual(replica.read("a"), b"one")
-            self.assertEqual(replica.metadata("a"), {"kind": "test"})
-            self.assertEqual(replica.path, published)
-
-    def test_tampered_object_is_refused(self) -> None:
-        with tempfile.TemporaryDirectory() as work:
-            root = Path(work)
-            generation = _generation(root)
-            generation.put("a", b"one", {})
-            published = _publish(generation)
-            (published / "objects" / "a").write_bytes(b"two")
-
-            with self.assertRaises(ManifestError):
-                RawReplica(root).read("a")
-
-    def test_no_generation_is_a_named_failure(self) -> None:
-        with tempfile.TemporaryDirectory() as work:
-            with self.assertRaises(ManifestError):
-                RawReplica(Path(work))
-
-    def test_carry_forward_marks_absence_once(self) -> None:
-        with tempfile.TemporaryDirectory() as work:
-            root = Path(work)
-            first = _generation(root)
-            first.put("kept", b"keep", {})
-            first.put("gone", b"bye", {})
-            _publish(first)
-
-            second = _generation(root, "gen-0002")
-            second.put("kept", b"keep", {})
-            carried = carry_forward(
-                second,
-                previous_replica(second),
-                reason=ABSENCE_NO_TOMBSTONE,
-                captured_at="2026-11-19T00:00:00+00:00",
-            )
-            self.assertEqual(carried, 1)
-            _publish(second)
-
-            third = _generation(root, "gen-0003")
-            carry_forward(
-                third,
-                previous_replica(third),
-                reason=ABSENCE_NO_TOMBSTONE,
-                captured_at="2026-12-01T00:00:00+00:00",
-            )
-            _publish(third)
-
-            metadata = RawReplica(root, "gen-0003").metadata("gone")
-            self.assertEqual(metadata[ABSENT_SINCE], "2026-11-19T00:00:00+00:00")
-            self.assertEqual(metadata["absence_reason"], ABSENCE_NO_TOMBSTONE)
-
-    def test_carry_forward_reads_no_object_bytes(self) -> None:
-        """A carried object costs an inode, not a read of the previous replica."""
-
-        with tempfile.TemporaryDirectory() as work:
-            root = Path(work)
-            first = StagingGeneration(root, "gen-1", source_id="tuta.mail")
-            first.put("mail::INBOX::1", b"From: a\r\n\r\nbody\r\n", {"folder": "INBOX"})
-            first.commit_next(complete=True)
-
-            second = StagingGeneration(root, "gen-2", source_id="tuta.mail")
-            def guarded(self, object_id):
-                raise AssertionError(f"carry_forward read {object_id}")
-
-            with mock.patch.object(RawReplica, "read", guarded):
-                carried = carry_forward(
-                    second,
-                    previous_replica(second),
-                    reason=ABSENCE_NO_TOMBSTONE,
-                    captured_at="2026-11-20T00:00:00+00:00",
-                )
-            self.assertEqual(carried, 1)
-
-            second.commit_next(complete=True)
-            replica = RawReplica(root, "gen-2")
-            self.assertEqual(
-                replica.read("mail::INBOX::1"), b"From: a\r\n\r\nbody\r\n"
-            )
-            self.assertIn(
-                "absent_since", replica.metadata("mail::INBOX::1")
-            )
-
-    def test_carry_forward_never_resurrects_a_tombstone(self) -> None:
-        with tempfile.TemporaryDirectory() as work:
-            root = Path(work)
-            first = _generation(root)
-            first.put("gone", b"bye", {})
-            _publish(first)
-
-            second = _generation(root, "gen-0002")
-            second.delete("gone")
-            self.assertEqual(
-                carry_forward(
-                    second,
-                    previous_replica(second),
-                    reason=ABSENCE_NO_TOMBSTONE,
-                    captured_at=CAPTURED,
-                ),
-                0,
-            )
-            _publish(second)
-            self.assertFalse(RawReplica(root, "gen-0002").object_ids())
-
-    def test_carry_forward_refuses_an_empty_reason(self) -> None:
-        with tempfile.TemporaryDirectory() as work:
-            generation = _generation(Path(work))
-            with self.assertRaises(ValidationError):
-                carry_forward(
-                    generation, None, reason="  ", captured_at=CAPTURED
-                )
 
 
 class MailTests(unittest.TestCase):

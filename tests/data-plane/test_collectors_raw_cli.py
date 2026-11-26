@@ -9,7 +9,6 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
-from data_plane.collectors.raw import RawReplica
 from data_plane.collectors.raw import cli as raw_cli
 from data_plane.collectors.raw.cli import EXIT_REFUSED, main
 from data_plane.collectors.state import ReplicaState
@@ -93,7 +92,7 @@ class MailCommandTests(unittest.TestCase):
             self.assertEqual(code, EXIT_REFUSED)
             self.assertIn("uidvalidity", err)
 
-    def test_a_refusal_leaves_no_published_generation(self) -> None:
+    def test_a_refusal_leaves_no_state(self) -> None:
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
             maildir = _maildir(root)

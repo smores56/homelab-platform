@@ -1155,7 +1155,7 @@ facade_mounts_only_memory() { # spec
 
 # The derived source index is personal: every raw collector is, so the general
 # deployment has no replica to index and takes neither the flag nor the mount.
-facade_serves_published_generation() { # spec source
+facade_serves_replica_state() { # spec source
   local exec_line
   exec_line=$(facade_exec_line "$1")
   if [[ " $exec_line " != *" --replica $2=/replica/$2 "* ]]; then
@@ -1235,8 +1235,8 @@ for _spec in personal:local:18004 general:general:18005; do
     facade_mounts_only_memory "$_spec"
   if [[ $_deployment == personal ]]; then
     for _source in mail calendar finance brave notes tasks photos music; do
-      registered "$_q serves $_source from its published generation" \
-        facade_serves_published_generation "$_spec" "$_source"
+      registered "$_q serves $_source from its replica state" \
+        facade_serves_replica_state "$_spec" "$_source"
     done
     registered "$_q mounts the personal replica tree read-only" \
       facade_mounts_personal_replica_read_only "$_spec"

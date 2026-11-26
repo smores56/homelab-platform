@@ -1,8 +1,10 @@
 # Raw portable replicas
 
-Four collectors turn one provider's own output into one published generation:
-mail (a Tuta Maildir), calendar (Tuta SDK entities), finance (a SimpleFIN
-AccountSet) and browsing history (a Brave `History` copy). `libs/data_plane/
+Seven collectors turn one provider's own output into one live replica state:
+mail (a Tuta Maildir or the IMAP bridge), calendar (Tuta SDK entities), finance
+(a SimpleFIN AccountSet), browsing history (a Brave `History` copy), notes (a
+Markdown vault), tasks (a todo.txt directory), photos and music (media
+libraries). `libs/data_plane/
 collectors/raw/` holds them; `tests/data-plane/test_collectors_raw.py` is the
 whole contract without a provider.
 
@@ -13,7 +15,7 @@ Mail has a second collector, `data_plane.collectors.stream.imap`, which reads th
 bridge over IMAP instead of a Maildir ("Mail over IMAP" below). It is the one the
 host runs; the Maildir collector remains the fixture-shaped contract.
 
-## Why raw, and why a generation
+## Why raw, and why a live state
 
 A derived index is a claim about somebody else's data. Re-encoding a MIME
 attachment, flattening a recurrence rule or projecting `visits JOIN urls` throws
@@ -22,15 +24,20 @@ afterwards. So the collector stores the provider's bytes, and the projections
 that the agent actually queries (a search index, a ledger view) are marked
 derived and rebuilt from those bytes.
 
-A generation is written under `.staging/<gen>` and published by one rename into
-`published/<gen>`. The manifest records every object's size and sha256, and
-`RawReplica` checks both on every read: a replica that was damaged or hand-edited
-fails loudly instead of quietly serving different data than it recorded. Partial
-pages never appear under `published`, because the rename is the commit.
+A replica holds the latest state only: content-addressed bytes under
+`objects/<2hex>/<sha256>` and one `state.sqlite` beside them. There is no
+history and no per-pass tree -- Restic keeps the history. `ReplicaState` checks
+every object's size and sha256 on read, so a replica that was damaged or
+hand-edited fails loudly instead of quietly serving different data than it
+recorded.
 
-`StagingGeneration.commit_next(complete=True)` also refuses a generation that
-drops a previously published object without naming it. That refusal is the whole
-reason deletion cannot be inferred from silence.
+One pass is one transaction. It writes only the bytes the replica does not hold,
+records the rows it enumerated, and commits rows, tombstones, absence markers,
+the cursor and the version together. A crash therefore leaves unreferenced
+bytes, never a row whose object is missing, and a refused pass commits nothing.
+`commit(complete=True)` refuses a pass that does not account for every live row
+it did not see: that refusal is the whole reason deletion cannot be inferred
+from silence.
 
 ## The absence ledger
 
@@ -51,14 +58,14 @@ The reasons are fixed strings:
 | `provider-supplies-no-tombstone` | calendar | the SDK lists events and never says one was deleted |
 | `provider-retention-expiry` | Brave | retention, user deletion and profile recreation look identical |
 
-`absent_since` is written once and never moved, so a generation can distinguish
+`absent_since` is written once and never moved, so the state can distinguish
 "gone since March" from "gone since this run". This ledger is why a Restic
 retention window cannot be the last copy of something the provider stopped
 mentioning.
 
 ## Mail
 
-`collect_maildir(path, generation, uidvalidity=..., captured_at=...)`
+`collect_maildir(path, state, uidvalidity=..., captured_at=...)`
 
 - Reads `cur/` and `new/` of the root and of every subdirectory that has them;
   folder names are the on-disk names (`INBOX` for the root, `.Sent` for a
@@ -66,7 +73,7 @@ mentioning.
 - Stores the raw RFC822 bytes. Nothing is re-encoded; attachments, charsets and
   header order are the provider's.
 - Refuses a non-empty `tmp/`: a file there is a delivery in progress, and the
-  generation would record half a maildir.
+  state would record half a maildir.
 - Refuses two files that map to one object id: that is a duplicated key, and
   last-writer-wins would lose a message while reporting success.
 - Requires a UIDVALIDITY for every folder, stores the map as the object
@@ -76,7 +83,7 @@ mentioning.
   the epoch is the provider's, and a number the collector guessed would
   invalidate the deletion rule the moment it drifted.
 - Records an expunge as a tombstone only in a folder whose epoch did not change.
-- Refuses a folder that the previous generation had and this one does not.
+- Refuses a folder that the last committed state had and this pass does not.
   Nothing this host does can remove a folder from a provider, so it is a
   replaced or half-mounted source, and tombstoning every message in it would
   record a mass deletion that never happened.
@@ -86,7 +93,7 @@ underlying an expunge.
 
 ## Mail over IMAP
 
-`collect_mailbox(mailbox, generation, previous, captured_at=...)` in
+`collect_mailbox(mailbox, state, captured_at=...)` in
 `data_plane.collectors.stream.imap` is the collector the host runs. The far side
 is TutaBridge (`agent-tmail`), the only process that holds a Tuta session: it
 serves the mailbox as local IMAP on the collectors' network, TLS with the
@@ -98,14 +105,14 @@ certificate it generated, and the collector logs in with the bridge password.
   comes back for the life of a folder's UIDVALIDITY, which is exactly the
   lifetime over which "this key is gone" means something.
 - The epoch comes from `SELECT`. Each folder's UIDVALIDITY is stored in
-  `mail::_uidvalidity`, and a value that differs from the previous generation
+  `mail::_uidvalidity`, and a value that differs from the recorded state
   raises `EpochError` before a single body is fetched. A renumbering makes every
   UID new, and publishing it as "the old ones vanished, these are new" would
   record a mass deletion that never happened.
 - Flags come from one `UID FETCH 1:* (UID FLAGS)` per folder and are stored
   sorted. They are the one metadata field a carried-forward object updates: its
   bytes and its `captured_at` stay the ones that first saw the UID.
-- A UID that the previous generation held, that the folder no longer lists, and
+- A UID the state held, that the folder no longer lists, and
   that was not re-added, is an expunge -- but only in a folder whose UIDVALIDITY
   did not change. That is the only tombstone this collector writes.
 - A folder that disappears is a refusal, not a mass tombstone: nothing this host
@@ -113,15 +120,15 @@ certificate it generated, and the collector logs in with the bridge password.
 - A folder name containing `/` or `::` is refused, because it has no unambiguous
   place in an object id; guessing which folder a key meant is how a replica loses
   one.
-- Bodies are fetched only for UIDs the previous generation lacks. Everything else
-  is carried forward from that generation's verified bytes, so a steady-state
+- Bodies are fetched only for UIDs the state lacks. Everything else keeps its
+  row and its bytes, so a steady-state
   pass costs one LIST, one SEARCH and one FLAGS fetch per folder, not a
   re-download.
 
 ### How the service runs
 
 `python3 -m data_plane.collectors.stream.imap` makes an initial full pass,
-publishes that generation, then opens one IDLE connection per folder (bounded at
+commits that state, then opens one IDLE connection per folder (bounded at
 32; Tuta exposes a handful) and lets a publisher thread decide when to run again.
 TutaBridge pushes `EXISTS`/`EXPUNGE` only to the session that selected the folder,
 which is why there is a connection per folder: a push marks the mailbox dirty and
@@ -132,15 +139,15 @@ and a reconnect.
 
 Every socket error is retried with exponential backoff, because the bridge
 restarts during an upgrade and the collector must outlive it. A refusal is
-different: `EpochError` and `PublishError` abort the staging generation and exit
+different: `EpochError` and `PublishError` commit nothing and exit
 non-zero, because nothing can be published from a mailbox whose epoch moved and
-a human has to reconcile it. Each published generation prints one JSON line with
-`source_id`, `generation_id`, `objects`, `carried`, `deleted` and
+a human has to reconcile it. Each committed pass prints one JSON line with
+`source_id`, `version`, `objects`, `carried`, `deleted` and
 `details.folders`.
 
 ## Calendar
 
-`collect_calendar(entities_dir, generation, captured_at=...)`
+`collect_calendar(entities_dir, state, captured_at=...)`
 
 Each `*.json` file is one raw Tuta SDK entity (`id` or `uid` required). Two
 objects per event: `calendar::<id>` (the entity, canonically encoded) and
@@ -197,7 +204,7 @@ below the minimum is rejected before any other answer (manual-steps 40.16).
 
 ## Finance
 
-`collect_simplefin(accountset, generation, accountset_url=..., captured_at=...,
+`collect_simplefin(accountset, state, accountset_url=..., captured_at=...,
 include_pending=True)`
 
 Observations are keyed by `(accountset_url, conn_id, account_id,
@@ -210,7 +217,7 @@ transition is visible instead of being hidden by a new row.
   verbatim.
 - Refuses publication on a non-empty document `errlist`, on any account-level
   error list, and on `act.missingdata` anywhere. A partial account is a partial
-  enumeration, and publishing it would look like a generation in which
+  enumeration, and committing it would look like a state in which
   transactions vanished.
 - Refuses `include_pending=False`: pending items are only in the response because
   the caller asked, so the request is explicit rather than assumed.
@@ -229,14 +236,14 @@ projection look like evidence.
 ### The hledger projection
 
 `render_journal(replica, accounts)` in `libs/data_plane/derived/hledger.py` is a
-pure function of one published generation: every
+pure function of one committed state: every
 `finance::txn::<account>::<txn>` becomes one journal transaction, `account`
 directives are emitted for every name used, and the objects are ordered by
-`(date, account id, transaction id)` so the same generation always renders the
+`(date, account id, transaction id)` so the same state always renders the
 same bytes. `write_journal` replaces the file in one rename and only when the
-bytes differ, so a two-hourly rerun over an unchanged generation leaves the
+bytes differ, so a two-hourly rerun over an unchanged state leaves the
 journal's mtime alone. `smortress-agent-collect-finance.service` runs it as its
-third stage, after the collector, because a projection needs a generation that
+third stage, after the collector, because a projection needs a state that
 exists and is published.
 
 - **Sign.** SimpleFIN's `amount` is the provider's own, and it is written
@@ -267,7 +274,7 @@ exists and is published.
   transaction. A transaction that names neither is a refusal: a commodity-less
   posting beside a commodity'd one is a journal that does not balance.
 
-To run it by hand over a generation already on disk:
+To run it by hand over a replica already on disk:
 
 ```sh
 PYTHONPATH=libs python3 -m data_plane.derived.hledger \
@@ -285,7 +292,7 @@ deletion.
 
 ## Brave
 
-`collect_brave_db(copy_path, generation, device=..., profile=..., captured_at=...)`
+`collect_brave_db(copy_path, state, device=..., profile=..., captured_at=...)`
 
 The input is a **copy**, never the live file: Chromium holds `History` open for
 the life of the browser, so a copy taken from a running profile is not a
@@ -370,7 +377,7 @@ arrived over the chain, because Sync delivers rows, not provenance.
 
 ## Notes
 
-`collect_notes(entities_dir, generation, *, captured_at=...)`
+`collect_notes(entities_dir, state, *, captured_at=...)`
 
 The input is the Markdown vault itself, mounted read-only. One object per file,
 keyed by the URL-quoted vault-relative path: a path is the only identity that
@@ -387,12 +394,12 @@ new revision of the same note instead of a delete plus a create.
   tombstoned: a partial mount or a sync still landing is not deletion evidence.
 
 `smortress-agent-collect-notes.timer` runs it hourly, with no network and no
-secret; unchanged files are hard-linked from the previous generation, so a run
+secret; unchanged files keep their row and are not rewritten, so a run
 that changes one note costs one object.
 
 ## Tasks
 
-`collect_tasks(entities_dir, generation, *, captured_at=...)`
+`collect_tasks(entities_dir, state, *, captured_at=...)`
 
 The input is a todo.txt directory: `todo.txt` and `done.txt`, each optional. A
 todo.txt line carries no id and the tools that write the file rewrite it in
@@ -408,14 +415,14 @@ place, so the object id is a digest of the line's bytes.
   tokens and the first bare `YYYY-MM-DD` as `created`; `text` stays the whole
   line so search sees exactly what the file said.
 - A directory holding neither file is refused, so a mistyped path cannot publish
-  an empty generation that carries every previous task away.
+  an empty state that carries every previous task away.
 
 `smortress-agent-collect-tasks.timer` runs it hourly, with no network and no
 secret.
 
 ## Photos
 
-`collect_photos(entities_dir, generation, *, captured_at=...)`
+`collect_photos(entities_dir, state, *, captured_at=...)`
 
 The input is the photo library, mounted read-only: the Immich media location
 (`raw/photos`, `/srv/photos`). Immich keeps the originals in `library/` there,
@@ -425,7 +432,7 @@ otherwise -- a thumbnail or a transcode must never become a second object for on
 asset. One object per media file, keyed by the URL-quoted originals-relative path,
 so a re-upload is a new revision of the same id.
 
-- The generation is **metadata only**: the path, the filename without its suffix
+- The state is **metadata only**: the path, the filename without its suffix
   as the title, the format, the size and the mtime. The media bytes never enter
   the replica; the collector stats each file and never opens it, so a revision is
   `size:mtime_ns` hashed rather than a content hash.
@@ -436,7 +443,7 @@ so a re-upload is a new revision of the same id.
 - Symlinked files and directories are refused, a library over
   `MAX_MEDIA_OBJECTS` (100 000) is refused rather than truncated, and so is an
   empty walk: a silent prefix would publish something that is not the library,
-  and an empty generation would carry every previous object forward as absent.
+  and an empty state would carry every previous object forward as absent.
   A directory the walk cannot read is a refusal too -- `os.walk` would otherwise
   skip it and publish a partial library with a green unit.
 - Files whose suffix is not a photo or video are skipped and counted under
@@ -446,17 +453,17 @@ so a re-upload is a new revision of the same id.
   mount is not deletion evidence, and Restic is the record of what was deleted.
 
 `smortress-agent-collect-photos.timer` runs it hourly, with no network and no
-secret; unchanged objects are hard-linked from the previous generation.
+secret; unchanged objects keep their row and are not rewritten.
 
 ## Music
 
-`collect_music(entities_dir, generation, *, captured_at=...)`
+`collect_music(entities_dir, state, *, captured_at=...)`
 
 The input is the music library itself, mounted read-only, the same tree Navidrome
 serves from (`raw/music`, `/srv/music`). One object per audio file, keyed by the
 URL-quoted library-relative path.
 
-- The generation is **metadata only**, for the same reason as photos: title, the
+- The state is **metadata only**, for the same reason as photos: title, the
   artist and album the directory layout names, a leading track number, the
   format, the size and the mtime. Tags inside the audio are not read.
 - `Artist/Album/Track` is the layout the artist and album come from. A file with
@@ -470,9 +477,9 @@ URL-quoted library-relative path.
 `smortress-agent-collect-music.timer` runs it hourly, with no network and no
 secret.
 
-## Who reads a generation
+## Who reads a state
 
-`apps/agent_facade/replica_sources.py` projects a published generation into the
+`apps/agent_facade/replica_sources.py` projects a committed state into the
 facade's record shape, so `sources.read` and `sources.search` answer from the raw
 objects instead of the fixtures. The projection is deliberately thin -- title and
 body -- and the adapter inherits its contract from the deployment's own source
@@ -481,11 +488,11 @@ table, so pointing a facade at a directory cannot widen what it may reach
 
 Search over a replica is served by a derived full-text index
 (`apps/agent_facade/source_index.py`): one SQLite FTS5 file under the facade's
-index root, per source and per generation, built from those projections. It is
-derived and never authoritative -- the generation is the record of what was
+index root, per source and per snapshot, built from those projections. It is
+derived and never authoritative -- the state is the record of what was
 collected, the index is a cache of reading it, and deleting the index costs one
-rebuild and no data. A generation publishes a new file, a short-word query falls
-back to the scan, and nothing outside the facade reads the file.
+rebuild and no data. A new snapshot publishes a new file, a short-word query
+falls back to the scan, and nothing outside the facade reads the file.
 
 ## Running one
 
@@ -513,15 +520,15 @@ on `agent-collect.network`, with the access URL as a Podman secret
 `--uidvalidity FOLDER=INT` is repeatable: the epoch is required for every folder
 and is never guessed.
 
-`--dry-run` enumerates and validates, then discards the staging generation: the
-first run against a real provider can be read before anything is published. The
-generation id defaults to `gen-<UTC timestamp>`, which sorts chronologically and
-is what makes "the latest earlier generation" well defined.
+`--dry-run` enumerates and validates, then publishes nothing: no object bytes
+and no database, so a first run against a real provider can be read before
+anything is committed. There is no `--generation` flag: a pass advances the
+state's version instead.
 
 ## What a collector does not do
 
-- It does not commit. The caller publishes with `commit_next(complete=True)` once
-  every folder, entity or table has been enumerated.
+- It commits one complete pass. Every collector enumerates its whole provider,
+  so every pass accounts for everything it did not see.
 - It does not decide deletion from silence. Only the tombstone cases above
   delete anything.
 - The raw collectors do not talk to a provider. The sync tool, the SDK dumper

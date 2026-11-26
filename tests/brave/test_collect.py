@@ -2,7 +2,7 @@
 
 This is the half the unit runs, so it is the real CLI (`data_plane.collectors.raw`)
 over a real database written by the fixture -- not a function call that skips the
-contract `RawReplica` enforces. The refusals are the ones the unit turns into a
+contract the replica state enforces. The refusals are the ones the unit turns into a
 failed service: a database still being written, and a database that is not one.
 """
 
