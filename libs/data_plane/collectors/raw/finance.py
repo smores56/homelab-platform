@@ -1,4 +1,4 @@
-"""Raw finance: a SimpleFIN AccountSet becomes one published generation.
+"""Raw finance: a SimpleFIN AccountSet becomes one committed replica state.
 
 The provider's record is stored whole -- ``extra``, connection metadata, pending
 transactions and the error lists included -- because the interesting question
@@ -14,8 +14,8 @@ Publication is refused, not degraded, when the provider reports a problem:
 * a non-empty error list on one account, or
 * ``act.missingdata`` anywhere on it.
 
-An AccountSet with a partial account is a partial enumeration, and publishing it
-would look like a generation in which transactions disappeared.
+An AccountSet with a partial account is a partial enumeration, and committing it
+would look like a state in which transactions disappeared.
 
 Everything is requested explicitly: pending items are part of the response only
 because the caller asked for them, so ``include_pending`` must be set rather than
@@ -146,7 +146,7 @@ def collect_simplefin(
     window_days: int = 90,
     now: int | None = None,
 ) -> CollectReport:
-    """Enumerate one AccountSet into ``generation``; never commit it."""
+    """Enumerate one AccountSet into ``state``; never commit it."""
 
     if not isinstance(accountset, Mapping):
         raise ValidationError("an AccountSet must be an object")

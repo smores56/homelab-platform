@@ -1,4 +1,4 @@
-"""Raw calendar: Tuta SDK entities become a generation, ICS is derived beside them.
+"""Raw calendar: Tuta SDK entities become the replica state, ICS is derived beside them.
 
 Tuta has no supported CalDAV path, so the adapter stores what its SDK returns and
 derives from that. Two rules decide the shape:

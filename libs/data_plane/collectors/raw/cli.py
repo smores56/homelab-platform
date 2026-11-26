@@ -13,7 +13,7 @@ and no database.
 
 Refusals are exit code 3 with the reason on stderr: a partial enumeration, a
 changed UIDVALIDITY, an error list, a database that was still being written. The
-point of the command is that those never become a published generation.
+point of the command is that those never become a committed state.
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""Raw browsing history: one Brave ``History`` copy becomes one generation.
+"""Raw browsing history: one Brave ``History`` copy becomes one committed state.
 
 Chromium takes an exclusive lock on ``History`` and keeps most recent writes in
 its WAL, so the database that is collected is always a *copy* taken while no
@@ -126,12 +126,12 @@ def collect_brave_db(
     profile: str,
     captured_at: str,
 ) -> CollectReport:
-    """Enumerate one Brave history copy into ``generation``; never commit it."""
+    """Enumerate one Brave history copy into ``state``; never commit it."""
 
     path = Path(database)
     _refuse_live_or_partial(path)
     if not device.strip() or not profile.strip():
-        raise PublishError("a history generation names its device and profile")
+        raise PublishError("a history pass needs a device and a profile")
 
     raw = path.read_bytes()
     digest = file_sha256(path)
@@ -218,7 +218,7 @@ def fidelity_fields() -> Iterable[str]:
 
 
 def declared_columns(report_details: Mapping[str, Any]) -> Iterable[str]:
-    """The tables a generation actually carried, for a fidelity declaration."""
+    """The tables a pass actually carried, for a fidelity declaration."""
 
     tables = report_details.get("tables")
     if not isinstance(tables, Mapping):

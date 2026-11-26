@@ -1,8 +1,9 @@
-"""Push-based collectors: a provider event becomes a published generation.
+"""Push-based collectors: a provider event updates the committed state.
 
 Mail is the one source that pushes. The bridge presents the mailbox as IMAP and
 tells an IDLE-ing session about ``EXISTS``/``EXPUNGE``; this package turns those
-events into whole generations, so a reader never sees a half-applied change.
+events into whole states in one transaction, so a reader never sees a
+half-applied change.
 """
 
 from .imap import (

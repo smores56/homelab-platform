@@ -5,7 +5,7 @@ Immich keeps the originals under ``library/`` inside its media location, beside
 directory when it is there, so a thumbnail or a transcode never becomes a second
 object for one asset.
 
-What the filesystem proves is all the generation carries: the path, the original
+What the filesystem proves is all the state carries: the path, the original
 filename, the format, the size and the mtime. Camera EXIF, albums and dimensions
 live in Immich's own database, and reading a second application's schema would
 make every Immich migration a collector outage -- the derived index can reach
@@ -96,7 +96,7 @@ def collect_photos(
     *,
     captured_at: str,
 ) -> CollectReport:
-    """Enumerate every media file into ``generation``; never commit it."""
+    """Enumerate every media file into ``state``; never commit it."""
 
     root = resolve_source_dir(entities_dir, "photo library")
 

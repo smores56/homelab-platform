@@ -2,7 +2,7 @@
 
 Photos and music are the two sources whose objects are large: one photo is
 megabytes, one track tens of them. The facade answers read and search from
-metadata, so a generation carries identifiers, titles, timestamps and the size
+metadata, so the state carries identifiers, titles, timestamps and the size
 and format the filesystem proves -- the media itself stays on its own dataset
 and is never copied into the agent's state.
 
@@ -36,7 +36,7 @@ from pathlib import Path
 
 from ...errors import PublishError
 
-#: A generation is bounded. Raising this is a deliberate act, not a side effect.
+#: One media pass is bounded. Raising this is a deliberate act, not a side effect.
 MAX_MEDIA_OBJECTS = 100_000
 
 #: Immich keeps the originals in ``library/`` beside the trees it derives from

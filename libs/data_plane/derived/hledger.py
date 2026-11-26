@@ -1,10 +1,10 @@
 """The hledger projection over a published finance replica.
 
 One ``finance::txn::<account>::<transaction>`` object becomes one journal
-transaction; the generation stays the authority for what a bank actually said,
-and this file is a view of it that can be rebuilt whenever the accounting format
-changes. Nothing here reads a clock, so the same generation always renders the
-same bytes.
+transaction; the state stays the authority for what a bank actually said, and
+this file is a view of it that can be rebuilt whenever the accounting format
+changes. Nothing here reads a clock, so the same state always renders the same
+bytes.
 
 **Sign.** SimpleFIN's ``amount`` sign is the provider's own and this module
 writes it through unchanged onto the mapped asset account, posting the exact
@@ -91,7 +91,7 @@ class JournalReport:
     """What one render produced, for the unit and the operator's JSON line."""
 
     snapshot: str
-    #: Transaction objects in the generation.
+    #: Transaction objects in the state.
     objects: int
     #: Those that carried no usable date and were left out.
     skipped: int
@@ -251,7 +251,7 @@ def render_journal(
 def write_journal(text: str, path: str | Path) -> bool:
     """Write the journal atomically; report whether the bytes changed.
 
-    A two-hourly rerun over an unchanged generation must not rewrite the file:
+    A two-hourly rerun over an unchanged state must not rewrite the file:
     the bytes are compared first, and an identical journal leaves the inode --
     its mtime included -- alone. Anything else replaces the file in one rename,
     so a reader never sees half a journal and a crash never leaves a truncated

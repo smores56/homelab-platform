@@ -78,7 +78,7 @@ def collect_music(
     *,
     captured_at: str,
 ) -> CollectReport:
-    """Enumerate every audio file into ``generation``; never commit it."""
+    """Enumerate every audio file into ``state``; never commit it."""
 
     root = resolve_source_dir(entities_dir, "music library")
 

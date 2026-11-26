@@ -45,8 +45,6 @@ class CollectReport:
     details: Mapping[str, Any] = field(default_factory=dict)
     #: The committed replica version: every pass advances it by one.
     version: int | None = None
-    #: Kept for callers that still name a published generation; empty now.
-    generation_id: str = ""
 
 
 def commit_pass(

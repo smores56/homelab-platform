@@ -1,4 +1,4 @@
-"""Raw mail: one quarantined Maildir becomes one published generation.
+"""Raw mail: one quarantined Maildir becomes one committed replica state.
 
 The input is a Maildir -- a provider sync's output, or the fixture that stands
 in for one -- that nothing else writes while this runs. What is stored is the
@@ -10,17 +10,17 @@ a re-encoded attachment cannot.
 Three refusals matter more than the happy path:
 
 * ``tmp/`` must be empty. A file there is a message being delivered, and
-  publishing a generation while a writer is active would record half a maildir.
+  committing a pass while a writer is active would record half a maildir.
 * Every folder needs a UIDVALIDITY. A far-side UIDVALIDITY change renumbers every
   message and makes "the file with this key is gone" meaningless, so the value is
-  persisted with every generation and a change raises ``EpochError`` instead of
-  publishing a generation that looks like mass deletion.
+  persisted in the replica state and a change raises ``EpochError`` instead of
+  committing a state that looks like mass deletion.
 * Two files that map to one object id are a refusal, not a last-writer-wins.
   That is what a duplicated key looks like, and silently dropping one copy is how
   a replica loses a message while reporting success.
 
 Deletion is recorded only where Maildir records it: a message the previous
-generation held and this one does not, in a folder whose UIDVALIDITY did not
+state held and this one does not, in a folder whose UIDVALIDITY did not
 change, is an expunge -- real provider evidence. The caller names those
 tombstones; ``DBSync``-style absence elsewhere is not enough.
 """
