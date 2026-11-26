@@ -22,6 +22,13 @@ suites() {  # every suite path under tests/, one per line
     assert_equal "$missing" ""
 }
 
+@test "no tag has two rows" {
+    # Two rows for one tag select the same suite twice and hide which claim is
+    # stale; a merge that resolves by keeping both is the way it happens.
+    dups=$(cut -f1 "$tags_file" | grep -v '^#' | sort | uniq -d | tr '\n' ' ')
+    assert_equal "$dups" ""
+}
+
 @test "every suite selects itself" {
     bad=''
     while IFS= read -r suite; do
