@@ -990,6 +990,24 @@ unclearable_gate_entry() {
     assert_equal "$(journal_field deferred '.reason')" snapshot-gate-exit-4
 }
 
+drifted_host_entry() {
+    scenario .
+    seed_state "$deployed" >/dev/null
+    queue_seed "$id_e" homelab-platform "$commit"
+    drain_once FAKE_PLATFORM_EXIT=6
+}
+
+@test "a host manager drop-in defers the entry under its own name" {
+    drifted_host_entry
+    assert_drain_ok
+    assert_equal "$(journal_field deferred '.reason')" host-drift
+}
+
+@test "a drift-deferred entry stays queued" {
+    drifted_host_entry
+    assert_equal "$(queue_count)" 1
+}
+
 # An apps commit has no reboot: it goes straight to the apps apply, and that
 # program's exit code is the whole verdict.
 applied_apps_entry() {
