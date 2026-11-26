@@ -13,8 +13,8 @@ if [[ ! $ref =~ @sha256:[0-9a-f]{64}$ ]]; then
   echo "verify-image: refusing a floating reference: $ref" >&2
   exit 1
 fi
-if [[ ! -s $repo/image/cosign.pub ]]; then
-  echo "verify-image: image/cosign.pub is missing" >&2
+if [[ ! -s $repo/bootc/server/cosign.pub ]]; then
+  echo "verify-image: bootc/server/cosign.pub is missing" >&2
   exit 1
 fi
 
@@ -25,7 +25,7 @@ for tool in cosign skopeo; do
   fi
 done
 
-cosign verify --key "$repo/image/cosign.pub" "$ref"
+cosign verify --key "$repo/bootc/server/cosign.pub" "$ref"
 # cosign verify reads the OCI 1.1 bundle; bootc and containers/image read the
 # legacy `.sig` lookaside tag. Assert the tag the host actually needs, and that
 # the registry digest matches the pin.
@@ -35,6 +35,6 @@ skopeo inspect --raw "docker://${ref%@*}:${digest/:/-}.sig" >/dev/null 2>&1 || {
   echo "verify-image: no legacy .sig lookaside for $digest; bootc cannot verify this image" >&2
   exit 1
 }
-jq -e '.default[0].type == "reject"' "$repo/image/rootfs/etc/containers/policy.json" >/dev/null
+jq -e '.default[0].type == "reject"' "$repo/bootc/server/rootfs/etc/containers/policy.json" >/dev/null
 echo "verified $ref"
 echo "install/rollback: sudo bootc switch --enforce-container-sigpolicy $ref ; sudo bootc status ; sudo bootc rollback"

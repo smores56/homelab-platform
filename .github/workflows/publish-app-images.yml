@@ -1,7 +1,7 @@
 # Mirrors and signs the pinned application images into our GHCR namespace.
 #
 # The host runs a default-reject signature policy and trusts only
-# ghcr.io/smores56/homelab-platform signed by image/cosign.pub, so an
+# ghcr.io/smores56/homelab-platform signed by bootc/server/cosign.pub, so an
 # application image that is not in that namespace cannot start. The digests are
 # preserved, so what lands is byte-identical to upstream.
 #
@@ -44,7 +44,7 @@ jobs:
       - name: install pinned cosign
         run: |
           set -euo pipefail
-          . image/pins.env
+          . bootc/lib/pins.env
           mkdir -p "$RUNNER_TEMP/bin"
           curl -fsSLo "$RUNNER_TEMP/bin/cosign" \
             "https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/cosign-linux-amd64"
@@ -57,9 +57,9 @@ jobs:
           COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
         run: |
           set -euo pipefail
-          test -s image/cosign.pub
+          test -s bootc/server/cosign.pub
           cosign public-key --key env://COSIGN_PRIVATE_KEY >"$RUNNER_TEMP/cosign.pub"
-          diff -u image/cosign.pub "$RUNNER_TEMP/cosign.pub"
+          diff -u bootc/server/cosign.pub "$RUNNER_TEMP/cosign.pub"
       - name: mirror, sign and verify every pinned image
         env:
           COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
@@ -84,17 +84,17 @@ jobs:
           # skopeo predates the `keyPaths` key that the ublue entry uses
           # ("invalid policy ... Unknown key \"keyPaths\""), and no entry here
           # pulls anything but an application image.
-          sudo install -D -m 0644 image/cosign.pub /etc/pki/containers/smortress.pub
+          sudo install -D -m 0644 bootc/server/cosign.pub /etc/pki/containers/smortress.pub
           # Without the host's registries.d entry containers/image never looks
           # at the .sig lookaside tag the signatures are stored in, and the pull
           # fails "A signature was required, but no signature exists".
           sudo install -D -m 0644 \
-            image/rootfs/etc/containers/registries.d/ghcr.io-smortress.yaml \
+            bootc/server/rootfs/etc/containers/registries.d/ghcr.io-smortress.yaml \
             /etc/containers/registries.d/ghcr.io-smortress.yaml
           jq '{"default": [{"type": "reject"}],
                "transports": {"docker": {"ghcr.io/smores56/homelab-platform":
                  .transports.docker["ghcr.io/smores56/homelab-platform"]}}}' \
-            image/rootfs/etc/containers/policy.json >"$RUNNER_TEMP/policy.json"
+            bootc/server/rootfs/etc/containers/policy.json >"$RUNNER_TEMP/policy.json"
           # shellcheck source=./app-images.sh disable=SC1091
           source scripts/app-images.sh
           empty="$RUNNER_TEMP/empty-auth.json"

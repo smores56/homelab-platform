@@ -51,7 +51,7 @@ CACHE_FILE = os.path.join(STATE_DIR, "cache.json")
 OWNER = "smores56"
 PLATFORM = "homelab-platform"
 REPOS = ("homelab-platform", "homelab-apps")
-# Must match IMAGE_REPO in image/pins.env: the tag, both digests and the
+# Must match IMAGE_REPO in bootc/lib/pins.env: the tag, both digests and the
 # revision label are all resolved out of this one repository.
 IMAGE_REPO = "smores56/homelab-platform/server"
 REVISION_LABEL = "org.opencontainers.image.revision"

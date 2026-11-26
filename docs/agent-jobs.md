@@ -74,7 +74,7 @@ One SELinux rule makes the mount usable: for AF_UNIX the `connectto` check is
 against the domain of the process that created the socket, so the bridge's socket
 is `unconfined_service_t` whatever label `:z` puts on the file, and `container_t`
 may not connect to it. `smortress-selinux-agent-shell.service` loads
-`image/rootfs/usr/share/selinux/smortress/agent-shell.cil` before the bridge; the
+`bootc/server/rootfs/usr/share/selinux/smortress/agent-shell.cil` before the bridge; the
 rule pairs those two domains on `unix_stream_socket` and widens nothing else.
 
 The facade mounts the socket's *directory*, not the socket: tmpfiles owns that
@@ -141,7 +141,7 @@ the containment depends on the pipe, so the capture moved into the unit rather
 than the platform being asked to accept a start that this host refuses.
 
 The general class's egress is filtered by the uid-keyed table in
-`image/rootfs/etc/nftables/smortress-agent-jobs.nft`: `fib daddr type local`,
+`bootc/server/rootfs/etc/nftables/smortress-agent-jobs.nft`: `fib daddr type local`,
 IPv4 and IPv6 private, link-local, CGNAT/Tailscale, loopback, multicast and the
 metadata range are dropped. DNS goes to the fixed public resolvers in the
 argument vector, never the host stub on loopback. The personal class is dropped
@@ -155,7 +155,7 @@ workspace the runner cannot write.
 
 ## Runners and provisioning
 
-`image/rootfs/etc/sysusers.d/smortress-agent-shell.conf` allocates both login-less
+`bootc/server/rootfs/etc/sysusers.d/smortress-agent-shell.conf` allocates both login-less
 accounts; nothing names their ids. `smortress-agent-job-provision.service` runs
 `scripts/agent-job-provision.sh` at boot to:
 

@@ -39,7 +39,7 @@ storage:
   # The authorised-key directory that used to sit under /var/lib/homelab is gone
   # with the Ignition-delivered key set (design #767): the key ships in the image
   # at /etc/ssh/authorized_keys.d/smores. /var/lib/homelab itself stays, at 0711
-  # from image/rootfs/etc/tmpfiles.d/smortress.conf, because the age identity and
+  # from bootc/server/rootfs/etc/tmpfiles.d/smortress.conf, because the age identity and
   # the applications' state live under it.
   # FCOS owns p1 BIOS-BOOT, p2 EFI-SYSTEM, p3 boot and p4 root. The approved
   # "two encrypted storage roots" intent is kept: p4 is the LUKS root and a new
@@ -98,17 +98,17 @@ storage:
       mode: 0644
       overwrite: true
       contents:
-        local: image/cosign.pub
+        local: bootc/server/cosign.pub
     - path: /etc/containers/policy.json
       mode: 0644
       overwrite: true
       contents:
-        local: image/rootfs/etc/containers/policy.json
+        local: bootc/server/rootfs/etc/containers/policy.json
     - path: /etc/containers/registries.d/ghcr.io-smortress.yaml
       mode: 0644
       overwrite: true
       contents:
-        local: image/rootfs/etc/containers/registries.d/ghcr.io-smortress.yaml
+        local: bootc/server/rootfs/etc/containers/registries.d/ghcr.io-smortress.yaml
 
 systemd:
   units:

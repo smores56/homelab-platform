@@ -14,7 +14,7 @@
 #             shell job because the job has nowhere to send it.
 #   general   the external deployment; exactly one live read/write mount,
 #             /var/srv/git, general egress filtered by the uid-keyed firewall in
-#             image/rootfs/etc/nftables/smortress-agent-jobs.nft, and a fixed
+#             bootc/server/rootfs/etc/nftables/smortress-agent-jobs.nft, and a fixed
 #             public resolver. It has no personal dataset, no agent state and no
 #             private workspace.
 #

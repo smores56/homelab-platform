@@ -17,7 +17,7 @@ esac
 mkdir -p "$dest"
 root=$(cd -- "$(dirname -- "$0")/.." && pwd)
 # shellcheck source=/dev/null
-. "$root/image/pins.env"
+. "$root/bootc/lib/pins.env"
 
 TOFU_VERSION=1.13.9
 TOFU_SHA256=bc44eb6b06446ba83bd4072114891987f590f66cca712737a7f1147c50c539ce

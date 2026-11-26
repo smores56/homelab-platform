@@ -49,7 +49,7 @@ jobs:
       - name: install pinned cosign
         run: |
           set -euo pipefail
-          . image/pins.env
+          . bootc/lib/pins.env
           mkdir -p "$RUNNER_TEMP/bin"
           curl -fsSLo "$RUNNER_TEMP/bin/cosign" \
             "https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/cosign-linux-amd64"
@@ -62,9 +62,9 @@ jobs:
           COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
         run: |
           set -euo pipefail
-          test -s image/cosign.pub
+          test -s bootc/server/cosign.pub
           cosign public-key --key env://COSIGN_PRIVATE_KEY >"$RUNNER_TEMP/cosign.pub"
-          diff -u image/cosign.pub "$RUNNER_TEMP/cosign.pub"
+          diff -u bootc/server/cosign.pub "$RUNNER_TEMP/cosign.pub"
       - name: build and push
         id: build
         env:
@@ -92,7 +92,7 @@ jobs:
           set -euo pipefail
           ref="ghcr.io/smores56/homelab-platform/${{ inputs.name }}@${{ steps.build.outputs.digest }}"
           cosign sign --key env://COSIGN_PRIVATE_KEY --yes "$ref"
-          cosign verify --key image/cosign.pub "$ref"
+          cosign verify --key bootc/server/cosign.pub "$ref"
       - name: prove a policy-checked, anonymous pull
         run: |
           set -euo pipefail
@@ -105,14 +105,14 @@ jobs:
           # skopeo predates the `keyPaths` key that the ublue entry uses
           # ("invalid policy ... Unknown key \"keyPaths\""), and no entry here
           # pulls anything but an application image.
-          sudo install -D -m 0644 image/cosign.pub /etc/pki/containers/smortress.pub
+          sudo install -D -m 0644 bootc/server/cosign.pub /etc/pki/containers/smortress.pub
           sudo install -D -m 0644 \
-            image/rootfs/etc/containers/registries.d/ghcr.io-smortress.yaml \
+            bootc/server/rootfs/etc/containers/registries.d/ghcr.io-smortress.yaml \
             /etc/containers/registries.d/ghcr.io-smortress.yaml
           jq '{"default": [{"type": "reject"}],
                "transports": {"docker": {"ghcr.io/smores56/homelab-platform":
                  .transports.docker["ghcr.io/smores56/homelab-platform"]}}}' \
-            image/rootfs/etc/containers/policy.json >"$RUNNER_TEMP/policy.json"
+            bootc/server/rootfs/etc/containers/policy.json >"$RUNNER_TEMP/policy.json"
           printf '{}' >"$RUNNER_TEMP/empty-auth.json"
           skopeo copy --retry-times 2 --authfile "$RUNNER_TEMP/empty-auth.json" \
             --policy "$RUNNER_TEMP/policy.json" \

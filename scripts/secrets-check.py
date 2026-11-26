@@ -20,7 +20,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 INDEX = ROOT / "secrets" / "index.json"
-MANIFEST = ROOT / "image" / "rootfs" / "usr" / "share" / "smortress" / "secrets.manifest"
+MANIFEST = ROOT / "bootc" / "server" / "rootfs" / "usr" / "share" / "smortress" / "secrets.manifest"
 SECRETS = ROOT / "secrets"
 RUN_REF = re.compile(r"/run/smortress/secrets/([A-Za-z0-9._-]+\.yaml)")
 UNIT_REF = re.compile(r"^Secret=([A-Za-z0-9._-]+)(?:,|$)", re.MULTILINE)
@@ -165,7 +165,7 @@ def main() -> int:
 
     for rel in tracked():
         if not (
-            rel.startswith(("units/", "scripts/", "image/rootfs/", "tests/"))
+            rel.startswith(("units/", "scripts/", "bootc/server/rootfs/", "tests/"))
             and rel.endswith((".sh", ".py", ".container", ".service", ".timer"))
         ):
             continue

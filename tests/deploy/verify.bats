@@ -23,7 +23,7 @@
 # server's log, not a passing check.
 load ../helpers
 
-verify=image/rootfs/usr/libexec/deploy-verify.py
+verify=bootc/server/rootfs/usr/libexec/deploy-verify.py
 lib=scripts/deploy-state.sh
 drain=scripts/deploy-drain.sh
 

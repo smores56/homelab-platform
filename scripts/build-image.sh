@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build the derived bootc image locally. Never pushes and never signs.
 #
-# The base tracks the uCore stream tag in image/pins.env; this script resolves
+# The base tracks the uCore stream tag in bootc/lib/pins.env; this script resolves
 # that tag's digest and passes it as BASE_DIGEST, so a local build records the
 # same org.opencontainers.image.base.digest label a CI build does. The build
 # fails closed on a digest-pinned or `:latest` base, on a base the registry will
@@ -10,8 +10,8 @@
 set -euo pipefail
 
 repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-# shellcheck source=../image/pins.env disable=SC1091
-source "$repo/image/pins.env"
+# shellcheck source=../bootc/lib/pins.env disable=SC1091
+source "$repo/bootc/lib/pins.env"
 
 engine=${ENGINE:-podman}
 if ! command -v "$engine" >/dev/null 2>&1; then
@@ -36,17 +36,17 @@ if [[ ! $BASE_DIGEST =~ ^sha256:[0-9a-f]{64}$ ]]; then
   echo "build-image: cannot resolve the base digest of $UCORE_IMAGE: ${BASE_DIGEST:-none}" >&2
   exit 1
 fi
-if [[ ! -s $repo/image/cosign.pub ]]; then
-  echo "build-image: image/cosign.pub is missing. Run docs/manual-steps.md section 37." >&2
+if [[ ! -s $repo/bootc/server/cosign.pub ]]; then
+  echo "build-image: bootc/server/cosign.pub is missing. Run docs/manual-steps.md section 37." >&2
   exit 1
 fi
-if ! grep -q 'BEGIN PUBLIC KEY' "$repo/image/cosign.pub"; then
-  echo "build-image: image/cosign.pub is not a PEM public key" >&2
+if ! grep -q 'BEGIN PUBLIC KEY' "$repo/bootc/server/cosign.pub"; then
+  echo "build-image: bootc/server/cosign.pub is not a PEM public key" >&2
   exit 1
 fi
 for var in SOPS_VERSION SOPS_SHA256 AGE_VERSION AGE_SHA256 RESTIC_VERSION RESTIC_SHA256 \
   PAM_RSSH_VERSION PAM_RSSH_COMMIT; do
-  [[ -n ${!var:-} ]] || { echo "build-image: $var is unset in image/pins.env" >&2; exit 1; }
+  [[ -n ${!var:-} ]] || { echo "build-image: $var is unset in bootc/lib/pins.env" >&2; exit 1; }
 done
 
 tag="sha-$(git -C "$repo" rev-parse --short=12 HEAD)"
@@ -64,7 +64,7 @@ image="${IMAGE_REPO}:${tag}"
   --build-arg "PAM_RSSH_VERSION=$PAM_RSSH_VERSION" \
   --build-arg "PAM_RSSH_COMMIT=$PAM_RSSH_COMMIT" \
   --label "org.opencontainers.image.revision=$(git -C "$repo" rev-parse HEAD)" \
-  -f "$repo/image/Containerfile" \
+  -f "$repo/bootc/server/Containerfile" \
   -t "$image" \
   "$repo"
 

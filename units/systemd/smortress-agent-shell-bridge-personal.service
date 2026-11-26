@@ -48,7 +48,7 @@ Type=simple
 # 1000 is the facade container's User=1000:1000; the socket's group is the whole
 # of "who may connect", so it is that gid and nothing broader.
 ExecStart=/usr/libexec/agent-shell-bridge --class personal --socket /run/smortress/agent-shell-personal/personal.sock --socket-group 1000
-# The directory comes from image/rootfs/etc/tmpfiles.d/smortress-agent-shell.conf
+# The directory comes from bootc/server/rootfs/etc/tmpfiles.d/smortress-agent-shell.conf
 # and the bridge refuses to serve if it is not 0710 without group/other write: a
 # directory it created could only be as private as its own default, and this is
 # the control that decides who reaches the socket.

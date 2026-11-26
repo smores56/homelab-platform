@@ -33,7 +33,7 @@ lsblk -dno MODEL,SIZE,TRAN "$disk"
 lsblk -bno SIZE "$disk"
 lsblk -rno MOUNTPOINTS "$disk" | grep -c .
 grep -qE '@sha256:[0-9a-f]{64}$' ignition/operator/derived-image && echo digest-pinned
-cosign verify --key image/cosign.pub "$(cat ignition/operator/derived-image)" >/dev/null \
+cosign verify --key bootc/server/cosign.pub "$(cat ignition/operator/derived-image)" >/dev/null \
   && echo signature-verified                        # P5: the image is signed
 ip -o link show | awk '$2 != "lo:" {print $2, $9}'  # P6: from the live media
 ip -4 route get 10.0.0.193                          # wired UP, route, 200
@@ -57,7 +57,7 @@ the public key is committed, and the same commands are in
 install -d -m 0700 "$HOME/.config/smortress"
 export COSIGN_PASSWORD="$(openssl rand -base64 32)"
 cosign generate-key-pair --output-key-prefix "$HOME/.config/smortress/cosign"
-install -m 0644 "$HOME/.config/smortress/cosign.pub" image/cosign.pub
+install -m 0644 "$HOME/.config/smortress/cosign.pub" bootc/server/cosign.pub
 gh api -X PUT "repos/smores56/homelab-platform/environments/server-image" \
   --input - <<<'{}' >/dev/null
 gh secret set COSIGN_PRIVATE_KEY --env server-image <"$HOME/.config/smortress/cosign.key"
@@ -123,7 +123,7 @@ means a secret or a weaker binding entered the config — stop, do not install. 
 result carries the account password hash, so keep it 0600 and remove it afterwards.
 Without a sops identity, `--check` validates a fixture hash and the install render
 refuses. Write the live media (Fedora CoreOS `live` at the `VERSION_ID` of
-`image/pins.env`'s tag), verify the read-back hash, then install:
+`bootc/lib/pins.env`'s tag), verify the read-back hash, then install:
 
 ```sh
 iso=$(ls "$HOME"/Downloads/fedora-coreos-*-live.x86_64.iso | tail -n1)
@@ -673,7 +673,7 @@ failed decrypt answers nothing rather than accepting unsigned requests.
 ### Publish and pin the platform image
 
 `publish-server-image.yml` builds, signs and pushes on a push to `main` touching
-`image/`, `units/`, `secrets/` or `scripts/`, and on dispatch. It prints the digest
+`bootc/server/`, `units/`, `secrets/` or `scripts/`, and on dispatch. It prints the digest
 for `ignition/operator/derived-image` and ends with the `notify` job that asks the
 receiver to deploy (`docs/core/server-image.md`, "The deploy path").
 
@@ -1668,7 +1668,7 @@ and both clients type.
 Four residual risks are known and accepted, and none of them is a defect to
 report. **The sudo ticket is shared**: `timestamp_type=tty` keys it to the pane's
 pty, every client of a pane shares that pty, and the ticket lasts 30 minutes
-(`image/rootfs/etc/sudoers.d/10-human-gate`), so a token holder can run `sudo -n`
+(`bootc/server/rootfs/etc/sudoers.d/10-human-gate`), so a token holder can run `sudo -n`
 in a pane where the owner escalated inside the window. **A browser-created pane
 has password sudo only**: the hardware touch needs the key's device, and a browser
 has no agent to forward. **The token is the boundary**: no expiry, no rate limit,

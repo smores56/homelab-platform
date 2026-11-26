@@ -233,7 +233,7 @@ done
 # A helper that is tested but never shipped is dead code, and a unit that is
 # shipped but never tested is a listener nobody checked.
 @test "the image installs the ingress helper" {
-    grep -q 'scripts/apps-ingress.sh' image/Containerfile
+    grep -q 'scripts/apps-ingress.sh' bootc/server/Containerfile
 }
 
 @test "the unit runs the installed helper for its instance" {

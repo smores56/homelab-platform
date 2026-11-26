@@ -218,7 +218,7 @@ receiver (#798) is the only thing that runs it: `deploy-apps apply --commit
 undone. Nothing on the host pulls `homelab-apps` on its own.
 
 **Verification first, on the host.**
-`image/rootfs/usr/libexec/deploy-verify.py --repo homelab-apps --commit <sha>`
+`bootc/server/rootfs/usr/libexec/deploy-verify.py --repo homelab-apps --commit <sha>`
 refuses the commit unless it is off the denylist, is the tip of `main` *now*,
 is not the deployed commit, and `compare/<deployed>...<commit>` answers `ahead`
 — descendancy in one request, against the ancestor `state.json` records. No

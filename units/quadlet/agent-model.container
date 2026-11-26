@@ -6,7 +6,7 @@
 # refuses a model whose context window is under 64,000 tokens ("below the
 # minimum 64,000 required by Hermes Agent"), so the server is started well above
 # the model's native 8,192 and the gateway config pins the same number
-# (image/rootfs/etc/smortress/agent/local-config.yaml). Raising one without the
+# (bootc/server/rootfs/etc/smortress/agent/local-config.yaml). Raising one without the
 # other is how the gateway stops admitting the model.
 #
 # The model file is fetched by hand into the state/agent-model dataset
