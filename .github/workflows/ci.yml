@@ -113,6 +113,18 @@ jobs:
         run: |
           scripts/install-ci-tools.sh "$RUNNER_TEMP/bin"
           echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
+      - name: install pinned butane
+        # tests/image/ignition-boundary renders the Ignition configs, and a
+        # render without butane is a failure, not a skip.
+        run: |
+          set -euo pipefail
+          . bootc/lib/pins.env
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -fsSLo "$RUNNER_TEMP/bin/butane" \
+            "https://github.com/coreos/butane/releases/download/v${BUTANE_VERSION}/butane-x86_64-unknown-linux-gnu"
+          echo "${BUTANE_SHA256}  $RUNNER_TEMP/bin/butane" | sha256sum -c -
+          chmod 0755 "$RUNNER_TEMP/bin/butane"
+          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.0.0
         with:
           node-version: "22"
