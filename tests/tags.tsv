@@ -38,6 +38,15 @@ secrets/decrypt	tests/secrets/decrypt.bats scripts/sops-decrypt.sh
 secrets/migration	tests/secrets/migration.bats scripts/smortress-secrets-seed.sh scripts/secrets-index.py
 secrets/policy	tests/secrets/policy.bats scripts/sops-policy.py
 secrets/rotate	tests/secrets/rotate.bats scripts/secret.sh secrets/index.json secrets/boot.json .sops.yaml scripts/sops-policy.py scripts/secrets-check.py
+lint	tests/lint.bats .github/* CODEOWNERS .yamllint.yaml scripts/* tests/* provision/* backrest/* .githooks/*
+docs	tests/docs.bats scripts/check-doc-refs.py scripts/doc-refs-baseline.txt
+tofu-fmt	tests/tofu-fmt.bats tofu/*
+actionlint	tests/actionlint.bats .github/*
+python/broker	tests/python/broker.bats apps/broker/*
+python/webhook	tests/python/webhook.bats apps/webhook/*
+python/agent-proxy	tests/python/agent-proxy.bats apps/agent_proxy/*
+python/agent-facade	tests/python/agent-facade.bats apps/agent_facade/*
+tofu/check	tests/tofu/check.bats tests/tofu/* tofu/* scripts/check-tofu-providers.py
 tags	tests/tags.bats
 core/agent-jobs	tests/core/agent-jobs.bats scripts/agent-job.sh scripts/agent-job-personal.sh scripts/agent-job-general.sh scripts/agent-job-provision.sh scripts/app-images.sh image/rootfs/etc/sysusers.d/smortress-agent-shell.conf image/rootfs/etc/tmpfiles.d/smortress-agent-shell.conf image/rootfs/etc/nftables/smortress-agent-jobs.nft units/systemd/smortress-agent-job-provision.service image/rootfs/etc/smortress/agent/job-image docs/agent-jobs.md image/Containerfile units/quadlet/* units/systemd/*
 core/agent-recovery	tests/core/agent-recovery.bats scripts/restic-plane-common.sh scripts/smortress-restic-backup.sh scripts/smortress-restic-verify.sh scripts/smortress-restic-restore-drill.sh units/systemd/smortress-restic-* units/systemd/smortress-agent-*.service units/quadlet/agent-*.container scripts/storage-layout.sh
