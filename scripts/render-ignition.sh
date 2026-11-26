@@ -1,20 +1,29 @@
 #!/usr/bin/env bash
-# Render the smortress Butane source into an Ignition config.
+# Render a Butane source into an Ignition config.
 #
 #   scripts/render-ignition.sh --check            # validate real operator values
 #   scripts/render-ignition.sh                   # write ignition/smortress.ign
 #   scripts/render-ignition.sh --synthetic --check  # CI: fixtures, no operator data
+#   scripts/render-ignition.sh --no-account      # write ignition/edge.json (public)
 #
-# Every value the template needs comes from a file under ignition/operator/
-# (gitignored) except the public cosign key, the Tang URL default and the smores
-# account password hash. The hash is image ciphertext
+# --no-account renders the edge's document (design #939): no console account, no
+# sops, and no `--check` fixture fallback, because that document is committed to
+# a public repository and a synthetic hash in it would be published rather than
+# caught. Its image reference comes from EDGE_REF and must be a resolved
+# digest; the output is mode 0644 and its sha512 is what the install passes as
+# --ignition-hash.
+#
+# Every value the smortress template needs comes from a file under
+# ignition/operator/ (gitignored) except the public cosign key, the Tang URL
+# default and the smores account password hash. The hash is image ciphertext
 # (secrets/boot.json, key smores.password_hash): the same value is re-applied at boot
 # by units/systemd/smortress-password.service, so a reinstall must not need an
 # operator file. Nothing here reads a private key and nothing here reads a
 # recovery passphrase: no secret enters Ignition or the installer media (design
 # #701), and the operator adds both LUKS passphrases after the install
-# (docs/manual-steps.md section 37 step 8.1). The rendered file still carries the
-# account hash, so it is written mode 0600 and removed by FCOS after first boot.
+# (docs/manual-steps.md section 37 step 8.1). The smortress render still carries
+# the account hash, so it is written mode 0600 and removed by FCOS after first
+# boot; the edge render carries no secret, and 0644 is what lets it be committed.
 set -euo pipefail
 
 repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
@@ -22,22 +31,28 @@ repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 source "$repo/bootc/lib/pins.env"
 
 synthetic=false
+no_account=false
 # --stock is only for uCore installer media: it installs onto the base and drops
 # the autorebase units. Plain FCOS media needs those units to reach uCore at all;
 # the FCOS → uCore transition is the supported path, not a direct bootc switch.
 # Unused for the smortress install on FCOS media.
 stock=false
 check=false
-output="$repo/ignition/smortress.ign"
+# Resolved after the flags, because the default depends on the mode.
+output=''
 
 usage() {
   cat <<'EOF' >&2
-usage: render-ignition.sh [--check] [--synthetic] [--stock] [--output FILE]
+usage: render-ignition.sh [--check] [--synthetic] [--stock] [--no-account] [--output FILE]
   --check      validate with butane instead of writing output
   --synthetic  use committed fixtures; no ignition/operator values required
   --stock      uCore installer media only: install onto the base and drop the
                autorebase units. Plain FCOS media MUST keep them.
-  --output     output path (default: ignition/smortress.ign)
+  --no-account render ignition/edge.bu: the public, committed edge document.
+               No console account, no sops, no fixture fallback, and the image
+               reference must come from EDGE_REF as a resolved digest.
+  --output     output path (default: ignition/smortress.ign, or
+               ignition/edge.json with --no-account)
 EOF
   exit 2
 }
@@ -47,12 +62,21 @@ while (($#)); do
     --check) check=true ;;
     --synthetic) synthetic=true ;;
     --stock) stock=true ;;
+    --no-account) no_account=true ;;
     --output) output=${2:?--output needs a value}; shift ;;
     -h|--help) usage ;;
     *) usage ;;
   esac
   shift
 done
+
+if [[ -z $output ]]; then
+  if $no_account; then
+    output=$repo/ignition/edge.json
+  else
+    output=$repo/ignition/smortress.ign
+  fi
+fi
 
 butane=${BUTANE:-butane}
 if ! command -v "$butane" >/dev/null 2>&1; then
@@ -74,6 +98,17 @@ escape() {
 require_file() { [[ -s $1 ]] || die "missing or empty operator file: $1"; }
 read_line() { local v=""; IFS= read -r v <"$1" || true; printf '%s' "$v"; }
 
+# Both flags produce a value the edge document must never carry: --synthetic
+# substitutes a fixture digest, --stock installs onto the uCore base instead of
+# the published edge digest, and either would be committed as if a host ran it.
+# Refused before any input is read, so the refusal is the whole answer.
+if $no_account && $synthetic; then
+  die "--no-account refuses --synthetic: the edge document is published, so a fixture render would commit a digest no image was pushed to"
+fi
+if $no_account && $stock; then
+  die "--no-account refuses --stock: the edge install rebases onto the published edge digest, not onto the base"
+fi
+
 # sha512crypt: $6$<salt>$<86 base64-ish characters>. Synthetic mode and a --check
 # that cannot decrypt use it, so the template still renders to a valid hash.
 fixture_hash="\$6\$synthetic\$aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -92,7 +127,22 @@ trap 'rm -rf "$tmp"' EXIT
 files_dir=$repo
 template=$repo/ignition/smortress.bu
 
-if $synthetic; then
+if $no_account; then
+  # The edge's document: no secret to read, no account to splice, and the
+  # resolved reference supplied by the publisher. A template that carried the
+  # hash placeholder would be reachable only through sops or the fixture, so it
+  # is refused here rather than rendered.
+  template=$repo/ignition/edge.bu
+  require_file "$template"
+  [[ -s $repo/bootc/server/cosign.pub ]] \
+    || die "bootc/server/cosign.pub is missing; the document installs it as the key its policy trusts"
+  derived_image=${EDGE_REF:-}
+  [[ -n $derived_image ]] \
+    || die "--no-account needs EDGE_REF=<registry>/<repo>@sha256:<digest>: the published edge digest, pinned after the signature verifies"
+  if grep -qF '@SMORES_PASSWORD_HASH@' "$template"; then
+    die "$template carries an account hash placeholder; the edge document has no account, and the only values that could fill it are a sops decrypt or a fixture"
+  fi
+elif $synthetic; then
   files_dir=$tmp
   template=$tmp/ignition/smortress.bu
   mkdir -p "$tmp/ignition/operator" "$tmp/bootc/server/rootfs/etc/containers/registries.d" "$tmp/bootc/server/rootfs/etc/containers"
@@ -155,27 +205,34 @@ fi
 if ! $stock && [[ ${derived_image%@*} == "${UCORE_IMAGE%%:*}" ]]; then
   die "derived image is the uCore base itself; publish the derived image first, or use --stock on uCore installer media"
 fi
-[[ $disk =~ ^/dev/disk/by-id/[A-Za-z0-9._:-]+$ ]] \
-  || die "disk must be a /dev/disk/by-id path: $disk"
-[[ $password_hash =~ ^\$6\$[^$]{1,16}\$[./A-Za-z0-9]{86}$ ]] \
-  || die "the smores password hash must be sha512crypt (openssl passwd -6)"
-[[ $tang_url =~ ^https?://[A-Za-z0-9.:-]+$ ]] \
-  || die "Tang URL must be http(s)://host:port: $tang_url"
-[[ $tang_thumbprint =~ ^[A-Za-z0-9_-]{43}$ ]] \
-  || die "Tang thumbprint must be 43 base64url characters: $tang_thumbprint"
+# The remaining references are the smortress install's: the edge has no disk,
+# no Tang binding and no account, so it has nothing here to validate.
+if ! $no_account; then
+  [[ $disk =~ ^/dev/disk/by-id/[A-Za-z0-9._:-]+$ ]] \
+    || die "disk must be a /dev/disk/by-id path: $disk"
+  [[ $password_hash =~ ^\$6\$[^$]{1,16}\$[./A-Za-z0-9]{86}$ ]] \
+    || die "the smores password hash must be sha512crypt (openssl passwd -6)"
+  [[ $tang_url =~ ^https?://[A-Za-z0-9.:-]+$ ]] \
+    || die "Tang URL must be http(s)://host:port: $tang_url"
+  [[ $tang_thumbprint =~ ^[A-Za-z0-9_-]{43}$ ]] \
+    || die "Tang thumbprint must be 43 base64url characters: $tang_thumbprint"
+fi
 
-work=$tmp/smortress.bu
+work=$tmp/$(basename -- "$template")
 cp "$template" "$work"
 # The account hash is the one secret in the output, so it goes through a 0600
 # script file instead of sed's argv, which /proc exposes to every local user.
 subs=$tmp/subs.sed
 umask 077
 printf '%s\n' \
-  "s|@DERIVED_IMAGE@|$(escape "$derived_image")|g" \
-  "s|@DISK_BY_ID@|$(escape "$disk")|g" \
-  "s|@SMORES_PASSWORD_HASH@|$(escape "$password_hash")|g" \
-  "s|@TANG_URL@|$(escape "$tang_url")|g" \
-  "s|@TANG_THUMBPRINT@|$(escape "$tang_thumbprint")|g" >"$subs"
+  "s|@DERIVED_IMAGE@|$(escape "$derived_image")|g" >"$subs"
+if ! $no_account; then
+  printf '%s\n' \
+    "s|@DISK_BY_ID@|$(escape "$disk")|g" \
+    "s|@SMORES_PASSWORD_HASH@|$(escape "$password_hash")|g" \
+    "s|@TANG_URL@|$(escape "$tang_url")|g" \
+    "s|@TANG_THUMBPRINT@|$(escape "$tang_thumbprint")|g" >>"$subs"
+fi
 sed -i -f "$subs" "$work"
 rm -f "$subs"
 
@@ -200,6 +257,20 @@ fi
 if $check; then
   "$butane" --check --strict --files-dir "$files_dir" "$work"
   echo "render-ignition: butane accepted $template"
+  exit 0
+fi
+
+if $no_account; then
+  # Public by construction and committed: the operator reads the file over
+  # raw.githubusercontent.com, so 0644 is the point, not an oversight, and the
+  # hash the install pins is computed from the file in the tree rather than
+  # transcribed from a CI log.
+  umask 022
+  "$butane" --pretty --strict --files-dir "$files_dir" "$work" >"$output"
+  chmod 0644 "$output"
+  echo "wrote $output" >&2
+  printf 'sha512 %s: sha512-%s\n' "$output" "$(sha512sum -- "$output" | cut -d' ' -f1)" >&2
+  echo "next: pass that value as --ignition-hash on the install line in docs/manual-steps.md, \"Public edge VPS\"" >&2
   exit 0
 fi
 

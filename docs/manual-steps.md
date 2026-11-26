@@ -1848,6 +1848,49 @@ bootstrap, Serve routes, the cutover and the timed rebuild drill — is
 three names (`photos`, `opds`, `recovery`); `provision/edge/verify.sh` asserts
 exactly those three site blocks and never a fourth.
 
+### Render and commit the edge Ignition
+
+The edge's document is committed to this repository instead of uploaded
+somewhere the install would have to fetch from a bucket: it carries no console
+password and no LUKS key, the repository is public, and the sha512 that pins it
+is computed from the checked-out file rather than transcribed from a CI log. It
+is regenerated when the published edge digest changes, and never with a
+placeholder: the renderer refuses a tag, a missing reference, `--synthetic` and
+`--stock`, and it has no fixture hash to fall back to — `--no-account` never
+reads sops at all.
+
+```sh
+gh workflow run publish-edge-image.yml
+gh run watch "$(gh run list --workflow publish-edge-image.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
+read -r EDGE_REF                     # paste the `pin: ` line: .../edge@sha256:...
+export EDGE_REF
+scripts/render-ignition.sh --no-account --check          # prints: butane accepted
+scripts/render-ignition.sh --no-account                  # writes ignition/edge.json, 0644
+jq -r '.passwd.users[] | has("passwordHash")' ignition/edge.json   # expect: false
+jq -r '.storage.files[].path' ignition/edge.json         # exactly four public paths
+sha512sum ignition/edge.json
+git add ignition/edge.json && git commit -m 'chore(edge): pin the published edge digest in Ignition'
+```
+
+The committed JSON is never edited by hand: a change belongs in
+`ignition/edge.bu`, then a re-render, so the file and its hash cannot disagree
+with the template.
+The install reads the committed file and the hash of that same file: the two
+lines below are the whole console step (BIOS/GRUB disk, so `/dev/vda`; the
+address is static, so dracut gets it as kernel arguments instead of a profile).
+
+```sh
+hash="sha512-$(sha512sum ignition/edge.json | cut -d' ' -f1)"
+url="https://raw.githubusercontent.com/smores56/homelab-platform/$(git rev-parse main)/ignition/edge.json"
+sudo coreos-installer install /dev/vda \
+  --ignition-url "$url" --ignition-hash "$hash" \
+  --append-karg ip=192.236.188.99::192.236.188.65:255.255.255.192:smoresnet:eth0:none \
+  --append-karg nameserver=8.8.8.8 --append-karg net.ifnames=0
+```
+
+The document's only credential is the operator's public key, and 22 is reachable
+on the public interface only until the tailnet join unit closes it.
+
 ## Former section numbers
 
 Scripts, units and the image still quote the pre-rewrite numbering; this is where
