@@ -39,9 +39,14 @@ BATS_LIB_DEST=${BATS_LIB_DEST:-${XDG_DATA_HOME:-$HOME/.local/share}/bats}
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
+# ftp.gnu.org is the only source for parallel and it stalls rather than refuses:
+# a job on 2026-11-26 spent 134 s of its 5-minute timeout failing to connect,
+# which the retry cannot help if the first attempt has no cap of its own. Every
+# fetch therefore bounds itself and retries, and the checksum still decides.
 fetch() {
   local url="$1" file="$2" sha256="$3"
-  curl -sSfL -o "$tmp/$file" "$url"
+  curl -sSfL --connect-timeout 15 --max-time 300 \
+    --retry 3 --retry-delay 2 --retry-all-errors -o "$tmp/$file" "$url"
   echo "$sha256  $tmp/$file" | sha256sum -c - >/dev/null
 }
 
