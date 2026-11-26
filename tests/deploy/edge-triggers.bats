@@ -199,8 +199,10 @@ PY
 # --- the suite runs where the other deploy suites do -----------------------
 
 @test "the deploy group runs this suite and the notify suite" {
-    assert grep -qE 'tests/deploy/edge-notify\.bats' scripts/check-all.sh
-    assert grep -qE 'tests/deploy/edge-triggers\.bats' scripts/check-all.sh
+    # Both files carry the deploy tag, which is what the area job selects on;
+    # the retired driver used to name them by path.
+    assert grep -qxF '# bats file_tags=deploy' "$BATS_TEST_DIRNAME/edge-notify.bats"
+    assert grep -qxF '# bats file_tags=deploy' "$BATS_TEST_DIRNAME/edge-triggers.bats"
 }
 
 @test "CI runs the deploy group" {

@@ -76,7 +76,7 @@ suites() {  # every suite path under tests/, one per line
     # not have to enumerate the others. Membership, not an exact list.
     run sh "$tags_sh" scripts/storage-layout.sh
     assert_output --partial "tests/core/storage-layout.bats"
-    assert_output --partial "tests/core/restic-plane.bats"
+    assert_output --regexp "tests/core/restic-plane-[a-z0-9]+\.bats"
 }
 
 @test "a path several rows claim selects all of them" {

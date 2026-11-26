@@ -340,6 +340,8 @@ PY
 # --- the suite runs in CI ----------------------------------------------------
 
 @test "CI runs the deploy group (both notify suites included)" {
+    # The area job selects by file tag, so the suite runs there iff it carries
+    # the tag: the driver that used to list it by path is retired.
     assert grep -qE -- "--filter-tags 'deploy'" "$ci"
-    assert grep -qE 'tests/deploy/edge-notify\.bats' scripts/check-all.sh
+    assert grep -qxF '# bats file_tags=deploy' "$BATS_TEST_DIRNAME/edge-notify.bats"
 }
