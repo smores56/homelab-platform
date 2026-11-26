@@ -140,6 +140,10 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: backrest/package-lock.json
+      # The backrest suite shells out to npx and npm; the toolchain is the
+      # job's to install, and a half-installed node_modules makes it skip.
+      - name: install the backrest toolchain
+        run: npm ci --prefix backrest
       - name: install gpg for the tuta-calendar suite
         run: |
           sudo apt-get update

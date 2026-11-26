@@ -451,18 +451,26 @@ fi
 # The two node checks are skipped together when this host cannot run them, which
 # is what the shell suite did: the toolchain is the CI job's to install, not
 # this suite's.
-typecheck() { (cd "$dir" && npx tsc --noEmit >/dev/null 2>&1); }
+typecheck() { (cd "$dir" && npx --no-install tsc --noEmit >/dev/null 2>&1); }
 unit_tests() { (cd "$dir" && npm test >/dev/null 2>&1); }
 
-if command -v npx >/dev/null 2>&1 && [[ -d $dir/node_modules ]]; then
+# A node on PATH is not a toolchain: a mise shim with no version, or a
+# half-installed node_modules, answers an error. Ask each tool to version itself
+# before registering, and skip with the command that fixes it otherwise.
+toolchain() { # <command...>: the command runs and succeeds
+    "$@" >/dev/null 2>&1
+}
+
+if [[ -d $dir/node_modules ]] && toolchain npx --no-install tsc --version; then
     register "TypeScript typecheck" typecheck
 else
     register_skip "TypeScript typecheck" \
-        "run 'cd backrest && npm ci && npm run typecheck' (node not installed here)"
+        "run 'cd backrest && npm ci && npm run typecheck' (no working node toolchain here)"
 fi
 
-if command -v npm >/dev/null 2>&1 && [[ -d $dir/node_modules ]]; then
+if [[ -d $dir/node_modules ]] && toolchain npm --version; then
     register "protobuf wire unit tests" unit_tests
 else
-    register_skip "protobuf wire unit tests" "run 'cd backrest && npm test' (node not installed here)"
+    register_skip "protobuf wire unit tests" \
+        "run 'cd backrest && npm ci && npm test' (no working node toolchain here)"
 fi
