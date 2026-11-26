@@ -111,6 +111,7 @@ setup() {
     export FAKE_BOOTC_STAGED=$work/staged
     secret=$(printf 'edge-%04d' "$RANDOM")
     printf 'value: %s\n' "$secret" >"$listener_secrets/webhook-secret.yaml"
+    chmod 0600 "$listener_secrets/webhook-secret.yaml"
 }
 
 teardown() {

@@ -75,10 +75,20 @@ COPY bootc/lib/deploy/decisions.py /usr/libexec/deploy/decisions.py
 # the shared output helpers. Both are sourced, never executed.
 COPY scripts/lib/ /usr/libexec/lib/
 COPY scripts/deploy-state.sh /usr/libexec/deploy-state
+# The deploy plane's programs, under the names the units run them by (design #939,
+# T8). The receiver is shared with the server and identical; the drain loop is the
+# one both roles source, and the heartbeat is shared because the dead-man question
+# ("is the listener answering and is its queue moving") is the same on both hosts.
+# deploy-drain-edge, deploy-verify.py and edge-boot-gate are the edge rootfs's own
+# and arrive with the COPY above.
+COPY bootc/lib/deploy/deploy-receiver.py /usr/libexec/deploy-receiver.py
+COPY bootc/lib/deploy/drain.sh /usr/libexec/deploy/drain.sh
+COPY scripts/deploy-heartbeat.sh /usr/libexec/deploy-heartbeat
 
 RUN set -eux; \
     chmod 0755 /usr/libexec/smoresnet-firewall-zones /usr/libexec/smoresnet-firewall-bind; \
-    chmod 0755 /usr/libexec/edge-boot-gate; \
+    chmod 0755 /usr/libexec/edge-boot-gate /usr/libexec/deploy-drain-edge; \
+    chmod 0755 /usr/libexec/deploy-heartbeat; \
     chmod 0644 /usr/share/smoresnet/Caddyfile /usr/share/smoresnet/firewalld/zones/public.xml /usr/share/smoresnet/firewalld/zones/tailscale.xml; \
     chmod 0644 /usr/share/smoresnet/deploy-units.txt; \
     chmod 0644 /etc/ssh/sshd_config.d/05-edge-hardening.conf; \
@@ -88,6 +98,8 @@ RUN set -eux; \
       caddy.service \
       edge-boot-gate.service \
       firewalld.service \
+      smoresnet-deploy-listener.service \
+      smoresnet-deploy-heartbeat.timer \
       smoresnet-firewall-zones.service \
       smoresnet-firewall-public.service \
       smoresnet-firewall-tailscale.service \
@@ -175,4 +187,11 @@ RUN set -eux; \
     grep -qF -- '--ssh=false' /usr/lib/systemd/system/smoresnet-tailscale-up.service || { echo "the join unit does not turn Tailscale SSH off" >&2; exit 1; }; \
     grep -qF -- 'LoadCredential=tailscale-authkey' /usr/lib/systemd/system/smoresnet-tailscale-up.service || { echo "the join unit does not read its key from a credential" >&2; exit 1; }; \
     test ! -e /etc/smoresnet/tailscale-authkey || { echo "an auth key is in the image: it is the operator's, and never image content" >&2; exit 1; }; \
+    test -x /usr/libexec/deploy-drain-edge || { echo "the edge drain is missing or not executable: smoresnet-deploy.service would fail 203/EXEC and the queue would never be consumed" >&2; exit 1; }; \
+    test -r /usr/libexec/deploy/drain.sh || { echo "the shared drain loop is missing: the edge drain has nothing to run" >&2; exit 1; }; \
+    test -r /usr/libexec/deploy-receiver.py || { echo "the deploy receiver is missing: nothing would answer the tailnet on 8484" >&2; exit 1; }; \
+    test -x /usr/libexec/deploy-heartbeat || { echo "the deploy heartbeat is missing or not executable: smoresnet-deploy-heartbeat.service would fail 203/EXEC and a wedged queue would never page" >&2; exit 1; }; \
+    ! grep -qE '^(Requires|Wants)=.*sops-decrypt' /usr/lib/systemd/system/smoresnet-deploy-listener.service || { echo "the edge listener depends on a sops unit this image does not ship: it would never start" >&2; exit 1; }; \
+    grep -qxF 'Environment=DEPLOY_SECRETS_DIR=/etc/smoresnet' /usr/lib/systemd/system/smoresnet-deploy-listener.service || { echo "the edge listener does not read its secret from /etc/smoresnet" >&2; exit 1; }; \
+    test ! -e /etc/smoresnet/webhook-secret.yaml || { echo "a webhook secret is in the image: it is the operator's, written by edge-bootstrap" >&2; exit 1; }; \
     test ! -e /etc/caddy/edge.env || { echo "the Caddy environment file is in the image: its upstreams are the operator's" >&2; exit 1; }

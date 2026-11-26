@@ -1,0 +1,211 @@
+#!/usr/bin/env bash
+# Drain the deploy queue on the public edge (design #939, T8). This script is the
+# edge role of the shared loop: bootc/lib/deploy/drain.sh owns the FIFO order, the
+# coalescing, the pop-and-retry rules, the verification and the counters, and both
+# bootc images run it. What is the edge's own is below:
+#
+#   drain_role_recover   nothing to repair -- no tenant apply, no work trees, no
+#                        snapshot to reconcile. It journals the deadline pair this
+#                        run was allowed to spend instead, because the one thing
+#                        on this host that can be wrong without failing is a
+#                        verifier killed in the middle of its own switch.
+#   drain_role_apply     the action a verified entry authorizes. The proof of a
+#                        deployment here is the verifier's own `bootc switch
+#                        --enforce-container-sigpolicy` (T6): its exit 0 means the
+#                        verified digest is already the staged boot entry, so this
+#                        hook must not switch again. What is left is the pending
+#                        record the boot gate resumes from (T7) and the reboot,
+#                        because the reboot is the deploy.
+#
+# The trigger is T11's: a dispatch-only notify, plus the daily poll as the
+# backstop. Until that lands this drain is callable by hand and by unit
+# (`systemctl start smoresnet-deploy.service`), which is all a queue consumer
+# needs to be.
+#
+# Every knob is environment-overridable so tests/deploy/edge-drain.bats can drive
+# this exact code. Production sets none of them.
+#
+# shellcheck disable=SC2034,SC2154  # deploy-state.sh and the shared loop use what this script sets, and the reverse
+set -euo pipefail
+
+self_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+# The image installs the shared output helpers as /usr/libexec/lib/log.sh, beside
+# this program; a checkout has them under scripts/lib.
+_smolib=$self_dir/lib/log.sh
+[[ -r $_smolib ]] || _smolib=/usr/libexec/lib/log.sh
+[[ -r $_smolib ]] || {
+  printf 'deploy-drain-edge: no output library at %s\n' "$_smolib" >&2
+  exit 1
+}
+# shellcheck source=/dev/null
+source "$_smolib"
+
+# The state library is the server's, deliberately: one implementation of the
+# journal, the denylist, the records and the lock, so a drain and a boot gate on
+# either host cannot disagree about a file. Sibling first, then the image's name.
+state_lib=${DEPLOY_STATE_LIB:-}
+if [[ -z $state_lib ]]; then
+  if [[ -r $self_dir/deploy-state.sh ]]; then
+    state_lib=$self_dir/deploy-state.sh
+  elif [[ -r $self_dir/deploy-state ]]; then
+    state_lib=$self_dir/deploy-state
+  else
+    state_lib=/usr/libexec/deploy-state
+  fi
+fi
+[[ -r $state_lib ]] || {
+  printf 'deploy-drain-edge: no state library at %s\n' "$state_lib" >&2
+  exit 1
+}
+# shellcheck source=/dev/null
+source "$state_lib"
+
+# The verifier ships in the edge rootfs beside this program, and in the image both
+# are /usr/libexec.
+verify_bin=$(deploy_resolve "${DEPLOY_VERIFY_BIN:-}" deploy-verify.py "$self_dir/deploy-verify.py")
+
+systemctl_bin=${DEPLOY_SYSTEMCTL:-systemctl}
+reboot_timeout=${DEPLOY_REBOOT_TIMEOUT:-60}
+
+# The deadline pair, set before the shared loop is sourced because it reads
+# DEPLOY_VERIFY_DEADLINE once, at source time.
+#
+# The verifier's SWITCH_TIMEOUT (deploy-verify.py) bounds the one call that pulls
+# an image, and the drain's deadline bounds the verifier as a whole. T6's review
+# found the shared default of 300 s under a 600 s switch: a slow pull would have
+# been killed mid-stage, after bootc had already written the boot entry and before
+# the verifier could answer, so the entry would have been retried until the
+# heartbeat paged for a deployment that was staged. Both are whole seconds and the
+# deadline is derived from the switch, so the relationship cannot drift; the
+# assertion below is what holds it if either is overridden.
+edge_switch_timeout=${DEPLOY_SWITCH_TIMEOUT:-600}
+export DEPLOY_SWITCH_TIMEOUT=$edge_switch_timeout
+export DEPLOY_VERIFY_DEADLINE=${DEPLOY_VERIFY_DEADLINE:-$((edge_switch_timeout + 600))}
+
+# The loop: the image installs it at /usr/libexec/deploy/drain.sh, beside the
+# shared decisions. The checkout path is tried before the installed one so a
+# suite run on a host that carries an image never tests the installed copy.
+drain_lib=${DEPLOY_DRAIN_LIB:-}
+if [[ -z $drain_lib ]]; then
+  if [[ -r $self_dir/deploy/drain.sh ]]; then
+    drain_lib=$self_dir/deploy/drain.sh
+  elif [[ -r $self_dir/../../../../lib/deploy/drain.sh ]]; then
+    drain_lib=$self_dir/../../../../lib/deploy/drain.sh
+  else
+    drain_lib=/usr/libexec/deploy/drain.sh
+  fi
+fi
+[[ -r $drain_lib ]] || {
+  printf 'deploy-drain-edge: no shared drain loop at %s\n' "$drain_lib" >&2
+  exit 1
+}
+# shellcheck source=/dev/null
+source "$drain_lib"
+
+if ! [[ $edge_switch_timeout =~ ^[0-9]+$ ]]; then
+  printf 'deploy-drain-edge: DEPLOY_SWITCH_TIMEOUT=%s is not whole seconds\n' \
+    "$edge_switch_timeout" >&2
+  exit 1
+fi
+if ! [[ $verify_deadline =~ ^[0-9]+$ ]] ||
+  ((10#$verify_deadline <= 10#$edge_switch_timeout)); then
+  printf 'deploy-drain-edge: DEPLOY_VERIFY_DEADLINE=%s does not clear the verifier switch timeout %ss: a slow pull would be killed mid-stage\n' \
+    "$verify_deadline" "$edge_switch_timeout" >&2
+  exit 1
+fi
+
+# The repositories this host deploys: the shell spelling of the edge role's
+# allowlist in bootc/lib/deploy/decisions.py. The receiver already refuses an apps
+# request at the door; an entry for anything else is unreadable here and dropped
+# with a record.
+drain_repos="homelab-platform"
+
+# drain_role_recover: the edge has no half-done apply to undo and no work tree
+# holding a decrypted secret, so there is nothing to repair before the queue.
+#
+# What it does record is the pair of limits above. The edge's failure mode is not
+# a corrupt record, it is a verifier killed inside its own switch, and the journal
+# line is how an operator reads afterwards what this host was allowed to spend and
+# whether a kill was its own deadline or something else.
+drain_role_recover() {
+  journal_append edge-drain-limits "$(jq -nc --argjson verify "$((10#$verify_deadline))" \
+    --argjson switch "$((10#$edge_switch_timeout))" \
+    '{verifyDeadline:$verify,switchTimeout:$switch}')" ||
+    warn "cannot journal the drain's deadlines"
+}
+
+# edge_snapshot_gate: the role hook the server fills with its Restic plane.
+#
+# The edge has no backup plane at all -- "any edge backup plane" is a non-goal of
+# the design -- so this is a no-op, and a no-op that says so. It sits exactly where
+# the server's gate sits (the first thing a verified entry authorizes), and the
+# journal line is what tells an operator that this deployment had nothing behind it
+# but the previous boot's image and the boot gate's rollback. Silence here would
+# read as a gate that passed.
+edge_snapshot_gate() {
+  journal_append snapshot-gate-skipped \
+    '{"role":"edge","reason":"the edge has no snapshot plane"}' ||
+    warn "cannot journal the skipped snapshot gate"
+  return 0
+}
+
+# drain_role_apply <id> <repo> <commit> <digests>
+#
+# Sets `drain_action` and returns non-zero only when the entry was not decided:
+# the reason is left in `drain_defer_reason` and the shared loop stamps a retry.
+drain_role_apply() {
+  local id=$1 repo=$2 commit=$3 digests=$4 index manifest rc=0
+
+  edge_snapshot_gate || {
+    drain_defer_reason=snapshot-gate-exit-$?
+    return 1
+  }
+  if [[ -z $digests ]]; then
+    drain_defer_reason=verdict-without-digests
+    return 1
+  fi
+  index=$(jq -er '.index // empty' <<<"$digests" 2>/dev/null) || index=""
+  manifest=$(jq -er '.manifest // empty' <<<"$digests" 2>/dev/null) || manifest=$index
+  if [[ -z $index ]]; then
+    # The boot gate accepts either digest form, but it cannot accept none: a
+    # record with no digest is a boot nothing can be judged against.
+    drain_defer_reason=verdict-without-digests
+    return 1
+  fi
+
+  # The verifier's switch has already made this digest the staged boot entry.
+  # The record is written before the reboot so a shutdown that kills this process
+  # still leaves the gate the request it must judge; `phase: staged` is the
+  # server's own stamp for the same document.
+  if ! jq -nc --arg commit "$commit" --arg index "$index" --arg manifest "$manifest" \
+    --argjson digests "$digests" --arg at "$(deploy_now)" \
+    '{schema:1,phase:"staged",commit:$commit,digest:$index,
+      digests:{index:$index,manifest:$manifest},stagedAt:$at}' | pending_write; then
+    journal_append stage-pending-failed "$(jq -nc --arg id "$id" --arg commit "$commit" \
+      --arg index "$index" '{id:$id,commit:$commit,digest:$index}')" ||
+      warn "cannot journal the failed pending record"
+    drain_defer_reason=pending-unwritable
+    return 1
+  fi
+  journal_append stage-pending "$(jq -nc --arg id "$id" --arg repo "$repo" \
+    --arg commit "$commit" --arg index "$index" --arg manifest "$manifest" \
+    '{id:$id,repo:$repo,commit:$commit,digest:$index,manifest:$manifest}')" ||
+    warn "cannot journal the pending record"
+
+  # The reboot is the deploy. A reboot that does not happen is an outage, not a
+  # verdict: the pending record stays for the boot gate, and the entry keeps its
+  # place so the next trigger tries the switch and the reboot again.
+  say "$repo $commit: staged $index; rebooting into it"
+  rc=0
+  timeout --signal=TERM --kill-after=15 "$(clamp_timeout "$reboot_timeout")" \
+    "$systemctl_bin" reboot || rc=$?
+  if ((rc != 0)); then
+    journal_append stage-reboot-failed "$(jq -nc --arg id "$id" --argjson exit "$rc" \
+      '{id:$id,exit:$exit}')" || warn "cannot journal the failed reboot"
+    drain_defer_reason=reboot-exit-$rc
+    return 1
+  fi
+  drain_action=staged
+}
+
+drain_main

@@ -218,6 +218,28 @@ clean `boot-complete.target` would be the host claiming otherwise. The tests are
 and 8484 closed to the internet — are the scheduled probe's
 (`scripts/verify-public-edge.sh`), not this gate's.
 
+## The deploy plane
+
+Four units, and none of them is a sops unit: the edge has no SOPS plane and no age
+identity. The listener (`smoresnet-deploy-listener.service`) answers the tailnet
+on 8484, admits nothing but `homelab-platform`, and reads one plaintext secret;
+the drain (`smoresnet-deploy.service`, `deploy-drain-edge`) runs the shared
+`bootc/lib/deploy/drain.sh` loop with a no-op where the server's snapshot gate
+sits, records `pending.json` and reboots into the digest the verifier's `bootc
+switch` already staged; the heartbeat (`smoresnet-deploy-heartbeat.service` on a
+five-minute timer) pings the deploy check green only while `/healthz` answers and
+no queue entry is older than 1800 s. T11 adds the triggers — a dispatch-only
+notify and a 03:00 poll — and until then the drain is `systemctl start
+smoresnet-deploy.service`.
+
+The secrets are the operator's, never image content, plaintext and 0600 under
+`/etc/smoresnet` (a `tmpfiles.d` line creates the 0700 directory): the webhook
+secret the listener authenticates against (`webhook-secret.yaml`, plus
+`webhook-secret-next.yaml` for a rotation window) and the dead-man URL above. A
+missing secret is the listener's own refusal to start naming the file, and a
+secret readable by group or other is refused the same way; `edge-bootstrap` (T10)
+is what writes them.
+
 ## Rebuild
 
 A reinstall erases the disk; there is no snapshot to fall back to. The drill is

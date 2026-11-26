@@ -41,6 +41,9 @@ on:
       # change to what this image runs.
       - "scripts/deploy-state.sh"
       - "scripts/lib/**"
+      # The dead-man beat is the server's program under the edge's own limits
+      # (design #939, T8), so a change to it changes what this image runs.
+      - "scripts/deploy-heartbeat.sh"
       # The repository has one signing key and the edge is verified against its
       # public half, so a change there re-publishes the edge as well.
       - "bootc/server/cosign.pub"
