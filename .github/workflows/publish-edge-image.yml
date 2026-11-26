@@ -36,6 +36,11 @@ on:
     paths:
       - "bootc/edge/**"
       - "bootc/lib/**"
+      # The boot gate sources the deploy state library and the output helpers the
+      # Containerfile copies in (design #939, T7), so a change to either is a
+      # change to what this image runs.
+      - "scripts/deploy-state.sh"
+      - "scripts/lib/**"
       # The repository has one signing key and the edge is verified against its
       # public half, so a change there re-publishes the edge as well.
       - "bootc/server/cosign.pub"

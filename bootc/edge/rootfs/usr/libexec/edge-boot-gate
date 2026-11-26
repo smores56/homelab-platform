@@ -1,0 +1,596 @@
+#!/usr/bin/env bash
+# Post-boot gate for the public edge: judge the deployment this host just
+# booted, or hold it (design #939, T7).
+#
+#   edge-boot-gate
+#
+# Runs on every boot from edge-boot-gate.service, late in boot
+# (After=multi-user.target) and before boot-complete.target. The server's
+# scripts/smortress-boot-gate.sh is the same idea with a snapshot plane, a tenant
+# and a GRUB counter behind it; the edge has none of the three, so this gate is
+# what is left once those are gone. Its inputs fall into two classes, and the
+# class is the whole contract:
+#
+#   verdict inputs      a fact about the deployment, and the deployment may be
+#                       denylisted and rolled back for it:
+#     digest            `bootc status --booted` reports the digest the request
+#                       recorded (either form, index or platform manifest);
+#     boot complete     `systemctl is-system-running` reached `running` or
+#                       `degraded` -- the boot's own transaction finished. A boot
+#                       still `starting` is a boot nothing may be judged on, so it
+#                       is a verdict, not a wait, and the unit list below is what
+#                       decides whether the failed units in a degraded boot matter;
+#     units             no unit in /usr/share/smoresnet/deploy-units.txt is
+#                       inactive or failed: caddy, firewalld, sshd, the three
+#                       things whose absence is a box that is not serving;
+#     landed record     state.json records this commit and these digests, read
+#                       back after the write. A host running an image its own
+#                       record does not name polls forever and reports healthy on
+#                       property it does not have.
+#
+#   infrastructure inputs  a fact about the host's surroundings, and the commit is
+#                       never the reason they are down:
+#     tailscaled        the daemon's backend is Running -- the tailnet is what
+#                       every public name is served through;
+#     dns               each of the three public names resolves to an address;
+#     loopback          Caddy completes a TLS handshake on 127.0.0.1:443 (any
+#                       HTTP status: the handshake is the question, not the
+#                       upstream's answer, and an unissued certificate is not a
+#                       failed deployment);
+#     public IPv4       this host's public address is the address the three names
+#                       resolve to.
+#
+# An infrastructure failure never denylists and never rolls back: it journals
+# `deploy-held`, stamps `retry_at` on the pending record and pages. The record is
+# left in place, so the next boot decides again, and the recorded commit stays the
+# old one, so the poll re-requests the deployment the host could not prove. The
+# infrastructure inputs are retried inside a budget first, because tailscaled and
+# DNS are up seconds after the boot, not with it.
+#
+# The marker is why this host never rolls back on a boot it has no history for:
+# /var/lib/smoresnet/boot-gate-landed.json is written by every boot this gate
+# reaches a verdict on. On an install or a reinstall it is absent -- /var is the
+# only tree a reinstall keeps, and the installer does not write it -- so the gate
+# alerts, holds, and writes the marker: nothing is denied and nothing rolled back
+# on a box whose previous deployment is the install medium's, and the boot after
+# it decides normally. A missing marker therefore costs one alert per host life,
+# which is also the one moment the operator wants to hear from a new box.
+#
+# There is no boot counter and no `boot-counting-absent` fiction: the edge ships
+# no GRUB snippet and T13's boot counting is unproven, so this gate journals
+# `boot-counting-absent` on every boot and the verdict above is the only rollback
+# the host has. A deployment that never reaches userspace is a console recovery.
+#
+# Exit codes: 0 nothing to do, a deployment was recorded, or the bootloader had
+# already rolled back; 1 held (an infrastructure input is down, or this is the
+# first boot on the host), or the gate could not finish -- the deployment is
+# judged either way, and a hold is deliberately a failed unit so the box is not
+# reported as a clean boot; 2 usage.
+#
+# Every knob is environment-overridable so tests/deploy/edge-boot.bats can drive
+# this exact code against fakes and a throwaway state directory. Production sets
+# none of them: the defaults are the host contract, not a way to skip a check.
+#
+# shellcheck disable=SC2154  # deploy-state.sh assigns these at source time
+set -euo pipefail
+
+self_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+# The image installs the shared output helpers as /usr/libexec/lib/log.sh, beside
+# this program; a checkout has them under scripts/lib.
+_smolib=$self_dir/lib/log.sh
+[[ -r $_smolib ]] || _smolib=/usr/libexec/lib/log.sh
+[[ -r $_smolib ]] || {
+  printf 'edge-boot-gate: no output library at %s\n' "$_smolib" >&2
+  exit 1
+}
+# shellcheck source=/dev/null
+source "$_smolib"
+
+# The deploy state library is the server's, deliberately: one implementation of
+# the journal, the denylist, the records and the lock, so a boot gate cannot write
+# a record the drain reads differently. The edge image installs it as
+# /usr/libexec/deploy-state (the server's smortress-src loop strips the `.sh`).
+state_lib=${DEPLOY_STATE_LIB:-}
+if [[ -z $state_lib ]]; then
+  if [[ -r $self_dir/deploy-state.sh ]]; then
+    state_lib=$self_dir/deploy-state.sh
+  elif [[ -r $self_dir/deploy-state ]]; then
+    state_lib=$self_dir/deploy-state
+  else
+    state_lib=/usr/libexec/deploy-state
+  fi
+fi
+[[ -r $state_lib ]] || {
+  printf 'edge-boot-gate: no state library at %s\n' "$state_lib" >&2
+  exit 1
+}
+# The page is the edge's own check, and the edge has no secrets plane: the URL is
+# the operator's file, written by edge-bootstrap like the tailnet auth key, and
+# read through deploy_notify's curl config. An absent file journals a skip, not a
+# failed deploy.
+export DEPLOY_PING_SECRET=${DEPLOY_PING_SECRET:-${EDGE_PING_SECRET:-/etc/smoresnet/deploy-ping-url}}
+# shellcheck source=/dev/null
+source "$state_lib"
+
+bootc_bin=${BOOTC_BIN:-bootc}
+systemctl_bin=${SYSTEMCTL_BIN:-systemctl}
+tailscale_bin=${TAILSCALE_BIN:-tailscale}
+curl_bin=${EDGE_CURL_BIN:-curl}
+resolve_bin=${EDGE_RESOLVE_BIN:-getent}
+# The units whose failure is a verdict: absent, crashed or failed means a box that
+# is not serving, whatever else is true. It is a file and not an array here for
+# the reason the server's list is one -- what "serving" means is data an operator
+# can read, and the gate keeps none of it.
+deploy_units_file=${EDGE_DEPLOY_UNITS_FILE:-/usr/share/smoresnet/deploy-units.txt}
+# The names the edge is the public surface for: the Caddyfile's three vhosts.
+# The apex is not among them -- the zone publishes no apex A record. Space
+# separated, one word per name: the list is a word list, not a document.
+#
+# It is a knob because the zone is the other half of it: `local.edge_hosts` in
+# tofu/cluster.tf declares the A records, and a name here that the zone does not
+# publish is a boot that holds on `dns` until either side changes. The gate
+# holds and pages rather than refusing the deployment precisely so the two lists
+# can be reconciled on a booted box.
+read -ra public_names <<<"${EDGE_PUBLIC_NAMES:-photos.sammohr.dev opds.sammohr.dev recovery.sammohr.dev}"
+# The one third party this gate talks to, and the only way a box can learn its own
+# public address: the answer is only ever compared with what the three names
+# resolve to, so a wrong or hostile answer holds the boot and pages -- it never
+# denylists a deployment.
+public_ip_url=${EDGE_PUBLIC_IPV4_URL:-https://api.ipify.org}
+loopback_url=${EDGE_LOOPBACK_URL:-https://127.0.0.1/}
+marker=${EDGE_BOOT_MARKER:-/var/lib/smoresnet/boot-gate-landed.json}
+# The infrastructure budget, not the whole gate's: DNS and the tailnet come up
+# seconds after multi-user, and a check that gave up on the first look would hold
+# every boot. The verdict inputs are not retried -- a booted digest, a finished
+# boot and a failed unit are facts, not races.
+gate_budget=${EDGE_BOOT_GATE_BUDGET:-300}
+gate_pause=${EDGE_BOOT_GATE_PAUSE:-4}
+# Five minutes is the deploy plane's retry period (drain `retry_delay`), so a held
+# record carries the stamp every other deferred record carries.
+retry_delay=${EDGE_RETRY_DELAY:-300}
+lock_wait=${EDGE_BOOT_GATE_LOCK_WAIT:-300}
+ctl_timeout=${EDGE_BOOT_GATE_CTL_TIMEOUT:-10}
+probe_timeout=${EDGE_BOOT_GATE_PROBE_TIMEOUT:-10}
+status_timeout=${EDGE_BOOT_GATE_STATUS_TIMEOUT:-60}
+rollback_timeout=${EDGE_ROLLBACK_TIMEOUT:-900}
+
+# The repository this gate records: the edge deploys the platform plane only, so
+# the state entry is the same one the server writes and the allowlist in
+# bootc/lib/deploy/decisions.py already says so.
+role_repo=homelab-platform
+
+# --- the bootc answer -------------------------------------------------------
+booted_digest() {
+  local doc
+  doc=$(timeout --signal=TERM --kill-after=10 "$(clamp_timeout "$status_timeout")" \
+    "$bootc_bin" status --booted --json 2>/dev/null) ||
+    return 1
+  jq -er '.status.booted.image.imageDigest // empty' <<<"$doc" 2>/dev/null
+}
+
+# Either recorded form is a match: bootc reports the index digest on one host and
+# the platform manifest digest on another for the same boot.
+digest_matches() { # <booted> <index> <manifest>
+  [[ -n $1 ]] || return 1
+  [[ -n $2 && $1 == "$2" ]] && return 0
+  [[ -n $3 && $1 == "$3" ]] && return 0
+  return 1
+}
+
+# --- the verdict inputs -----------------------------------------------------
+# `running` is a finished startup with nothing failed; `degraded` is a finished
+# startup with at least one failed unit, and which of those matters is the unit
+# list's question. `starting` is a transaction that never finished, and nothing
+# about a boot that is still assembling itself is a fact yet.
+boot_state() {
+  local state
+  state=$(timeout --signal=TERM "$(clamp_timeout "$ctl_timeout")" \
+    "$systemctl_bin" is-system-running 2>/dev/null) || true
+  printf '%s\n' "${state:-unknown}"
+}
+
+# verdict_units: the first deploy-critical unit that is not serving, on stdout.
+verdict_units() {
+  local unit
+  local -a units=()
+  [[ -r $deploy_units_file ]] || {
+    printf 'units-file-missing\n'
+    return 1
+  }
+  mapfile -t units < <(sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
+    -e '/^$/d' "$deploy_units_file")
+  ((${#units[@]})) || {
+    printf 'units-file-empty\n'
+    return 1
+  }
+  for unit in "${units[@]}"; do
+    if [[ $(timeout --signal=TERM "$(clamp_timeout "$ctl_timeout")" \
+      "$systemctl_bin" is-active "$unit" 2>/dev/null) != active ]]; then
+      printf 'unit-inactive:%s\n' "$unit"
+      return 1
+    fi
+  done
+  # `failed` is asked about the declared units only: an unrelated unit that failed
+  # must not roll the box back.
+  for unit in "${units[@]}"; do
+    if [[ $(timeout --signal=TERM "$(clamp_timeout "$ctl_timeout")" \
+      "$systemctl_bin" is-failed "$unit" 2>/dev/null) == failed ]]; then
+      printf 'unit-failed:%s\n' "$unit"
+      return 1
+    fi
+  done
+  return 0
+}
+
+# landed_record_written <commit> <index> <manifest>
+#
+# Records the deployment and reads it back: the write is the claim, the read-back
+# is the proof, and a state.json the gate cannot write twice is a host whose next
+# poll would deploy the same commit over and over.
+landed_record_written() { # <commit> <index> <manifest>
+  local commit=$1 index=$2 manifest=$3 recorded got_index got_manifest
+  state_record_verified "$role_repo" "$commit" "$index" "$manifest" || return 1
+  recorded=$(state_field "repos.$role_repo.commit" 2>/dev/null) || return 1
+  [[ $recorded == "$commit" ]] || return 1
+  got_index=$(state_field "repos.$role_repo.indexDigest" 2>/dev/null) || got_index=""
+  got_manifest=$(state_field "repos.$role_repo.manifestDigest" 2>/dev/null) || got_manifest=""
+  [[ $got_index == "$index" && $got_manifest == "$manifest" ]] || return 1
+  return 0
+}
+
+# --- the infrastructure inputs ----------------------------------------------
+# Set by the failed check: the input's name and the detail the journal and the
+# page carry. Two fields and not a return string, because the name is the
+# vocabulary (`infra-<input>`) and the detail is for a human.
+infra_input=
+infra_detail=
+declare -A resolved_ip=()
+
+check_tailscaled() {
+  local doc state
+  doc=$(timeout --signal=TERM --kill-after=5 "$(clamp_timeout "$ctl_timeout")" \
+    "$tailscale_bin" status --json 2>/dev/null) || doc=""
+  state=$(jq -r '.BackendState // "unknown"' <<<"$doc" 2>/dev/null) || state=unknown
+  [[ $state == Running ]] && return 0
+  infra_input=tailscaled
+  infra_detail="the tailscale backend is $state, not Running"
+  return 1
+}
+
+# resolve_ipv4 <name>: the first address, on stdout. 2 is "no resolver on this
+# host", 3 is "this name has no address" -- the journal names which, because the
+# two have different fixes and one of them is not the DNS zone.
+resolve_ipv4() { # <name>
+  local out rc=0 address
+  out=$(timeout --signal=TERM "$(clamp_timeout "$probe_timeout")" "$resolve_bin" \
+    ahostsv4 "$1" 2>/dev/null) || rc=$?
+  # getent's 2 is "key not found"; anything else is a resolver that could not run.
+  ((rc == 0 || rc == 2)) || return 2
+  address=$(printf '%s\n' "$out" | awk 'NF { print $1; exit }')
+  [[ -n $address ]] || return 3
+  printf '%s\n' "$address"
+  return 0
+}
+
+check_dns() {
+  local name address rc=0
+  resolved_ip=()
+  for name in "${public_names[@]}"; do
+    address=$(resolve_ipv4 "$name") || rc=$?
+    if ((rc != 0)); then
+      infra_input=dns
+      if ((rc == 2)); then
+        infra_detail="no resolver ran for $name"
+      else
+        infra_detail="$name does not resolve"
+      fi
+      return 1
+    fi
+    resolved_ip[$name]=$address
+  done
+  return 0
+}
+
+# The handshake, not the answer: `--insecure` because a name's certificate is
+# Caddy's to issue and a reinstall's first order can still be in flight, and no
+# `--fail` because a 502 from an upstream name is still Caddy answering on
+# loopback. Any three-digit status is a completed TLS handshake.
+check_loopback() {
+  local status rc=0
+  status=$(timeout --signal=TERM --kill-after=5 "$(clamp_timeout "$probe_timeout")" \
+    "$curl_bin" --insecure --silent --output /dev/null --write-out '%{http_code}' \
+    --max-time "$(clamp_timeout "$probe_timeout")" "$loopback_url" 2>/dev/null) || rc=$?
+  if ((rc == 0)) && [[ $status =~ ^[0-9]{3}$ ]]; then return 0; fi
+  infra_input=loopback
+  infra_detail="no TLS answer on $loopback_url (curl exit $rc, status '${status}')"
+  return 1
+}
+
+check_public_ipv4() {
+  local host name address
+  host=$(timeout --signal=TERM --kill-after=5 "$(clamp_timeout "$probe_timeout")" \
+    "$curl_bin" --fail --silent --show-error --max-time "$(clamp_timeout "$probe_timeout")" \
+    "$public_ip_url" 2>/dev/null | tr -d '[:space:]') || host=""
+  if [[ ! $host =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]]; then
+    infra_input=public-ipv4
+    infra_detail="cannot read this host's public address from $public_ip_url"
+    return 1
+  fi
+  for name in "${public_names[@]}"; do
+    address=${resolved_ip[$name]:-}
+    if [[ $address != "$host" ]]; then
+      infra_input=public-ipv4
+      infra_detail="$name resolves to ${address:-nothing}, and this host is $host"
+      return 1
+    fi
+  done
+  return 0
+}
+
+infra_checks() {
+  infra_input=''
+  infra_detail=''
+  resolved_ip=()
+  check_tailscaled || return 1
+  check_dns || return 1
+  check_loopback || return 1
+  check_public_ipv4 || return 1
+  return 0
+}
+
+infra_gate() {
+  local deadline attempts=0
+  deadline=$(($(date -u +%s) + gate_budget))
+  while :; do
+    attempts=$((attempts + 1))
+    if infra_checks; then
+      say "infrastructure is up after $attempts attempt(s)"
+      return 0
+    fi
+    if (($(date -u +%s) >= deadline)); then
+      warn "$infra_input is not up after $attempts attempt(s): $infra_detail"
+      return 1
+    fi
+    say "$infra_input is not up yet ($infra_detail); retrying"
+    sleep "$gate_pause"
+  done
+}
+
+# --- the records ------------------------------------------------------------
+pending_fields() { # <doc> -> "<commit>\t<index>\t<manifest>"
+  jq -r '[.commit // "", .digests.index // .digest // "", .digests.manifest // .digest // ""]
+    | @tsv' <<<"$1" 2>/dev/null
+}
+
+# The marker is the host's own history, so it is the last thing a good boot writes
+# and the thing an operator reads when a page says a box has never landed.
+marker_write() { # <commit> <index> <manifest>
+  # /var/lib/smoresnet is the tailnet join's directory too, and a reinstall starts
+  # without it: created here so a first boot can record itself.
+  install -d -m 0700 "$(dirname -- "$marker")" || return 1
+  jq -nc --arg repo "$role_repo" --arg commit "${1:-}" --arg index "${2:-}" \
+    --arg manifest "${3:-}" --arg at "$(deploy_now)" \
+    '{schema:1,repo:$repo,commit:$commit,digests:{index:$index,manifest:$manifest},at:$at}' |
+    atomic_write "$marker"
+}
+
+denylist_forms() { # <index> <manifest> <reason>
+  local index=$1 manifest=$2 reason=$3
+  [[ -z $index ]] || denylist_add digest "$index" "$reason" ||
+    warn "cannot denylist $index"
+  [[ -z $manifest || $manifest == "$index" ]] ||
+    denylist_add digest "$manifest" "$reason" || warn "cannot denylist $manifest"
+}
+
+# The queue's own stamp, written into the pending record with the queue's own
+# field names (`retry_at` epoch seconds, `attempts`, `deferred`), so a hold is the
+# same shape to a reader as a deferred request.
+stamp_retry() { # <retry-at> <reason>
+  local doc attempts
+  doc=$(pending_read 2>/dev/null) || return 1
+  attempts=$(jq -er '.attempts // 0 | tonumber' <<<"$doc" 2>/dev/null) || attempts=0
+  jq -c --argjson at "$1" --argjson attempts "$((attempts + 1))" --arg reason "$2" \
+    '. + {retry_at: $at, attempts: $attempts, deferred: $reason}' <<<"$doc" |
+    pending_write
+}
+
+# --- the four outcomes ------------------------------------------------------
+succeed() { # <commit> <index> <manifest>
+  local commit=$1 index=$2 manifest=$3
+  journal_append boot-gate-green "$(jq -nc --arg repo "$role_repo" --arg commit "$commit" \
+    --arg index "$index" --arg manifest "$manifest" \
+    '{role:"edge",repo:$repo,commit:$commit,digests:{index:$index,manifest:$manifest}}')" || {
+    warn "cannot journal the green gate"
+    return 1
+  }
+  marker_write "$commit" "$index" "$manifest" || warn "cannot write $marker"
+  # Cleared last: a crash before this leaves the record, and the next boot repeats
+  # an idempotent success instead of forgetting the deploy.
+  pending_clear || {
+    warn "cannot clear the pending record"
+    return 1
+  }
+  deploy_notify success || warn "could not report the deployment to the deploy check"
+  say "$commit is running"
+  return 0
+}
+
+# A verdict failure: the commit is the reason, so the digest is refused from now
+# on and the host goes back to what it booted before.
+fail_verdict() { # <reason> <commit> <index> <manifest>
+  local reason=$1 commit=${2:-} index=${3:-} manifest=${4:-} rc=0
+  journal_append boot-gate-failed "$(jq -nc --arg reason "$reason" --arg commit "$commit" \
+    --arg index "$index" --arg manifest "$manifest" \
+    '{role:"edge",reason:$reason,commit:$commit,digests:{index:$index,manifest:$manifest}}')" ||
+    warn "cannot journal the gate failure"
+  denylist_forms "$index" "$manifest" "boot-gate:$reason"
+  # Before the rollback, not after: `bootc rollback --apply` reboots, and a page
+  # that arrived after the reboot would name a boot nobody can read.
+  deploy_notify fail "boot-gate-$reason" || warn "could not report the failed boot"
+  timeout --signal=TERM --kill-after=30 "$(clamp_timeout "$rollback_timeout")" \
+    "$bootc_bin" rollback --apply || rc=$?
+  if ((rc != 0)); then
+    journal_append rollback-failed "$(jq -nc --argjson exit "$rc" '{exit:$exit}')" ||
+      warn "cannot journal the failed rollback"
+    warn "bootc rollback --apply failed (exit $rc); the host is still on the failed deployment"
+    return 1
+  fi
+  return 0
+}
+
+# Booted something else: the bootloader already fell back, or an operator did.
+# Nothing is rolled back -- there is nothing to roll back to -- and the record is
+# consumed so a later manual reboot cannot roll a healthy host back either.
+rolled_back() { # <booted> <commit> <index> <manifest>
+  local booted=$1 commit=$2 index=$3 manifest=$4
+  journal_append rolled-back-by-bootloader "$(jq -nc --arg commit "$commit" \
+    --arg index "$index" --arg manifest "$manifest" --arg booted "$booted" \
+    '{role:"edge",commit:$commit,digests:{index:$index,manifest:$manifest},booted:$booted}')" ||
+    warn "cannot journal the rollback"
+  denylist_forms "$index" "$manifest" rolled-back-by-bootloader
+  deploy_notify fail rolled-back-by-bootloader || warn "could not report the rollback"
+  pending_clear || {
+    warn "cannot clear the pending record"
+    return 1
+  }
+  warn "booted $booted, not the staged $index: left the host alone"
+  return 0
+}
+
+# An infrastructure hold: the deployment is neither blessed nor refused, so the
+# record stays, the stamp says when to look again, and the page is the only thing
+# that says a good box is not being served.
+hold() { # <commit> <index> <manifest>
+  local commit=${1:-} index=${2:-} manifest=${3:-} retry_at reason
+  retry_at=$(($(date +%s) + retry_delay))
+  reason="infra-$infra_input"
+  journal_append deploy-held "$(jq -nc --arg reason "$reason" --arg detail "$infra_detail" \
+    --arg commit "$commit" --arg index "$index" --arg manifest "$manifest" \
+    --argjson retry_at "$retry_at" \
+    '{role:"edge",reason:$reason,detail:$detail,commit:$commit,
+      digests:{index:$index,manifest:$manifest},retry_at:$retry_at}')" ||
+    warn "cannot journal the hold"
+  stamp_retry "$retry_at" "$reason" || warn "cannot stamp retry_at on the pending record"
+  deploy_notify fail "boot-gate-held-$reason" || warn "could not report the hold"
+  warn "held: $reason ($infra_detail); nothing denylisted, nothing rolled back, retry_at $retry_at"
+  return 0
+}
+
+# The first boot on this host: /var carries no landed record, so nothing here can
+# say the box that is running is worse than the one it replaced. Alert, hold, and
+# write the marker so this is one boot and not every boot.
+first_boot() { # <booted>
+  local booted=$1
+  journal_append deploy-held "$(jq -nc --arg booted "$booted" --arg marker "$marker" \
+    '{role:"edge",reason:"first-boot",detail:("no landed record at " + $marker),
+      booted:$booted}')" || warn "cannot journal the first boot"
+  deploy_notify fail boot-gate-first-boot || warn "could not report the first boot"
+  marker_write "" "$booted" "" || warn "cannot write $marker"
+  warn "first boot on this host ($marker absent): alerting and holding; nothing denylisted, nothing rolled back"
+  return 0
+}
+
+# --- main -------------------------------------------------------------------
+main() {
+  local doc commit index manifest booted state reason
+  deploy_state_init || {
+    warn "cannot create $deploy_state_dir"
+    exit 1
+  }
+  if ! deploy_lock_acquire "$lock_wait"; then
+    journal_append boot-gate-locked "$(jq -nc --arg lock "$deploy_lock_file" '{lock:$lock}')" || true
+    warn "another deploy holds $deploy_lock_file; the gate did not run"
+    exit 1
+  fi
+  trap deploy_lock_release EXIT
+
+  journal_append boot-gate-start '{"role":"edge"}' || warn "cannot journal the gate start"
+  # Named once per boot rather than assumed: a host with no counter is a host
+  # whose only rollback is the verdict below, and an operator reading the journal
+  # has to be told which of the two exists.
+  journal_append boot-counting-absent '{"reason":"the edge ships no boot counter"}' || true
+
+  if ! booted=$(booted_digest); then
+    # Nothing is decided and nothing is denylisted: a host that cannot say what it
+    # is running has said nothing about the deployment, and the record stays for
+    # the next boot.
+    journal_append bootc-status-failed '{}' || true
+    deploy_notify fail boot-gate-bootc-status-unreadable || warn "could not report the unreadable status"
+    warn "cannot read the booted deployment; nothing was decided"
+    exit 1
+  fi
+
+  if [[ ! -e $marker ]]; then
+    first_boot "$booted"
+    exit 1
+  fi
+
+  if ! record_exists pending; then
+    say "no staged deployment"
+    exit 0
+  fi
+  if ! doc=$(pending_read); then
+    journal_append pending-unreadable '{"reason":"cannot read the record"}' || true
+    deploy_notify fail boot-gate-pending-unreadable || warn "could not report the unreadable record"
+    warn "cannot read $deploy_state_dir/pending.json"
+    exit 1
+  fi
+  IFS=$'\t' read -r commit index manifest < <(pending_fields "$doc")
+  if [[ -z $commit || (-z $index && -z $manifest) ]]; then
+    journal_append pending-unreadable '{"reason":"the record names no commit or digest"}' || true
+    deploy_notify fail boot-gate-pending-unreadable || warn "could not report the unreadable record"
+    warn "the pending record names no commit or digest"
+    exit 1
+  fi
+
+  if ! digest_matches "$booted" "$index" "$manifest"; then
+    rolled_back "$booted" "$commit" "$index" "$manifest" || exit 1
+    exit 0
+  fi
+
+  state=$(boot_state)
+  case $state in
+    running | degraded) ;;
+    *)
+      fail_verdict "boot-not-complete:$state" "$commit" "$index" "$manifest" || exit 1
+      exit 1
+      ;;
+  esac
+
+  if ! reason=$(verdict_units); then
+    fail_verdict "$reason" "$commit" "$index" "$manifest" || exit 1
+    exit 1
+  fi
+
+  if ! infra_gate; then
+    hold "$commit" "$index" "$manifest" || exit 1
+    exit 1
+  fi
+
+  # Last of the verdicts and after the infrastructure, because it is the record of
+  # a deployment the host accepts: a hold must leave the previous commit in place
+  # so the poll requests this one again.
+  if ! landed_record_written "$commit" "$index" "$manifest"; then
+    fail_verdict landed-record "$commit" "$index" "$manifest" || exit 1
+    exit 1
+  fi
+  succeed "$commit" "$index" "$manifest" || exit 1
+  exit 0
+}
+
+case ${1-} in
+  -h | --help)
+    cat >&2 <<'EOF'
+usage: edge-boot-gate
+
+  Runs on every boot: judges the deployment a pending.json says was staged, or
+  holds it when the host's surroundings are not up. No arguments.
+EOF
+    exit 0
+    ;;
+  '') main ;;
+  *)
+    printf 'edge-boot-gate: no arguments\n' >&2
+    exit 2
+    ;;
+esac

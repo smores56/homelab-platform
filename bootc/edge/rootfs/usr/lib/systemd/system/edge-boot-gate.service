@@ -1,0 +1,63 @@
+[Unit]
+Description=Judge the deployment the public edge just booted
+# The server's ordering, and the same reason for it: the gate runs late in boot,
+# after every service it asks about has been started, and the boot is not
+# declared complete until it has recorded, held or rolled back the deployment.
+# Unlike the server there is no tenant to reconcile and no GRUB counter to reset,
+# so this unit has one job.
+Before=boot-complete.target
+After=multi-user.target
+After=network-online.target
+# Wants and never Requires: a unit that failed is exactly what the gate is there
+# to judge, and a service skipped for a failed dependency would leave a broken
+# deployment recorded as landed. `After=` alone orders without requiring success.
+Wants=network-online.target
+After=tailscaled.service caddy.service firewalld.service
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/edge-boot-gate
+# The infrastructure budget (300 s) and one bounded rollback (900 s), so a wedged
+# tailscale or `bootc` cannot hold the boot for ever.
+TimeoutStartSec=1500
+UMask=0077
+User=root
+# The deploy lock's own directory, never /run/smortress: the gate takes the same
+# lock the drain does. Preserve=yes so a hand-run command's lock inode survives
+# this oneshot's own cleanup.
+RuntimeDirectory=smortress-deploy
+# bootc creates a temporary containers-storage at /run/bootc/storage while it
+# stages a pull; ProtectSystem=strict leaves /run read-only, so PID 1 creates
+# that one directory writable instead of opening all of /run.
+RuntimeDirectory=bootc
+# ostree opens its runtime auth file at /run/ostree/auth.json; without it a
+# pull fails with "Function not implemented".
+RuntimeDirectory=ostree
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+
+# The gate writes the deploy records and the landed marker, and `bootc rollback
+# --apply` writes the ostree deployment it switches to. Nothing else is writable.
+# The rollback needs `/sysroot` itself and not just `/sysroot/ostree`: bootc
+# remounts /sysroot writable before it writes anything, and that remount is what
+# ProtectSystem=strict turns into "Initializing storage: Read-only file system".
+ProtectSystem=strict
+ReadWritePaths=/var/lib/homelab/deploy
+ReadWritePaths=/var/lib/smoresnet
+ReadWritePaths=/sysroot
+# `bootc rollback --apply` runs the same SELinux install_t probe a switch does, so
+# the gate needs the same private scratch the server's drain does.
+ReadWritePaths=/tmp
+ReadWritePaths=/var/tmp
+ProtectHome=read-only
+PrivateTmp=yes
+
+LockPersonality=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -28,6 +28,7 @@ deploy/poll	tests/deploy/poll.bats scripts/deploy-poll.sh scripts/deploy-state.s
 deploy/verify	tests/deploy/verify.bats bootc/server/rootfs/usr/libexec/deploy-verify.py scripts/deploy-state.sh scripts/deploy-drain.sh bootc/lib/deploy/*
 deploy/fixtures	tests/deploy/fixtures.bats bootc/lib/deploy/*
 deploy/edge-verify	tests/deploy/edge-verify.bats bootc/edge/rootfs/usr/libexec/deploy-verify.py bootc/lib/deploy/* tests/deploy/fixture-server.py tests/deploy/fixtures.bats
+deploy/edge-boot	tests/deploy/edge-boot.bats bootc/edge/rootfs/usr/libexec/edge-boot-gate bootc/edge/rootfs/usr/lib/systemd/system/edge-boot-gate.service bootc/edge/rootfs/usr/share/smoresnet/deploy-units.txt bootc/edge/Containerfile .github/workflows/publish-edge-image.yml scripts/deploy-state.sh
 apps/check	tests/apps/check.bats scripts/apps-schema.py
 apps/ingress	tests/apps/ingress.bats scripts/apps-ingress.sh bootc/server/Containerfile units/systemd/smortress-app-ingress@.service
 apps/ingress-reconcile	tests/apps/ingress-reconcile.bats scripts/apps-ingress-reconcile.sh units/systemd/smortress-app-ingress-reconcile.service
