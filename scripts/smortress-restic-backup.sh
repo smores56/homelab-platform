@@ -462,14 +462,17 @@ run_maintenance() {
     done
     restic_with_lock "$deadline_maintenance" "$repo" prune \
       >>"$log" 2>&1 || rc=1
-    : >"$stamp"
+    # The stamp's content is the epoch it records: the gate reads it with `-s`,
+    # so an empty file is "never ran" and every hourly run would maintain the
+    # repository again -- which is what the host did until this was written.
+    printf '%s\n' "$now" >"$stamp"
     chmod 0600 "$stamp"
   fi
 
   if ((check_due)); then
     if restic_with_lock "$deadline_maintenance" "$repo" \
       check --read-data-subset=1/30 >>"$log" 2>&1; then
-      : >"$check_stamp"
+      printf '%s\n' "$now" >"$check_stamp"
       chmod 0600 "$check_stamp"
     else
       rc=1

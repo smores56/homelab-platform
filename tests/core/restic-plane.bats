@@ -471,6 +471,40 @@ backup_with_stale_lock() {
     assert_logged '--retry-lock 2m backup' "$log/restic"
 }
 
+# --- 1b. maintenance is due once a day, not once a run -------------------
+# The stamps are what make forget/prune daily and the data check weekly. An
+# empty stamp read as "never ran", so every hourly run pruned and read 1/30 of
+# the repository: on 2026-11-26 the host logged "maintenance ok" at 10:05, 11:05
+# and 12:05.
+maintenance_twice() {
+    export STUB_BACKUP_EXIT=0 STUB_BACKUP_ID="maint1"
+    drive "$driver" ssd --unit photos
+    prunes_first=$(grep -c ' prune' "$log/restic")
+    checks_first=$(grep -c ' check ' "$log/restic")
+    drive "$driver" ssd --unit photos
+}
+
+@test "the first run maintains the repository" {
+    maintenance_twice
+    assert_equal "$prunes_first" 1
+    assert_equal "$checks_first" 1
+}
+
+@test "a second run inside the day prunes nothing" {
+    maintenance_twice
+    assert_equal "$(grep -c ' prune' "$log/restic")" "$prunes_first"
+}
+
+@test "a second run inside the day reads no data subset" {
+    maintenance_twice
+    assert_equal "$(grep -c ' check ' "$log/restic")" "$checks_first"
+}
+
+@test "the second run says why it skipped" {
+    maintenance_twice
+    assert grep -qF 'ssd: maintenance not due' <<<"$out"
+}
+
 # --- 2. stale staging reconciliation ------------------------------------
 # zfs lists a snapshot the previous run left behind, and it destroys cleanly.
 run_with_stale_staging() {
