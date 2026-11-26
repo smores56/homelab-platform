@@ -1,0 +1,50 @@
+[Unit]
+# The R2 recovery reader (design #939, T12). It used to run on the public edge,
+# which meant the corpus-read credential lived on a box anybody can reach; the
+# credential is now only on this host and the edge proxies to the Service this
+# unit answers behind (`svc:recovery`, scripts/tailscale-serve.sh).
+#
+# The reader is a host binary rather than a Quadlet for the same reason restic,
+# sops and age are: Backrest is one static binary with the web UI embedded, and
+# the guard in front of it is python3 with jq for the config render, both of which
+# the image already carries. An image here would have to be mirrored, signed and
+# pinned to run at all, and would add nothing the host does not have.
+#
+# Not in deploy-units.txt on purpose: the credential comes from an operator file
+# (/etc/backrest/env, docs/manual-steps.md), so a missing or malformed one is a
+# reader that cannot start, never a reason to roll back an image that deployed
+# cleanly. The watchdog and the public probe are what page for it.
+Description=Backrest recovery reader behind its read-only guard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# The one place the restic password and the R2 read pair live: root-only, outside
+# the image, outside this repository. The renderer below refuses to start if any
+# value it needs is absent, so an empty file cannot put an unauthenticated reader
+# on the tailnet.
+EnvironmentFile=/etc/backrest/env
+Environment=BACKREST_BIN=/usr/libexec/smortress-backrest
+# The guard owns the port the Serve route targets and starts Backrest on the
+# second one, so neither address is reachable from outside this host.
+Environment=BACKREST_GUARD_ADDR=127.0.0.1:9898
+Environment=BACKREST_UPSTREAM_ADDR=127.0.0.1:9899
+Environment=BACKREST_CONFIG=/var/lib/backrest/config.json
+Environment=BACKREST_DATA=/var/lib/backrest/data
+Environment=BACKREST_CACHE=/var/lib/backrest/cache
+Environment=BACKREST_RESTIC=/usr/bin/restic
+ExecStart=/usr/libexec/smortress-backrest-entrypoint /usr/libexec/backrest-guard
+# The index under /var/lib/backrest is a cache: it is rebuilt by listing the
+# repository, so it is in no recovery group and nothing else writes here.
+StateDirectory=backrest
+StateDirectoryMode=0700
+# `always`, not `on-failure`: the failure this reader actually has is a process
+# that stays up and answers nothing, and the watchdog covers that one. Exit is
+# covered here.
+Restart=always
+RestartSec=10s
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

@@ -20,5 +20,14 @@ COPY --chmod=0755 entrypoint.sh /usr/local/bin/smortress-backrest-entrypoint
 # deployment keeps CMD=/backrest and the Worker's own guard.
 COPY --chmod=0755 guard.py /usr/local/bin/backrest-guard
 
+# The renderer's own defaults are the smortress host's (SDLC #953): state under
+# /var/lib/backrest and a loopback bind, because there the guard is what starts
+# Backrest. A container keeps the ephemeral paths and the bundled restic here; the
+# bind address stays the guard's to choose.
+ENV BACKREST_CONFIG=/config/config.json \
+    BACKREST_DATA=/data \
+    BACKREST_CACHE=/cache \
+    BACKREST_RESTIC=/bin/restic
+
 ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/smortress-backrest-entrypoint"]
 CMD ["/backrest"]

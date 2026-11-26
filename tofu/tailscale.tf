@@ -98,17 +98,18 @@ locals {
     # A Service VIP is an address the tailnet owns rather than one a device
     # holds, so it cannot be named as an `acl` destination: that form is a host's
     # port, and the VIP is no host. A grant names the service instead, and the
-    # owner reaches all six Services (design #834). The CI names probe (#848)
-    # holds a second grant on each of the same six, which is worth nothing unless
-    # the prober is not the owner; nothing else has asked for any of them.
+    # owner reaches seven of the eight Services (design #834). The CI names probe
+    # (#848) holds a second grant on each of the six it reads, which is worth
+    # nothing unless the prober is not the owner; the public edge (#725, #953)
+    # holds the only grant on the three it proxies.
     #
     # One grant per application instead of one fronting all of them is the
     # narrower surface, not the wider one: each granted VIP is a Service that
     # terminates at exactly one application on one port, so the admitted set can
     # be read off this list. The Service that fronted the `sammohr.dev` aliases
     # carried everything behind one Caddy, and any route that proxy grew was
-    # reachable from CI with no policy change at all; a seventh application now
-    # needs a seventh grant and a line in the tests below.
+    # reachable from CI with no policy change at all; another application now
+    # needs another grant and a line in the tests below.
     grants = [
       {
         # OPDShelf's Service, the first application off the per-port scheme. The
@@ -210,6 +211,19 @@ locals {
         dst = ["svc:opds"]
         ip  = ["443"]
       },
+      {
+        # The recovery reader (SDLC #953). It runs on this host now, so
+        # `recovery.sammohr.dev` is the edge proxying to a Service instead of
+        # reaching a process on the VPS, and the corpus-read credential never
+        # leaves the tailnet. A Service and not a host port, still: the host's 443
+        # carries the agent gateway APIs and the wallpaper tree, and a
+        # port-scoped rule cannot say "this path only". No owner or probe grant
+        # accompanies this one -- the reader is the edge's alone, and its own
+        # password is the only login anybody gets.
+        src = ["tag:vps"]
+        dst = ["svc:recovery"]
+        ip  = ["443"]
+      },
     ]
 
     # The advertisement is the host's own, so it approves itself: without an
@@ -224,6 +238,7 @@ locals {
         "svc:agent"     = ["tag:smortress"]
         "svc:sync"      = ["tag:smortress"]
         "svc:terminal"  = ["tag:smortress"]
+        "svc:recovery"  = ["tag:smortress"]
       }
     }
 
@@ -271,7 +286,7 @@ locals {
       },
       {
         src  = "tag:untrusted"
-        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:vps:22", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443", "svc:terminal:443"]
+        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:vps:22", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443", "svc:terminal:443", "svc:recovery:443"]
       },
       {
         # The edge reaches no host port at all. Its two destinations are Service
@@ -292,7 +307,7 @@ locals {
       {
         # Everything else stays closed to tag:deploy. A deny test may not name a
         # destination a grant admits, so no Service destination appears here: all
-        # seven are admitted to some source, six of them to this tag. The
+        # eight are admitted to some source, six of them to this tag. The
         # remaining entries are every host port and edge login any rule admits.
         src  = "tag:deploy"
         deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:vps:22"]
@@ -405,5 +420,19 @@ resource "tailscale_service" "terminal" {
   count = var.tailnet == "" ? 0 : 1
 
   name  = "svc:terminal"
+  ports = ["tcp:443"]
+}
+
+# The recovery reader's own Service (SDLC #953). The reader answers on
+# 127.0.0.1:9898 behind its read-only guard
+# (units/systemd/smortress-backrest.service), Serve terminates TLS for the
+# Service name, and the public edge proxies `recovery.sammohr.dev` to it over the
+# tailnet instead of to a process on the VPS. That is what keeps the corpus-read
+# credential off the public box. Granted to `tag:vps` alone: the owner reads the
+# public name like everyone else, and the reader's password is the only login.
+resource "tailscale_service" "recovery" {
+  count = var.tailnet == "" ? 0 : 1
+
+  name  = "svc:recovery"
   ports = ["tcp:443"]
 }

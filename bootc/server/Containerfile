@@ -69,6 +69,8 @@ ARG AGE_VERSION
 ARG AGE_SHA256
 ARG RESTIC_VERSION
 ARG RESTIC_SHA256
+ARG BACKREST_VERSION
+ARG BACKREST_SHA256
 
 # base.name is the tag the build asked for and base.digest is what that tag
 # resolved to, both recorded here because nothing in the repository pins them:
@@ -112,6 +114,7 @@ COPY scripts/storage-layout.sh scripts/zfs-ready.sh scripts/sops-decrypt.sh \
      scripts/deploy-apps.sh scripts/deploy-poll.sh scripts/deploy-heartbeat.sh \
      scripts/agent-config-seed.sh \
      scripts/smortress-password.sh scripts/agent-job.sh scripts/agent-job-personal.sh scripts/agent-job-general.sh scripts/agent-job-provision.sh \
+     scripts/smortress-backrest-watchdog.sh \
      /usr/libexec/smortress-src/
 COPY scripts/deploy/apps/ /usr/libexec/deploy/apps/
 # The shared deploy code (design #939, T2). The receiver and the decisions are
@@ -168,6 +171,12 @@ COPY scripts/secrets-index.py /usr/libexec/secrets-index
 # decides what a shell request may be must be pinned with the OS, not with the
 # agent's own image.
 COPY scripts/agent-shell-bridge.py /usr/libexec/agent-shell-bridge
+# The recovery reader's two programs (SDLC #953): the read-only guard that owns
+# the port, and the config renderer the guard is started through. The binary
+# itself is downloaded above; the image's own jq and python3 are what these run
+# on, which is why the reader needs no container image of its own.
+COPY backrest/container/guard.py /usr/libexec/backrest-guard
+COPY backrest/container/entrypoint.sh /usr/libexec/smortress-backrest-entrypoint
 # The base ships %sudo ALL=(ALL) NOPASSWD: ALL in /etc/sudoers.d/coreos-sudo-group.
 # A NOPASSWD line reaches authsucc without consulting pam_authenticate, so the
 # touch, the password fallback and the faillock tally all stop applying: the
@@ -181,7 +190,8 @@ RUN set -eux; \
     rm -rf /usr/libexec/smortress-src; \
     ln -sf /usr/libexec/smortress-deploy /usr/bin/smortress-deploy; \
     ln -sf /usr/libexec/smortress-restic-progress /usr/bin/smortress-restic-progress; \
-    chmod 0755 /usr/libexec/apps-schema /usr/libexec/secrets-index /usr/libexec/agent-shell-bridge; \
+    chmod 0755 /usr/libexec/apps-schema /usr/libexec/secrets-index /usr/libexec/agent-shell-bridge \
+      /usr/libexec/backrest-guard /usr/libexec/smortress-backrest-entrypoint; \
     chmod 0644 /usr/share/smortress/secrets.index.json; \
     chmod 0644 /etc/pki/containers/smortress.pub /usr/share/smortress/secrets.manifest; \
     chmod 0600 /etc/smortress/secrets/*.json; \
@@ -226,7 +236,12 @@ RUN set -eux; \
     echo "${RESTIC_SHA256}  /tmp/restic.bz2" | sha256sum -c -; \
     bzip2 -dc /tmp/restic.bz2 > /usr/bin/restic; \
     chmod 0755 /usr/bin/restic; \
-    rm -rf /tmp/sops /tmp/age /tmp/age.tar.gz /tmp/restic.bz2
+    curl -fsSLo /tmp/backrest.tar.gz \
+      "https://github.com/garethgeorge/backrest/releases/download/v${BACKREST_VERSION}/backrest_Linux_x86_64.tar.gz"; \
+    echo "${BACKREST_SHA256}  /tmp/backrest.tar.gz" | sha256sum -c -; \
+    tar -xzf /tmp/backrest.tar.gz -C /tmp backrest; \
+    install -m 0755 /tmp/backrest /usr/libexec/smortress-backrest; \
+    rm -rf /tmp/sops /tmp/age /tmp/age.tar.gz /tmp/restic.bz2 /tmp/backrest /tmp/backrest.tar.gz
 
 # bootc images enable units with systemctl at build time. rpm-ostree and zincati
 # automatic updates are masked: a deployment change lands in a maintenance
@@ -278,6 +293,8 @@ RUN set -eux; \
       smortress-apps-egress.service \
       smortress-app-ingress-reconcile.service \
       smortress-tailscale-serve.service \
+      smortress-backrest.service \
+      smortress-backrest-watchdog.timer \
       smortress-deploy-listener.service \
       smortress-deploy.path \
       smortress-boot-gate.service \

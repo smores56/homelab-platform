@@ -1,11 +1,13 @@
 #!/usr/bin/env bats
 # bats file_tags=backrest
-# Offline shape tests for the hosted Backrest reader (#707).
+# Offline shape tests for the recovery reader (#707, hosted on smortress by
+# SDLC #953).
 #
-# The gate needs a Cloudflare account, restic and hours of streaming; this checks
-# the half that does not: the deployment config, the pinned image, the read-only
-# surface, the redaction and verified-only rules, and that no secret or
-# falling-open default is committed.
+# The gate needs restic, a browser and hours of streaming; this checks the half
+# that does not: the reader's smortress unit and its pinned binary, the watchdog
+# that moved with it, the edge's route to the tailnet and the absence of any
+# restic or R2 credential there, the read-only surface, the redaction and
+# verified-only rules, and that no secret or falling-open default is committed.
 #
 #   bats tests/backrest/check.bats
 #
@@ -21,6 +23,12 @@ wire=$dir/src/wire.ts
 entry=$dir/container/entrypoint.sh
 gate=$dir/scripts/gate.sh
 deploy=$dir/scripts/deploy.sh
+reader=units/systemd/smortress-backrest.service
+watchdog_unit=units/systemd/smortress-backrest-watchdog.service
+watchdog_timer=units/systemd/smortress-backrest-watchdog.timer
+watchdog=scripts/smortress-backrest-watchdog.sh
+serve=scripts/tailscale-serve.sh
+edge_caddyfile=bootc/edge/rootfs/usr/share/smoresnet/Caddyfile
 
 # has <needle> <file>: the file must carry the literal text.
 has() {
@@ -43,7 +51,8 @@ exists() { # file
 }
 
 for f in "$index" "$entry" "$gate" "$deploy" "$dir/wrangler.json" "$dir/package.json" \
-    "$dir/container/Dockerfile"; do
+    "$dir/container/Dockerfile" "$dir/container/guard.py" "$reader" "$watchdog_unit" \
+    "$watchdog_timer" "$watchdog"; do
     register "exists: $f" exists "$f"
 done
 
@@ -73,6 +82,24 @@ done
 
 @test "the edge serves recovery.sammohr.dev" {
     has "recovery.sammohr.dev {" provision/edge/Caddyfile
+}
+
+# The reader is on smortress (SDLC #953), so the third name is a tailnet proxy
+# like the other two and the edge keeps no process and no credential for it.
+@test "the edge proxies the reader to the tailnet, not to loopback" {
+    for caddyfile in provision/edge/Caddyfile "$edge_caddyfile"; do
+        has 'reverse_proxy {$RECOVERY_UPSTREAM}' "$caddyfile"
+        hasnt '127.0.0.1:9898' "$caddyfile"
+    done
+}
+
+@test "the bootstrap derives the reader's Service upstream" {
+    has 'RECOVERY_UPSTREAM=https://recovery.$tailnet_domain' provision/edge/bootstrap.sh
+    has 'RECOVERY_UPSTREAM=$RECOVERY_UPSTREAM' provision/edge/bootstrap.sh
+}
+
+@test "the verify refuses a box with no reader upstream" {
+    has 'RECOVERY_UPSTREAM' provision/edge/verify.sh
 }
 
 @test "repository location is not a checked-in default" {
@@ -111,12 +138,23 @@ done
     has 'unset RESTIC_PASSWORD R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY' "$entry"
 }
 
-@test "entrypoint uses the bundled restic" {
-    has 'BACKREST_RESTIC_COMMAND=/bin/restic' "$entry"
+# The renderer serves two callers with one set of rules; the defaults are the
+# host's, so a host that forgets to override them cannot publish the port.
+@test "entrypoint defaults to the host's restic" {
+    has ': "${BACKREST_RESTIC:=/usr/bin/restic}"' "$entry"
 }
 
-@test "entrypoint binds the container port" {
-    has 'BACKREST_PORT=0.0.0.0:9898' "$entry"
+@test "entrypoint defaults to a loopback bind" {
+    has ': "${BACKREST_BIND:=127.0.0.1:9899}"' "$entry"
+}
+
+@test "entrypoint keeps state out of the image's paths by default" {
+    has ': "${BACKREST_DATA:=/var/lib/backrest/data}"' "$entry"
+}
+
+@test "the container image keeps its ephemeral paths" {
+    has 'BACKREST_DATA=/data' "$dir/container/Dockerfile"
+    has 'BACKREST_RESTIC=/bin/restic' "$dir/container/Dockerfile"
 }
 
 # --- read-only recovery reader ----------------------------------------------
@@ -386,6 +424,103 @@ done
 
 @test "secrets never travel in argv" {
     has 'url.cfg' "$gate"
+}
+
+# --- where the reader runs now: smortress (SDLC #953) ------------------------
+# The corpus-read credential may not live on the public edge, so the reader, its
+# guard and its watchdog are a smortress unit and the edge keeps only the route.
+
+@test "the reader is a smortress unit that starts the guard, not Backrest" {
+    has 'ExecStart=/usr/libexec/smortress-backrest-entrypoint /usr/libexec/backrest-guard' "$reader"
+    has 'Environment=BACKREST_BIN=/usr/libexec/smortress-backrest' "$reader"
+}
+
+@test "the reader's credential is the operator's file, never the unit" {
+    has 'EnvironmentFile=/etc/backrest/env' "$reader"
+    hasnt 'RESTIC_PASSWORD' "$reader"
+    hasnt 'R2_ACCESS_KEY_ID' "$reader"
+    hasnt 'R2_SECRET_ACCESS_KEY' "$reader"
+}
+
+@test "the reader's two ports are loopback" {
+    has 'Environment=BACKREST_GUARD_ADDR=127.0.0.1:9898' "$reader"
+    has 'Environment=BACKREST_UPSTREAM_ADDR=127.0.0.1:9899' "$reader"
+}
+
+@test "the reader is restarted and its index lives outside any recovery group" {
+    has 'Restart=always' "$reader"
+    has 'StateDirectory=backrest' "$reader"
+    has 'StateDirectoryMode=0700' "$reader"
+}
+
+# A reader that cannot start must not roll back an image that deployed cleanly.
+@test "the reader is not in the deploy gate's serving list" {
+    ! grep -qxF 'smortress-backrest.service' bootc/server/rootfs/usr/share/smortress/deploy-units.txt
+}
+
+@test "the image installs the reader, its guard, its renderer and its units" {
+    has 'backrest/container/guard.py /usr/libexec/backrest-guard' bootc/server/Containerfile
+    has 'backrest/container/entrypoint.sh /usr/libexec/smortress-backrest-entrypoint' \
+        bootc/server/Containerfile
+    has 'backrest_Linux_x86_64.tar.gz' bootc/server/Containerfile
+    has 'smortress-backrest.service' bootc/server/Containerfile
+    has 'smortress-backrest-watchdog.timer' bootc/server/Containerfile
+}
+
+@test "the backrest binary is hash-pinned in the pins table" {
+    run bash -c '. bootc/lib/pins.env
+        printf "%s\n%s\n" "$BACKREST_VERSION" "$BACKREST_SHA256"'
+    assert_success
+    assert_regex "${lines[0]}" '^[0-9]+\.[0-9]+\.[0-9]+$'
+    assert_regex "${lines[1]}" '^[0-9a-f]{64}$'
+    has 'download/v${BACKREST_VERSION}/backrest_Linux_x86_64.tar.gz' bootc/server/Containerfile
+    has '${BACKREST_SHA256}' bootc/server/Containerfile
+}
+
+@test "the watchdog moved with the reader and restarts that unit" {
+    has 'systemctl restart "$unit"' "$watchdog"
+    has 'smortress-backrest.service' "$watchdog"
+    has 'ExecStart=/usr/libexec/smortress-backrest-watchdog' "$watchdog_unit"
+    has 'ConditionPathExists=/etc/backrest/env' "$watchdog_unit"
+    has 'OnUnitActiveSec=5min' "$watchdog_timer"
+    run test -e provision/edge/backrest-watchdog.sh
+    assert_failure
+}
+
+@test "the watchdog is a shell script the gate can parse" {
+    bash -n "$watchdog"
+}
+
+@test "the reader is advertised as a Service the edge is granted" {
+    has 'serve --bg --service=svc:recovery --https=443 http://127.0.0.1:9898' "$serve"
+    has 'resource "tailscale_service" "recovery"' tofu/tailscale.tf
+    has 'name  = "svc:recovery"' tofu/tailscale.tf
+    has 'dst = ["svc:recovery"]' tofu/tailscale.tf
+    has '"svc:recovery"  = ["tag:smortress"]' tofu/tailscale.tf
+}
+
+# The edge is a public box: no restic password, no R2 key pair, no reader. The
+# scan covers the image's own tree, the break-glass bootstrap and its Caddyfile,
+# because a credential reintroduced in either place is the same downgrade.
+@test "the edge image and its /etc carry no restic or R2 credential" {
+    hits=$(grep -rInE 'RESTIC_PASSWORD|R2_(ACCESS|SECRET)_ACCESS_KEY|AWS_(ACCESS|SECRET)_ACCESS_KEY|restic-password|r2-credentials' \
+        bootc/edge provision/edge || true)
+    if [[ -n $hits ]]; then
+        printf '%s\n' "$hits" >&2
+        return 1
+    fi
+}
+
+# The other half of the same claim: nothing on the box runs a reader. A route to
+# a tailnet Service cannot read a repository, so the process and its config
+# directory are as much of the credential's old home as the key was.
+@test "the edge runs no reader of its own" {
+    hits=$(grep -rInE 'backrest\.(service|container)|/etc/backrest|/usr/local/bin/backrest|/etc/containers/systemd/backrest' \
+        bootc/edge provision/edge || true)
+    if [[ -n $hits ]]; then
+        printf '%s\n' "$hits" >&2
+        return 1
+    fi
 }
 
 # --- deterministic toolchain -------------------------------------------------

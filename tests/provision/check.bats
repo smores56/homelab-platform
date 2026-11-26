@@ -179,6 +179,33 @@ setup_file() {
     has 'reverse_proxy {$OPDS_UPSTREAM}' "$edge/Caddyfile"
 }
 
+# The reader runs on smortress (SDLC #953), so all three names are tailnet
+# proxies and the bootstrap writes the third upstream into the same environment
+# file Caddy substitutes from.
+@test "the edge proxies the reader to a Service upstream" {
+    has 'reverse_proxy {$RECOVERY_UPSTREAM}' "$edge/Caddyfile"
+    has 'RECOVERY_UPSTREAM=https://recovery.$tailnet_domain' "$edge/bootstrap.sh"
+    has 'RECOVERY_UPSTREAM=$RECOVERY_UPSTREAM' "$edge/bootstrap.sh"
+}
+
+@test "the verify refuses a box with no reader upstream" {
+    has ': "${RECOVERY_UPSTREAM:?/etc/caddy/edge.env has no RECOVERY_UPSTREAM}"' "$edge/verify.sh"
+}
+
+@test "the verify proves the reader is a Service, not a loopback process" {
+    has 'grep -qF "reverse_proxy {\$RECOVERY_UPSTREAM}" /etc/caddy/Caddyfile' "$edge/verify.sh"
+    has 'no reader listens on this box' "$edge/verify.sh"
+}
+
+# The watchdog moved with the reader: neither the script nor the unit it was
+# installed as may survive here, because either one is a reader dependency on the
+# public box.
+@test "the bootstrap installs no reader and no watchdog" {
+    lacks 'backrest-watchdog' "$edge/bootstrap.sh"
+    lacks 'backrest.service' "$edge/bootstrap.sh"
+    [ ! -e "$edge/backrest-watchdog.sh" ]
+}
+
 @test "the edge declares no plain HTTP site" {
     no_plain_http_site
 }
