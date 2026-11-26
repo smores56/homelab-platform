@@ -24,7 +24,7 @@ After=network-online.target zfs-ready@state-agent-general.service sops-decrypt.s
 Wants=network-online.target agent-proxy.service
 
 [Container]
-Image=ghcr.io/smores56/homelab-platform/agent-runtime@sha256:9cd8202e19dfe1375ae015f35e11b694bd4df21907819b67844d25caf4650e97
+Image=ghcr.io/smores56/homelab-platform/agent-runtime@sha256:6c6964bf94dd2582dac51fe3d68dc5919df58541fbff68d2d0cf58e710d06ac4
 ContainerName=smortress-agent-general
 Network=agent-general.network
 Exec=gateway run
