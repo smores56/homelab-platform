@@ -1,0 +1,14 @@
+[Unit]
+Description=Hourly, publish the photo library into the personal replica
+
+[Timer]
+# Hourly: a photo is added by an upload at an unpredictable time, the pass is a
+# stat-only walk with hard-linked reuse, and an hour is the staleness a reader can
+# be expected to tolerate. Persistent, because a missed run is a gap.
+OnCalendar=*-*-* *:35:00
+AccuracySec=1m
+Persistent=true
+Unit=smortress-agent-collect-photos.service
+
+[Install]
+WantedBy=timers.target
