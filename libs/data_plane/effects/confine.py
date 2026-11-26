@@ -187,30 +187,66 @@ class ConfinedRoot:
                 raise StaleError(
                     f"{relative!r} is at revision {current!r}, not {base_revision!r}"
                 )
-            self._replace(directory, leaf, data, relative)
+            self._replace(
+                directory,
+                leaf,
+                data,
+                relative,
+                mode=None if info is None else stat.S_IMODE(info.st_mode),
+            )
             return hashlib.sha256(data).hexdigest()
 
     def create(self, relative: object, data: bytes) -> str:
-        """Write a file that must not exist yet."""
+        """Write a file that must not exist yet, without ever replacing one.
+
+        ``os.link`` is the guard, not the ``stat`` above it: a rename has replace
+        semantics, so a file that appeared between the check and the write would
+        be destroyed. A hard link refuses an existing name atomically, and the
+        staged file is then unlinked.
+        """
 
         if len(data) > MAX_FILE_BYTES:
             raise ValidationError(
                 f"{relative!r} is larger than {MAX_FILE_BYTES} bytes"
             )
         with self.parent(relative) as (directory, leaf):
-            if self._stat(directory, leaf, relative) is not None:
-                raise ValidationError(f"{relative!r} already exists")
-            self._replace(directory, leaf, data, relative)
+            temporary = self._stage(directory, data, relative, mode=None)
+            try:
+                try:
+                    os.link(temporary, leaf, src_dir_fd=directory, dst_dir_fd=directory)
+                except FileExistsError as error:
+                    raise ValidationError(f"{relative!r} already exists") from error
+                except OSError as error:
+                    raise ValidationError(
+                        f"{relative!r} cannot be created: {_reason(error)}"
+                    ) from error
+            finally:
+                try:
+                    os.unlink(temporary, dir_fd=directory)
+                except OSError:
+                    pass
+            os.fsync(directory)
             return hashlib.sha256(data).hexdigest()
 
-    def remove(self, relative: object) -> str | None:
-        """Delete the file and return the digest it had, or ``None`` if absent."""
+    def remove(
+        self, relative: object, *, expect_revision: str | None = None
+    ) -> str | None:
+        """Delete the file and return the digest it had, or ``None`` if absent.
+
+        ``expect_revision`` is checked against the bytes the unlink will actually
+        remove, under the same descriptor, so a version written between the
+        caller's read and this call is refused instead of destroyed.
+        """
 
         with self.parent(relative) as (directory, leaf):
             info = self._stat(directory, leaf, relative)
             if info is None:
                 return None
             digest = hashlib.sha256(self._read(directory, leaf, info, relative)).hexdigest()
+            if expect_revision is not None and digest != expect_revision:
+                raise StaleError(
+                    f"{relative!r} is at revision {digest!r}, not {expect_revision!r}"
+                )
             try:
                 os.unlink(leaf, dir_fd=directory)
             except OSError as error:
@@ -322,6 +358,11 @@ class ConfinedRoot:
             ) from error
         try:
             with os.fdopen(handle, "rb") as stream:
+                opened = os.fstat(stream.fileno())
+                if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
+                    raise ValidationError(
+                        f"{relative!r} was replaced between the check and the read"
+                    )
                 data = stream.read(MAX_FILE_BYTES + 1)
         except OSError as error:
             raise ValidationError(
@@ -334,8 +375,18 @@ class ConfinedRoot:
         return data
 
     @staticmethod
-    def _replace(directory: int, leaf: str, data: bytes, relative: object) -> None:
-        temporary = f".{leaf}.tmp-{secrets.token_hex(8)}"
+    def _stage(
+        directory: int, data: bytes, relative: object, *, mode: int | None
+    ) -> str:
+        """Write ``data`` to a new name in ``directory`` and return that name.
+
+        The name is short on purpose: a staging name derived from the leaf would
+        overflow ``NAME_MAX`` for a long-but-legal file name. A mode is applied
+        when replacing a file that already had one, so an edit never quietly
+        strips group or other read from a note the person shares.
+        """
+
+        temporary = f".tmp-{secrets.token_hex(8)}"
         try:
             writer = os.open(
                 temporary,
@@ -352,9 +403,31 @@ class ConfinedRoot:
                 view = memoryview(data)
                 while view:
                     view = view[os.write(writer, view) :]
+                if mode is not None:
+                    os.fchmod(writer, mode)
                 os.fsync(writer)
             finally:
                 os.close(writer)
+        except BaseException:
+            try:
+                os.unlink(temporary, dir_fd=directory)
+            except OSError:
+                pass
+            raise
+        return temporary
+
+    @classmethod
+    def _replace(
+        cls,
+        directory: int,
+        leaf: str,
+        data: bytes,
+        relative: object,
+        *,
+        mode: int | None = None,
+    ) -> None:
+        temporary = cls._stage(directory, data, relative, mode=mode)
+        try:
             os.replace(temporary, leaf, src_dir_fd=directory, dst_dir_fd=directory)
         except BaseException:
             try:

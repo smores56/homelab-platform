@@ -28,9 +28,22 @@ from ..identity import canonical_json
 DIRECTORY = ".data-plane"
 LEDGER = "tombstones.jsonl"
 
-#: A ledger is read whole on every lookup; a file this large is a bug, not a
-#: history, and silently reading it would hide one.
+#: A lookup reads at most this much of the ledger's tail. The newest entry
+#: wins, so an old ledger stays readable instead of failing closed once it grows
+#: past a bound nobody can raise from inside the process.
 MAX_LEDGER_BYTES = 4 << 20
+
+
+def _tail(stream) -> bytes:
+    """The newest entries of a ledger, bounded, without splitting a line."""
+
+    info = os.fstat(stream.fileno())
+    if info.st_size <= MAX_LEDGER_BYTES:
+        return stream.read()
+    stream.seek(info.st_size - MAX_LEDGER_BYTES)
+    raw = stream.read()
+    newline = raw.find(b"\n")
+    return b"" if newline < 0 else raw[newline + 1 :]
 
 
 class TombstoneLog:
@@ -60,6 +73,10 @@ class TombstoneLog:
                 try:
                     os.write(handle, canonical_json(record) + b"\n")
                     os.fsync(handle)
+                    # The directory entry has to be durable too, or a power loss
+                    # can keep the unlink and lose the record that explains it.
+                    os.fsync(directory)
+                    os.fsync(root)
                 finally:
                     os.close(handle)
             finally:
@@ -99,7 +116,7 @@ class TombstoneLog:
                     ) from error
                 try:
                     with os.fdopen(handle, "rb") as stream:
-                        raw = stream.read(MAX_LEDGER_BYTES + 1)
+                        raw = _tail(stream)
                 except OSError as error:
                     raise ValidationError(
                         f"the tombstone ledger {LEDGER} cannot be read: {error.strerror}"
@@ -108,10 +125,6 @@ class TombstoneLog:
                 os.close(directory)
         finally:
             os.close(root)
-        if len(raw) > MAX_LEDGER_BYTES:
-            raise ValidationError(
-                f"the tombstone ledger {LEDGER} is larger than {MAX_LEDGER_BYTES} bytes"
-            )
         found: dict[str, str] | None = None
         for line in raw.splitlines():
             if not line.strip():
@@ -126,6 +139,15 @@ class TombstoneLog:
                 continue
             found = {key: str(value) for key, value in entry.items()}
         return found
+
+    def check(self) -> None:
+        """Fail now if the ledger cannot be written, before an approval is spent."""
+
+        root = self._open_root()
+        try:
+            os.close(self._control_directory(root))
+        finally:
+            os.close(root)
 
     def _open_root(self) -> int:
         try:

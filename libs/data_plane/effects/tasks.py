@@ -37,6 +37,24 @@ _ID_LENGTH = 16
 
 _ALLOWED_CONTROL = frozenset("\t")
 
+#: Every terminator ``str.splitlines`` recognises, longest first. A line's
+#: identity is the text the replica saw, so the rewrite must strip exactly the
+#: terminator the reader stripped; anything else leaves a line that can be read
+#: and never removed.
+_TERMINATORS = (
+    "\r\n",
+    "\n",
+    "\r",
+    "\x0b",
+    "\x0c",
+    "\x1c",
+    "\x1d",
+    "\x1e",
+    "\x85",
+    "\u2028",
+    "\u2029",
+)
+
 
 def _now() -> str:
     return datetime.now(tz=UTC).isoformat(timespec="seconds")
@@ -50,6 +68,17 @@ def _target(line: str) -> str:
     return f"{TARGET_PREFIX}{_digest(line)[:_ID_LENGTH]}"
 
 
+def _without_terminator(raw: str) -> str:
+    for terminator in _TERMINATORS:
+        if raw.endswith(terminator):
+            return raw[: -len(terminator)]
+    return raw
+
+
+def _digest_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
 def _text(data: bytes, name: str) -> str:
     try:
         return data.decode("utf-8")
@@ -58,9 +87,11 @@ def _text(data: bytes, name: str) -> str:
 
 
 def _one_target(operation: NormalizedOperation) -> str:
+    # A create carries one line and that line is the id, so a second target would
+    # be the same id twice and the broker refuses the request before this runs.
     if len(operation.targets) != 1:
         raise ValidationError(
-            f"{SOURCE_ID} writes one task per intent, not {len(operation.targets)}"
+            f"{SOURCE_ID} creates one task per intent, not {len(operation.targets)}"
         )
     return operation.targets[0]
 
@@ -92,6 +123,7 @@ class TasksAdapter:
         self._root = ConfinedRoot(root, label="todo directory")
         self._root.check()
         self._tombstones = TombstoneLog(root, source_id=SOURCE_ID)
+        self._tombstones.check()
 
     def revision(self, target: str) -> str | None:
         found = self._locate(target)
@@ -123,50 +155,76 @@ class TasksAdapter:
     def apply(
         self, operation: NormalizedOperation, idempotency_key: str
     ) -> dict[str, object]:
-        target = _one_target(operation)
+        if not operation.targets:
+            raise ValidationError(f"{SOURCE_ID} needs at least one target")
         effect: dict[str, object] = {
             "source_id": SOURCE_ID,
-            "target": target,
             "capability": operation.capability,
             "idempotency_key": idempotency_key,
         }
         if operation.capability == "create":
+            target = _one_target(operation)
             line = _line(operation)
             if self._locate(target) is not None:
                 raise ValidationError(f"{target} already exists")
             self._append(TODO, line)
-            return {**effect, "revision": _digest(line)}
-        if operation.capability == "delete":
-            found = self._locate(target)
-            if found is None:
-                return {**effect, "revision": None, "deleted": False}
-            name, line = found
-            self._tombstones.declare(
-                target=target,
-                revision=_digest(line),
-                pre_image_sha256=hashlib.sha256(
-                    canonical_json(self._record(name, line))
-                ).hexdigest(),
-                deleted_at=_now(),
-            )
-            removed = self._remove(line)
             return {
                 **effect,
-                "revision": _digest(line),
-                "deleted": removed > 0,
-                "removed": removed,
+                "applied": 1,
+                "results": [
+                    {"target": target, "revision": _digest(line), "deleted": False}
+                ],
             }
+        if operation.capability == "delete":
+            return {**effect, **self._delete(operation)}
         raise ValidationError(
             f"{SOURCE_ID} has no {operation.capability!r} capability"
         )
 
+    def _delete(self, operation: NormalizedOperation) -> dict[str, object]:
+        results: list[dict[str, object]] = []
+        wanted: dict[str, str] = {}
+        for target in operation.targets:
+            found = self._locate(target)
+            if found is None:
+                results.append(
+                    {"target": target, "revision": None, "deleted": False, "removed": 0}
+                )
+                continue
+            name, line = found
+            self._tombstones.declare(
+                target=target,
+                revision=_digest(line),
+                pre_image_sha256=_digest_bytes(
+                    canonical_json(self._record(name, line))
+                ),
+                deleted_at=_now(),
+            )
+            wanted[line] = target
+            results.append(
+                {
+                    "target": target,
+                    "revision": _digest(line),
+                    "deleted": True,
+                    "removed": 0,
+                }
+            )
+        if not wanted:
+            return {"applied": 0, "results": results}
+        counts = self._remove(set(wanted))
+        for result in results:
+            line = next(
+                (item for item, target in wanted.items() if target == result["target"]),
+                None,
+            )
+            if line is not None:
+                result["removed"] = counts.get(line, 0)
+                result["deleted"] = result["removed"] > 0
+        return {"applied": sum(int(item["removed"]) for item in results), "results": results}
+
     def _append(self, name: str, line: str) -> None:
         snapshot = self._root.read_optional(name)
-        base = (
-            None
-            if snapshot is None
-            else hashlib.sha256(snapshot.data).hexdigest()
-        )
+        base = None if snapshot is None else _digest_bytes(snapshot.data)
         body = b"" if snapshot is None else snapshot.data
         if body and not body.endswith(b"\n"):
             body += b"\n"
@@ -174,30 +232,59 @@ class TasksAdapter:
             name, body + line.encode("utf-8") + b"\n", base_revision=base
         )
 
-    def _remove(self, line: str) -> int:
-        removed = 0
+    def _remove(self, wanted: set[str]) -> dict[str, int]:
+        counts = {line: 0 for line in wanted}
+        rewrites: list[tuple[str, bytes, str, bytes]] = []
         for name in FILES:
             snapshot = self._root.read_optional(name)
             if snapshot is None:
                 continue
             kept: list[str] = []
-            count = 0
+            touched = 0
             for raw in _text(snapshot.data, name).splitlines(keepends=True):
-                if raw.rstrip("\r\n") == line:
-                    count += 1
+                line = _without_terminator(raw)
+                if line in wanted:
+                    counts[line] += 1
+                    touched += 1
                     continue
                 kept.append(raw)
-            if not count:
-                continue
-            removed += count
-            self._root.write(
-                name,
-                "".join(kept).encode("utf-8"),
-                base_revision=hashlib.sha256(snapshot.data).hexdigest(),
-            )
-        if not removed:
-            raise StaleError(f"task {line!r} is gone")
-        return removed
+            if touched:
+                rewrites.append(
+                    (
+                        name,
+                        snapshot.data,
+                        _digest_bytes(snapshot.data),
+                        "".join(kept).encode("utf-8"),
+                    )
+                )
+        if not rewrites:
+            raise StaleError(f"no occurrence of {sorted(wanted)!r} is left")
+        # Both base revisions are checked before either file is written, and a
+        # failure between the two writes restores the first: the pair is not
+        # one atomic unit on this filesystem, so the smallest possible window and
+        # a rollback are the honest guarantee.
+        for name, _, base, _ in rewrites:
+            if self._root.revision(name) != base:
+                raise StaleError(f"{name} moved before the rewrite")
+        written: list[tuple[str, str, bytes]] = []
+        try:
+            for name, _, base, body in rewrites:
+                self._root.write(name, body, base_revision=base)
+                written.append((name, _digest_bytes(body), body))
+        except BaseException:
+            for name, original, _, _ in rewrites[: len(written)]:
+                try:
+                    self._root.write(
+                        name,
+                        original,
+                        base_revision=next(
+                            base for written_name, base, _ in written if written_name == name
+                        ),
+                    )
+                except (ValidationError, StaleError):
+                    pass
+            raise
+        return counts
 
     def _lines(self, name: str) -> list[str]:
         snapshot = self._root.read_optional(name)

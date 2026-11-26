@@ -56,14 +56,6 @@ def _decode(snapshot: Snapshot, relative: str) -> str:
         raise ValidationError(f"{relative!r} is not valid UTF-8") from error
 
 
-def _one_target(operation: NormalizedOperation) -> str:
-    if len(operation.targets) != 1:
-        raise ValidationError(
-            f"{SOURCE_ID} writes one note per intent, not {len(operation.targets)}"
-        )
-    return operation.targets[0]
-
-
 def _body(operation: NormalizedOperation) -> str:
     changes = {change.field: change.after for change in operation.field_diff}
     if set(changes) != set(_WRITABLE):
@@ -83,6 +75,7 @@ class NotesAdapter:
         self._root = ConfinedRoot(root, label="vault", suffix=".md")
         self._root.check()
         self._tombstones = TombstoneLog(root, source_id=SOURCE_ID)
+        self._tombstones.check()
 
     def revision(self, target: str) -> str | None:
         return self._root.revision(self._relative(target))
@@ -117,14 +110,23 @@ class NotesAdapter:
     def apply(
         self, operation: NormalizedOperation, idempotency_key: str
     ) -> dict[str, object]:
-        target = _one_target(operation)
-        relative = self._relative(target)
-        effect: dict[str, object] = {
+        if not operation.targets:
+            raise ValidationError(f"{SOURCE_ID} needs at least one target")
+        results = [
+            self._apply_one(operation, target) for target in operation.targets
+        ]
+        return {
             "source_id": SOURCE_ID,
-            "target": target,
             "capability": operation.capability,
             "idempotency_key": idempotency_key,
+            "applied": len(results),
+            "results": results,
         }
+
+    def _apply_one(
+        self, operation: NormalizedOperation, target: str
+    ) -> dict[str, object]:
+        relative = self._relative(target)
         if operation.capability == "create":
             data = _encode(_body(operation), relative)
             try:
@@ -137,15 +139,15 @@ class NotesAdapter:
                 if snapshot is None or snapshot.data != data:
                     raise
                 revision = hashlib.sha256(data).hexdigest()
-            return {**effect, "revision": revision}
+            return {"target": target, "revision": revision, "deleted": False}
         if operation.capability == "update":
             data = _encode(_body(operation), relative)
             revision = self._root.write(
                 relative, data, base_revision=operation.base_revision, must_exist=True
             )
-            return {**effect, "revision": revision}
+            return {"target": target, "revision": revision, "deleted": False}
         if operation.capability == "delete":
-            return {**effect, **self._delete(target, relative)}
+            return self._delete(target, relative)
         raise ValidationError(
             f"{SOURCE_ID} has no {operation.capability!r} capability"
         )
@@ -153,7 +155,7 @@ class NotesAdapter:
     def _delete(self, target: str, relative: str) -> dict[str, object]:
         snapshot = self._root.read_optional(relative)
         if snapshot is None:
-            return {"revision": None, "deleted": False}
+            return {"target": target, "revision": None, "deleted": False}
         revision = hashlib.sha256(snapshot.data).hexdigest()
         self._tombstones.declare(
             target=target,
@@ -163,8 +165,12 @@ class NotesAdapter:
             ).hexdigest(),
             deleted_at=_now(),
         )
-        removed = self._root.remove(relative)
-        return {"revision": revision, "deleted": removed is not None, "removed": removed}
+        removed = self._root.remove(relative, expect_revision=revision)
+        return {
+            "target": target,
+            "revision": revision,
+            "deleted": removed is not None,
+        }
 
     def _record(
         self, target: str, relative: str, snapshot: Snapshot

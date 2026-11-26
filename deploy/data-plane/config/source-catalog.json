@@ -132,9 +132,7 @@
         {"name": "delete", "effect": "delete", "requires_confirmation": true, "reversible": false, "description": "Parks for human confirmation and leaves a tombstone before unlinking."}
       ],
       "authority": [
-        {"field": "body", "authority": "portable_file", "exportable": true, "note": "The file's text is authoritative."},
-        {"field": "path", "authority": "portable_file", "exportable": true, "note": "The vault-relative path is the identity."},
-        {"field": "heading", "authority": "portable_file", "exportable": true, "note": "Derived from the body; never written."}
+        {"field": "body", "authority": "portable_file", "exportable": true, "note": "Only the body is writable; heading and updated_at are derived from it."}
       ],
       "fidelity_limits": [
         {"field": "remote_embeds", "reason": "Remote images and embeds are never fetched; only their text remains."},

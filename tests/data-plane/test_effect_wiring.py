@@ -17,9 +17,10 @@ for candidate in (str(ROOT), str(ROOT / "libs")):
     if candidate not in sys.path:
         sys.path.insert(0, candidate)
 
-from apps.data_plane import run  # noqa: E402
 from data_plane.effects import NotesAdapter, TasksAdapter  # noqa: E402
 from data_plane.errors import ValidationError  # noqa: E402
+
+from apps.data_plane import run
 
 CATALOG = ROOT / "deploy" / "data-plane" / "config" / "source-catalog.json"
 
@@ -34,6 +35,10 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(notes.tombstone_field, "tombstone")
         self.assertTrue(notes.capability("delete").requires_confirmation)
         self.assertTrue(notes.capability("update").reversible)
+        # Only the body is writable, so a request that changes any other field is
+        # refused at propose instead of reaching the adapter and being recorded
+        # as an effect of unknown outcome.
+        self.assertEqual([item.field for item in notes.authority], ["body"])
 
     def test_the_shipped_catalog_declares_the_tasks_owner(self) -> None:
         tasks = self.sources["tasks.todo"]

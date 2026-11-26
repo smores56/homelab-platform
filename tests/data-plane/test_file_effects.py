@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import stat
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,6 +17,7 @@ from pathlib import Path
 from data_plane.broker import MAX_FIELD_BYTES, Broker, WriteRequest
 from data_plane.broker_journal import BrokerJournal
 from data_plane.confirmation import ConfirmationGate, FieldChange
+from data_plane.effects import tombstones
 from data_plane.effects.confine import ConfinedRoot
 from data_plane.effects.notes import NotesAdapter
 from data_plane.effects.tasks import TasksAdapter
@@ -70,6 +72,32 @@ def notes_contract() -> SourceContract:
         ),
         authority=(
             FieldAuthority(field="body", authority=Authority.PORTABLE_FILE),
+        ),
+    )
+
+
+def tasks_contract() -> SourceContract:
+    return SourceContract(
+        source_id="tasks.todo",
+        visibility=Visibility.PERSONAL,
+        version=1,
+        recovery_group="notes",
+        stable_id_fields=("task_id",),
+        revision_field="revision",
+        tombstone_field="tombstone",
+        capabilities=(
+            Capability(name="read", effect=EffectClass.READ),
+            Capability(name="search", effect=EffectClass.SEARCH),
+            Capability(name="create", effect=EffectClass.CREATE, reversible=True),
+            Capability(
+                name="delete",
+                effect=EffectClass.DELETE,
+                reversible=False,
+                requires_confirmation=True,
+            ),
+        ),
+        authority=(
+            FieldAuthority(field="text", authority=Authority.PORTABLE_FILE),
         ),
     )
 
@@ -232,6 +260,23 @@ class TombstoneLogTests(TreeTest):
         self.assertEqual(entry["revision"], "r1")
 
 
+
+    def test_an_old_ledger_stays_readable_past_the_bound(self) -> None:
+        log = TombstoneLog(self.root, source_id=SOURCE_ID)
+        log.declare(
+            target="notes::old.md", revision="r1", pre_image_sha256="a", deleted_at="t1"
+        )
+        ledger = self.root / ".data-plane" / "tombstones.jsonl"
+        filler = b'{"target":"notes::filler.md","revision":"r"}\n'
+        with ledger.open("ab") as handle:
+            handle.write(filler * (tombstones.MAX_LEDGER_BYTES // len(filler) + 1))
+        log.declare(
+            target="notes::new.md", revision="r2", pre_image_sha256="b", deleted_at="t2"
+        )
+        entry = log.lookup("notes::new.md")
+        assert entry is not None
+        self.assertEqual(entry["revision"], "r2")
+
 class NotesAdapterTests(TreeTest):
     def setUp(self) -> None:
         super().setUp()
@@ -241,11 +286,12 @@ class NotesAdapterTests(TreeTest):
     def apply(self, capability: str, **values: object) -> dict:
         from data_plane.confirmation import NormalizedOperation
 
+        target = str(values.pop("target", self.target))
         operation = NormalizedOperation(
             intent_id="intent-1",
             source_id=SOURCE_ID,
             capability=capability,
-            targets=(self.target,),
+            targets=(target,),
             base_revision=values.get("base_revision"),  # type: ignore[arg-type]
             field_diff=tuple(
                 FieldChange(field=name, before=None, after=value)
@@ -328,6 +374,37 @@ class NotesAdapterTests(TreeTest):
         with self.assertRaises(ValidationError):
             self.adapter.read("notes::%2E%2E%2Fsecret.md")
 
+
+    def test_an_update_keeps_the_mode_of_the_file(self) -> None:
+        self.write("index.md", "first")
+        os.chmod(self.root / "index.md", 0o664)
+        self.apply("update", body="second", base_revision=digest(b"first"))
+        self.assertEqual(
+            stat.S_IMODE((self.root / "index.md").stat().st_mode), 0o664
+        )
+
+    def test_a_long_but_legal_name_can_be_updated(self) -> None:
+        name = "n" * 240 + ".md"
+        self.write(name, "first")
+        target = f"notes::{name}"
+        self.apply("update", body="second", base_revision=digest(b"first"), target=target)
+        self.assertEqual((self.root / name).read_text(), "second")
+
+    def test_a_delete_refuses_a_version_that_arrived_after_the_read(self) -> None:
+        self.apply("create", body="v1")
+        revision = self.adapter.revision(self.target)
+        path = self.root / "index.md"
+        declare = self.adapter._tombstones.declare
+
+        def arrive(**values: object) -> dict:
+            path.write_text("v2 worth keeping", encoding="utf-8")
+            return declare(**values)  # type: ignore[arg-type]
+
+        self.adapter._tombstones.declare = arrive  # type: ignore[method-assign]
+        with self.assertRaises(StaleError):
+            self.apply("delete", base_revision=revision)
+        self.assertEqual(path.read_text(), "v2 worth keeping")
+
     def test_search_finds_body_and_heading_and_skips_the_ledger(self) -> None:
         self.apply("create", body="# Espresso\n\nwater and beans\n")
         self.write("sub/other.md", "nothing here")
@@ -395,7 +472,7 @@ class BrokerFileEffectTests(TreeTest):
         write = self.update()
         self.broker.propose(claims, write)
         effect = self.broker.apply(claims, write)
-        self.assertEqual(effect["target"], "notes::index.md")
+        self.assertEqual(effect["results"][0]["target"], "notes::index.md")
         self.assertEqual((self.root / "index.md").read_text(), "# Second\n")
         self.assertEqual(self.events[0]["capability"], "update")
 
@@ -476,11 +553,12 @@ class TasksAdapterTests(TreeTest):
     def apply(self, capability: str, **values: object) -> dict:
         from data_plane.confirmation import NormalizedOperation
 
+        target = str(values.pop("target", self.target))
         operation = NormalizedOperation(
             intent_id="intent-1",
             source_id="tasks.todo",
             capability=capability,
-            targets=(self.target,),
+            targets=(target,),
             base_revision=values.get("base_revision"),  # type: ignore[arg-type]
             field_diff=tuple(
                 FieldChange(field=name, before=None, after=value)
@@ -525,7 +603,7 @@ class TasksAdapterTests(TreeTest):
         self.write("todo.txt", self.line + "\nkeep me\n" + self.line + "\n")
         self.write("done.txt", self.line + "\n")
         effect = self.apply("delete", base_revision=digest(self.line.encode()))
-        self.assertEqual(effect["removed"], 3)
+        self.assertEqual(effect["results"][0]["removed"], 3)
         self.assertEqual((self.root / "todo.txt").read_text(), "keep me\n")
         self.assertEqual((self.root / "done.txt").read_text(), "")
         self.assertTrue(self.adapter.read(self.target)["tombstone"])
@@ -551,9 +629,36 @@ class TasksAdapterTests(TreeTest):
 
     def test_a_target_that_is_not_a_digest_is_refused(self) -> None:
         for target in ("tasks::zz", "tasks::" + "0" * 15, "done::" + "0" * 16):
-            with self.subTest(target=target):
-                with self.assertRaises(ValidationError):
-                    self.adapter.read(target)
+            with self.subTest(target=target), self.assertRaises(ValidationError):
+                self.adapter.read(target)
+
+
+    def test_a_line_terminated_by_a_form_feed_is_still_removed(self) -> None:
+        (self.root / "todo.txt").write_bytes(b"foo\x0b\nkeep\n")
+        target = f"tasks::{digest(b'foo')[:16]}"
+        effect = self.apply("delete", base_revision=digest(b"foo"), target=target)
+        self.assertEqual(effect["results"][0]["removed"], 1)
+        self.assertNotIn(b"foo", (self.root / "todo.txt").read_bytes())
+        self.assertIn(b"keep", (self.root / "todo.txt").read_bytes())
+
+    def test_a_failed_second_write_restores_the_first_file(self) -> None:
+        self.write("todo.txt", self.line + "\n")
+        self.write("done.txt", self.line + "\n")
+        root = self.adapter._root
+        real = root.write
+        failures = {"done.txt": 1}
+
+        def flaky(name, data, *, base_revision, must_exist=False):
+            if failures.get(name):
+                failures[name] = 0
+                raise StaleError("simulated loss between the two writes")
+            return real(name, data, base_revision=base_revision, must_exist=must_exist)
+
+        root.write = flaky  # type: ignore[method-assign]
+        with self.assertRaises(StaleError):
+            self.apply("delete", base_revision=digest(self.line.encode()))
+        self.assertEqual((self.root / "todo.txt").read_text(), self.line + "\n")
+        self.assertEqual((self.root / "done.txt").read_text(), self.line + "\n")
 
     def test_search_finds_and_dedupes_across_both_files(self) -> None:
         self.write("todo.txt", self.line + "\n")
@@ -561,6 +666,78 @@ class TasksAdapterTests(TreeTest):
         found = self.adapter.search("milk")
         self.assertEqual([record["task_id"] for record in found], [self.target])
         self.assertEqual(len(self.adapter.search("thing")), 1)
+
+
+class BrokerTasksEffectTests(TreeTest):
+    """The tasks adapter through the real broker, not just at its own seam."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.journal = tempfile.TemporaryDirectory()
+        self.contract = tasks_contract()
+        self.sources = {"tasks.todo": self.contract}
+        self.adapter = TasksAdapter(self.root)
+        self.issuer = IdentityIssuer(self.sources, KEY, clock=lambda: NOW)
+        self.gate = ConfirmationGate(ttl_seconds=60, clock=lambda: NOW)
+        self.store = IntentStore(Path(self.journal.name) / "intents.db", clock=lambda: NOW)
+        self.broker = Broker(
+            self.sources,
+            {"tasks.todo": self.adapter},
+            self.issuer,
+            self.gate,
+            BrokerJournal(self.store),
+            _Recorder([]),
+            clock=lambda: NOW,
+        )
+        self.line = "buy milk"
+        self.target = f"tasks::{digest(self.line.encode())[:16]}"
+
+    def tearDown(self) -> None:
+        self.store.close()
+        self.journal.cleanup()
+        super().tearDown()
+
+    def claims(self, capability: str):
+        return self.issuer.verify(
+            self.issuer.issue(LOCAL_PROFILE, "agent", (("tasks.todo", capability),))
+        )
+
+    def test_a_routine_create_appends_and_read_back_proves_it(self) -> None:
+        claims = self.claims("create")
+        write = WriteRequest(
+            source_id="tasks.todo",
+            capability="create",
+            targets=(self.target,),
+            idempotency_key="task-create-1",
+            field_diff=(FieldChange(field="text", before=None, after=self.line),),
+            base_revision=None,
+            run_id="run-1",
+        )
+        self.broker.propose(claims, write)
+        self.broker.apply(claims, write)
+        self.assertEqual((self.root / "todo.txt").read_text(), self.line + "\n")
+
+    def test_a_delete_parks_for_confirmation_then_leaves_a_tombstone(self) -> None:
+        (self.root / "todo.txt").write_text(self.line + "\n", encoding="utf-8")
+        claims = self.claims("delete")
+        write = WriteRequest(
+            source_id="tasks.todo",
+            capability="delete",
+            targets=(self.target,),
+            idempotency_key="task-delete-1",
+            field_diff=(),
+            base_revision=digest(self.line.encode()),
+            run_id="run-2",
+        )
+        intent, operation = self.broker.propose(claims, write)
+        self.assertEqual(intent.state, IntentState.AWAITING_CONFIRMATION)
+        with self.assertRaises(ConfirmationRequired):
+            self.broker.apply(claims, write)
+        _, token = self.gate.issue(operation, "smores")
+        self.broker.confirm(claims, write, token)
+        self.broker.apply(claims, write)
+        self.assertEqual((self.root / "todo.txt").read_text(), "")
+        self.assertTrue(self.adapter.read(self.target)["tombstone"])
 
 
 class _Recorder:

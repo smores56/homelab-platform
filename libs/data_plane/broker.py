@@ -91,7 +91,11 @@ class SourceAdapter(Protocol):
         """Return the current revision of ``target``, or ``None`` if absent."""
 
     def read(self, target: str) -> dict[str, Any]:
-        """Return one record; an absent target yields an empty mapping."""
+        """Return one record.
+
+        An absent target yields an empty mapping, or, for a source that records
+        its own deletions, a record carrying the contract's tombstone field.
+        """
 
     def search(self, query: str) -> list[dict[str, Any]]:
         """Return records in this source matching ``query``."""
@@ -581,7 +585,15 @@ class Broker:
                     f"field {change.field!r} is human-authoritative; an agent cannot write it"
                 )
             try:
-                size = len(canonical_json(change.after))
+                # A text field is measured as the bytes it becomes on disk; any
+                # other value as its canonical JSON, since that is what the
+                # journal and the approval card hold.
+                payload = (
+                    change.after.encode("utf-8")
+                    if isinstance(change.after, str)
+                    else canonical_json(change.after)
+                )
+                size = len(payload)
             except (TypeError, ValueError) as error:
                 raise ValidationError(
                     f"field {change.field!r} is not JSON"
