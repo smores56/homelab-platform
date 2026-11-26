@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 # bats file_tags=tofu
-# The tofu formatting gate, run the way its check-all group runs it.
+# The tofu formatting gate, run the way its CI area runs it.
 #
 #   bats tests/tofu-fmt.bats
 #

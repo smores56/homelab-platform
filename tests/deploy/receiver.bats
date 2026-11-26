@@ -402,34 +402,52 @@ state_fixture() {
     assert_equal "$code" 202
 }
 
+# A listener with a state directory of its own: the journal cases below count
+# lines the receiver writes, and the file-scoped listener's journal is written by
+# every test that runs beside them.
+quiet_listener() { # -> quiet_base, quiet_state
+    quiet_state=$BATS_TEST_TMPDIR/quiet-state
+    mkdir -p "$quiet_state/queue" "$quiet_state/work"
+    chmod 0700 "$quiet_state" "$quiet_state/queue"
+    quiet_port=$(free_port)
+    start_listener "$quiet_state" "$secrets_dir" "$quiet_port" "$BATS_TEST_TMPDIR/quiet.log"
+    pids+=("$listener_pid")
+    wait_for "$quiet_port" 200 ||
+        fail "the quiet listener never answered: $(tail -n 5 "$BATS_TEST_TMPDIR/quiet.log")"
+    quiet_base=http://127.0.0.1:$quiet_port
+}
+
 @test "a burst of refusals writes only the queued request's line" {
-    journal_before=$(wc -l <"$state_dir/journal.jsonl")
+    quiet_listener
+    journal_before=$(wc -l <"$quiet_state/journal.jsonl" 2>/dev/null || echo 0)
     burst_pids=()
     for _ in $(seq 1 20); do
-        (post "$base" "$accepted" "${secret}wrong" >/dev/null 2>&1) &
+        (post "$quiet_base" "$accepted" "${secret}wrong" >/dev/null 2>&1) &
         burst_pids+=("$!")
     done
     request=$(body homelab-apps "$commit_ok" "$now" "$(nonce)")
-    code=$(post "$base" "$request" "$secret")
+    code=$(post "$quiet_base" "$request" "$secret")
     wait "${burst_pids[@]}" 2>/dev/null || true
     guard "$code" 202 "the valid request was not queued"
     # One line for the request that was queued, nothing for the twenty that were
     # refused: the difference is what an unauthenticated caller can make the
     # receiver write.
-    assert_equal "$(($(wc -l <"$state_dir/journal.jsonl") - journal_before))" 1
+    journal_now=$(wc -l <"$quiet_state/journal.jsonl" 2>/dev/null || echo 0)
+    assert_equal "$((journal_now - journal_before))" 1
 }
 
 @test "a refused signature is never journaled" {
+    quiet_listener
     burst_pids=()
     for _ in $(seq 1 20); do
-        (post "$base" "$accepted" "${secret}wrong" >/dev/null 2>&1) &
+        (post "$quiet_base" "$accepted" "${secret}wrong" >/dev/null 2>&1) &
         burst_pids+=("$!")
     done
     wait "${burst_pids[@]}" 2>/dev/null || true
     rejected=''
     if jq -e 'select(.event == "deploy-rejected" and .reason == "bad-signature")' \
-        "$state_dir/journal.jsonl" >/dev/null 2>&1; then
-        rejected=$(jq -c 'select(.event == "deploy-rejected")' "$state_dir/journal.jsonl" | head -n 3)
+        "$quiet_state/journal.jsonl" >/dev/null 2>&1; then
+        rejected=$(jq -c 'select(.event == "deploy-rejected")' "$quiet_state/journal.jsonl" | head -n 3)
     fi
     assert_equal "$rejected" ""
 }

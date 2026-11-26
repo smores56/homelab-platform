@@ -8,18 +8,25 @@ on:
 
 permissions: read-all
 
+# A hung test must fail its job instead of holding the runner for the whole
+# timeout; the slowest test in the tree is ~12s, the two former monoliths
+# included.
+env:
+  BATS_TEST_TIMEOUT: "120"
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# Every job runs a check-all group, so a command is defined once in
-# scripts/check-all.sh. Job-level setup is only what the group needs to start:
-# a runtime, a pinned tool, or a package the tests shell out to.
+# One job per area: each runs the tests whose `# bats file_tags=` names it,
+# through tests/tags.bats' drift check, so a suite cannot land in no job. Job
+# setup is only what that area needs to start — a runtime, a pinned tool, or a
+# package the tests shell out to.
 jobs:
-  broker:
-    name: broker unit tests
+  core:
+    name: core (gate scripts, Restic plane, Quadlets, Serve)
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
@@ -28,13 +35,13 @@ jobs:
         run: |
           scripts/install-ci-tools.sh "$RUNNER_TEMP/bin"
           echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
-      - name: broker
-        run: scripts/check-all.sh --only broker
+      - name: core
+        run: git ls-files -z 'tests/*.bats' 'tests/*/*.bats' | xargs -0 bats --filter-tags 'core' --jobs "$(nproc)"
 
-  webhook:
-    name: webhook unit tests
+  deploy:
+    name: deploy (receiver, state, gates, apps apply)
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
@@ -43,13 +50,13 @@ jobs:
         run: |
           scripts/install-ci-tools.sh "$RUNNER_TEMP/bin"
           echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
-      - name: webhook
-        run: scripts/check-all.sh --only webhook
+      - name: deploy
+        run: git ls-files -z 'tests/*.bats' 'tests/*/*.bats' | xargs -0 bats --filter-tags 'deploy' --jobs "$(nproc)"
 
-  agent-proxy:
-    name: agent-proxy unit tests
+  apps:
+    name: apps and data plane (python)
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
@@ -58,56 +65,11 @@ jobs:
         run: |
           scripts/install-ci-tools.sh "$RUNNER_TEMP/bin"
           echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
-      - name: agent-proxy
-        run: scripts/check-all.sh --only agent-proxy
+      - name: apps
+        run: git ls-files -z 'tests/*.bats' 'tests/*/*.bats' | xargs -0 bats --filter-tags 'apps||python||data-plane||agent-shell-bridge' --jobs "$(nproc)"
 
-  agent-facade:
-    name: agent-facade unit tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-        with:
-          persist-credentials: false
-      - name: install the pinned test runner
-        run: |
-          scripts/install-ci-tools.sh "$RUNNER_TEMP/bin"
-          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
-      - name: agent-facade
-        run: scripts/check-all.sh --only agent-facade
-
-  agent-shell-bridge:
-    name: agent-shell-bridge unit tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-        with:
-          persist-credentials: false
-      - name: install the pinned test runner
-        run: |
-          scripts/install-ci-tools.sh "$RUNNER_TEMP/bin"
-          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
-      - name: agent-shell-bridge
-        run: scripts/check-all.sh --only agent-shell-bridge
-
-  data-plane:
-    name: data-plane unit tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-        with:
-          persist-credentials: false
-      - name: install the pinned test runner
-        run: |
-          scripts/install-ci-tools.sh "$RUNNER_TEMP/bin"
-          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
-      - name: data-plane
-        run: scripts/check-all.sh --only data-plane
-
-  tuta-calendar:
-    name: tuta-calendar unit tests
+  edge:
+    name: edge, tailnet and egress contracts
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -118,66 +80,15 @@ jobs:
         run: |
           scripts/install-ci-tools.sh "$RUNNER_TEMP/bin"
           echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
-      # gpg is the seal's own runtime and is in the image; the driver builds the
-      # pinned venv from images/tuta-calendar/requirements.lock itself.
-      - name: install gpg
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gnupg
-      - name: tuta-calendar
-        run: scripts/check-all.sh --only tuta-calendar
+      # Stubs only: the edge probes themselves need a public host and a tailnet
+      # node, and verify-public-edge.yml / verify-tailnet-names.yml have them.
+      - name: edge
+        run: git ls-files -z 'tests/*.bats' 'tests/*/*.bats' | xargs -0 bats --filter-tags 'edge||tailnet-names||agent-egress||brave' --jobs "$(nproc)"
 
-  agent-egress:
-    name: agent-egress unit tests
+  image:
+    name: image, ignition, tofu and workflows
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-        with:
-          persist-credentials: false
-      - name: install the pinned test runner
-        run: |
-          scripts/install-ci-tools.sh "$RUNNER_TEMP/bin"
-          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
-      - name: agent-egress
-        run: scripts/check-all.sh --only agent-egress
-
-  brave:
-    name: brave seed and snapshot unit tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-        with:
-          persist-credentials: false
-      - name: install the pinned test runner
-        run: |
-          scripts/install-ci-tools.sh "$RUNNER_TEMP/bin"
-          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
-      - name: brave
-        run: scripts/check-all.sh --only brave
-
-  tailnet-names:
-    name: tailnet names probe contract
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-        with:
-          persist-credentials: false
-      - name: install the pinned test runner
-        run: |
-          scripts/install-ci-tools.sh "$RUNNER_TEMP/bin"
-          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
-      # Stubs only: the probe itself needs a tailnet node, and
-      # verify-tailnet-names.yml is the job that has one.
-      - name: tailnet-names
-        run: scripts/check-all.sh --only tailnet-names
-
-  tofu:
-    name: tofu fmt and validate
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
@@ -186,18 +97,36 @@ jobs:
         run: |
           scripts/install-ci-tools.sh "$RUNNER_TEMP/bin"
           echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
-      - name: validate
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.0.0
+        with:
+          node-version: "22"
+      - name: validate the tofu config
         # No backend and no secrets: validate only needs provider schemas.
         run: |
           tofu -chdir=tofu init -backend=false -input=false
           tofu -chdir=tofu validate
-      - name: tofu-check and tofu-fmt
-        run: scripts/check-all.sh --only tofu-check,tofu-fmt
+      - name: image
+        run: git ls-files -z 'tests/*.bats' 'tests/*/*.bats' | xargs -0 bats --filter-tags 'image||tofu||actionlint' --jobs "$(nproc)"
 
-  backrest:
-    name: backrest reader
+  lint:
+    name: lint, docs and secrets
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      - name: install pinned sops and age
+        run: |
+          scripts/install-ci-tools.sh "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
+      - name: lint
+        run: git ls-files -z 'tests/*.bats' 'tests/*/*.bats' | xargs -0 bats --filter-tags 'lint||docs||secrets' --jobs "$(nproc)"
+
+  tenants:
+    name: tenants (backrest, tuta-calendar, provision)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
@@ -211,68 +140,12 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: backrest/package-lock.json
-      - name: backrest
-        run: scripts/check-all.sh --only backrest
-
-  lint:
-    name: lint (yaml, shell, pins, boundaries)
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-        with:
-          persist-credentials: false
-      - name: install the pinned test runner
+      - name: install gpg for the tuta-calendar suite
         run: |
-          scripts/install-ci-tools.sh "$RUNNER_TEMP/bin"
-          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
-      - name: lint
-        run: scripts/check-all.sh --only lint
-
-  docs:
-    name: documentation references
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-        with:
-          persist-credentials: false
-      - name: install the pinned test runner
-        run: |
-          scripts/install-ci-tools.sh "$RUNNER_TEMP/bin"
-          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
-      - name: references and anchors
-        run: scripts/check-all.sh --only docs
-
-  secrets:
-    name: SOPS policy
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-        with:
-          persist-credentials: false
-      - name: install pinned sops and age
-        run: |
-          scripts/install-ci-tools.sh "$RUNNER_TEMP/bin"
-          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
-      - name: policy and index checks
-        run: scripts/check-all.sh --only secrets
-
-  gates:
-    name: core, apps, deploy, provision
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-        with:
-          persist-credentials: false
-      - name: install the pinned test runner
-        run: |
-          scripts/install-ci-tools.sh "$RUNNER_TEMP/bin"
-          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
-      - name: gates
-        run: scripts/check-all.sh --only provision,core,apps,deploy
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gpg
+      - name: tenants
+        run: git ls-files -z 'tests/*.bats' 'tests/*/*.bats' | xargs -0 bats --filter-tags 'provision||backrest||tuta-calendar' --jobs "$(nproc)"
 
   fork-pr-secret-boundary:
     name: fork-pr-secret-boundary
@@ -292,16 +165,3 @@ jobs:
           test -z "${CLOUDFLARE_API_TOKEN:-}"
       - name: no pull_request workflow references a secret
         run: scripts/check-pr-secret-boundary.sh
-
-  check-all:
-    name: check-all self-test
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-        with:
-          persist-credentials: false
-      # The driver decides which groups a branch runs; a bad selector is a green
-      # run that tested nothing, so its logic carries its own test.
-      - name: run the pre-commit driver self-test
-        run: tests/check-all/check.sh

@@ -17,8 +17,8 @@ load ../helpers
 group=tuta-calendar
 # The exporter's dependencies are the ones the image ships, pinned in the lock
 # file, so the tests run against a venv built from it. The venv is cached beside
-# the other check-all environments and built once per machine, not per run.
-venv=${XDG_CACHE_HOME:-$HOME/.cache}/check-all/tuta-calendar
+# the other suites and built once per machine, not per run.
+venv=${XDG_CACHE_HOME:-$HOME/.cache}/homelab-bats/tuta-calendar
 requirements=images/tuta-calendar/requirements.lock
 
 setup_file() {

@@ -58,5 +58,5 @@ jobs:
           echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
       - name: server-image group
         # The group runs the static checks, both Ignition renders, and the
-        # boundary test. The command lives in scripts/check-all.sh.
-        run: scripts/check-all.sh --only server-image
+        # boundary test. The suites live under tests/image/.
+        run: git ls-files -z 'tests/*.bats' 'tests/*/*.bats' | xargs -0 bats --filter-tags 'image' --jobs "$(nproc)"

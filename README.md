@@ -43,20 +43,22 @@ changes by pull request from a fork, so no PR workflow can read a secret.
 ## Local checks
 
 ```sh
-scripts/check-all.sh                     # every group, in parallel
-scripts/check-all.sh --changed           # only the groups this branch touches
-scripts/check-all.sh --list              # the groups and their commands
+scripts/install-ci-tools.sh ~/.local/bin # bats, GNU parallel, the pinned tools; also fills ~/.local/share/bats
+bats --jobs "$(nproc)" $(git ls-files 'tests/*.bats' 'tests/*/*.bats') # every suite
+tests/tags.sh --changed | xargs -r bats --jobs "$(nproc)"             # only the suites this branch touches
+tests/tags.sh --changed                                              # the suite list alone
 
-scripts/install-ci-tools.sh ~/.local/bin # the pinned binaries the gate and tofu group need
 bats tests/tofu/check.bats               # Cloudflare config shape, no credentials
 bats tests/data-plane/check.bats         # data-plane unit tests, no host
-bats tests/core/*.bats                   # core gate, apps tenant and deploy docs
-bats tests/deploy/*.bats                 # deploy receiver, verification, gates, apps apply, notification
-scripts/render-recovery-groups.py --check # the recovery manifest matches its source
+bats tests/core/                         # core gate, apps tenant, Restic plane, Quadlets
+bats tests/deploy/                       # deploy receiver, verification, gates, apps apply
 ```
 
-`scripts/check-all.sh` is the source of truth for what runs; CI
-(`.github/workflows/ci.yml`) calls it once per shard with `--only <group>`.
+`tests/tags.tsv` is the selector: one row per suite maps changed paths to the
+suite that covers them, and a path no row claims selects every suite.
+`tests/tags.bats` holds the table to the tree and holds every suite's
+`# bats file_tags=` to an area job in `.github/workflows/ci.yml`. The pre-push
+hook (`git config core.hooksPath .githooks`) runs the selected suites.
 `.github/workflows/tofu-plan-pr.yml` and `tofu-apply.yml` own the `cloudflare`
 environment: `tofu-plan` is a read-only drift check on `main`, and `tofu-apply`
 is `workflow_dispatch` only and applies a reviewed plan (SDLC #622).
