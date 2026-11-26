@@ -33,7 +33,7 @@
 # 5 the deploy is held until an operator releases it (prepare), or the staged
 # digest is not the verified one (stage -- nothing is staged, nothing reboots).
 #
-# Every knob is environment-overridable so tests/deploy/platform.sh can drive
+# Every knob is environment-overridable so tests/deploy/platform.bats can drive
 # this exact code. Production sets none of them: the defaults are the host
 # contract, not a way to skip a check.
 #

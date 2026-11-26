@@ -22,7 +22,7 @@
 # Exit codes: 0 every repository was polled, 1 at least one could not be (the unit
 # fails, which is the visible signal), 2 usage.
 #
-# Every knob is environment-overridable so tests/deploy/poll.sh can drive this
+# Every knob is environment-overridable so tests/deploy/poll.bats can drive this
 # exact code against a throwaway directory. Production sets none of them.
 #
 # shellcheck disable=SC2154  # deploy-state.sh assigns these at source time

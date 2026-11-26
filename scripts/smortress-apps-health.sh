@@ -40,7 +40,7 @@
 # Exit codes: 0 every app in the plan is serving, or an apply is in flight;
 # 1 a check failed or the run could not start.
 #
-# Every knob is environment-overridable so tests/deploy/apps-health.sh can drive
+# Every knob is environment-overridable so tests/deploy/apps-health.bats can drive
 # this exact code against fakes. Production sets none of them: the defaults are
 # the host contract, not a way to skip a check.
 #
