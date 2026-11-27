@@ -72,3 +72,21 @@ mcp_servers:
     headers:
       X-Deployment-Token: __FACADE_TOKEN__
     trust: full
+
+# THE MIRAGE WORKSPACE (SDLC #979, T1). One virtual terminal, one workspace, and
+# the native surface the facade's fixed source verbs were standing in for:
+# `shell`, `read`, `write`, `edit`, `ls`, `grep` and `glob`.
+#
+# The URL goes to socat's port, not the daemon's. The daemon binds 127.0.0.1
+# inside its own container and no config key moves it, so 18010 is the address the
+# bridge network can reach; `smortress-mirage-personal` is the container name and
+# the instance publishes nothing, so this name is the only route to it.
+#
+# `Authorization` is the one value in this file that is not the facade token:
+# Mirage takes a bearer header, and the seed replaces `__MIRAGE_TOKEN__` with
+# `Bearer <mirage-personal-token>` the first time this file is seeded.
+  mirage:
+    url: http://smortress-mirage-personal:18010/v1/workspaces/personal/mcp
+    headers:
+      Authorization: __MIRAGE_TOKEN__
+    trust: full

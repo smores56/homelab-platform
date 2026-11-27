@@ -1,0 +1,59 @@
+# The personal Mirage workspace (SDLC #979, T1).
+#
+# This file is the workspace half of the access layer: it says which host
+# directories the agent sees, under which names, at what access level, and what
+# the shell may do. The source work in T2-T4 mounts more prefixes here; nothing
+# in this file decides freshness or format.
+#
+# Access levels are the strictest of this file and the container's volumes, so
+# `mode: read` here is the whole story for the vault even though the volume is
+# writable: the workspace never gets a write handle it can reach.
+#
+# `network: false` is the answer to both halves of the admin surface. The daemon
+# and its ask-admin endpoint live on 127.0.0.1 inside this container, and a
+# workspace with no network has no route to them at any address, so an agent
+# cannot answer its own ask. The `mirage` program is denied by name as well,
+# because a denial that depends on a blocked socket is one misconfiguration away
+# from being no denial at all.
+#
+# `rm` is an ask, not a deny: deleting a note is a normal thing to want and a
+# normal thing to have signed off. The human answers on smortress with
+# `mirage workspace allow|deny`, never through this workspace.
+#
+# `/feed/changes.jsonl` is the one live signal in T1. The host watcher appends to
+# it; the agent tails or greps it. It is read-only, and it is the current-state
+# feed, not a ledger: a missed append costs nothing, because every path in it is
+# still on disk to be read.
+mounts:
+  /data/todos:
+    vfs: disk
+    mode: write
+    config:
+      root: /srv/files/todos
+  /data/vault:
+    vfs: disk
+    mode: read
+    config:
+      root: /srv/files
+  /feed:
+    vfs: disk
+    mode: read
+    config:
+      root: /state/feed
+
+mode: write
+
+profiles:
+  agent:
+    cwd: /data/todos
+    commands:
+      "*": allow
+      mirage:
+        decision: deny
+        reason: "the Mirage CLI and its admin surface are not the agent's"
+      rm:
+        decision: ask
+        reason: "deletes need sign-off"
+    network: false
+
+profile: agent

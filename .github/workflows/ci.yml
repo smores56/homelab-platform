@@ -75,6 +75,7 @@ jobs:
               --filter-tags python \
               --filter-tags data-plane \
               --filter-tags agent-shell-bridge \
+              --filter-tags agent-data-plane \
               --jobs "$(nproc)" --no-parallelize-within-files
 
   edge:

@@ -161,6 +161,7 @@ COPY units/quadlet/immich.network units/quadlet/immich-postgres.container \
      units/quadlet/agent-brave.network units/quadlet/agent-brave.container \
      units/quadlet/agent-egress-proxy.container \
      units/quadlet/agent-egress-dns.container \
+     units/quadlet/mirage-personal.container \
      /usr/share/containers/systemd/
 COPY secrets/boot.json secrets/apps.json secrets/agents.json /etc/smortress/secrets/
 COPY secrets/index.json /usr/share/smortress/secrets.index.json
@@ -181,6 +182,10 @@ COPY scripts/secrets-index.py /usr/libexec/secrets-index
 # decides what a shell request may be must be pinned with the OS, not with the
 # agent's own image.
 COPY scripts/agent-shell-bridge.py /usr/libexec/agent-shell-bridge
+# The personal workspace's feed watcher (SDLC #979, T1). A python program, not a
+# shell helper, because the server image installs no distribution package and
+# inotifywait is one: the watch is inotify(7) through ctypes.
+COPY scripts/agent-todos-watch.py /usr/libexec/agent-todos-watch
 # The recovery reader's two programs (SDLC #953): the read-only guard that owns
 # the port, and the config renderer the guard is started through. The binary
 # itself is downloaded above; the image's own jq and python3 are what these run
@@ -201,6 +206,7 @@ RUN set -eux; \
     ln -sf /usr/libexec/smortress-deploy /usr/bin/smortress-deploy; \
     ln -sf /usr/libexec/smortress-restic-progress /usr/bin/smortress-restic-progress; \
     chmod 0755 /usr/libexec/apps-schema /usr/libexec/secrets-index /usr/libexec/agent-shell-bridge \
+      /usr/libexec/agent-todos-watch \
       /usr/libexec/backrest-guard /usr/libexec/smortress-backrest-entrypoint; \
     chmod 0644 /usr/share/smortress/secrets.index.json; \
     chmod 0644 /etc/pki/containers/smortress.pub /usr/share/smortress/secrets.manifest; \
@@ -320,6 +326,7 @@ RUN set -eux; \
       smortress-agent-brave-seed.service \
       smortress-agent-collect-brave.path \
       smortress-agent-collect-brave.timer \
+      smortress-agent-todos-watch.service \
       smortress-agent-collect-notes.timer \
       smortress-agent-collect-tasks.timer \
       smortress-agent-collect-photos.timer \

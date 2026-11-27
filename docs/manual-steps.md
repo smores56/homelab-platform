@@ -1583,6 +1583,64 @@ while its report's `objects` is the row count across those tables. A source with
 `state.sqlite` answers `unavailable` and the facade stays up; its first
 `sources.read` or `sources.search` pays one projection over that source.
 
+### Bring up the personal Mirage workspace
+
+The personal agent's virtual terminal is one Quadlet, `mirage-personal`, and its
+token is the only value the image does not carry. The ciphertext is already in
+the tree (`secrets/mirage.json`, output `mirage-personal-token.yaml`); staging it
+is what puts it on a host that was built before this change:
+
+```sh
+scripts/secret.sh stage mirage-personal-token.yaml
+sudo systemctl restart sops-decrypt.service smortress-agent-config.service
+```
+
+`sops-decrypt` writes `/run/smortress/secrets/mirage-personal-token.yaml`, and
+`smortress-agent-config.service` turns it into `/var/lib/agent/local/mirage.env`
+with the trailing newline stripped -- Podman's `type=env` secret would keep it
+and the daemon would compare a token that never matches. The Quadlet reads that
+file with `EnvironmentFile=` and starts only after both units, so one reboot is
+the whole procedure:
+
+```sh
+sudo reboot
+```
+
+Prove it came up. The workspace must list, the todos mount must be there, and the
+feed must have a record after an edit:
+
+```sh
+sudo systemctl status mirage-personal.service --no-pager
+sudo podman exec smortress-mirage-personal mirage workspace list
+sudo podman exec smortress-mirage-personal mirage shell -w personal -c 'ls /data/todos'
+echo '- a note' | sudo tee /srv/files/todos/probe.md
+sudo tail -n 1 /var/lib/agent/local/mirage/feed/changes.jsonl
+rm -f /srv/files/todos/probe.md
+```
+
+The MCP surface the gateway sees is the proxy port, not the daemon's: the daemon
+binds 127.0.0.1 inside its own container and no config key moves it, so the
+gateway's `mcp_servers.mirage` entry in
+`bootc/server/rootfs/etc/smortress/agent/local-config.yaml` names
+`smortress-mirage-personal:18010`. If Hermes reports the server as unreachable,
+that name and that port are the two things to check before anything else.
+
+A delete is an ask, so an agent that runs `rm` gets a pending decision. Answer it
+on smortress; the workspace has no network and cannot answer its own:
+
+```sh
+sudo podman exec smortress-mirage-personal mirage workspace list-asks -w personal
+sudo podman exec smortress-mirage-personal mirage workspace allow personal <ask> --scope once
+```
+
+Rotating the token is the same three steps in a different order: `scripts/secret.sh
+edit mirage-personal-token.yaml`, `scripts/secret.sh stage mirage-personal-token.yaml`,
+`sudo systemctl restart sops-decrypt.service smortress-agent-config.service`, then
+delete `/var/lib/agent/local/config.yaml` and restart
+`smortress-agent-config.service` so the gateway's seeded copy picks up the new
+`Authorization` header, then `sudo systemctl restart mirage-personal.service
+agent-local.service`.
+
 ## Recover
 
 ### T0: freeze, rescue, verify, and publish the kit
