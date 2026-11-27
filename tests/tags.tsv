@@ -154,3 +154,4 @@ stream/imap	tests/stream/imap.bats tests/stream/* libs/data_plane/collectors/str
 brave/publish	tests/brave/publish.bats libs/data_plane/collectors/raw/publish_brave.py units/systemd/smortress-agent-collect-brave.service
 calendar/publish	tests/calendar/publish.bats tests/calendar/* libs/data_plane/collectors/raw/publish_calendar.py units/systemd/smortress-agent-collect-calendar.service
 core/syncthing-hostcheck	tests/core/syncthing-hostcheck.bats scripts/syncthing-hostcheck.sh units/systemd/smortress-syncthing-hostcheck.service units/systemd/smortress-syncthing-gui-proxy.service units/systemd/smortress-selinux-caddy-proxy.service bootc/server/Containerfile scripts/tailscale-serve.sh tofu/tailscale.tf tests/core/*
+python/raw-collectors	tests/python/raw-collectors.bats libs/data_plane/collectors/raw/tasks.py libs/data_plane/collectors/raw/notes.py libs/data_plane/collectors/* tests/python/*

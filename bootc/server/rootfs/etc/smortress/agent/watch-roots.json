@@ -5,6 +5,8 @@
     ".stversions/*",
     ".obsidian",
     ".syncthing.*.tmp",
+    "*.sync-conflict-*",
+    "*.bak",
     "~$*",
     "*.swp",
     "tmp",

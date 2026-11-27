@@ -75,6 +75,11 @@ def _markdown_files(root: Path) -> list[tuple[str, Path]]:
                 raise PublishError(f"{base / name} is a symlink; refusing to follow it")
         for name in filenames:
             path = base / name
+            # Syncthing writes a conflict copy beside the original when two
+            # devices disagree. It is not a note the human wrote, and publishing
+            # it would add a second note at a path that never existed.
+            if ".sync-conflict-" in name:
+                continue
             if path.suffix != ".md":
                 continue
             if path.is_symlink():

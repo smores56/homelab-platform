@@ -13,11 +13,13 @@ a digest of the line's bytes. That choice has two consequences, both accepted:
   multiset, and collapsing them is the only way to keep the id a pure function of
   the line; the collapse is counted in the report rather than hidden.
 
-A directory with neither ``todo.txt`` nor ``done.txt`` is refused: a mistyped
-path would otherwise commit an empty list, which marks every earlier task absent
-and looks like a real, empty list. The two files are read
-through a symlink if the deployment renders them that way; a symlinked directory
-is still refused by ``resolve_source_dir``.
+A directory without ``todo.txt`` is refused: a mistyped path, an unmounted
+dataset or a half-finished move would otherwise commit an empty list, which marks
+every earlier task absent and looks like a real, empty list. ``done.txt`` alone is
+not evidence of a list -- both todo.txt-cli and tuxedo create it on first use, so
+a run in a fresh directory leaves one behind. The two files are read through a
+symlink if the deployment renders them that way; a symlinked directory is still
+refused by ``resolve_source_dir``.
 """
 
 from __future__ import annotations
@@ -111,12 +113,13 @@ def collect_tasks(
 
     root = resolve_source_dir(entities_dir, "todo directory")
 
-    present = [name for name in FILES if (root / name).is_file()]
-    if not present:
+    if not (root / "todo.txt").is_file():
         raise PublishError(
-            f"todo directory {root} holds neither "
-            f"{' nor '.join(FILES)}; refusing to publish an empty list"
+            f"todo directory {root} does not hold todo.txt; "
+            "refusing to publish an empty list"
         )
+
+    present = [name for name in FILES if (root / name).is_file()]
 
     seen: set[str] = set()
     duplicates = 0
