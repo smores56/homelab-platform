@@ -1489,6 +1489,79 @@ The watcher that publishes changes into `/var/lib/agent/local/watch/changes.json
 is `smortress-source-watch.service`; it starts with the host and needs no action.
 Its roots are `/etc/smortress/agent/watch-roots.json`.
 
+### Move the todo list and consolidate the Syncthing share
+
+The list moves out of `/srv/files/notes` into `/srv/files/todos`, and Syncthing
+goes from per-directory folders (`notes`, `vault`) to one folder rooted at
+`/srv/files` (SDLC #1000). The new agent image mounts `/srv/files/todos` as a
+bind source, and Podman refuses a missing source, so this runbook finishes
+**before** the image that carries the new unit lands. Both writers create
+`done.txt` on first use, so the move is a plain `mv`, not a fresh start.
+
+Order matters. Syncthing does not support nesting folders, so no device may run
+the old layout while another runs the new one, and a move is safe only once the
+peers agree on what the folder holds. Do it in one window:
+
+1. Copy what cannot be rebuilt, then pause every peer:
+
+```sh
+sudo cp -a /srv/files/notes/todo.txt /srv/files/notes/done.txt /var/backup/
+sudo systemctl stop syncthing.service
+```
+
+   On the laptop and every other peer, pause Syncthing in its GUI (Actions →
+   Pause All) and wait for "Up to date".
+
+2. Create the directory as the dataset owner and give it the container label:
+
+```sh
+sudo install -d -o 1000 -g 1000 -m 0700 /srv/files/todos
+sudo chcon -R -t container_file_t /srv/files/todos
+```
+
+   `raw/files` belongs to uid 1000 and carries `container_file_t`; a new child
+   does not always inherit the label, and the agent's `/srv/files` mount has no
+   `:z`, so the relabel is what keeps the mount readable.
+
+3. Move the list on every device:
+
+```sh
+for f in todo.txt done.txt inbox.txt; do
+    [ -e "/srv/files/notes/$f" ] && sudo mv "/srv/files/notes/$f" /srv/files/todos/
+done
+```
+
+   On the laptop the files are `smores:smores`, so the same loop runs without
+   `sudo`; its directory already exists from tmpfiles.
+
+4. Replace the two folders with one on every device: in the Syncthing GUI remove
+   `notes` and `vault` with **Remove**, not "Remove and delete"; add one folder
+   with ID `files`, path `/srv/files`, Send & Receive and the same versioning
+   policy; share it with the peers and accept them one at a time, waiting for
+   "Up to date" before the next. Do the server first, then the peers.
+
+   None of this is repository state: the folder table is `config.xml` on
+   `state/syncthing-config` and each peer's own config. The old folder IDs keep
+   their version archives, which are not carried into the new folder; the ZFS
+   snapshots and the Restic `files` unit are the fallback.
+
+5. Prove it, then let the image land:
+
+```sh
+test -f /srv/files/todos/todo.txt
+sudo find /srv/files -path '*/.stversions/*' -prune -o -name '*.sync-conflict-*' -print
+sudo systemctl start syncthing.service
+sudo systemctl status agent-local.service --no-pager
+```
+
+   The `find` must print nothing. A phone that should not hold the 5.1 GB vault
+   can add `/vault` to its own `.stignore`; the collector skips conflict copies
+   and `*.bak` either way.
+
+   Only after this runbook is complete does the image carrying the new
+   `/srv/files/todos` mount boot. If it boots first, Podman refuses the bind and
+   `agent-local.service` crash-loops.
+
 ## Recover
 
 ### T0: freeze, rescue, verify, and publish the kit

@@ -118,7 +118,7 @@ one Restic snapshot names every dataset the unit restores.
 | --- | --- | --- | --- |
 | Immich | `raw/photos` — `/srv/photos`, the asset library | `state/immich-postgres` — `/var/lib/immich/postgres` (the dataset root is `PGDATA`); `state/immich-dumps` — `/var/lib/immich/dumps` | `/data/library`; Postgres `/data`; the dump writes into the dump dataset |
 | OPDShelf | `raw/books` — `/srv/books`, the catalog | `state/opdshelf` — `/var/lib/opdshelf`, edits, annotations and covers | `/books`; `DATA_DIR=/state` |
-| Personal gateway | `/srv/files` (read-write), `/srv/files/vault` (read-only) | `state/agent-local` — `/var/lib/agent/local/memory`, the `local` memory profile, the collectors' derived index, and `/watch`, the source watcher's feed | `/opt/data` (writable), `/srv/files` (writable), `/srv/files/vault` (read-only) |
+| Personal gateway | `/srv/files` (read-only), `/srv/files/todos` and `/srv/files/notes` (read-write), `/srv/files/vault` (read-only) | `state/agent-local` — `/var/lib/agent/local/memory`, the `local` memory profile, the collectors' derived index, and `/watch`, the source watcher's feed | `/opt/data` (writable), `/srv/files` (read-only), `/srv/files/todos` and `/srv/files/notes` (writable), `/srv/files/vault` (read-only) |
 | General gateway | `/srv/git` (read-write), `/srv/books` (read-write) | `state/agent-general` — `/var/lib/agent/general/memory`, the `external` profile | `/opt/data` (writable), `/srv/git` and `/srv/books` (writable) |
 | Local model | none | none: `state/agent-model` — `/var/lib/agent/model` is the GGUF file, and it is in no backup | `/models` (read-only) |
 | Syncthing | `raw/files` — `/srv/files`, the vault | `state/syncthing-config` — `/var/lib/syncthing/config`, identity and configuration | `/srv/files`; `/var/syncthing/config` |
@@ -347,7 +347,7 @@ has no route off the host.
 | `agent-tmail` (Quadlet; it serves, no timer) | `agent-collect.network` | `state/agent-local/quarantine/tmail`, its own session volume | none: its credential is the session on that volume |
 | `smortress-agent-collect-brave.path` → `.service`, plus a six-hourly `.timer` reconcile | `agent-brave.network` for the browser (`agent-brave`); neither collection stage has a network | `state/agent-local/quarantine/brave` (the snapshot) and `state/agent-local/replica/brave` (the collection) | Podman secret `brave-sync-seed`, uid 1000 mode 0400, held by the seed unit only |
 | `smortress-agent-collect-notes.timer` → `.service` | none: it reads `/srv/files/vault` and needs no address | `state/agent-local/replica/notes` | none: the vault is already on this host |
-| `smortress-agent-collect-tasks.timer` → `.service` | none: it reads `/srv/files/notes` | `state/agent-local/replica/tasks` | none |
+| `smortress-agent-collect-tasks.timer` → `.service` | none: it reads `/srv/files/todos` | `state/agent-local/replica/tasks` | none |
 | `smortress-agent-collect-photos.timer` → `.service` | none: it reads `/srv/photos` and needs no address | `state/agent-local/replica/photos` (metadata only; the media stays on `raw/photos`) | none |
 | `smortress-agent-collect-music.timer` → `.service` | none: it reads `/srv/music` | `state/agent-local/replica/music` (metadata only; the audio stays on `raw/music`) | none |
 
@@ -555,12 +555,14 @@ A view's shape follows three rules, the same in all four:
   be a shorter and wrong answer. Mail has an index only because scanning 74k
   Maildir files is expensive and its records do have one date each.
 
-The personal gateway reads `/srv/files` directly (SDLC #995): `todo.txt` and the
-notes are read-write, the vault is a read-only nested bind, and the runtime's own
-`terminal` and `file` toolsets are the interface. There is no MCP server, no
-adapter table and no policy process, so "a source outside the table is refused"
-becomes "a path outside the mount does not exist". The one permission rule that
-survives is the vault's mount mode, and the kernel enforces it.
+The personal gateway reads `/srv/files` directly (SDLC #995, #1000): the root is
+a read-only bind, `todos/` and `notes/` are writable nested binds, the vault is
+read-only, and the runtime's own `terminal` and `file` toolsets are the
+interface. There is no MCP server, no adapter table and no policy process, so "a
+source outside the table is refused" becomes "a path outside the mount does not
+exist". The permission rules are the mount modes, and the kernel enforces them:
+the writable children win over the read-only parent, and the vault stays
+read-only.
 
 Changes reach the agent through `smortress-source-watch.service`, which appends
 inotify events from two roots -- `/srv/files` and the published views under
