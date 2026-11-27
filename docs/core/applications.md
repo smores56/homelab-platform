@@ -58,8 +58,9 @@ the digest that run produced.
 | `syncthing` | `…/syncthing@sha256:2b71da7c…` | `docker.io/syncthing/syncthing:2.1.7` |
 | `navidrome` | `…/navidrome@sha256:38dc2727…` | `docker.io/navidrome/navidrome:0.64.2` |
 | `agent-model` | `…/agent-model@sha256:26f89ebd…` | `ghcr.io/ggml-org/llama.cpp:server-cuda` (b12602) |
-| `agent-runtime` | `…/agent-runtime@sha256:4ea73e6d…` | built from `images/agent-runtime/Containerfile` (base `docker.io/nousresearch/hermes-agent@sha256:276d4468…`) |
+| `agent-runtime` | `…/agent-runtime@sha256:c38090f3…` | built from `images/agent-runtime/Containerfile` (base `docker.io/nousresearch/hermes-agent@sha256:276d4468…`) |
 | `agent-webui` | `…/agent-webui@sha256:fb50509e…` | built from `images/agent-webui/Containerfile` |
+| `agent-workspace` | `…/agent-workspace@sha256:1ec05339…` | `ghcr.io/outsourc-e/hermes-workspace:main-c631425` |
 
 `agent-runtime`, `agent-webui`, `tuta-calendar`, `brave` and `agent-egress` are
 built rows. They are the same trust story with one difference: the digest is the
@@ -67,7 +68,8 @@ last build's, so the row and the run that printed it are the record of what is
 deployed. Upstream's image cannot be mirrored into
 service, because its entrypoint installs the dependencies from PyPI at container
 start and the personal deployment has no route off the host; the Containerfile
-moves that install to build time.
+moves that install to build time. `agent-workspace` is a mirror row: upstream
+ships the Node build, and the row preserves its digest.
 
 `agent-runtime` is drawn by three Quadlets (the two gateways and the hosted
 proxy) and by the collector and mail units. The proxy and the collectors are Python
@@ -108,6 +110,10 @@ Every unit keeps the pattern's invariants:
 - loopback-only publication, fronted by Tailscale Serve;
 - no `AutoUpdate=`, no `Pull=always`, no image tag without a digest.
 
+The agent runtimes and the Workspace are the deliberate exceptions to the first
+bullet: their entrypoints need a writable root and the capabilities to drop
+privileges themselves, and each unit says why.
+
 ## Storage mapping
 
 Data is split by kind: `/srv` holds raw data and `/var/lib` holds the service
@@ -119,6 +125,7 @@ one Restic snapshot names every dataset the unit restores.
 | Immich | `raw/photos` — `/srv/photos`, the asset library | `state/immich-postgres` — `/var/lib/immich/postgres` (the dataset root is `PGDATA`); `state/immich-dumps` — `/var/lib/immich/dumps` | `/data/library`; Postgres `/data`; the dump writes into the dump dataset |
 | OPDShelf | `raw/books` — `/srv/books`, the catalog | `state/opdshelf` — `/var/lib/opdshelf`, edits, annotations and covers | `/books`; `DATA_DIR=/state` |
 | Personal gateway | `/srv/files` (read-only), `/srv/files/todos` and `/srv/files/notes` (read-write), `/srv/files/vault` (read-only) | `state/agent-local` — `/var/lib/agent/local/memory`, the `local` memory profile, the collectors' derived index, and `/watch`, the source watcher's feed | `/opt/data` (writable), `/srv/files` (read-only), `/srv/files/todos` and `/srv/files/notes` (writable), `/srv/files/vault` (read-only) |
+| Personal workspace | `/srv/files` (read-only), `/srv/files/todos` and `/srv/files/notes` (read-write), `/srv/files/vault` (read-only) | the named volume `agent-workspace-state`, outside every dataset and backup (login sessions and caches only; no quota) | `/workspace` (read-only), `/workspace/todos` and `/workspace/notes` (writable), `/workspace/vault` (read-only), `/home/workspace/.hermes` (named volume), `/home/workspace/.hermes/memory` (read-only) |
 | General gateway | `/srv/git` (read-write), `/srv/books` (read-write) | `state/agent-general` — `/var/lib/agent/general/memory`, the `external` profile | `/opt/data` (writable), `/srv/git` and `/srv/books` (writable) |
 | Local model | none | none: `state/agent-model` — `/var/lib/agent/model` is the GGUF file, and it is in no backup | `/models` (read-only) |
 | Syncthing | `raw/files` — `/srv/files`, the vault | `state/syncthing-config` — `/var/lib/syncthing/config`, identity and configuration | `/srv/files`; `/var/syncthing/config` |
@@ -158,8 +165,9 @@ though it belongs to the `files` unit.
 | Personal gateway key | `secrets/agents.json` `["agent"]["local_api_key"]` | `/run/smortress/secrets/agent-local-api-key.yaml` (`value`, root 0400) | Podman secret `agent-local-api-key`, also mounted at uid 1000 mode 0400; `smortress-agent-config.service` writes it into `/var/lib/agent/local/.env` as `API_SERVER_KEY` (the runtime has no `_FILE` variant, and Podman's `type=env` keeps the file's trailing newline) |
 | General gateway key | `secrets/agents.json` `["agent"]["general_api_key"]` | `/run/smortress/secrets/agent-general-api-key.yaml` (`value`, root 0400) | Same shape, `agent-general-api-key`, `/var/lib/agent/general/.env` |
 | Hosted provider key | `secrets/agents.json` `["agent"]["hosted_key"]` | `/run/smortress/secrets/agent-hosted-key.yaml` (`value`, root 0400) | Podman secret `agent-hosted-key`, mounted read-only at `/run/secrets/agent-hosted-key` in `agent-proxy` only. Never in an environment, never in a config file, never in argv |
-| Personal UI password | `secrets/agents.json` `["ui"]["personal_password"]` | `/run/smortress/secrets/agent-ui-personal-password.yaml` (`value`, root 0400) | Not a Podman secret: `smortress-agent-config.service` writes it into `/var/lib/agent/local/webui.env` as `HERMES_WEBUI_PASSWORD`, which `agent-webui-personal` reads through `EnvironmentFile=`. The UI has no `_FILE` variant, and `type=env` would carry the file's trailing newline into a comparison that never matches |
-| General UI password | `secrets/agents.json` `["ui"]["general_password"]` | `/run/smortress/secrets/agent-ui-general-password.yaml` (`value`, root 0400) | Same shape, `/var/lib/agent/general/webui.env`. One password per deployment: the two UIs are separate authority domains, so a leak on one must not open the other |
+| Personal UI password | `secrets/agents.json` `["ui"]["personal_password"]` | `/run/smortress/secrets/agent-ui-personal-password.yaml` (`value`, root 0400) | Not a Podman secret: `smortress-agent-config.service` writes it into `/var/lib/agent/local/webui.env` as `HERMES_WEBUI_PASSWORD` (file `0:0 0400`), which `agent-webui-personal` reads through `EnvironmentFile=`. The UI has no `_FILE` variant, and `type=env` would carry the file's trailing newline into a comparison that never matches |
+| Personal workspace token and password | `secrets/agents.json` `["agent"]["local_api_key"]` and `["ui"]["personal_password"]` | the same two ciphertexts | `smortress-agent-config.service` writes `/run/smortress/workspace.env` (`0:0 0400` on `/run`, outside the agent's mounted dataset): `HERMES_API_TOKEN` is the gateway key and `HERMES_PASSWORD` is the workspace's login gate, which `agent-workspace-personal` reads through `EnvironmentFile=`. Same value, same no-`_FILE` reason; `/run` keeps the agent from reading or replacing it |
+| General UI password | `secrets/agents.json` `["ui"]["general_password"]` | `/run/smortress/secrets/agent-ui-general-password.yaml` (`value`, root 0400) | Same shape, `/var/lib/agent/general/webui.env`. One password per deployment: the workspace and the general web UI are separate authority domains, so a leak on one must not open the other |
 | SimpleFIN access URL | `secrets/agents.json` `["simplefin"]["access_url"]` | `/run/smortress/secrets/simplefin-access-url.yaml` (`value`, root 0400) | Podman secret `simplefin-access-url`, mounted at uid 1000 mode 0400 in `smortress-agent-collect-finance.service` only, which reads it through `--access-url-file` |
 | TutaBridge password | `secrets/agents.json` `["tmail"]["bridge_password"]` | `/run/smortress/secrets/tmail-bridge-password.yaml` (`value`, root 0400) | Podman secret `tmail-bridge-password`, mounted at uid 1000 mode 0400 in `smortress-agent-collect-mail.service` only, where isync's `PassCmd` reads it. The bridge generates this password locally; the Tuta account password is never stored in this repository |
 
@@ -304,13 +312,24 @@ the other side's sources.
 
 | Deployment | Quadlets | Network | May reach | May not reach |
 | --- | --- | --- | --- | --- |
-| Personal | `agent-local`, `agent-model`, `agent-webui-personal` | `agent-local.network`, `no_default_route=true` | each other, by container name; the host reaches their published ports; the bridge resolver answers names | the internet, the LAN, the general deployment -- no default route exists |
+| Personal | `agent-local`, `agent-model`, `agent-webui-personal`, `agent-workspace-personal` | `agent-local.network`, `no_default_route=true`; `agent-workspace-personal` shares `agent-local`'s network namespace | each other, by container name; the host reaches their published ports; the bridge resolver answers names | the internet, the LAN, the general deployment -- no default route exists |
 | General | `agent-general`, `agent-proxy`, `agent-webui-general` | `agent-general.network`, a plain bridge | the pinned provider, through the proxy; each other, by container name | the personal deployment, every personal source |
 
 The personal gateway publishes `127.0.0.1:18001`; the general one publishes
-`127.0.0.1:18002`; the proxy publishes `127.0.0.1:18003`; the personal web UI
-publishes `127.0.0.1:18006` and the general one `127.0.0.1:18007`. Nothing else on
-either agent network publishes anything at all.
+`127.0.0.1:18002`; the proxy publishes `127.0.0.1:18003`; the personal workspace's
+UI listener is published by `agent-local` as `127.0.0.1:18008` (the workspace
+shares its network namespace, so it cannot publish a port itself); the legacy
+personal web UI stays on `127.0.0.1:18006` as the cutover rollback; the general
+web UI publishes `127.0.0.1:18007`. Nothing else on either agent network
+publishes anything at all.
+
+The workspace is not a peer on the bridge. It shares `agent-local`'s network
+namespace so it can reach the gateway's loopback dashboard, and the dashboard
+binds loopback for that reason: a non-loopback bind fails closed without an auth
+provider, and a loopback control plane cannot be reached from `agent-model` or
+the legacy web UI. The workspace's own UI listener is in that namespace too, so
+`agent-model` and the legacy web UI can reach it at the gateway's bridge address;
+the login gate is the boundary for that surface, not the network.
 
 Publishing is the reason `agent-local.network` is not `Internal=true`. Netavark
 creates no port-forwarding DNAT rules for an internal network and adds
@@ -586,7 +605,7 @@ disk to be read.
 | Personal agent gateway | `127.0.0.1:18001` | `https://smortress.<tailnet>.ts.net/apps/agent-local/v1` |
 | General agent gateway | `127.0.0.1:18002` | `https://smortress.<tailnet>.ts.net/apps/agent-general/v1` |
 | Hosted proxy | `127.0.0.1:18003` | none, on purpose: a tailnet path would let any device spend the provider key |
-| Personal web UI | `127.0.0.1:18006` | `https://assistant.<tailnet>.ts.net/` and `https://smortress.<tailnet>.ts.net:8444/` |
+| Personal workspace | `127.0.0.1:18008` | `https://assistant.<tailnet>.ts.net/` and `https://smortress.<tailnet>.ts.net:8444/` |
 | General web UI | `127.0.0.1:18007` | `https://agent.<tailnet>.ts.net/` and `https://smortress.<tailnet>.ts.net:8445/` |
 | zellij web terminal | `127.0.0.1:8082` | `https://terminal.<tailnet>.ts.net/` |
 
@@ -603,19 +622,20 @@ handler that nothing declares any more -- and a Service dropped from the script'
 `--service=` declarations is cleared on that run for the same reason, so a name no
 declaration makes stops advertising itself.
 
-The two UIs answer on a Service each, like every other application behind the
-tailnet name service (design #834): `svc:assistant` and `svc:agent` are advertised
-over HTTPS, so Tailscale terminates TLS and mints the certificate for the name.
+The personal workspace and the general web UI answer on a Service each, like every
+other application behind the tailnet name service (design #834): `svc:assistant`
+and `svc:agent` are advertised over HTTPS, so Tailscale terminates TLS and mints
+the certificate for the name.
 The `*.sammohr.dev` aliases the host's own Caddy answered are gone with that
 terminator: no zone record names either UI, the agent UI Service and its VIP are
 deleted, and nothing on the host answers those names. The VIPs these Services own
 are in `100.64.0.0/10`, so the names resolve anywhere and route only on the
 tailnet. Each is granted to the owner and to the scheduled probe, below.
 
-The `:8444` and `:8445` Serve routes stay declared as the rollback: both answer
-the same two UIs on the host's own name, so a certificate fault or a Service the
-tailnet dropped costs the named URL and not the UI. Nothing is provisioned for
-them, one line each in `scripts/tailscale-serve.sh`.
+The `:8444` and `:8445` Serve routes stay declared as the rollback: they answer
+the workspace and the general UI on the host's own name, so a certificate fault
+or a Service the tailnet dropped costs the named URL and not the UI. Nothing is
+provisioned for them, one line each in `scripts/tailscale-serve.sh`.
 
 `scripts/verify-tailnet-names.sh` is the probe on that path (task #848), and
 `.github/workflows/verify-tailnet-names.yml` runs it daily from a CI node that

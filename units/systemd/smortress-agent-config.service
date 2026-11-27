@@ -27,10 +27,10 @@
 #
 # Requires= both datasets: without them the copy lands on the root filesystem and
 # the gateway starts against an empty home that looks configured.
-Description=Seed the agent runtime configs, their keys, the web UI env and the facade memory roots
+Description=Seed the agent runtime configs, their keys, the UI and Workspace env, and the facade memory roots
 Requires=zfs-ready@state-agent-local.service zfs-ready@state-agent-general.service sops-decrypt.service
 After=zfs-ready@state-agent-local.service zfs-ready@state-agent-general.service sops-decrypt.service
-Before=agent-local.service agent-general.service agent-webui-personal.service agent-webui-general.service
+Before=agent-local.service agent-general.service agent-webui-personal.service agent-webui-general.service agent-workspace-personal.service
 
 [Service]
 Type=oneshot

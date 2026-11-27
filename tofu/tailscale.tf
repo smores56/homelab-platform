@@ -420,7 +420,7 @@ resource "tailscale_service" "navidrome" {
   ports = ["tcp:443"]
 }
 
-# The personal web UI on 127.0.0.1:18006. The `sammohr.dev` alias Caddy used to
+# The personal workspace on 127.0.0.1:18008. The `sammohr.dev` alias Caddy used to
 # answer for it is gone with that terminator; this Service is the name it owns.
 resource "tailscale_service" "assistant" {
   count = var.tailnet == "" ? 0 : 1

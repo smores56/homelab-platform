@@ -14,6 +14,7 @@ core/app-quadlets-datasets	tests/core/app-quadlets-datasets.bats units/quadlet/*
 core/app-quadlets-host	tests/core/app-quadlets-host.bats units/quadlet/* units/systemd/* bootc/server/* scripts/app-images.sh scripts/storage-layout.sh tests/core/*
 core/app-quadlets-agents	tests/core/app-quadlets-agents.bats units/quadlet/* units/systemd/* bootc/server/* scripts/app-images.sh scripts/storage-layout.sh tests/core/*
 core/app-quadlets-webui	tests/core/app-quadlets-webui.bats units/quadlet/* units/systemd/* bootc/server/* scripts/app-images.sh scripts/storage-layout.sh tests/core/*
+core/app-quadlets-workspace	tests/core/app-quadlets-workspace.bats units/quadlet/* units/systemd/* bootc/server/* scripts/app-images.sh scripts/storage-layout.sh scripts/agent-config-seed.sh scripts/tailscale-serve.sh scripts/verify-tailnet-names.sh scripts/agent-runtime-drill.sh tests/core/*
 core/app-quadlets-collectors	tests/core/app-quadlets-collectors.bats units/quadlet/* units/systemd/* bootc/server/* scripts/app-images.sh scripts/storage-layout.sh tests/core/*
 core/app-quadlets-collections	tests/core/app-quadlets-collections.bats units/quadlet/* units/systemd/* bootc/server/* scripts/app-images.sh scripts/storage-layout.sh tests/core/*
 core/app-quadlets-egress	tests/core/app-quadlets-egress.bats units/quadlet/* units/systemd/* bootc/server/* scripts/app-images.sh scripts/storage-layout.sh tests/core/*

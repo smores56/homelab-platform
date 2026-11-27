@@ -43,10 +43,10 @@ fail() {
 
 command -v jq >/dev/null 2>&1 || fail "jq is missing"
 
-# https port -> loopback port. 443 Immich, 8443 OPDShelf, 8444 the personal web UI,
-# 8445 the general one, 8448 Navidrome. Every one of them serves the owner's own
-# tailnet clients; the public edge does not read them. The Syncthing GUI has no host
-# port: since #897 T2 its only route is the `svc:sync` Service below. It
+# https port -> loopback port. 443 Immich, 8443 OPDShelf, 8444 the personal
+# workspace, 8445 the general web UI, 8448 Navidrome. Every one of them serves the
+# owner's own tailnet clients; the public edge does not read them. The Syncthing
+# GUI has no host port: since #897 T2 its only route is the `svc:sync` Service below. It
 # proxies the `svc:immich` and `svc:opds` Services instead (design #725), because
 # the edge may not use 443, which also carries the agent gateways and the
 # wallpaper tree, and a port-scoped tailnet rule cannot express a path. The
@@ -55,7 +55,7 @@ command -v jq >/dev/null 2>&1 || fail "jq is missing"
 declare -A core_routes=(
   [443]=2283
   [8443]=8083
-  [8444]=18006
+  [8444]=18008
   [8445]=18007
   [8448]=4533
 )
@@ -174,8 +174,8 @@ fi
 if ! "$tailscale_bin" serve --bg --service=svc:navidrome --https=443 http://127.0.0.1:4533; then
   fail "could not advertise the Navidrome Service on svc:navidrome https/443"
 fi
-if ! "$tailscale_bin" serve --bg --service=svc:assistant --https=443 http://127.0.0.1:18006; then
-  fail "could not advertise the personal web UI Service on svc:assistant https/443"
+if ! "$tailscale_bin" serve --bg --service=svc:assistant --https=443 http://127.0.0.1:18008; then
+  fail "could not advertise the personal workspace Service on svc:assistant https/443"
 fi
 if ! "$tailscale_bin" serve --bg --service=svc:agent --https=443 http://127.0.0.1:18007; then
   fail "could not advertise the general web UI Service on svc:agent https/443"

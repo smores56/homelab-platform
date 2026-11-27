@@ -18,8 +18,10 @@ setup() { aq_setup; }
 # Ports that are published on loopback for the operator's own curl and are
 # deliberately not a Serve route. 18003 is the hosted proxy: the gateway reaches
 # it by container name on agent-general.network, so a tailnet path to it would
-# only widen who can spend the provider key.
-readonly no_serve_ports=(18003)
+# only widen who can spend the provider key. 18006 is the legacy personal web UI,
+# kept running only as the rollback for the Workspace cutover; the operator
+# reaches it through an SSH forward, not through a name on the tailnet.
+readonly no_serve_ports=(18003 18006)
 
 # Loopback listeners that reach the tailnet through a proxy the image ships rather
 # than through a route of their own. The Syncthing GUI refuses a foreign Host, so

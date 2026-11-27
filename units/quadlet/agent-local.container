@@ -3,8 +3,8 @@
 # llama.cpp server on agent-local.network.
 #
 # This is the deployment's whole network boundary: agent-local.network is the only
-# network, and it is internal (no default route, no NAT), so the gateway has no
-# route off the host. The tailnet still reaches it because Serve forwards to
+# network, and it has no default route (no route off the host, no NAT), so the
+# gateway has no route off the host. The tailnet still reaches it because Serve forwards to
 # 127.0.0.1:18001, which is host-side DNAT -- a published port, not a route in
 # this container's namespace.
 #
@@ -47,6 +47,9 @@ Description=Hermes Agent gateway, personal deployment (no egress)
 Requires=zfs-ready@state-agent-local.service zfs-ready@raw-files.service sops-decrypt.service smortress-app-secrets.service smortress-agent-config.service
 After=network-online.target zfs-ready@state-agent-local.service zfs-ready@raw-files.service sops-decrypt.service smortress-app-secrets.service smortress-agent-config.service
 Wants=network-online.target
+# BindsTo/PartOf on the workspace stop and restart it with this unit; Upholds is
+# the other direction, so a workspace that exits on its own comes back.
+Upholds=agent-workspace-personal.service
 
 [Container]
 Image=ghcr.io/smores56/homelab-platform/agent-runtime@sha256:dd5dc3547ed57bd7b797ddb2afa4b7536f336257a358be3c801bb5da5d37c5c7
@@ -57,6 +60,13 @@ Secret=agent-local-api-key,type=mount,target=/run/secrets/agent-local-api-key,ui
 Environment=API_SERVER_ENABLED=true
 Environment=API_SERVER_HOST=0.0.0.0
 Environment=API_SERVER_PORT=18001
+# The Workspace shares this container's network namespace, so the dashboard
+# binds loopback: a non-loopback bind fails closed without an auth provider,
+# and the loopback listener cannot be reached from agent-local.network. The
+# workspace reads sessions, skills, jobs and config through it.
+Environment=HERMES_DASHBOARD=1
+Environment=HERMES_DASHBOARD_HOST=127.0.0.1
+Environment=HERMES_DASHBOARD_PORT=9119
 Environment=HERMES_HOME=/opt/data
 Environment=HERMES_UID=1000
 Environment=HERMES_GID=1000
@@ -72,6 +82,9 @@ Volume=/srv/files/notes:/srv/files/notes:rw
 # mount is what says so.
 Volume=/srv/files/vault:/srv/files/vault:ro
 PublishPort=127.0.0.1:18001:18001
+# The workspace's UI listens in this container's network namespace, so its
+# publish has to live here; a Quadlet sharing a netns cannot publish its own.
+PublishPort=127.0.0.1:18008:3000
 # The runtime writes its state under /opt/data, so the root filesystem cannot be
 # read-only here. NoNewPrivileges stays; DropCapability cannot, see above.
 ReadOnly=false

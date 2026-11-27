@@ -224,7 +224,7 @@ core_status() {
       "/apps/agent-ui-personal": {"Proxy": "http://127.0.0.1:18006"},
       "/apps/agent-ui-general": {"Proxy": "http://127.0.0.1:18007"}}},
     "host:8443": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:8083"}}},
-    "host:8444": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:18006"}}},
+    "host:8444": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:18008"}}},
     "host:8445": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:18007"}}}
   }
 }
