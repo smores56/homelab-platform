@@ -98,6 +98,11 @@ for spec in personal:local general:general; do
   # ProtectSystem=strict and a directory Podman or systemd has to create would
   # land root-owned inside a dataset owned by uid 1000 at 0750.
   install -d -o 1000 -g 1000 -m 0750 "$home/watch"
+  # The published source views (SDLC #995, T2/T3/T4): a bind source podman has
+  # to create would land root-owned inside a uid-1000 dataset at 0750, and the
+  # collector container would fail its first write.
+  install -d -o 1000 -g 1000 -m 0750 "$home/sources" \
+    "$home/sources/finance" "$home/sources/mail" "$home/sources/brave"
 
   # The mail half and the derived index exist only on the personal side: every
   # raw collector is personal, and the general deployment has no source to

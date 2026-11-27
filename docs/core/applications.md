@@ -485,6 +485,23 @@ image's entrypoint with `python3`.
 
 ### The agent data plane
 
+Each collector publishes a plain view beside its raw artifact under
+`state/agent-local/sources/<source>`, which the gateway already sees as
+`/opt/data/sources/<source>` because the whole dataset is mounted there. Nothing
+has to be added to a container for a new view to be readable.
+
+| Source | Raw artifact (fidelity) | Published view (what a shell reads) |
+| --- | --- | --- |
+| Finance | `replica/finance` — the committed SimpleFIN state | `sources/finance/accounts.jsonl`, `transactions.jsonl` (180-day window, 20k cap), `state.json`; amounts stay decimal text, never floats |
+| Mail | `sources/mail` — content-addressed RFC822 objects and `state.sqlite` | `sources/mail/maildir/<folder>/{cur,new,tmp}/*.eml`, `messages.jsonl` (newest 5000, decoded headers), `state.json` |
+| Browser history | `quarantine/brave/History` — the rename-published snapshot | `sources/brave/History` (a copy) and `visits.jsonl` (90-day window, newest 2000), `state.json` |
+
+Every view is written atomically (temp file and `os.replace`) and every
+`state.json` carries `last_run`, `ok` and the counts, so a reader can tell an
+empty source from a collector that has not run. The views are current state, not
+history: they are rebuilt on each pass and nothing replays.
+
+
 The personal gateway reads `/srv/files` directly (SDLC #995): `todo.txt` and the
 notes are read-write, the vault is a read-only nested bind, and the runtime's own
 `terminal` and `file` toolsets are the interface. There is no MCP server, no

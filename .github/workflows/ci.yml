@@ -98,6 +98,8 @@ jobs:
               --filter-tags tailnet-names \
               --filter-tags agent-egress \
               --filter-tags brave \
+              --filter-tags finance \
+              --filter-tags mail \
               --jobs "$(nproc)" --no-parallelize-within-files
 
   image:
