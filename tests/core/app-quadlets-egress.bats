@@ -241,8 +241,8 @@ unset _flag
   [[ -f $brave_collect ]]
 }
 
-@test "units/systemd/smortress-agent-collect-brave.service is snapshot then collect" {
-  assert_equal "$(grep -cE '^ExecStart=' "$brave_collect")" 2
+@test "units/systemd/smortress-agent-collect-brave.service is snapshot then collect then view" {
+  assert_equal "$(grep -cE '^ExecStart=' "$brave_collect")" 3
 }
 
 @test "the snapshot stage runs before the collector stage" {
@@ -264,13 +264,19 @@ unset _flag
   grep -qE -- '/var/lib/agent/local/quarantine/brave:/quarantine:ro' "$brave_collect"
 }
 
+@test "the view is published beside the snapshot, not into it" {
+  grep -qE -- '/var/lib/agent/local/sources/brave:/out:z' "$brave_collect" &&
+    grep -qF -- '-m data_plane.collectors.raw.publish_brave --history /quarantine/History --out /out' \
+      "$brave_collect"
+}
+
 @test "the collector names the device and profile the replica is keyed by" {
   grep -qF -- 'brave --database /quarantine/History --device smortress --profile default' \
     "$brave_collect"
 }
 
-@test "neither stage has a network" {
-  assert_equal "$(grep -cE -- '--network none' "$brave_collect")" 2
+@test "no stage has a network" {
+  assert_equal "$(grep -cE -- '--network none' "$brave_collect")" 3
 }
 
 @test "the collection pass holds no Podman secret" {
