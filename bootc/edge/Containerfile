@@ -257,6 +257,7 @@ RUN set -eux; \
     test -e /etc/systemd/system/multi-user.target.wants/smoresnet-boot-counter.service || { echo "the boot counter installer is not enabled: nothing would put the counter where grub.cfg reads it" >&2; exit 1; }; \
     test -e /etc/systemd/system/multi-user.target.wants/smoresnet-boot-rw.service || { echo "/boot is left read-only: greenboot cannot write grubenv and the counter never arms" >&2; exit 1; }; \
     test -e /etc/systemd/system/multi-user.target.wants/greenboot-healthcheck.service || { echo "greenboot's healthcheck is not enabled: a deployment that boots but is broken would never be rolled back" >&2; exit 1; }; \
+    test -x /etc/greenboot/check/required.d/10-edge-health.sh || { echo "the edge's greenboot check is missing or not executable: greenboot would mark every boot good and never roll back a sick deployment" >&2; exit 1; }; \
     test -e /etc/systemd/system/timers.target.wants/bootc-fetch-apply-updates.timer || { echo "the bootc update timer is not enabled: this host would never upgrade itself" >&2; exit 1; }; \
     grep -qxF 'OnCalendar=*-*-* 04:00:00 America/New_York' /usr/lib/systemd/system/bootc-fetch-apply-updates.timer.d/10-schedule.conf || { echo "the edge's update window is not its own 04:00 local" >&2; exit 1; }; \
     grep -qxF 'RandomizedDelaySec=0' /usr/lib/systemd/system/bootc-fetch-apply-updates.timer.d/10-schedule.conf || { echo "the update timer keeps the vendor jitter: two hosts' windows can drift into each other" >&2; exit 1; }; \
