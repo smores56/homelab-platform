@@ -134,7 +134,7 @@ COPY scripts/storage-layout.sh scripts/zfs-ready.sh scripts/sops-decrypt.sh \
      scripts/deploy-platform.sh scripts/smortress-boot-gate.sh \
      scripts/deploy-apps.sh scripts/deploy-poll.sh scripts/deploy-heartbeat.sh \
      scripts/agent-config-seed.sh \
-     scripts/smortress-password.sh scripts/agent-job.sh scripts/agent-job-personal.sh scripts/agent-job-general.sh scripts/agent-job-provision.sh \
+     scripts/smortress-password.sh \
      scripts/smortress-backrest-watchdog.sh \
      /usr/libexec/smortress-src/
 COPY scripts/deploy/apps/ /usr/libexec/deploy/apps/
@@ -164,8 +164,6 @@ COPY units/quadlet/immich.network units/quadlet/immich-postgres.container \
      units/quadlet/agent-local.network units/quadlet/agent-general.network \
      units/quadlet/agent-model.container units/quadlet/agent-local.container \
      units/quadlet/agent-general.container units/quadlet/agent-proxy.container \
-     units/quadlet/agent-facade-personal.container \
-     units/quadlet/agent-facade-general.container \
      units/quadlet/agent-webui-personal.container \
      units/quadlet/agent-webui-general.container \
      units/quadlet/agent-collect.network units/quadlet/agent-tmail.container \
@@ -186,12 +184,6 @@ COPY bootc/server/cosign.pub /etc/pki/containers/smortress.pub
 # change to them rebuilds that container image instead of this one.
 COPY scripts/apps-schema.py /usr/libexec/apps-schema
 COPY scripts/secrets-index.py /usr/libexec/secrets-index
-# The shell bridge (SDLC #859): the one root program a facade's request reaches.
-# It runs the class-fixed dispatcher and owns the socket the general facade
-# mounts, so it belongs to the host image and not to agent-runtime: the code that
-# decides what a shell request may be must be pinned with the OS, not with the
-# agent's own image.
-COPY scripts/agent-shell-bridge.py /usr/libexec/agent-shell-bridge
 # The agent plane's live signal (SDLC #995): one inotify watch over every source
 # root, appended to the JSONL feed the agent reads. A python program, not a shell
 # helper, because the server image installs no distribution package and inotifywait
@@ -216,7 +208,7 @@ RUN set -eux; \
     rm -rf /usr/libexec/smortress-src; \
     ln -sf /usr/libexec/smortress-deploy /usr/bin/smortress-deploy; \
     ln -sf /usr/libexec/smortress-restic-progress /usr/bin/smortress-restic-progress; \
-    chmod 0755 /usr/libexec/apps-schema /usr/libexec/secrets-index /usr/libexec/agent-shell-bridge \
+    chmod 0755 /usr/libexec/apps-schema /usr/libexec/secrets-index \
       /usr/libexec/source-watch \
       /usr/libexec/backrest-guard /usr/libexec/smortress-backrest-entrypoint; \
     chmod 0755 /usr/libexec/boot-counter; \
@@ -312,12 +304,8 @@ RUN set -eux; \
       zfs-ready@state-agent-model.service \
       smortress-app-secrets.service \
       smortress-agent-config.service \
-      smortress-agent-job-provision.service \
-      smortress-agent-shell-bridge.service \
-      smortress-agent-shell-bridge-personal.service \
       smortress-nvidia-cdi.service \
       smortress-selinux-nvidia-map.service \
-      smortress-selinux-agent-shell.service \
       smortress-apps-user.service \
       smortress-apps-quota.service \
       smortress-apps-deny.service \

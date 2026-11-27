@@ -14,7 +14,6 @@ host that is running: the image, its Quadlets, its backups and its edge.
 | `webhook.md` | The webhook receiver's trust boundary and request contract. |
 | `raw-replicas.md` | The raw-replica shape the collectors publish, source by source. |
 | `agent-identity.md` | The two machine credentials a general agent job receives. |
-| `agent-facade.md` | The facade's MCP surface and how a deployment's sources are described. |
 | `agent-jobs.md` | The agent shell dispatcher, its runners and its two probes. |
 | `migration-gates.md` | The gate sequence a destructive migration had to pass, as the record of it. |
 | `kanbei-critical.md` | Which paths are Kanbei-critical, and why their review is Code Owners'. |

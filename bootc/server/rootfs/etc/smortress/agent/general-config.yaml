@@ -36,16 +36,3 @@ delegation:
   max_spawn_depth: 1
   child_timeout_seconds: 1800
   inherit_mcp_toolsets: true
-
-# The general deployment's source facade
-# (units/quadlet/agent-facade-general.container), reached by container name on
-# agent-general.network; it publishes nothing. Same shape as the personal one with
-# its own token and its own source table, so `repos` and `books` exist here and
-# nowhere else. The placeholder is substituted at seed time from
-# agent-facade-general-token.yaml, and no template carries a token.
-mcp_servers:
-  general:
-    url: http://smortress-agent-facade-general:18005/mcp
-    headers:
-      X-Deployment-Token: __FACADE_TOKEN__
-    trust: full

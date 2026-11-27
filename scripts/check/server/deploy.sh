@@ -252,12 +252,9 @@ check "the seed unit runs the installed script" \
 # not here: this image must carry no copy of them, which is what keeps an agent-code
 # change off the OS rebuild path. The units import them from the image and mount
 # nothing from the host, so there is no second copy to drift.
-for path in 'apps/agent_facade' 'apps/brave_ingest' 'apps/agent_proxy' \
+for path in 'apps/brave_ingest' 'apps/agent_proxy' \
   'libs/data_plane' '/usr/lib/agent-facade' '/usr/libexec/agent-proxy'; do
   check "the host image ships no $path" lacks "$path" bootc/server/Containerfile
-done
-for q in units/quadlet/agent-facade-personal.container units/quadlet/agent-facade-general.container; do
-  check "$q mounts no host copy of the facade" lacks 'Volume=/usr/lib/agent-facade' "$q"
 done
 check "the proxy unit mounts no host copy of its program" \
   lacks 'Volume=/usr/libexec/agent-proxy' units/quadlet/agent-proxy.container
@@ -267,7 +264,7 @@ for unit in units/systemd/smortress-agent-brave-seed.service \
 done
 # The programs' own list has to be complete in the image that does carry them: a
 # module left out is an import error at the first start.
-for module in apps/agent_facade/*.py apps/brave_ingest/*.py; do
+for module in apps/brave_ingest/*.py; do
   check "the runtime image installs ${module#apps/}" \
     has "$module" images/agent-runtime/Containerfile
 done
@@ -275,7 +272,7 @@ check "the runtime image installs the facade libraries" \
   has 'libs/data_plane/ /usr/lib/agent-facade/libs/data_plane/' images/agent-runtime/Containerfile
 check "the runtime image installs the proxy" \
   has 'apps/agent_proxy/proxy.py /usr/libexec/agent-proxy' images/agent-runtime/Containerfile
-if grep -qE '^COPY.*apps/(agent_facade|agent_proxy)/tests' \
+if grep -qE '^COPY.*apps/(agent_brave_ingest|agent_proxy)/tests' \
   images/agent-runtime/Containerfile; then
   bad "the runtime image ships no test suite"
 else

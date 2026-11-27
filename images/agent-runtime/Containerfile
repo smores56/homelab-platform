@@ -4,29 +4,23 @@
 # The two gateways run the upstream image untouched. Four other consumers run our
 # code inside that same image: the hosted-model proxy (`apps/agent_proxy/`), and
 # the two source facades and the browsing collector, which need
-# `apps/agent_facade/` or `apps/brave_ingest/` plus the `libs/data_plane/` they
+# `apps/brave_ingest/` plus the `libs/data_plane/` it
 # import. Those used to be installed by the bootc image under
 # `/usr/lib/agent-facade` (and `/usr/libexec/agent-proxy`) and bind-mounted into
 # the container, which made every change to them an OS image rebuild and a host
 # reboot. They are baked here instead, at the paths the Quadlets already name, so
-# `Entrypoint=python3`, `Exec=-m apps.agent_facade` and
+# `Entrypoint=python3` and
 # `PYTHONPATH=/usr/lib/agent-facade/libs:/usr/lib/agent-facade` resolve with no
 # host mount at all.
 #
 # The base is the digest the gateway deployment runs; bumping the runtime moves
 # this digest with it. The modules are listed one by one rather than by glob:
-# `apps/agent_facade/tests/` and `apps/agent_proxy/tests/` must never reach an
+# `apps/agent_proxy/tests/` must never reach an
 # image, and a module left off the list is an import error at the first start
 # instead of a silent difference at review time.
 FROM docker.io/nousresearch/hermes-agent@sha256:276d44685c65c0cb2a25f190b63c65c8906f9dc76486fb1c05ae71b5826bda08
 
 COPY libs/data_plane/ /usr/lib/agent-facade/libs/data_plane/
-COPY apps/agent_facade/__init__.py apps/agent_facade/__main__.py \
-     apps/agent_facade/contracts.py apps/agent_facade/memory.py \
-     apps/agent_facade/server.py apps/agent_facade/sources.py \
-     apps/agent_facade/replica_sources.py apps/agent_facade/source_index.py \
-     apps/agent_facade/shell.py apps/agent_facade/tree_sources.py \
-     /usr/lib/agent-facade/apps/agent_facade/
 COPY apps/brave_ingest/__init__.py apps/brave_ingest/seed.py \
      apps/brave_ingest/snapshot.py /usr/lib/agent-facade/apps/brave_ingest/
 COPY apps/agent_proxy/proxy.py /usr/libexec/agent-proxy

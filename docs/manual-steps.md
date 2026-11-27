@@ -637,23 +637,6 @@ sudo systemctl restart smortress-agent-config.service
 sudo systemctl restart agent-webui-personal.service
 ```
 
-A facade token lives in three places that must move together: the ciphertext, the
-Podman secret the facade mounts, and the gateway's seeded `config.yaml`. The first
-two follow `edit` and `stage`; the third does not, because the seed uses `cp -n`.
-Rotate the ciphertext and stage it first — reseeding before that copies the *old*
-token back:
-
-```sh
-scripts/secret.sh edit agent-facade-personal-token.yaml   # facade.personal_token: openssl rand -hex 32
-scripts/secret.sh stage agent-facade-personal-token.yaml
-git commit -am 'chore(core): rotate the personal facade token'
-git push
-sudo rm /var/lib/agent/local/config.yaml
-sudo systemctl restart smortress-agent-config.service
-sudo stat -c '%u:%g %a %n' /var/lib/agent/local/config.yaml   # 1000:1000 0600
-sudo systemctl restart agent-facade-personal.service agent-local.service
-```
-
 ### Rotate the deploy webhook key
 
 `webhook.secret` is what both notify jobs sign with today and `webhook.next` is the
@@ -1212,16 +1195,16 @@ deployments".
 systemd-analyze verify units/systemd/smortress-nvidia-cdi.service \
   units/systemd/smortress-agent-config.service
 sudo /usr/lib/systemd/system-generators/podman-system-generator -dryrun -v 2>&1 \
-  | grep -E 'agent-(model|local|general|proxy|facade-personal|facade-general)\.(service|network)'
-systemctl cat agent-proxy.service agent-facade-personal.service | head -40
+  | grep -E 'agent-(model|local|general|proxy)\.(service|network)'
+systemctl cat agent-proxy.service | head -40
 ```
 
 ```sh
-sudo systemctl stop agent-webui-personal agent-local agent-facade-personal agent-model
+sudo systemctl stop agent-webui-personal agent-local agent-model
 sudo systemctl stop agent-local-network.service
 sudo podman network rm systemd-agent-local
 sudo systemctl start agent-local-network.service agent-model.service \
-  agent-facade-personal.service agent-local.service agent-webui-personal.service
+  agent-local.service agent-webui-personal.service
 ```
 
 ```sh
@@ -1230,13 +1213,12 @@ sudo systemctl start zfs-ready@state-agent-model.service zfs-ready@state-agent-l
 sudo nvidia-ctk cdi list                                     # nvidia.com/gpu=all
 sudo systemctl start smortress-agent-config.service
 sudo systemctl start agent-proxy.service agent-model.service agent-general.service agent-local.service
-sudo systemctl start agent-facade-personal.service agent-facade-general.service
 nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv
 sudo podman logs smortress-agent-local 2>&1 | grep -E 'stage2|Changing hermes'
 ```
 
-Six containers answer `Up`. The memory directories must be `1000:1000 0750` before
-the facades start, and `nvidia-smi` must list `llama-server` — a separate fact from
+Five containers answer `Up`. The memory directories must be `1000:1000 0750` before
+the gateways start, and `nvidia-smi` must list `llama-server` — a separate fact from
 the container being up; no entry means `ggml_cuda_init` failed or
 `smortress-selinux-nvidia-map.service` did not load its rule. A `Permission
 denied` under `/opt/data` means the `HERMES_UID`/`HERMES_GID` remap did not run,
@@ -1289,41 +1271,6 @@ sign-in staged by hand: the SimpleFIN access URL, the TutaBridge session and its
 local IMAP password, the Tuta calendar session, and the Brave Sync seed. The
 commands are `docs/core/applications.md`, "Collector sign-ins".
 
-### Verify the facade wire
-
-The client is the gateway container itself — it is on the deployment's network and
-its image carries `python3` — and the token arrives on stdin, never in an argument.
-`initialize` must answer `agent-facade-personal` and `tools/list` exactly
-`sources.describe`, `sources.read`, `sources.search`, `memory.read`,
-`memory.write`, `memory.search` and `memory.rebuild`; the general deployment
-answers at `http://smortress-agent-facade-general:18005/mcp` with `repos` and
-`books` and no personal source. A request with no token is `401` before any tool
-could run.
-
-```sh
-sudo podman exec -i smortress-agent-local python3 -c '
-import json, sys, urllib.request
-token = sys.stdin.readline().strip()
-def call(method, ident, params=None):
-    request = urllib.request.Request(
-        "http://smortress-agent-facade-personal:18004/mcp",
-        data=json.dumps({"jsonrpc": "2.0", "id": ident, "method": method,
-                         "params": params or {}}).encode(),
-        headers={"Content-Type": "application/json", "X-Deployment-Token": token})
-    with urllib.request.urlopen(request, timeout=10) as answer:
-        return json.load(answer)
-print(call("initialize", 1)["result"]["serverInfo"])
-print([tool["name"] for tool in call("tools/list", 2)["result"]["tools"]])
-' < <(sudo cat /run/smortress/secrets/agent-facade-personal-token.yaml)
-sudo podman exec -e HERMES_HOME=/opt/data smortress-agent-local hermes mcp test personal
-sudo grep -c '__FACADE_TOKEN__' /var/lib/agent/local/config.yaml   # 0 after seeding
-sudo podman logs smortress-agent-facade-personal 2>&1 | tail
-```
-
-The gateway's own client is the fastest diagnosis of a rotation that did not reach
-the config, and the facade logs the method, the path and the status of every
-request — never a header or a token — so its log is safe to paste.
-
 ### Verify the two browser UIs
 
 Both run the pre-baked image, so the first check is that starting them installs
@@ -1366,7 +1313,7 @@ publicly trusted name either has: the `*.sammohr.dev` aliases, their `A` records
 and the Caddy that answered them are retired.
 
 The first-run wizard is disabled, so `Missing imports: run_agent` is expected;
-the facades are the tool surface.
+the gateways are the tool surface.
 
 ### Fetch the pinned model
 
@@ -1390,148 +1337,6 @@ The size and the checksum are the pin (`16525559776` bytes). The name matters:
 change. `AD-Q4_K` is the pinned quant; the neighbouring *Uncensored* variant and
 the `mmproj` projector are deliberately not used.
 
-### Agent shell jobs
-
-`smortress-agent-job-provision.service` creates each shell runner's subuid range,
-the general runner's ACL on `/var/srv/git` and the uid-keyed egress table. The
-pinned job image is pulled as each runner by that unit, before the egress table is
-loaded — the personal runner has zero egress by rule, so afterwards it could not
-fetch a new digest at all. `--pull=never` makes a job on a host whose store lacks
-the digest fail closed with `has not prepulled`. The manual pull below is only for
-a pin change you want live without waiting for the reboot that carries it.
-`docs/agent-jobs.md` is the shape.
-
-```sh
-sudo /usr/libexec/agent-job-provision --check
-grep -E '^agent-shell-(personal|general):' /etc/subuid /etc/subgid
-sudo nft list table inet smortress_agent_jobs
-getfacl -p /var/srv/git | grep agent-shell-general
-image=$(cat /etc/smortress/agent/job-image)
-for runner in agent-shell-personal agent-shell-general; do
-  state=${runner#agent-shell-}
-  # The runtime directory is logind's, never one under /run/smortress: rootless
-  # Podman fails in namespace setup with any other path.
-  sudo loginctl enable-linger "$runner"
-  sudo -u "$runner" env -i HOME="/var/lib/agent-shell/$state" \
-    XDG_RUNTIME_DIR="/run/user/$(id -u "$runner")" PATH=/usr/bin:/bin podman pull "$image"
-done
-sudo /usr/libexec/agent-job-personal \
-  'id; test ! -e /var/srv/git && echo "no general tree"; test -e /run/podman/podman.sock && echo "socket" || echo "no podman socket"'
-sudo /usr/libexec/agent-job-personal \
-  'python3 -c "import urllib.request; urllib.request.urlopen(\"https://example.com\", timeout=3)" || echo blocked'
-```
-
-Both egress refusals must be denials, not timeouts into a successful fetch. An
-output over 1 MiB is truncated and reported; a job past 300 seconds has its cgroup
-killed and any leftover container removed. Shell jobs are unsupervised by design:
-the only approval contract is the write broker's `libs/data_plane/approval.py`.
-
-A facade does not run an entry point itself: it holds a socket served by its
-class's bridge — `smortress-agent-shell-bridge` (general) or
-`smortress-agent-shell-bridge-personal` — and that socket is the only path to a job
-in that class (`docs/agent-jobs.md#transport`). Each socket sits in its own
-directory, `/run/smortress/agent-shell-<class>`, under the root 0700
-`/run/smortress`, and each directory is 0710 root:1000. The only client is the
-container that mounts its own class's directory as `/run/agent-shell`:
-
-```sh
-systemctl status smortress-agent-shell-bridge smortress-agent-shell-bridge-personal
-sudo stat -c '%U:%G %a %n' \
-  /run/smortress/agent-shell-general /run/smortress/agent-shell-general/general.sock \
-  /run/smortress/agent-shell-personal /run/smortress/agent-shell-personal/personal.sock
-# root:core 710 /run/smortress/agent-shell-general
-# root:core 660 /run/smortress/agent-shell-general/general.sock
-# root:core 710 /run/smortress/agent-shell-personal
-# root:core 660 /run/smortress/agent-shell-personal/personal.sock
-# core is gid 1000, the facade containers' group
-sudo podman exec smortress-agent-facade-general python3 -c '
-import socket
-sock = socket.socket(socket.AF_UNIX)
-sock.connect("/run/agent-shell/general.sock")
-sock.sendall(b"{\"command\": \"id -u; cat /proc/self/uid_map; ls /work | head -3; test -e /var/srv/git && echo LEAK-host-path || echo no-host-path\"}\n")
-print(sock.makefile().readline())'
-sudo podman exec smortress-agent-facade-personal python3 -c '
-import socket
-sock = socket.socket(socket.AF_UNIX)
-sock.connect("/run/agent-shell/personal.sock")
-sock.sendall(b"{\"command\": \"id -u; cat /proc/self/uid_map; ls -A /work | wc -l; ls /sys/class/net\"}\n")
-print(sock.makefile().readline())'
-```
-
-Both answers start with `0`: a rootless container is root **inside its own user
-namespace**, so the number that says who runs it is `/proc/self/uid_map`, which
-names the class runner on the host (`0 970 1` for general, `0 971 1` for personal)
-and that class's subuid range (`400000` or `300000`). The general answer then
-lists `/work` (the live tree — the host's `/var/srv/git` is the mount's source and
-does not exist inside the container) and `no-host-path`; the personal answer prints
-`0` for an empty disposable `/work` and `lo` alone, so the same transport reaches a
-job with no live tree and no route.
-Cross-class access is a missing mount, not a refusal: each facade's container has
-only its own class's directory, so the other class's socket path does not exist
-inside it.
-
-```sh
-sudo podman exec smortress-agent-facade-personal test -e /run/agent-shell/general.sock &&
-  echo reachable || echo "general socket not mounted"        # not mounted
-sudo podman exec smortress-agent-facade-general test -e /run/agent-shell/personal.sock &&
-  echo reachable || echo "personal socket not mounted"       # not mounted
-```
-
-Any other uid is refused by the socket's group, and the host path is refused before
-that by the root-only parent -- no gateway, model server or web UI has a mount to
-try with:
-
-```sh
-sudo runuser -u nobody -- python3 -c '
-import socket
-socket.socket(socket.AF_UNIX).connect("/run/smortress/agent-shell-general/general.sock")'  # Permission denied
-sudo runuser -u nobody -- python3 -c '
-import socket
-socket.socket(socket.AF_UNIX).connect("/run/smortress/agent-shell-personal/personal.sock")'  # Permission denied
-```
-
-`tools/list` names `shell.run` on both facades now, and each entry runs in its own
-class: the tool's presence is still the socket's presence, and the class is the
-bridge's constant (the token is the deployment's own, read from its mounted file):
-
-```sh
-sudo podman exec smortress-agent-facade-general python3 -c '
-import json, urllib.request
-token = open("/run/secrets/agent-facade-general-token").read().strip()
-body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).encode()
-request = urllib.request.Request(
-    "http://127.0.0.1:18005/mcp", data=body,
-    headers={"Content-Type": "application/json", "X-Deployment-Token": token})
-print([tool["name"] for tool in json.load(urllib.request.urlopen(request))["result"]["tools"]])'
-```
-
-The same call with the personal deployment's token answers `401`: one token is one
-deployment, so a token that names the personal facade cannot reach the general one.
-
-The general facade's two live sources (SDLC #851) read the trees through its own
-read-only mounts, so a `sources.search` names a real path in a clone and a real
-book, and `sources.read` returns the file at `HEAD` or the OPF's fields:
-
-```sh
-sudo podman exec smortress-agent-facade-general python3 -c '
-import json, urllib.request
-token = open("/run/secrets/agent-facade-general-token").read().strip()
-def call(name, arguments):
-    body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-                       "params": {"name": name, "arguments": arguments}}).encode()
-    request = urllib.request.Request(
-        "http://127.0.0.1:18005/mcp", data=body,
-        headers={"Content-Type": "application/json", "X-Deployment-Token": token})
-    return json.load(urllib.request.urlopen(request))["result"]["content"][0]["text"]
-for source, query in (("repos", "requires"), ("books", "dune")):
-    print(source, call("sources.search", {"source": source, "query": query, "limit": 2})[:200])
-print(call("sources.read", {"source": "repos", "id": "repos::github.com/smores56/homelab-platform::justfile"})[:400])'
-```
-
-A personal facade naming either root does not start: the contract is the
-deployment table's, so `tree_adapters_for` refuses the binding before the service
-listens.
-
 ### Run the agent runtime drill
 
 `scripts/agent-runtime-drill.sh` answers three rows of the T6 matrix that no static
@@ -1547,7 +1352,6 @@ sudo systemctl stop smortress-agent-collect-finance.timer \
 sudo systemctl stop smortress-agent-mail-stream.service agent-tmail.service \
   agent-brave.service syncthing.service
 sudo systemctl stop agent-webui-personal.service agent-webui-general.service \
-  agent-facade-personal.service agent-facade-general.service \
   agent-local.service agent-general.service agent-proxy.service
 sudo scripts/agent-runtime-drill.sh mounts
 sudo scripts/agent-runtime-drill.sh credentials
@@ -1602,7 +1406,7 @@ sudo find /var/lib/agent/local/replica -path '*/objects/*' -type f \
 
 Brave's file count is small on purpose: one `brave::db` object plus one per table,
 while its report's `objects` is the row count across those tables. A source with no
-`state.sqlite` answers `unavailable` and the facade stays up; its first
+`state.sqlite` answers `unavailable` and the reader reports the source as absent; its first
 `sources.read` or `sources.search` pays one projection over that source.
 
 ### The agent data plane is a mount, not a service
@@ -2231,7 +2035,6 @@ each number landed.
 | §40.1–40.6 | Applications and agents; Restore an application by hand |
 | §40.7, §40.11 | Rotate the agent's credentials; Validate the units |
 | §40.8 | Fetch the pinned model |
-| §40.12 | Verify the facade wire |
 | §40.13 | Verify the two browser UIs |
 | §40.14 | Claim the SimpleFIN access URL |
 | §40.15 | Sign in to the Tuta mail bridge |

@@ -239,8 +239,8 @@ unset _toolset
 
 # The runtime has no _FILE variant, so the key reaches it through .env written by
 # the seed unit -- from the decrypted ciphertext, at the container's uid. The unit
-# delegates to a script now that seeding also splices a token into a YAML file: a
-# value built inside an `ExecStart` line is a value in the process table.
+# delegates to a script: a value built inside an `ExecStart` line is a value in the
+# process table.
 
 # shellcheck disable=SC2016  # the matched text is the seed script's own source line
 @test "the seed unit derives both gateway keys from their ciphertext" {
@@ -255,16 +255,9 @@ unset _toolset
     grep -qF 'cp -n "$template" "$config"' "$seed_script"
 }
 
-# The facade token must not travel through argv or a command substitution: the
-# script reads it with `read` and splices it with parameter expansion.
-@test "the facade token is read into a variable, never into argv" {
-  grep -qF 'while IFS= read -r line' "$seed_script" &&
-    ! grep -vE '^[[:space:]]*#' "$seed_script" | grep -qE '\$\(cat|sed .*\$\(|awk -v token'
-}
-
-# The personal facade bind-mounts its index directory, and a bind source podman
-# has to create would land root-owned inside the dataset, so the seed unit creates
-# it at the container's uid -- on the personal side only, where the replicas are.
+# A bind source podman has to create would land root-owned inside a dataset owned
+# by uid 1000, so the seed unit creates the derived-index directory at the
+# container's uid -- on the personal side only, where the collectors write.
 # shellcheck disable=SC2016  # the matched text is the seed script's own source line
 @test "the seed unit creates the personal index directory at the container uid" {
   grep -qF 'if [[ $state == local ]]; then' "$seed_script" &&
@@ -353,18 +346,6 @@ for _q in "${app_quadlets[@]}"; do
   done <"$_q"
 done
 unset _q _line _path _seen
-
-# The same rule for the facade in particular: its program is a Python package, so
-# what has to be inside the container is the directory PYTHONPATH names.
-names_a_tree_its_own_image_carries() { # quadlet
-  [[ $(sed -n 's/^Environment=PYTHONPATH=//p' "$1") == /usr/lib/agent-facade/libs:/usr/lib/agent-facade ]] &&
-    baked_by_runtime_image /usr/lib/agent-facade
-}
-
-for _q in units/quadlet/agent-facade-personal.container units/quadlet/agent-facade-general.container; do
-  registered "$_q names a tree its own image carries" names_a_tree_its_own_image_carries "$_q"
-done
-unset _q
 
 # The collectors run the same package through a plain podman unit, where the
 # environment is a podman argument rather than Quadlet's Environment=. The rule

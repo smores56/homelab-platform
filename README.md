@@ -24,7 +24,6 @@ changes by pull request from a fork, so no PR workflow can read a secret.
 | `libs/data_plane/` | The data-plane library: contracts, event log, write broker, backup runner, migration gates |
 | `apps/broker/` | Broker source and unit tests (Python stdlib, no dependencies) (`docs/broker.md`) |
 | `apps/webhook/` | Webhook receiver source and unit tests (Python stdlib, no dependencies) (`docs/webhook.md`) |
-| `apps/agent_facade/` | MCP source facades and portable memory for the two agent deployments (`docs/agent-facade.md`) |
 | `apps/data_plane/` | CLI entry points for the data-plane library |
 | `backrest/` | The Backrest reader Worker: source, TypeScript typecheck and static tests (`docs/core/backrest.md`) |
 | `images/` | Container image sources: agent egress, agent mail, agent WebUI, data-plane, brave, tuta-calendar |
@@ -38,7 +37,7 @@ changes by pull request from a fork, so no PR workflow can read a secret.
 | `tests/tofu/` | Static assertions on the Cloudflare config (`tests/tofu/check.bats`) |
 | `tests/edge/` | Offline checks for the public-edge probe (`tests/edge/check.bats`) |
 | `scripts/` | CI helpers, shellchecked |
-| `docs/` | Core image, apps tenant, Restic plane, backrest, public edge, recovery kit, broker, webhook, agent facade, runbook, manual steps |
+| `docs/` | Core image, apps tenant, Restic plane, backrest, public edge, recovery kit, broker, webhook, runbook, manual steps |
 
 ## Local checks
 
