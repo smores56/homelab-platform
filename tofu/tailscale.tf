@@ -59,13 +59,14 @@ locals {
       {
         # Serve publishes the applications as HTTPS on the host itself, one
         # root path per port (scripts/tailscale-serve.sh): 443 Immich, 8443
-        # OPDShelf, 8448 Navidrome and 10000 the Syncthing GUI. 8444 and 8445
-        # are the personal and general agent UIs, separate authority domains
-        # behind separate passwords, so the edge and CI stay off them (the deny
-        # tests below).
+        # OPDShelf and 8448 Navidrome. 8444 and 8445 are the personal and general
+        # agent UIs, separate authority domains behind separate passwords, so the
+        # edge and CI stay off them (the deny tests below). The Syncthing GUI is
+        # not here: since #897 T2 it is reachable only as `svc:sync`, so no host
+        # port on 10000 exists to grant.
         action = "accept"
         src    = ["group:owner"]
-        dst    = ["tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000"]
+        dst    = ["tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448"]
       },
       {
         # The owner reaches the edge's sshd and nothing else on it. The edge is
@@ -300,11 +301,11 @@ locals {
     # The Tailscale API evaluates these every time the policy is saved, so a rule
     # that widens access fails the plan and never reaches the tailnet. Both sides
     # list every admitted destination: a test naming only :22 would save cleanly
-    # beside a new rule that opened 8443, 10000 or 22000.
+    # beside a new rule that opened 8443 or 22000.
     tests = [
       {
         src    = var.tailscale_login
-        accept = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:vps:22", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443", "svc:terminal:443"]
+        accept = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:22000", "tag:vps:22", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443", "svc:terminal:443"]
       },
       {
         # The owner reaches the edge login, never either deploy receiver: the two
@@ -314,7 +315,7 @@ locals {
       },
       {
         src  = "tag:untrusted"
-        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:vps:22", "tag:vps:8484", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443", "svc:terminal:443", "svc:recovery:443"]
+        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:22000", "tag:vps:22", "tag:vps:8484", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443", "svc:terminal:443", "svc:recovery:443"]
       },
       {
         # The edge reaches no host port at all. Its three destinations are Service
@@ -324,7 +325,7 @@ locals {
         # edge's own 8484 belongs to tag:deploy for the same reason as the
         # server's, so it is named here too.
         src  = "tag:vps"
-        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:smortress:8484", "tag:vps:8484", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443", "svc:terminal:443"]
+        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:22000", "tag:smortress:8484", "tag:vps:8484", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443", "svc:terminal:443"]
       },
       {
         # The deploy node reaches both receivers -- the server's and, since T11,
@@ -344,7 +345,7 @@ locals {
         # login included, which is what keeps the one port T11 opened from being
         # the first of several.
         src  = "tag:deploy"
-        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:10000", "tag:smortress:22000", "tag:vps:22"]
+        deny = ["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:22000", "tag:vps:22"]
       },
     ]
   }
@@ -435,10 +436,10 @@ resource "tailscale_service" "agent" {
   ports = ["tcp:443"]
 }
 
-# The Syncthing GUI's own Service, the same shape as the rest now that its host
-# check is off (docs/manual-steps.md): Serve forwards the client's Host unchanged,
-# and with the check on the GUI answers 403 to the name. The host's 10000 route
-# stays as the rollback.
+# The Syncthing GUI's own Service, the same shape as the rest: Serve forwards the
+# client's Host unchanged and the GUI's check is on (design #897, T2), so the route
+# reaches a loopback proxy that rewrites Host to the one address the GUI trusts.
+# This name is the GUI's only way in; the old host route on 10000 is retired.
 resource "tailscale_service" "sync" {
   count = var.tailnet == "" ? 0 : 1
 

@@ -1031,31 +1031,56 @@ sudo systemctl start smortress-tailscale-serve.service
 tailscale serve status
 ```
 
-Expect seven routes: 443 to `http://127.0.0.1:2283` (Immich, plus `/wallpapers/`,
-`/apps/agent-local` and `/apps/agent-general`), 8443 to `http://127.0.0.1:8083`
-(OPDShelf), 10000 to `http://127.0.0.1:8384` (Syncthing GUI), 8444 and 8445 to the
-agent web UIs, 8448 to `http://127.0.0.1:4533` (Navidrome), and the deploy
-receiver's `tcp/8484` forward. The public edge is not in this table: it proxies the
-`svc:immich` and `svc:opds` Services. Nothing here is Funnel. The
-wallpaper route shows a `Path` target rather than a `Proxy`:
+Expect six host routes: 443 to `http://127.0.0.1:2283` (Immich, plus
+`/wallpapers/`, `/apps/agent-local` and `/apps/agent-general`), 8443 to
+`http://127.0.0.1:8083` (OPDShelf), 8444 and 8445 to the agent web UIs, 8448 to
+`http://127.0.0.1:4533` (Navidrome), and the deploy receiver's `tcp/8484` forward;
+plus the `svc:` names, including `svc:sync` for the Syncthing GUI. The public edge
+is not in this table: it proxies the `svc:immich` and `svc:opds` Services. Nothing
+here is Funnel. The wallpaper route shows a `Path` target rather than a `Proxy`:
 
 ```sh
 curl -fsS https://smortress.<tailnet>.ts.net/wallpapers/ | head
 systemctl status zfs-ready@raw-wallpapers.service   # an empty listing means not mounted
 ```
 
-Syncthing refuses a proxied Host header, and Serve forwards the client's Host
-unchanged, so its check has to be off for `https://sync.<tailnet>.ts.net/` to
-answer -- this is the route's prerequisite, not a troubleshooting step: turn it off
-with the key from the config on its dataset. That setting is host state, not image
-state (it lives in `config.xml` on `state/syncthing-config`), so a host rebuilt from
-the image comes back with the default and the key has to be applied again:
+Syncthing refuses a Host header it does not expect and Serve forwards the client's
+Host unchanged, so `https://sync.<tailnet>.ts.net/` reaches the GUI through a
+loopback proxy: `smortress-syncthing-gui-proxy.service` answers on
+`127.0.0.1:8385`, rewrites Host to `127.0.0.1:8384` and forwards. The GUI's own
+check stays on, and `smortress-syncthing-hostcheck.service` writes it back on at
+every boot, because the setting is host state in `config.xml` on
+`state/syncthing-config` and a restored config would otherwise bring the bypass
+with it. The name is the GUI's only route; the old host route on `10000` is retired.
+
+```sh
+sudo systemctl status smortress-syncthing-hostcheck.service
+sudo curl -fsS -H 'Host: evil.example' -o /dev/null -w '%{http_code}\n' \
+  http://127.0.0.1:8384/rest/noauth/health          # 403: the check is on
+curl -fsS -o /dev/null -w '%{http_code}\n' https://sync.<tailnet>.ts.net/rest/noauth/health
+tailscale serve status                              # no :10000 entry
+```
+
+A route that still answers on `10000` is a stale handler: `scripts/tailscale-serve.sh`
+turns a dropped port off on its next run, so `sudo systemctl start
+smortress-tailscale-serve.service` retires it, or do it by hand with
+`tailscale serve --https=10000 off`.
+
+The GUI now has one route, so a dead proxy or a failed enforcement is a GUI nobody
+can open. The hand recovery is both halves of what T2 retired -- the bypass back on,
+and a host route to Serve -- and it is a stopgap, because a reboot re-runs the
+enforcement and the Serve producer:
 
 ```sh
 key=$(sudo sed -n 's:.*<apikey>\(.*\)</apikey>.*:\1:p' /var/lib/syncthing/config/config.xml)
 sudo curl -fsS -X PATCH -H "X-API-Key: $key" -H 'Content-Type: application/json' \
   -d '{"insecureSkipHostcheck": true}' http://127.0.0.1:8384/rest/config/gui
+sudo tailscale serve --bg --https=10000 http://127.0.0.1:8384
 ```
+
+The fix that lasts is a revert of T2 in the image (`scripts/tailscale-serve.sh`,
+the units, the policy), which restores the `10000` entry and drops the enforcement
+from the next boot.
 
 The GUI has no password of its own, so the tailnet-only route is its whole access
 control.
@@ -1178,7 +1203,7 @@ The next daily maintenance prunes the freed snapshot metadata.
 ```sh
 curl -fsS -o /dev/null -w '%{http_code}\n' https://smortress.<tailnet>.ts.net/api/server/ping
 curl -fsS -o /dev/null -w '%{http_code}\n' https://smortress.<tailnet>.ts.net:8443/healthz
-curl -fsS -o /dev/null -w '%{http_code}\n' https://smortress.<tailnet>.ts.net:10000/rest/noauth/health
+curl -fsS -o /dev/null -w '%{http_code}\n' https://sync.<tailnet>.ts.net/rest/noauth/health
 ```
 
 All three answer 200 from a tailnet device. From a machine on the LAN that is

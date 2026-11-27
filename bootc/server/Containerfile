@@ -129,7 +129,7 @@ COPY scripts/storage-layout.sh scripts/zfs-ready.sh scripts/sops-decrypt.sh \
      scripts/app-secrets.sh scripts/immich-dump.sh scripts/tailscale-serve.sh \
      scripts/apps-quota.sh scripts/apps-user.sh scripts/apps-ingress.sh \
      scripts/apps-ingress-reconcile.sh \
-     scripts/smortress-apps-health.sh \
+     scripts/smortress-apps-health.sh scripts/syncthing-hostcheck.sh \
      scripts/deploy-state.sh scripts/deploy-drain.sh \
      scripts/deploy-platform.sh scripts/smortress-boot-gate.sh \
      scripts/deploy-apps.sh scripts/deploy-poll.sh scripts/deploy-heartbeat.sh \
@@ -306,12 +306,14 @@ RUN set -eux; \
       smortress-agent-config.service \
       smortress-nvidia-cdi.service \
       smortress-selinux-nvidia-map.service \
+      smortress-selinux-caddy-proxy.service \
       smortress-apps-user.service \
       smortress-apps-quota.service \
       smortress-apps-deny.service \
       smortress-apps-egress.service \
       smortress-app-ingress-reconcile.service \
       smortress-tailscale-serve.service \
+      smortress-syncthing-hostcheck.service \
       smortress-syncthing-gui-proxy.service \
       smortress-backrest.service \
       smortress-backrest-watchdog.timer \
@@ -394,4 +396,5 @@ RUN set -eux; \
     test -e /etc/ssh/sudo_authorized_keys || { echo "the sudo key file is missing: libpam_rssh.so reads it on every prompt (design #767)" >&2; exit 1; }; \
     ! test -f /usr/lib64/security/pam_oath.so || { echo "pam_oath.so is still in the image: sudo's TOTP is retired (design #767)" >&2; exit 1; }; \
     ! grep -rhvE '^[[:space:]]*#' /etc/sudoers /etc/sudoers.d | grep -q 'NOPASSWD' || { echo "a sudoers line grants NOPASSWD: it would bypass pam_authenticate and void the whole stack (design #767)" >&2; exit 1; }; \
-    caddy validate --config /usr/share/smortress/syncthing-gui.Caddyfile --adapter caddyfile >/dev/null || { echo "the shipped Syncthing GUI proxy Caddyfile does not parse: svc:sync would lose its route (design #897)" >&2; exit 1; }
+    caddy validate --config /usr/share/smortress/syncthing-gui.Caddyfile --adapter caddyfile >/dev/null || { echo "the shipped Syncthing GUI proxy Caddyfile does not parse: svc:sync would lose its route (design #897)" >&2; exit 1; }; \
+    test -x /usr/bin/semanage || { echo "semanage is missing from the base: the GUI proxy's port label would never be written and Caddy would be denied the bind on every boot (design #897)" >&2; exit 1; }

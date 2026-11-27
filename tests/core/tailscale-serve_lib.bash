@@ -214,7 +214,7 @@ plan_with() { jq -cn --argjson apps "$1" '{version: 1, apps: $apps}'; }
 core_status() {
     cat >"$status" <<'EOF'
 {
-  "TCP": {"443": {"HTTPS": true}, "8443": {"HTTPS": true}, "10000": {"HTTPS": true},
+  "TCP": {"443": {"HTTPS": true}, "8443": {"HTTPS": true},
           "8444": {"HTTPS": true}, "8445": {"HTTPS": true}},
   "Web": {
     "host:443": {"Handlers": {
@@ -224,7 +224,6 @@ core_status() {
       "/apps/agent-ui-personal": {"Proxy": "http://127.0.0.1:18006"},
       "/apps/agent-ui-general": {"Proxy": "http://127.0.0.1:18007"}}},
     "host:8443": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:8083"}}},
-    "host:10000": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:8384"}}},
     "host:8444": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:18006"}}},
     "host:8445": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:18007"}}}
   }

@@ -2,11 +2,12 @@
 # The loopback proxy in front of the Syncthing GUI (design #897, T1).
 #
 # Syncthing's GUI refuses a Host header it does not expect and Tailscale Serve
-# forwards the client's Host unchanged, so `svc:sync` cannot reach the GUI while
-# the check is on. The host's answer until now was `insecureSkipHostcheck`, which
-# turns the check off for every caller instead of teaching the GUI one name: this
-# unit is what replaces it when T2 clears that setting; T1 ships with the setting
-# still applied so the rollback is the one-line PATCH. Caddy answers on 127.0.0.1:8385, rewrites Host to
+# forwards the client's Host unchanged, so `svc:sync` cannot reach the GUI unless
+# the header is the one the GUI trusts. The host's answer used to be
+# `insecureSkipHostcheck`, which turns the check off for every caller instead of
+# teaching the GUI one name; since T2 the bypass is off and
+# `smortress-syncthing-hostcheck.service` is what keeps it off. Caddy answers on
+# 127.0.0.1:8385, rewrites Host to
 # 127.0.0.1:8384, and forwards, so the GUI keeps its check and `svc:sync` targets
 # the proxy (scripts/tailscale-serve.sh) rather than the GUI.
 #
@@ -17,11 +18,22 @@
 # what covers this unit failing, so Wants/Requires would only make the proxy's
 # failure take the GUI with it.
 #
+# Requires= the host-check enforcement (T2): the GUI trusts one address only
+# because that bypass is off, so a proxy in front of a GUI that still trusts any
+# Host would be the exposure the split was meant to end. A failed enforcement
+# therefore takes the route down instead of trusting a setting nobody verified.
+#
+# Requires= the port label (T2): a confined Caddy may bind only an http_port_t
+# port, so the proxy that starts before the label exists is denied at its first
+# bind and stays down for the rest of the boot. The label unit is a no-op on a
+# store that already carries it, which is every boot after the first.
+#
 # Not in deploy-units.txt on purpose: a proxy that is not running is a broken
-# route, not a host that rolled back onto an image that deployed cleanly, and the
-# GUI's own 10000 route still answers until T2 retires it.
+# route, not a host that rolled back onto an image that deployed cleanly.
 Description=Loopback proxy in front of the Syncthing GUI
-After=network.target syncthing.service
+After=network.target syncthing.service smortress-syncthing-hostcheck.service smortress-selinux-caddy-proxy.service
+Requires=smortress-syncthing-hostcheck.service
+Requires=smortress-selinux-caddy-proxy.service
 Wants=network.target
 
 [Service]

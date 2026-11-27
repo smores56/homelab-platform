@@ -1,0 +1,43 @@
+[Unit]
+# The GUI's host check, back on (design #897, T2).
+#
+# The GUI gets one address it trusts -- 127.0.0.1:8384 -- and the environment
+# cannot put it back on: `insecureSkipHostcheck` is host state in config.xml on the
+# syncthing-config dataset, so a restored config, a rebuilt host or an operator's
+# experiment brings the bypass with it. This unit is what makes "on" survive that.
+#
+# `smortress-syncthing-gui-proxy.service` Requires= this unit: a proxy in front of
+# a GUI whose check is off would serve the whole tailnet a GUI that trusts any
+# Host, so the route has to be down rather than true-by-assumption.
+#
+# Not `Requires=syncthing.service`: the script's own retry loop covers a container
+# that is still starting, and an ordering that failed this unit whenever the GUI
+# failed would also take the proxy's restart with it.
+Description=Turn the Syncthing GUI's host check back on
+After=network.target syncthing.service
+Wants=network.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# The script budgets 60 attempts of 5 s, and systemd's default for a oneshot is
+# 90 s: a GUI that answers at 100 s would fail a unit whose only job is to wait
+# for it, and the proxy Requires= it. Above the script's budget, so a GUI slower
+# than the wait is the script's own message in the journal.
+TimeoutStartSec=360
+ExecStart=/usr/libexec/syncthing-hostcheck
+# Root: the API key is in config.xml, which is 0700 core:core. The script reads
+# that one file and talks to loopback; nothing here needs a writable filesystem.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

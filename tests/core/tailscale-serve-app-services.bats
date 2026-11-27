@@ -19,12 +19,11 @@ setup() { ts_setup; }
 # Immich, Navidrome, the two agent web UIs and the Syncthing GUI follow the
 # catalogue off the per-port scheme: each declaration is `--https` against a
 # Service of its own, so Tailscale terminates TLS for that name, and each is
-# additive -- the host routes (443, 8448, 8444, 8445, 10000) stay declared above
-# as the rollback. The GUI is here through the loopback proxy in front of it
-# (design #897, T1): Serve forwards the client's Host unchanged, so `svc:sync`
-# targets 8385, where Caddy rewrites the Host to the one the GUI checks. The skip
-# PATCH stays on the host until T2 clears it, so 8384 and the 10000 route remain
-# the rollback.
+# additive -- the host routes (443, 8448, 8444, 8445) stay declared above. The GUI
+# is here through the loopback proxy in front of it (design #897, T1/T2): Serve
+# forwards the client's Host unchanged, so `svc:sync` targets 8385, where Caddy
+# rewrites the Host to the one the GUI trusts. T2 cleared the skip PATCH and retired
+# the 10000 host route, so this name is the GUI's only way in.
 
 @test "the Immich Service endpoint is declared exactly once, over https/443" {
     core_run
@@ -119,7 +118,7 @@ setup() { ts_setup; }
 @test "no app Service declaration opens a host port" {
     core_run
     assert_equal "$(jq -r '.Web | keys | join(" ")' "$status" 2>/dev/null)" \
-        'host:10000 host:443 host:8443 host:8444 host:8445 host:8448'
+        'host:443 host:8443 host:8444 host:8445 host:8448'
 }
 
 @test "host:443 still fronts Immich as the rollback" {
@@ -140,11 +139,6 @@ setup() { ts_setup; }
 @test "host:8445 still fronts the general UI as the rollback" {
     core_run
     serves host:8445 / http://127.0.0.1:18007
-}
-
-@test "host:10000 still fronts the Syncthing GUI as the rollback" {
-    core_run
-    serves host:10000 / http://127.0.0.1:8384
 }
 
 @test "the app Services are declared after the catalogue and before the Serve status read" {

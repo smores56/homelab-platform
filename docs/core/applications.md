@@ -549,7 +549,7 @@ disk to be read.
 | --- | --- | --- |
 | Immich | `127.0.0.1:2283` | `https://immich.<tailnet>.ts.net/` (the `svc:immich` Service, which is also the edge's upstream) and `https://smortress.<tailnet>.ts.net/` |
 | OPDShelf | `127.0.0.1:8083` | `https://opds.<tailnet>.ts.net/` (the `svc:opds` Service, which is also the edge's upstream) and `https://smortress.<tailnet>.ts.net:8443/` |
-| Syncthing GUI | `127.0.0.1:8384` | `https://sync.<tailnet>.ts.net/` and `https://smortress.<tailnet>.ts.net:10000/` |
+| Syncthing GUI | `127.0.0.1:8384`, through the loopback proxy on `127.0.0.1:8385` | `https://sync.<tailnet>.ts.net/` |
 | Navidrome | `127.0.0.1:4533` | `https://navidrome.<tailnet>.ts.net/` and `https://smortress.<tailnet>.ts.net:8448/` |
 | Wallpapers | `/srv/wallpapers` (static files) | `https://smortress.<tailnet>.ts.net/wallpapers/` |
 | Personal agent gateway | `127.0.0.1:18001` | `https://smortress.<tailnet>.ts.net/apps/agent-local/v1` |
@@ -561,7 +561,7 @@ disk to be read.
 
 The two agent paths are a second table in `scripts/tailscale-serve.sh`
 (`core_path_routes`): the clients that address those APIs already use a path, and
-443, 8443 and 10000 were the ports already taken. The browser UIs cannot work that
+443 and 8443 were the ports already taken. The browser UIs cannot work that
 way -- a web UI emits absolute asset and link URLs, so a path prefix on 443 would
 send the browser to the tailnet root, which is Immich -- and they get two more
 entries in `core_routes` (8444 and 8445) instead. A tenant

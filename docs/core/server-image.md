@@ -744,8 +744,8 @@ a temporary age identity; it wrote `canary: sops-decrypt-ok` at mode 0400 root.
 ### The tailnet policy and the enrollment key
 
 `tofu/tailscale.tf` owns the policy: one `tailscale_acl`, gated on `var.tailnet`,
-admitting `group:owner` to smortress on 22, Serve's 443/8443/10000 and Syncthing's
-22000, and nothing else. The group member is `var.tailscale_login`, the tailnet's
+admitting `group:owner` to smortress on 22, Serve's 443/8443/8444/8445/8448 and
+Syncthing's 22000, and nothing else (the GUI has no host port: it is `svc:sync`). The group member is `var.tailscale_login`, the tailnet's
 own `user@provider`, **not** the Access `var.email`: Tailscale accepts a member it
 does not know and then admits nobody. The policy's `tests` run on every save, so a
 rule that widens access fails the plan instead of reaching the tailnet.
@@ -777,7 +777,7 @@ credentials").
 tailscale status                          # expect: smortress listed
 ssh smortress true                        # expect: success
 curl -sS --max-time 5 http://smortress:80/ && echo open || echo closed
-# expect: closed — the policy admits 22, 443, 8443, 10000 and 22000 only
+# expect: closed — the policy admits 22, 443, 8443, 8444, 8445, 8448 and 22000 only
 ```
 
 From a device outside `group:owner`, port 22 must not answer while `tailscale ping

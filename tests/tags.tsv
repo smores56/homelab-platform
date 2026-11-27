@@ -152,3 +152,4 @@ finance/publish	tests/finance/publish.bats tests/finance/* libs/data_plane/colle
 mail/publish	tests/mail/publish.bats tests/mail/* libs/data_plane/collectors/raw/publish_mail.py units/systemd/smortress-agent-mail-stream.service
 brave/publish	tests/brave/publish.bats libs/data_plane/collectors/raw/publish_brave.py units/systemd/smortress-agent-collect-brave.service
 calendar/publish	tests/calendar/publish.bats tests/calendar/* libs/data_plane/collectors/raw/publish_calendar.py units/systemd/smortress-agent-collect-calendar.service
+core/syncthing-hostcheck	tests/core/syncthing-hostcheck.bats scripts/syncthing-hostcheck.sh units/systemd/smortress-syncthing-hostcheck.service units/systemd/smortress-syncthing-gui-proxy.service units/systemd/smortress-selinux-caddy-proxy.service bootc/server/Containerfile scripts/tailscale-serve.sh tofu/tailscale.tf tests/core/*
