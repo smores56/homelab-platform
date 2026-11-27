@@ -33,7 +33,7 @@ ExecStart=/usr/bin/podman run --rm --replace --name smortress-agent-collect-phot
   --env PYTHONPATH=/usr/lib/data-plane/libs:/usr/lib/data-plane \
   --env PYTHONDONTWRITEBYTECODE=1 \
   --entrypoint python3 \
-  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:7246da5a75bf2eb3d33923e8c5915c914ae505df1ed5edd11a8c36b55c11b50a \
+  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:c38090f3bba4736dfc7d9e490fbc3a4b69bb568022bdd70082f05f558e9fca23 \
   -m data_plane.collectors.raw --root /replica/photos \
   photos --entities /entities
 Restart=no
