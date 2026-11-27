@@ -118,8 +118,6 @@ one Restic snapshot names every dataset the unit restores.
 | --- | --- | --- | --- |
 | Immich | `raw/photos` — `/srv/photos`, the asset library | `state/immich-postgres` — `/var/lib/immich/postgres` (the dataset root is `PGDATA`); `state/immich-dumps` — `/var/lib/immich/dumps` | `/data/library`; Postgres `/data`; the dump writes into the dump dataset |
 | OPDShelf | `raw/books` — `/srv/books`, the catalog | `state/opdshelf` — `/var/lib/opdshelf`, edits, annotations and covers | `/books`; `DATA_DIR=/state` |
-| Personal agent | none — no personal source is mounted | `state/agent-local` — `/var/lib/agent/local`, sessions, memory, skills | `/opt/data` |
-| General agent | none — no repository or book tree is mounted | `state/agent-general` — `/var/lib/agent/general`, same shape | `/opt/data` |
 | Personal gateway | `/srv/files` (read-write), `/srv/files/vault` (read-only) | `state/agent-local` — `/var/lib/agent/local/memory`, the `local` memory profile, the collectors' derived index, and `/watch`, the source watcher's feed | `/opt/data` (writable), `/srv/files` (writable), `/srv/files/vault` (read-only) |
 | General gateway | `/srv/git` (read-write), `/srv/books` (read-write) | `state/agent-general` — `/var/lib/agent/general/memory`, the `external` profile | `/opt/data` (writable), `/srv/git` and `/srv/books` (writable) |
 | Local model | none | none: `state/agent-model` — `/var/lib/agent/model` is the GGUF file, and it is in no backup | `/models` (read-only) |
