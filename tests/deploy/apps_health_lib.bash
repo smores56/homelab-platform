@@ -1,5 +1,8 @@
-#!/usr/bin/env bats
-# bats file_tags=deploy
+# Shared prober helpers for the split apps-health suites. Sourced by
+# tests/deploy/apps-health-*.bats through `load ./apps_health_lib`; bats
+# sources it afresh for every test, so it only defines functions and the
+# variables they read.
+# shellcheck disable=SC2154,SC2034
 # Offline checks for the tenant's five-minute health prober (smortress-apps-health).
 #
 # The prober asks the three questions that define a serving app: the Quadlet's
@@ -16,18 +19,40 @@
 # check is a real TCP connect to a throwaway listener, because a fake would prove
 # nothing about it. No root, no reboot, no image, no network.
 #
-#   bats tests/deploy/apps-health.bats
-load ../helpers
-
+#   bats tests/deploy/apps-health-matrix.bats tests/deploy/apps-health-cases.bats
 prober=scripts/smortress-apps-health.sh
 lib=scripts/deploy-state.sh
 ping_url=https://hc.invalid/ping/abc
 tenant_ping_url=https://hc.invalid/ping/tenant
-# Two ports: one a real listener holds, one nothing ever binds. The closed one is
-# a fixed number rather than a second ephemeral bind, so a rerun on another host
-# keeps meaning the same thing.
-app_port=34711
-closed_port=34712
+# Two ports, both taken from the kernel's ephemeral range in health_setup_file:
+# one a real listener holds, one nothing binds. They cannot be fixed numbers:
+# bats runs files in parallel, and both health files call health_setup_file, so a
+# constant would have the second file's listener lose the bind and then "pass"
+# against the first file's socket.
+app_port=
+closed_port=
+
+# pick_closed_port: a loopback port on which nothing is listening, allocated by
+# binding port 0 and releasing it. The connect re-checks the port is closed at
+# the moment it is chosen, so a foreign listener cannot silently become ours.
+pick_closed_port() {
+    local candidate
+    for _ in $(seq 1 20); do
+        candidate=$(python3 - <<'PY'
+import socket
+probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+probe.bind(("127.0.0.1", 0))
+print(probe.getsockname()[1])
+probe.close()
+PY
+        )
+        if ! port_accepts "$candidate"; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
 
 # port_accepts <port>: a TCP connect to a loopback port, from a child bash, so
 # the port is a number and never a name this shell could resolve.
@@ -39,7 +64,7 @@ port_accepts() {
 
 # The fakes and the listener are the same for every test, so they are built once
 # per file; the plan, the Serve answer, the records and the logs are per test.
-setup_file() {
+health_setup_file() {
     bin=$BATS_FILE_TMPDIR/bin
     mkdir -p "$bin"
 
@@ -113,14 +138,17 @@ STUB
 
     # The listener is a real socket: the ingress check must pass on a bound port
     # and fail on an unbound one, and a stub could only ever say what it was
-    # told. One listener serves the whole file and its pid is left behind for
-    # teardown_file, the one process that can see it again.
-    python3 - "$app_port" <<'PY' &
+    # told. It binds port 0 and reports the port it got, so two files running
+    # under `--jobs` cannot collide. One listener serves the whole file and its
+    # pid is left behind for teardown_file, the one process that sees it again.
+    rm -f "$BATS_FILE_TMPDIR/listener.port"
+    python3 - "$BATS_FILE_TMPDIR/listener.port" <<'PY' &
 import socket, sys
 listener = socket.socket()
-listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-listener.bind(("127.0.0.1", int(sys.argv[1])))
+listener.bind(("127.0.0.1", 0))
 listener.listen(16)
+with open(sys.argv[1], "w") as fh:
+    fh.write(str(listener.getsockname()[1]))
 while True:
     try:
         conn, _ = listener.accept()
@@ -130,9 +158,25 @@ while True:
 PY
     printf '%s\n' "$!" >"$BATS_FILE_TMPDIR/listener.pid"
     for _ in $(seq 1 50); do
-        port_accepts "$app_port" && break
+        [[ -s $BATS_FILE_TMPDIR/listener.port ]] && break
         sleep 0.1
     done
+    if [[ ! -s $BATS_FILE_TMPDIR/listener.port ]]; then
+        printf 'health_setup_file: the app listener never reported a port\n' >&2
+        return 1
+    fi
+    app_port=$(cat "$BATS_FILE_TMPDIR/listener.port")
+    if ! port_accepts "$app_port"; then
+        printf 'health_setup_file: the app listener on port %s accepts no connection\n' "$app_port" >&2
+        return 1
+    fi
+    if ! closed_port=$(pick_closed_port); then
+        printf 'health_setup_file: no closed loopback port could be found\n' >&2
+        return 1
+    fi
+    # bats runs each test in its own process, which does not inherit the file's
+    # variables, so the pair is left on disk for health_setup to read.
+    printf '%s %s\n' "$app_port" "$closed_port" >"$BATS_FILE_TMPDIR/ports"
 }
 
 teardown_file() {
@@ -144,7 +188,9 @@ teardown_file() {
 # Every test starts from the healthy tenant and breaks the one part it is about:
 # bats runs a file's tests in parallel, so the state, the records and the logs
 # are per test.
-setup() {
+health_setup() {
+    read -r app_port closed_port <"$BATS_FILE_TMPDIR/ports"
+    export app_port closed_port
     work=$BATS_TEST_TMPDIR
     log=$work/log
     state=$work/state
@@ -291,268 +337,4 @@ case_fixture() {
 case_probe() { # <case>
     case_fixture "$1"
     probe
-}
-
-# --- the prober's own fakes --------------------------------------------------
-
-# The fixture's whole claim, proved: without a bound port the ingress cases below
-# would be proving the prober against a closed port twice.
-@test "the ingress stand-in accepts connections on 127.0.0.1:34711" {
-    for _ in $(seq 1 50); do
-        port_accepts "$app_port" && return 0
-        sleep 0.1
-    done
-    return 1
-}
-
-# --- 1. a healthy tenant passes silently ------------------------------------
-
-@test "a healthy plan journals no failure" {
-    case_probe healthy
-    assert_equal "$(journal_field apps-health-failed '.reason')" ''
-}
-
-@test "the unit is asked of the tenant's own manager" {
-    case_probe healthy
-    assert grep -qF -- '--machine=apps@.host is-active demo.service' "$log/systemctl-calls"
-}
-
-@test "the plan's Quadlet name is asked about the .service unit it generates" {
-    case_probe healthy
-    assert grep -qF -- 'is-active demo.service' "$log/systemctl-calls"
-}
-
-@test "the base path is checked against Serve" {
-    case_probe healthy
-    assert grep -qF -- 'serve status --json' "$log/tailscale-calls"
-}
-
-@test "a healthy tick pings the tenant check green" {
-    case_probe healthy
-    ping_is '' '1 app(s) are serving'
-}
-
-# The prober judges and journals; it never acts on the platform or on the tenant,
-# and it never touches the deploy check: one Healthchecks check answered by the
-# host heartbeat cannot carry a tenant verdict, and a `deploy_notify fail` from
-# here would page a down/recover pair every five minutes for one broken app.
-no_landed_record() { # <case>
-    case_probe "$1"
-    assert [ ! -e "$state/state.json" ]
-}
-
-no_pending_record() { # <case>
-    case_probe "$1"
-    assert [ ! -e "$state/pending.json" ]
-}
-
-no_denylist() { # <case>
-    case_probe "$1"
-    assert [ ! -e "$state/denylist.json" ]
-}
-
-no_reboot() { # <case>
-    case_probe "$1"
-    refute grep -q 'reboot' "$log/systemctl-calls"
-}
-
-pings_only_the_tenant_check() { # <case>
-    case_probe "$1"
-    [[ ! -s $log/curl-urls ]] || ! grep -qvF -- "$tenant_ping_url" "$log/curl-urls"
-}
-
-fails_the_probe() { # <case>
-    case_probe "$1"
-    expect_failure
-}
-
-journals_the_reason() { # <case>
-    case_probe "$1"
-    assert_equal "$(journal_field apps-health-failed '.reason')" "$(reason_for "$1")"
-}
-
-passes() { # <case>
-    case_probe "$1"
-    assert_equal "$rc" 0
-}
-
-for case in $fail_cases; do
-    label=$(label_for "$case")
-    register "$label fails the probe" fails_the_probe "$case"
-    register "the failure is journaled as $(reason_for "$case")" journals_the_reason "$case"
-    register "$label records no landed deployment" no_landed_record "$case"
-    register "$label leaves no pending record" no_pending_record "$case"
-    register "$label denylists nothing" no_denylist "$case"
-    register "$label requests no reboot" no_reboot "$case"
-    register "$label pings only the tenant check" pings_only_the_tenant_check "$case"
-done
-
-for case in $pass_cases; do
-    label=$(label_for "$case")
-    register "$label passes" passes "$case"
-    register "$label records no landed deployment" no_landed_record "$case"
-    register "$label leaves no pending record" no_pending_record "$case"
-    register "$label denylists nothing" no_denylist "$case"
-    register "$label requests no reboot" no_reboot "$case"
-    register "$label pings only the tenant check" pings_only_the_tenant_check "$case"
-done
-
-# --- 2. an app whose unit is not active -------------------------------------
-
-@test "the journal names the app" {
-    case_probe tenant-unit-inactive
-    assert_equal "$(journal_field apps-health-failed '.app')" demo
-}
-
-@test "the journal names the unit" {
-    case_probe tenant-unit-inactive
-    assert_equal "$(journal_field apps-health-failed '.unit')" demo.service
-}
-
-@test "the unit's own stderr names the reason too" {
-    case_probe tenant-unit-inactive
-    assert_contains "$out" 'not serving: tenant-unit-inactive:demo'
-}
-
-@test "a failure reports the reason to the tenant check in the same tick" {
-    case_probe tenant-unit-inactive
-    ping_is /fail 'not serving: tenant-unit-inactive:demo'
-}
-
-# --- 3. a plan row that cannot be probed ------------------------------------
-
-@test "the unreadable row is journaled with its app" {
-    case_probe plan-row-unreadable
-    assert_equal "$(journal_field apps-health-failed '.app')" demo
-}
-
-# --- 6. an apps apply in flight is not a fault ------------------------------
-
-# A tick inside the apply window must say nothing rather than page on a deploy
-# that succeeds.
-@test "an apply in flight journals no failure" {
-    case_probe apply-in-flight
-    assert_equal "$(journal_field apps-health-failed '.reason')" ''
-}
-
-@test "an apply in flight probes no unit" {
-    case_probe apply-in-flight
-    assert [ ! -s "$log/systemctl-calls" ]
-}
-
-@test "an apply in flight keeps the tenant check green" {
-    case_probe apply-in-flight
-    ping_is '' 'apps apply in flight; nothing was probed'
-}
-
-# An apply that begins after the run's first look is the same window: the record
-# the prober read for was not there yet, and the revision it is now halfway
-# through is the one this tick would call broken. Reporting it would put a false
-# line on the tenant's only signal for every deploy that overlaps a tick.
-@test "the mid-probe apply is seen after the probe started" {
-    case_probe apply-mid-probe
-    assert grep -qF -- 'is-active demo.service' "$log/systemctl-calls"
-}
-
-@test "an apply that starts mid-probe journals no failure" {
-    case_probe apply-mid-probe
-    assert_equal "$(journal_field apps-health-failed '.reason')" ''
-}
-
-@test "an apply that starts mid-probe keeps the tenant check green" {
-    case_probe apply-mid-probe
-    ping_is '' 'apps apply in flight; nothing was reported'
-}
-
-# --- 7. no plan is a host with no tenant -----------------------------------
-
-# The prober runs from the first boot, before the first apps apply installs a
-# plan: failing here would name every healthy host a host with a broken tenant.
-@test "no plan still pings the tenant check green" {
-    case_probe no-plan
-    ping_is '' 'no tenant plan'
-}
-
-@test "no plan probes no unit" {
-    case_probe no-plan
-    assert [ ! -s "$log/systemctl-calls" ]
-}
-
-# --- 8. one run journals one failure --------------------------------------
-
-# Two broken apps are one outage, not two: the run stops at the first failure, so
-# the journal gets a single line naming the app that came first in the plan.
-two_inactive_apps() {
-    : >"$STUB_SYSTEMCTL_USER_ACTIVE"
-    jq -nc --argjson port "$app_port" \
-        '{version:1,apps:{alpha:{basePath:"/apps/alpha",containerPort:8080,loopbackPort:$port},
-          beta:{basePath:"/apps/beta",containerPort:8081,loopbackPort:$port}}}' >"$APPS_PLAN"
-    probe
-}
-
-@test "a plan with two inactive apps fails the probe" {
-    two_inactive_apps
-    expect_failure
-}
-
-@test "a run with two inactive apps journals one failure" {
-    two_inactive_apps
-    assert_equal "$(grep -c 'apps-health-failed' "$state/journal.jsonl")" 1
-}
-
-@test "the first failing app decides the reason" {
-    two_inactive_apps
-    assert_equal "$(journal_field apps-health-failed '.reason')" tenant-unit-inactive:alpha
-}
-
-# --- 9. an unstaged check is silent, not a failure -------------------------
-# The URL is an operator step: until it is in the decrypted file the prober has
-# nothing to ping, and the tenant verdict must still be journaled normally.
-no_apps_ping_url() {
-    printf 'restic-ping-url: https://hc.invalid/ping/restic\n' >"$APPS_HEALTH_SECRET"
-}
-
-nothing_pinged() {
-    assert_equal "$(wc -l <"$log/curl-urls" | tr -d ' ')" 0
-}
-
-@test "a missing apps-ping-url key does not fail the probe" {
-    no_apps_ping_url
-    probe
-    assert_equal "$rc" 0
-}
-
-@test "a missing apps-ping-url key pings nothing" {
-    no_apps_ping_url
-    probe
-    nothing_pinged
-}
-
-@test "a missing apps-ping-url key still fails a broken tenant" {
-    no_apps_ping_url
-    : >"$STUB_SYSTEMCTL_USER_ACTIVE"
-    probe
-    expect_failure
-}
-
-@test "a missing apps-ping-url key still journals the reason" {
-    no_apps_ping_url
-    : >"$STUB_SYSTEMCTL_USER_ACTIVE"
-    probe
-    assert_equal "$(journal_field apps-health-failed '.reason')" tenant-unit-inactive:demo
-}
-
-@test "a broken tenant with no check configured pings nothing" {
-    no_apps_ping_url
-    : >"$STUB_SYSTEMCTL_USER_ACTIVE"
-    probe
-    nothing_pinged
-}
-
-# The deploy check is never pinged from here, whatever the tenant's state; the
-# case that pages the tenant check is the one that could reach it.
-@test "the tenant prober never pings the deploy check" {
-    case_probe tenant-unit-inactive
-    assert [ -e "$DEPLOY_PING_SECRET" ]
-    refute grep -qF -- "$ping_url" "$log/curl-urls"
 }
