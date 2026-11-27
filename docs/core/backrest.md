@@ -257,8 +257,9 @@ repository, token, `--no-lock` or "verified only" moves with the host:
   is a cache — it is rebuilt by listing the repository — so it is in no recovery
   group.
 - `svc:recovery` is the tailnet name `scripts/tailscale-serve.sh` advertises on
-  `127.0.0.1:9898`, `tofu/tailscale.tf` creates it and grants it to `tag:vps`
-  alone, and the edge's Caddyfile proxies `recovery.sammohr.dev` to
+  `127.0.0.1:9898`, `tofu/tailscale.tf` creates it and grants it to `tag:vps` and
+  `group:owner` — two sources, no probe and no tagged host — and the edge's
+  Caddyfile proxies `recovery.sammohr.dev` to
   `$RECOVERY_UPSTREAM` (`https://recovery.<tailnet>.ts.net`).
 - `smortress-backrest-watchdog.timer` restarts the reader when it stops answering
   and pings Healthchecks from `/etc/backrest/healthcheck-url`, which is why it is

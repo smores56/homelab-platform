@@ -1174,18 +1174,21 @@ done
 
 grant_to() { has "dst[[:space:]]*=[[:space:]]*\\[\"$1\"\\]"; }
 
-for dst in svc:immich svc:navidrome svc:assistant svc:agent svc:sync svc:terminal; do
+for dst in svc:immich svc:navidrome svc:assistant svc:agent svc:sync svc:terminal svc:recovery; do
     register "the policy grants the owner $dst" grant_to "$dst"
 done
 
-# The reader is the edge's alone (SDLC #953): no owner grant, no probe grant, so
-# its password is the only login anybody gets at it.
+# The reader answers with its own password and no identity gate, so the grant is
+# what separates an owner device from anybody else. #953 narrowed this to the
+# edge alone; the owner keeps its path back so the reader is debuggable from the
+# same place as every other Service. The probe stays out: it reads status classes
+# of the six apps, and a login form is not one.
 @test "the policy grants the edge the reader Service" {
     grant_to svc:recovery
 }
 
-@test "the owner has no grant on the reader Service" {
-    eq "$(grep -cF 'dst = ["svc:recovery"]' "$BATS_FILE_TMPDIR/code.tf")" 1
+@test "the owner and the edge both reach the reader Service" {
+    eq "$(grep -cF 'dst = ["svc:recovery"]' "$BATS_FILE_TMPDIR/code.tf")" 2
 }
 
 @test "the grant names the one service port" {
@@ -1211,12 +1214,12 @@ done
 }
 
 # The destination is the service and the port, never the name, so a source needs
-# one grant per Service it reaches. Sixteen grants are the whole admitted set --
-# the owner's on seven of the eight Services (#834: the catalogue's, the four core
-# apps', the Syncthing GUI's and the web terminal's), the CI names probe's on the
-# same six (#848) and the public edge's on the three it proxies (#725, #953) -- so
-# a seventeenth, a second port on any, or a grant no test below reads, is a
-# widening nobody decided.
+# one grant per Service it reaches. Seventeen grants are the whole admitted set --
+# the owner's on all eight Services (#834: the catalogue's, the four core apps',
+# the Syncthing GUI's and the web terminal's; the reader's since the owner path
+# came back), the CI names probe's on six (#848) and the public edge's on the
+# three it proxies (#725, #953) -- so an eighteenth, a second port on any, or a
+# grant no test below reads, is a widening nobody decided.
 grants_block() {
     awk '/^    grants = \[/ { f = 1 } f { print } f && /^    \]/ { exit }' "$BATS_FILE_TMPDIR/code.tf"
 }
@@ -1225,12 +1228,12 @@ grants_block() {
     [ -n "$(grants_block)" ]
 }
 
-@test "the Services are granted to exactly sixteen sources" {
-    eq "$(grep -cE '^        src = ' <<<"$(grants_block)")" 16
+@test "the Services are granted to exactly seventeen sources" {
+    eq "$(grep -cE '^        src = ' <<<"$(grants_block)")" 17
 }
 
-@test "the owner reaches all seven Services" {
-    eq "$(grep -cF 'src = ["group:owner"]' <<<"$(grants_block)")" 7
+@test "the owner reaches all eight Services" {
+    eq "$(grep -cF 'src = ["group:owner"]' <<<"$(grants_block)")" 8
 }
 
 @test "the names probe reaches the six Service names" {
@@ -1242,7 +1245,7 @@ grants_block() {
 }
 
 @test "every grant names the one Service port" {
-    eq "$(grep -cF 'ip  = ["443"]' <<<"$(grants_block)")" 16
+    eq "$(grep -cF 'ip  = ["443"]' <<<"$(grants_block)")" 17
 }
 
 # No test names the retired Service at all: a destination a grant no longer

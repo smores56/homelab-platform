@@ -112,10 +112,10 @@ locals {
     # A Service VIP is an address the tailnet owns rather than one a device
     # holds, so it cannot be named as an `acl` destination: that form is a host's
     # port, and the VIP is no host. A grant names the service instead, and the
-    # owner reaches seven of the eight Services (design #834). The CI names probe
-    # (#848) holds a second grant on each of the six it reads, which is worth
-    # nothing unless the prober is not the owner; the public edge (#725, #953)
-    # holds the only grant on the three it proxies.
+    # owner reaches all eight Services (design #834, plus the reader's own path
+    # back below). The CI names probe (#848) holds a second grant on each of the
+    # six it reads, which is worth nothing unless the prober is not the owner; the
+    # public edge (#725, #953) holds the only grant on the three it proxies.
     #
     # One grant per application instead of one fronting all of them is the
     # narrower surface, not the wider one: each granted VIP is a Service that
@@ -167,6 +167,19 @@ locals {
         # is the first gate and the login token the second (#954).
         src = ["group:owner"]
         dst = ["svc:terminal"]
+        ip  = ["443"]
+      },
+      {
+        # The recovery reader's owner grant. #953 narrowed this Service to the
+        # edge alone, which left the reader reachable from exactly one place and
+        # debuggable from none: a tailnet-only name that does not even resolve is
+        # not a credential boundary the owner can use. The boundary that matters
+        # is unchanged -- the reader still answers only its own login form, it is
+        # still not granted to the probe or any tagged host, and the write denial
+        # at the Backrest and R2 layers is still the control (docs/core/backrest.md,
+        # "The read-only boundary").
+        src = ["group:owner"]
+        dst = ["svc:recovery"]
         ip  = ["443"]
       },
       {
@@ -231,9 +244,10 @@ locals {
         # reaching a process on the VPS, and the corpus-read credential never
         # leaves the tailnet. A Service and not a host port, still: the host's 443
         # carries the agent gateway APIs and the wallpaper tree, and a
-        # port-scoped rule cannot say "this path only". No owner or probe grant
-        # accompanies this one -- the reader is the edge's alone, and its own
-        # password is the only login anybody gets.
+        # port-scoped rule cannot say "this path only". The owner's grant above is
+        # the other half of its reachable set: two sources, owner and edge, and no
+        # third -- in particular no probe grant, because a login form is not a
+        # status class.
         src = ["tag:vps"]
         dst = ["svc:recovery"]
         ip  = ["443"]
