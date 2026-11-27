@@ -20,19 +20,13 @@ gui=${SYNCTHING_GUI:-http://127.0.0.1:8384}
 attempts=${SYNCTHING_ATTEMPTS:-60}
 pause=${SYNCTHING_PAUSE:-5}
 
-# awk, not `sed | head`: under `pipefail` the SIGPIPE from a reader that stops
-# early fails the assignment, and the file is root-only so a guessed key is not
-# an option.
-key=$(awk -F'<apikey>|</apikey>' '/<apikey>/ { gsub(/[[:space:]]/, "", $2); print $2; exit }' "$config")
-if [[ -z $key ]]; then
-  echo "syncthing-hostcheck: no <apikey> in $config: the GUI's check cannot be enforced" >&2
-  exit 1
-fi
-
-# The GUI is a container that may still be starting, and this unit is ordered
-# after its Quadlet but not gated on its health. /rest/noauth/health needs no
-# key. A GUI that never answers is this unit's failure: the proxy Requires= it,
-# so the route goes down with it rather than serving a GUI nobody verified.
+# The GUI is a container that may still be starting, its config -- where the key
+# lives -- is written by its own first start, and this unit is ordered after that
+# Quadlet but not gated on its health. So the wait comes first: on a fresh host the
+# file does not exist yet, and reading it before the GUI answered would fail a unit
+# whose whole job is to write one setting. /rest/noauth/health needs no key. A GUI
+# that never answers is this unit's failure: the proxy Requires= it, so the route
+# goes down with it rather than serving a GUI nobody verified.
 ready=
 for _ in $(seq 1 "$attempts"); do
   if curl -fsS -o /dev/null "$gui/rest/noauth/health" 2>/dev/null; then
@@ -43,6 +37,15 @@ for _ in $(seq 1 "$attempts"); do
 done
 if [[ -z $ready ]]; then
   echo "syncthing-hostcheck: the GUI at $gui never answered" >&2
+  exit 1
+fi
+
+# awk, not `sed | head`: under `pipefail` the SIGPIPE from a reader that stops
+# early fails the assignment, and the file is root-only so a guessed key is not
+# an option.
+key=$(awk -F'<apikey>|</apikey>' '/<apikey>/ { gsub(/[[:space:]]/, "", $2); print $2; exit }' "$config")
+if [[ -z $key ]]; then
+  echo "syncthing-hostcheck: no <apikey> in $config: the GUI's check cannot be enforced" >&2
   exit 1
 fi
 

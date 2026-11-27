@@ -91,13 +91,23 @@ run_check() {
     assert_output 1
 }
 
-@test "a config with no apikey fails before any request" {
+@test "a config with no apikey fails instead of PATCHing with an empty key" {
     printf '<configuration/>\n' >"$config"
     run_check
     assert_equal "$rc" 1
     assert_contains "$out" 'no <apikey>'
-    run cat "$log"
-    assert_output ''
+    run grep -c 'X PATCH' "$log" || true
+    assert_output 0
+}
+
+@test "the config is read only after the GUI answers, which is when it exists" {
+    # A fresh host has no config.xml until the GUI's own first start writes it.
+    export CURL_HEALTH_RC=7
+    rm -f "$config"
+    run_check
+    assert_equal "$rc" 1
+    assert_contains "$out" 'never answered'
+    [[ $out != *'no <apikey>'* ]] || fail "the key was read before the GUI answered"
 }
 
 @test "a GUI that never answers fails the unit" {
