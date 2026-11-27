@@ -81,8 +81,10 @@ setup() {
     export EDGE_CADDY_DIR=$work/etc/caddy
     export EDGE_CADDY_CONFIG=$work/usr/share/smoresnet/Caddyfile
     export EDGE_SSH_DIR=$work/etc/ssh
-    export EDGE_CADDY_GROUP
+    export EDGE_CADDY_GROUP EDGE_CADDY_USER EDGE_CADDY_HOME
     EDGE_CADDY_GROUP=$(id -gn)
+    EDGE_CADDY_USER=$(id -un)
+    EDGE_CADDY_HOME=$work/var/lib/caddy
     # A tailnet that is up is the normal case; a test that wants it down says so
     # by rewriting the document, and no test waits for the retry budget.
     export EDGE_TAILNET_WAIT=0
@@ -448,4 +450,18 @@ wrote_nothing() {
     run_ok "$(standard_document)" --host-key "$kit_key"
     assert_contains "$out" "scripts/verify-public-edge.sh"
     assert_contains "$out" "tofu/terraform.tfvars"
+}
+
+@test "Caddy's home exists before the service is restarted" {
+    # The package's User=caddy cannot create /var/lib/caddy, and a Caddy without
+    # it serves nothing: every order fails with `mkdir /var/lib/caddy: permission
+    # denied` and every name answers 500. The image does not ship the directory,
+    # so this step is where it comes from.
+    bootstrap "$(standard_document)"
+    [[ -d $EDGE_CADDY_HOME ]] || fail "the bootstrap did not create $EDGE_CADDY_HOME"
+    assert_equal "$(stat -c '%a' "$EDGE_CADDY_HOME")" 750
+    assert_equal "$(stat -c '%U:%G' "$EDGE_CADDY_HOME")" "$EDGE_CADDY_USER:$EDGE_CADDY_GROUP"
+    # And it happened before the restart: a directory created afterwards would
+    # leave the first start failing and the test green.
+    assert grep -qF 'restart caddy' "$log/systemctl-calls"
 }

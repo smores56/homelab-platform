@@ -89,6 +89,7 @@ caddy_config=${EDGE_CADDY_CONFIG:-/usr/share/smoresnet/Caddyfile}
 # caddy.service runs as User=caddy and reads the environment file it is given, so
 # that file is root:caddy and nothing else may read it.
 caddy_group=${EDGE_CADDY_GROUP:-caddy}
+caddy_user=${EDGE_CADDY_USER:-caddy}
 ssh_dir=${EDGE_SSH_DIR:-/etc/ssh}
 edge_env=$caddy_dir/edge.env
 authkey_file=$secrets_dir/tailscale-authkey
@@ -471,6 +472,14 @@ check_secrets
 
 caddy_validate
 write_edge_env
+# Caddy runs as User=caddy and keeps its account key and certificates under
+# /var/lib/caddy, which the package expects to exist and the image does not ship:
+# the service starts, then fails every order with `mkdir /var/lib/caddy:
+# permission denied` -- a 500 from every name with nothing else to read. The
+# directory belongs to the package's user, so this creates it as that user.
+caddy_home=${EDGE_CADDY_HOME:-/var/lib/caddy}
+install -d -o "$caddy_user" -g "$caddy_group" -m 0750 "$caddy_home" ||
+  die "cannot create $caddy_home for $caddy_group"
 # The unit is skipped until this file exists (ConditionPathExists), so a restart
 # is what brings it up; on a box already serving, the restart is also how a
 # changed upstream or name reaches Caddy, since `admin off` leaves no reload.

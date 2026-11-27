@@ -1,0 +1,32 @@
+[Unit]
+# Open ssh on the public zone until this host has joined the tailnet.
+#
+# The public zone ships without ssh on purpose -- the box publishes names, not
+# shells -- and the tailscale zone is the only one that admits 22. That is right
+# for a host that has joined and wrong for one that has not: before the join
+# there is no tailnet to reach it on, and the only way in is the key-only sshd
+# the Ignition document authorized. Design #939 section 3 step 5 states that
+# window; without it a failed join is a host reachable by ping alone, with no
+# console account to fix it from, and `edge-bootstrap` (which writes the deploy
+# record) can never run.
+#
+# The window is a runtime rule, not a zone file: the reviewed public zone stays
+# the single answer to "what does this box accept", and the script decides from
+# the enrollment marker on every boot, so the boot after a successful join closes
+# it again.
+#
+# The ordering after the join unit is what makes that decision current: the join
+# unit is what writes the marker, and a skipped unit counts as done, so a fresh
+# boot lands here with no marker and a joined boot lands here with one.
+Description=Hold the public ssh window open until the tailnet join succeeds
+Requires=firewalld.service
+Wants=network-online.target
+After=firewalld.service network-online.target smoresnet-firewall-public.service smoresnet-tailscale-up.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/smoresnet-firewall-prejoin
+
+[Install]
+WantedBy=multi-user.target

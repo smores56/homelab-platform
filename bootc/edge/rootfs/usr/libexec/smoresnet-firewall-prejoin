@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# Decide whether the public zone admits ssh, from the one fact that answers it:
+# has this box joined the tailnet yet.
+#
+# The image admits no ssh on the public interface -- the public zone is 443,
+# 41641/udp and ICMP echo -- because the box's whole job is publishing names.
+# But a box that has not joined has no tailnet either, and then the operator's
+# only way in is the public interface: the key-only sshd from the Ignition
+# document. Design #939 section 3 step 5 states that window; without it a failed
+# join leaves a host reachable by ping alone, with no console account to repair
+# it from, and the deploy record and the tailnet key can only arrive over ssh.
+#
+# The window is runtime-only, never a second zone file: the shipped zone stays
+# the reviewed one, a reboot re-decides from the marker, and the state is visible
+# in `firewall-cmd --zone=public --list-all` rather than in git as a difference.
+#
+# Run by smoresnet-firewall-prejoin.service after the public binding and after
+# the join unit has had its turn.
+set -euo pipefail
+
+self_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+_smolib=$self_dir/lib/log.sh
+[[ -r $_smolib ]] || _smolib=/usr/libexec/lib/log.sh
+[[ -r $_smolib ]] || {
+  printf 'smoresnet-firewall-prejoin: no output library at %s\n' "$_smolib" >&2
+  exit 1
+}
+# shellcheck source=/dev/null
+source "$_smolib"
+
+zone=${EDGE_PUBLIC_ZONE:-public}
+marker=${EDGE_ENROLLED_MARKER:-/var/lib/smoresnet/tailscale-enrolled}
+firewall_cmd=${FIREWALL_CMD:-firewall-cmd}
+
+ssh_open() { "$firewall_cmd" --zone="$zone" --query-service=ssh >/dev/null 2>&1; }
+
+if [[ -e $marker ]]; then
+  # The tailnet is up, so 22 belongs to the tailscale zone alone. Removing an
+  # entry that is not there is not a failure: an image that already closed it, a
+  # boot that ran this twice, and a reload that dropped the runtime rule all look
+  # the same from here, and all of them are the state we want.
+  if ssh_open; then
+    "$firewall_cmd" --zone="$zone" --remove-service=ssh >/dev/null ||
+      die "the tailnet is up but ssh stays open on $zone; the box is reachable from the internet"
+    say "closed the public ssh window: this host has joined the tailnet"
+  else
+    say "public ssh is closed and this host has joined the tailnet"
+  fi
+  exit 0
+fi
+
+if ! ssh_open; then
+  "$firewall_cmd" --zone="$zone" --add-service=ssh >/dev/null ||
+    die "cannot open ssh on $zone; a host that cannot join the tailnet has no other way in"
+fi
+# Loud on purpose: the operator reads this line in the console or the journal and
+# knows the box has one more door than the zone file says, and which boot closes
+# it.
+warn "public ssh is open until the tailnet join succeeds: this host has no /var/lib/smoresnet/tailscale-enrolled yet. The next boot after the join removes it."

@@ -223,9 +223,13 @@ and 8484 closed to the internet — are the scheduled probe's
 
 ## The deploy plane
 
-Four units, and none of them is a sops unit: the edge has no SOPS plane and no age
-identity. The listener (`smoresnet-deploy-listener.service`) answers the tailnet
-on 8484, admits nothing but `homelab-platform`, and reads one plaintext secret;
+Five units, and none of them is a sops unit: the edge has no SOPS plane and no age
+identity. The listener (`smoresnet-deploy-listener.service`) binds loopback and
+admits nothing but `homelab-platform`, and `smoresnet-deploy-forward.service`
+advertises that socket on the tailnet with `tailscale serve` — without the
+forward, the notify job's POST reaches a port that exists on this host and
+nowhere else, and only the 03:00 poll would ever enqueue anything. The listener
+reads one plaintext secret;
 the drain (`smoresnet-deploy.service`, `deploy-drain-edge`) runs the shared
 `bootc/lib/deploy/drain.sh` loop with a no-op where the server's snapshot gate
 sits, records `pending.json` and reboots into the digest the verifier's `bootc
@@ -239,6 +243,16 @@ dispatched. Both only enqueue; `smoresnet-deploy.path` starts the drain on the
 first file in the queue, so a hand-run (`systemctl start
 smoresnet-deploy.service`) is the same path an operator can take while the
 listener is down.
+
+`smoresnet-firewall-prejoin.service` is the one door that is not on the list
+above: the public zone admits no ssh, and that is right for a host with a
+tailnet. A host that has not joined has no other way in, so the unit opens 22 on
+the public zone as a *runtime* rule while
+`/var/lib/smoresnet/tailscale-enrolled` is absent, and the first boot after the
+join removes it. The shipped zone stays the single reviewed answer to "what does
+this box accept"; the window is visible in `firewall-cmd --zone=public
+--list-all` and in the journal, and it is what makes `edge-bootstrap` reachable
+on a box whose join has not happened yet.
 
 The secrets are the operator's, never image content, plaintext and 0600 under
 `/etc/smoresnet` (a `tmpfiles.d` line creates the 0700 directory): the webhook
