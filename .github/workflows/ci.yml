@@ -100,6 +100,7 @@ jobs:
               --filter-tags brave \
               --filter-tags finance \
               --filter-tags mail \
+              --filter-tags calendar \
               --jobs "$(nproc)" --no-parallelize-within-files
 
   image:

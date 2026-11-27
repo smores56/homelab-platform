@@ -47,13 +47,25 @@ readonly calendar_timer=units/systemd/smortress-agent-collect-calendar.timer
   [[ -f $calendar ]]
 }
 
-@test "units/systemd/smortress-agent-collect-calendar.service is dump then collect" {
-  assert_equal "$(grep -cE '^ExecStart=' "$calendar")" 2
+@test "units/systemd/smortress-agent-collect-calendar.service is dump, collect, then publish" {
+  # Three stages: the exporter, the collector, and the plain view the agent reads
+  # (SDLC #995, T4). `Type=oneshot` runs them in order, so the vdir is published
+  # from the state the collector just committed.
+  assert_equal "$(grep -cE '^ExecStart=' "$calendar")" 3
 }
 
-@test "units/systemd/smortress-agent-collect-calendar.service names the collector network" {
-  assert_equal "$(grep -cE -- '--network systemd-agent-collect' "$calendar")" \
-    "$(grep -cE -- '--network ' "$calendar")"
+@test "units/systemd/smortress-agent-collect-calendar.service reaches only the collector network and none" {
+  # The dump and the collector talk to Tuta on the collectors' network; the
+  # projection needs no socket at all.
+  assert_equal "$(grep -cE -- '--network systemd-agent-collect' "$calendar")" 2
+  assert_equal "$(grep -cE -- '--network none([[:space:]\\]|$)' "$calendar")" 1
+  assert_equal "$(grep -cE -- '^[[:space:]]*--network ' "$calendar")" 3
+}
+
+@test "units/systemd/smortress-agent-collect-calendar.service publishes the vdir beside the replica" {
+  grep -qF -- '--volume /var/lib/agent/local/replica:/replica:ro' "$calendar" &&
+    grep -qF -- '--volume /var/lib/agent/local/sources/calendar:/out:z' "$calendar" &&
+    grep -qF -- '--raw /replica/calendar --out /out' "$calendar"
 }
 
 @test "the calendar pass holds no Podman secret" {

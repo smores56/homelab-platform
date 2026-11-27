@@ -1,9 +1,10 @@
 [Unit]
 # One calendar pass: the exporter signs in with its sealed session and rewrites
-# the entity directory, then the collector commits it to the replica state. Two
-# ExecStart lines rather than two units because the second only makes sense after
-# the first exited successfully, and because a half-written entity directory must
-# never be committed.
+# the entity directory, the collector commits it to the replica state, and the
+# projection publishes the readable view. Three ExecStart lines rather than
+# three units because each only makes sense after the one before it exited
+# successfully, and because a half-written entity directory must never be
+# committed.
 #
 # The exporter talks to Tuta on the collectors' network; the collector reads the
 # dump and writes only the personal replica. Neither can reach a deployment, the
@@ -48,6 +49,23 @@ ExecStart=/usr/bin/podman run --rm --replace --name smortress-agent-collect-cale
   ghcr.io/smores56/homelab-platform/agent-runtime@sha256:a2097dc2f54142b75137779c91f2e90956a01687cdfd2424685d748c3669baa1 \
   -m data_plane.collectors.raw --root /replica/calendar \
   calendar --entities /entities
+# Stage 3: the projection. No network, no secret, the replica read-only: its
+# whole input is the committed state and its whole output is one vdir under the
+# personal index dataset -- `events/<uid>.ics`, one VEVENT per file, plus
+# `state.json`. No event is expanded: an RRULE is carried through as the
+# provider stated it, and a tombstoned event's file is removed because the view
+# is current state and not history.
+ExecStart=/usr/bin/podman run --rm --replace --name smortress-agent-calendar-publish \
+  --network none \
+  --read-only --cap-drop=all --security-opt no-new-privileges \
+  --tmpfs /tmp:rw,size=16m --user 1000:1000 \
+  --volume /var/lib/agent/local/replica:/replica:ro \
+  --volume /var/lib/agent/local/sources/calendar:/out:z \
+  --env PYTHONPATH=/usr/lib/agent-facade/libs:/usr/lib/agent-facade \
+  --env PYTHONDONTWRITEBYTECODE=1 \
+  --entrypoint python3 \
+  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:a2097dc2f54142b75137779c91f2e90956a01687cdfd2424685d748c3669baa1 \
+  -m data_plane.collectors.raw.publish_calendar --raw /replica/calendar --out /out
 # A refusal exits 3 and publishes nothing. That is a failed unit on purpose, as
 # for the other collectors: a rejected session, a version floor or a model change
 # needs a human, and the timer is the only signal that the replica stopped

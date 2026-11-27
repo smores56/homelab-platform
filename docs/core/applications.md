@@ -500,12 +500,31 @@ has to be added to a container for a new view to be readable.
 | Finance | `replica/finance` — the committed SimpleFIN state | `sources/finance/accounts.jsonl`, `transactions.jsonl` (180-day window, 20k cap), `state.json`; amounts stay decimal text, never floats |
 | Mail | `sources/mail` — content-addressed RFC822 objects and `state.sqlite` | `sources/mail/maildir/<folder>/{cur,new,tmp}/*.eml`, `messages.jsonl` (newest 5000, decoded headers), `state.json` |
 | Browser history | `quarantine/brave/History` — the rename-published snapshot | `sources/brave/History` (a copy) and `visits.jsonl` (90-day window, newest 2000), `state.json` |
+| Calendar | `replica/calendar` — the SDK entities and their derived `.ics` | `sources/calendar/events/<uid>.ics` (one VEVENT per file), `state.json`; `RRULE` and `RECURRENCE-ID` kept unexpanded |
 
 Every view is written atomically (temp file and `os.replace`) and every
 `state.json` carries `last_run`, `ok` and the counts, so a reader can tell an
 empty source from a collector that has not run. The views are current state, not
 history: they are rebuilt on each pass and nothing replays.
 
+A view's shape follows three rules, the same in all four:
+
+- **The anchor stays raw and the view stays derived.** A publisher opens the
+  store read-only, verifies each object against its recorded size and sha256, and
+  writes only under `sources/`. A projection bug therefore costs a republish, not
+  a re-collection — which is the whole reason mail keeps its objects: 74,488
+  bodies is one Tuta pass, and an 18-minute one.
+- **A refusal publishes nothing.** A missing or damaged store exits 3 and leaves
+  the previous view in place, so a reader finds either a fresh view or the last
+  good one, and `state.json`'s `last_run` is what says which.
+- **A file per record, and no index where the record has no single time.** Mail
+  keeps its `.eml` mirror although the same bytes are in `objects/`, because a
+  shell can list a folder and open one message, and restic stores identical
+  chunks once, so the copy costs local disk and not a second backup. Calendar
+  takes one `.ics` per event and carries no index beside them: a recurring event
+  has an unexpanded `RRULE` and therefore no single `DTSTART`, so an index would
+  be a shorter and wrong answer. Mail has an index only because scanning 74k
+  Maildir files is expensive and its records do have one date each.
 
 The personal gateway reads `/srv/files` directly (SDLC #995): `todo.txt` and the
 notes are read-write, the vault is a read-only nested bind, and the runtime's own
