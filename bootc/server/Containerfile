@@ -162,6 +162,7 @@ COPY units/quadlet/immich.network units/quadlet/immich-postgres.container \
      units/quadlet/agent-egress-proxy.container \
      units/quadlet/agent-egress-dns.container \
      units/quadlet/mirage-personal.container \
+     units/quadlet/mirage-general.container \
      /usr/share/containers/systemd/
 COPY secrets/boot.json secrets/apps.json secrets/agents.json /etc/smortress/secrets/
 COPY secrets/index.json /usr/share/smortress/secrets.index.json

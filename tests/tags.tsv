@@ -150,3 +150,4 @@ tuta-calendar/check	tests/tuta-calendar/check.bats apps/tuta_calendar/* libs/dat
 agent-shell-bridge/check	tests/agent-shell-bridge/check.bats scripts/agent-shell-bridge.py tests/agent-shell-bridge/*
 backrest/check	tests/backrest/check.bats tests/backrest/guard.sh backrest/* provision/edge/Caddyfile tests/backrest/*
 agent-data-plane/slice	tests/agent-data-plane/slice.bats tests/agent-data-plane/* scripts/agent-todos-watch.py units/quadlet/mirage-personal.container units/systemd/smortress-agent-todos-watch.service bootc/server/rootfs/etc/smortress/mirage/* images/mirage/*
+agent-data-plane/general	tests/agent-data-plane/general.bats tests/agent-data-plane/* units/quadlet/mirage-general.container bootc/server/rootfs/etc/smortress/mirage/* secrets/mirage-general.json
