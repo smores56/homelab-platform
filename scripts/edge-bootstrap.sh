@@ -31,7 +31,7 @@
 # state a flag may overwrite.
 #
 #   sudo SMORTRESS_FQDN=smortress.<tailnet>.ts.net EDGE_ACME_EMAIL=you@example.com \
-#     scripts/edge-bootstrap.sh --host-key /root/kit/ssh_host_ed25519_key <<'EOF'
+#     scripts/edge-bootstrap.sh <<'EOF'
 #   TS_AUTHKEY=tskey-auth-...
 #   WEBHOOK_SECRET=...
 #   DEPLOY_PING_URL=https://hc-ping.com/...
@@ -125,7 +125,11 @@ declare -A offered=()
 declare -A seen=()
 
 force=false
-host_key=/root/kit/ssh_host_ed25519_key
+# Empty unless the operator names one: sshd's identity is the machine's own, and
+# the edge has no plan that keeps a copy of it off the box (design #939: the
+# tailnet node key is the identity that is pinned, by node ID, for the one thing
+# that needs autonomous access).
+host_key=''
 commit_override=''
 
 usage() { # [<exit>]
@@ -136,7 +140,8 @@ usage: edge-bootstrap [--force] [--commit <40-hex>] [--host-key <path>]
                    state record, the node ID and every validation stay as they
   --commit <sha>   the commit the booted image was built from, for a host whose
                    image carries no revision label
-  --host-key       the kit's ed25519 host key (default /root/kit/ssh_host_ed25519_key)
+  --host-key       install this ed25519 host key instead of keeping the one
+                   sshd generated at first boot (not needed for a normal edge)
 
 The secret document arrives on stdin: TS_AUTHKEY, WEBHOOK_SECRET,
 WEBHOOK_SECRET_NEXT and DEPLOY_PING_URL, one KEY=value per line, all optional.
@@ -406,8 +411,18 @@ seed_state() {
 # the kit does not name.
 install_host_key() {
   local derived tmp
+  if [[ -z $host_key ]]; then
+    # The box keeps the ed25519 pair sshd made for itself at first boot. That is
+    # the whole identity this host needs: logins arrive over the tailnet, whose
+    # node key is what authenticates the machine, and the pre-join window is
+    # minutes of key-only sshd. Carrying a copy in a recovery kit bought a stable
+    # `known_hosts` line and cost a credential that had to be fetched, trusted and
+    # rotated; the rebuild drill is what showed the trade is not worth it.
+    say "keeping the host key sshd generated: no --host-key was given"
+    return 0
+  fi
   [[ -r $host_key ]] ||
-    die "no kit host key at $host_key; copy the kit's ed25519 host key there or pass --host-key"
+    die "no host key at $host_key; pass a readable ed25519 private key or omit --host-key"
   # stdin closed: a passphrase-protected key would prompt, and a host key that
   # needs a person to type at boot is a key sshd cannot use.
   derived=$("$ssh_keygen_bin" -y -f "$host_key" </dev/null 2>/dev/null) ||
@@ -495,6 +510,14 @@ write_secrets
 "$systemctl_bin" start smoresnet-tailscale-up.service ||
   die "cannot start smoresnet-tailscale-up.service"
 say "started smoresnet-tailscale-up.service"
+# The forward is conditioned on the enrollment marker, so a boot before the join
+# skipped it. Starting it here is what makes the receiver reachable on the tailnet
+# in the same run that enrolled the box, rather than after the next reboot.
+if [[ -e $state_dir/tailscale-enrolled ]]; then
+  "$systemctl_bin" start smoresnet-deploy-forward.service ||
+    die "cannot start smoresnet-deploy-forward.service; a notify job cannot reach the receiver until it runs"
+  say "started smoresnet-deploy-forward.service (the receiver is on the tailnet)"
+fi
 
 install_host_key
 pin_node_id
@@ -503,7 +526,11 @@ seed_state
 say "bootstrap complete; this box now holds"
 note "  $edge_env  SMORTRESS_FQDN, EDGE_ACME_EMAIL and the three Service upstreams"
 note "  $secrets_dir  the auth key, the webhook secret (and its rotation), the ping URL"
-note "  $ssh_dir/ssh_host_ed25519_key  the kit's host key, so known_hosts survives a rebuild"
+if [[ -n $host_key ]]; then
+  note "  $ssh_dir/ssh_host_ed25519_key  the host key you named, installed for sshd"
+else
+  note "  $ssh_dir/ssh_host_ed25519_key  the identity sshd generated; logins are over the tailnet"
+fi
 note "  $node_id_file  the tailnet node ID, pinned by ID and not by name"
 note "  $deploy_state_file  homelab-platform at the booted commit and digest"
 say "still the operator's"
