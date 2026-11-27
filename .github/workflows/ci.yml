@@ -101,6 +101,7 @@ jobs:
               --filter-tags finance \
               --filter-tags mail \
               --filter-tags calendar \
+              --filter-tags stream \
               --jobs "$(nproc)" --no-parallelize-within-files
 
   image:

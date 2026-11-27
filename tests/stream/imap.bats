@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# bats file_tags=mail
+# bats file_tags=stream
 # What one pass does when a folder changes shape (SDLC #983 follow-up).
 #
 # On 2026-11-27 a post-reboot pass asked the Tuta bridge for Archive before it
