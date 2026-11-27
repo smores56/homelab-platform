@@ -13,6 +13,10 @@ Before=shutdown.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
+# The installer is shared with the edge and defaults to that image's path, so
+# this image names its own: without it the unit fails with a missing snippet and
+# the host silently has no counter (found on the first real boot).
+Environment=BOOT_COUNTER_SNIPPET=/usr/share/smortress/boot-counter.cfg
 ExecStart=/usr/libexec/boot-counter
 TimeoutStartSec=120
 

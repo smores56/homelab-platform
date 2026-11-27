@@ -11,6 +11,7 @@ load ../helpers
 
 check=bootc/server/rootfs/etc/greenboot/check/required.d/10-smortress-health.sh
 drop_in=units/systemd/greenboot-healthcheck.service.d/10-timeout.conf
+counter_unit=units/systemd/smortress-boot-counter.service
 
 setup() {
     bin=$BATS_TEST_TMPDIR/bin
@@ -75,4 +76,11 @@ STUB
     [[ -n $budget ]] || fail "the budget is not a literal"
     [[ -n $limit ]] || fail "the drop-in sets no timeout"
     ((budget < limit)) || fail "a ${budget}s budget outlives the unit's ${limit}s limit"
+}
+
+@test "the counter unit names the snippet path this image ships" {
+    # The installer is shared with the edge, whose snippet lives elsewhere; the
+    # first boot of this image proved what happens when this unit stays silent.
+    grep -qxF 'Environment=BOOT_COUNTER_SNIPPET=/usr/share/smortress/boot-counter.cfg' "$counter_unit" ||
+        fail "the counter unit does not name this image's snippet"
 }
