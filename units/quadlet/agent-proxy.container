@@ -39,7 +39,7 @@ After=network-online.target sops-decrypt.service smortress-app-secrets.service
 Wants=network-online.target
 
 [Container]
-Image=ghcr.io/smores56/homelab-platform/agent-runtime@sha256:c38090f3bba4736dfc7d9e490fbc3a4b69bb568022bdd70082f05f558e9fca23
+Image=ghcr.io/smores56/homelab-platform/agent-runtime@sha256:773b64860909522576e58dbfe112415371d374f5bfcddf528e7e471c236d2f9a
 ContainerName=smortress-agent-proxy
 Network=agent-general.network
 User=1000:1000

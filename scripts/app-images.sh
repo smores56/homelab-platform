@@ -52,7 +52,7 @@ app_images=(
   # now `/usr/lib/data-plane`, the facade name having outlived the facade.
   # `sqlite3` is absent on purpose: the apt CLI and the image disagree about
   # libsqlite3, so the plane documents `python3 -m sqlite3` instead.
-  'agent-runtime|built:images/agent-runtime/Containerfile|sha256:c38090f3bba4736dfc7d9e490fbc3a4b69bb568022bdd70082f05f558e9fca23'
+  'agent-runtime|built:images/agent-runtime/Containerfile|sha256:773b64860909522576e58dbfe112415371d374f5bfcddf528e7e471c236d2f9a'
   # Built by this repository (SDLC #775), not mirrored: upstream's entrypoint
   # installs its Python dependencies from PyPI at container start, which a sealed
   # deployment can never do. The digest is the publish-agent-webui run for the

@@ -28,7 +28,7 @@ ExecStart=/usr/bin/podman run --rm --replace --name smortress-agent-collect-musi
   --env PYTHONPATH=/usr/lib/data-plane/libs:/usr/lib/data-plane \
   --env PYTHONDONTWRITEBYTECODE=1 \
   --entrypoint python3 \
-  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:c38090f3bba4736dfc7d9e490fbc3a4b69bb568022bdd70082f05f558e9fca23 \
+  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:773b64860909522576e58dbfe112415371d374f5bfcddf528e7e471c236d2f9a \
   -m data_plane.collectors.raw --root /replica/music \
   music --entities /entities
 Restart=no
