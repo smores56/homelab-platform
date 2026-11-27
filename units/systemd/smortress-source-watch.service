@@ -17,9 +17,10 @@ Requires=zfs-ready@raw-files.service zfs-ready@state-agent-local.service
 Requires=smortress-agent-config.service
 After=zfs-ready@raw-files.service zfs-ready@state-agent-local.service
 After=smortress-agent-config.service
-# The roots live on raw/files. A dataset that is not mounted yet is a skip, not a
-# restart loop; the watcher itself skips any single missing root and keeps the
-# rest.
+# The roots are raw/files and the published views under state/agent-local. A
+# dataset that is not mounted yet is a skip, not a restart loop; the watcher
+# itself skips any single missing root and keeps the rest, which is why the
+# condition names only the one that a boot without it would make useless.
 ConditionPathIsDirectory=/srv/files
 StartLimitIntervalSec=300
 StartLimitBurst=5
@@ -46,6 +47,8 @@ ProtectHome=true
 # its first mkdir -- a unit that cannot write its feed must fail, not run silent.
 ReadWritePaths=/var/lib/agent/local/watch
 ReadOnlyPaths=/srv/files
+# The views are read, never written, on this path either.
+ReadOnlyPaths=/var/lib/agent/local/sources
 RestrictAddressFamilies=AF_UNIX
 LockPersonality=true
 

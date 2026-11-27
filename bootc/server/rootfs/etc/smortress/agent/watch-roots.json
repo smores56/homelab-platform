@@ -12,6 +12,13 @@
     "*/tmp/*"
   ],
   "roots": [
-    {"source": "files", "path": "/srv/files"}
+    {
+      "source": "files",
+      "path": "/srv/files"
+    },
+    {
+      "source": "sources",
+      "path": "/var/lib/agent/local/sources"
+    }
   ]
 }

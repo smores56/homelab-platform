@@ -81,9 +81,16 @@ for root in roots:
     assert root["path"].startswith("/"), root
     assert root["source"] not in seen, root
     seen.add(root["source"])
-# One root, the whole Syncthing folder: todo.txt lives at notes/todo.txt and the
-# vault beside it, so a second root would watch the same inodes twice.
-assert seen == {"files"}, seen
+# Two roots and no more: the Syncthing folder (todo.txt lives at notes/todo.txt
+# and the vault beside it, so one root covers all three trees) and the published
+# source views, which the collectors rewrite under the state dataset. A root for
+# notes/ or vault/ separately would watch the same inodes twice.
+assert seen == {"files", "sources"}, seen
+paths = {root["source"]: root["path"] for root in roots}
+assert paths == {
+    "files": "/srv/files",
+    "sources": "/var/lib/agent/local/sources",
+}, paths
 print("ok")
 PY
   assert_success

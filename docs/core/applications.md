@@ -510,8 +510,9 @@ becomes "a path outside the mount does not exist". The one permission rule that
 survives is the vault's mount mode, and the kernel enforces it.
 
 Changes reach the agent through `smortress-source-watch.service`, which appends
-inotify events from the mounted roots to a bounded JSONL ring inside the state
-dataset (`/var/lib/agent/local/watch/changes.jsonl`). It runs on the host rather
+inotify events from two roots -- `/srv/files` and the published views under
+`state/agent-local/sources` -- to a bounded JSONL ring inside the state dataset
+(`/var/lib/agent/local/watch/changes.jsonl`). It runs on the host rather
 than in the container, so a watch outlives the agent process it serves, and its
 `rescan` records are how a reader learns that the feed may have missed something
 and that the tree is worth a sweep. The design's rule that the plane keeps no
