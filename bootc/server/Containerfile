@@ -92,9 +92,19 @@ LABEL org.opencontainers.image.title="smortress server image" \
 # Caddy here is a loopback HTTP proxy only -- no certificate, no 443, no
 # capability -- so the package brings nothing this image has to widen for.
 RUN set -eux; \
-    dnf5 -y --setopt=install_weak_deps=False install caddy; \
+    dnf5 -y --setopt=install_weak_deps=False install caddy greenboot; \
     dnf5 clean all; \
     rm -rf /var/cache/dnf /var/cache/libdnf5
+
+# greenboot ships its GRUB snippet for bootupd to inject, and bootupd injects
+# nothing on this host: grub.cfg was generated once and is never regenerated.
+# The snippet is kept as image content under this image's own path and removed
+# from bootupd's directory, because a regeneration that did inject it would run
+# the counter twice in one boot and spend two of the three attempts.
+RUN set -eux; \
+    install -d -m 0755 /usr/share/smortress; \
+    install -m 0644 /usr/lib/bootupd/grub2-static/configs.d/08_greenboot.cfg /usr/share/smortress/boot-counter.cfg; \
+    rm -f /usr/lib/bootupd/grub2-static/configs.d/08_greenboot.cfg
 
 # Runtime helpers, units and ciphertext. The public cosign key is the only
 # signature-related material in the image; the policy references it by path.
@@ -106,6 +116,7 @@ COPY units/quadlet/pattern.container /usr/share/smortress/quadlet/pattern.contai
 # /usr/local is a symlink to /var on bootc, so helpers go under /usr/libexec
 # and lose the .sh suffix that the units would otherwise have to know about.
 COPY scripts/lib/ /usr/libexec/lib/
+COPY scripts/boot-counter-install.sh /usr/libexec/boot-counter
 COPY scripts/storage-layout.sh scripts/zfs-ready.sh scripts/sops-decrypt.sh \
      scripts/smortress-secrets-seed.sh scripts/init-zpool.sh \
      scripts/init-data-luks.sh \
@@ -123,7 +134,7 @@ COPY scripts/storage-layout.sh scripts/zfs-ready.sh scripts/sops-decrypt.sh \
      scripts/deploy-platform.sh scripts/smortress-boot-gate.sh \
      scripts/deploy-apps.sh scripts/deploy-poll.sh scripts/deploy-heartbeat.sh \
      scripts/agent-config-seed.sh \
-     scripts/smortress-password.sh scripts/agent-job.sh scripts/agent-job-personal.sh scripts/agent-job-general.sh scripts/agent-job-provision.sh \
+     scripts/smortress-password.sh \
      scripts/smortress-backrest-watchdog.sh \
      /usr/libexec/smortress-src/
 COPY scripts/deploy/apps/ /usr/libexec/deploy/apps/
@@ -153,16 +164,12 @@ COPY units/quadlet/immich.network units/quadlet/immich-postgres.container \
      units/quadlet/agent-local.network units/quadlet/agent-general.network \
      units/quadlet/agent-model.container units/quadlet/agent-local.container \
      units/quadlet/agent-general.container units/quadlet/agent-proxy.container \
-     units/quadlet/agent-facade-personal.container \
-     units/quadlet/agent-facade-general.container \
      units/quadlet/agent-webui-personal.container \
      units/quadlet/agent-webui-general.container \
      units/quadlet/agent-collect.network units/quadlet/agent-tmail.container \
      units/quadlet/agent-brave.network units/quadlet/agent-brave.container \
      units/quadlet/agent-egress-proxy.container \
      units/quadlet/agent-egress-dns.container \
-     units/quadlet/mirage-personal.container \
-     units/quadlet/mirage-general.container \
      /usr/share/containers/systemd/
 COPY secrets/boot.json secrets/apps.json secrets/agents.json /etc/smortress/secrets/
 COPY secrets/index.json /usr/share/smortress/secrets.index.json
@@ -177,19 +184,11 @@ COPY bootc/server/cosign.pub /etc/pki/containers/smortress.pub
 # change to them rebuilds that container image instead of this one.
 COPY scripts/apps-schema.py /usr/libexec/apps-schema
 COPY scripts/secrets-index.py /usr/libexec/secrets-index
-# The shell bridge (SDLC #859): the one root program a facade's request reaches.
-# It runs the class-fixed dispatcher and owns the socket the general facade
-# mounts, so it belongs to the host image and not to agent-runtime: the code that
-# decides what a shell request may be must be pinned with the OS, not with the
-# agent's own image.
-COPY scripts/agent-shell-bridge.py /usr/libexec/agent-shell-bridge
-# The personal workspace's feed watcher (SDLC #979, T1). A python program, not a
-# shell helper, because the server image installs no distribution package and
-# inotifywait is one: the watch is inotify(7) through ctypes.
-COPY scripts/agent-todos-watch.py /usr/libexec/agent-todos-watch
-# The ask operator path (SDLC #979, T7): the host's door to the daemon's CLI, and
-# the timer-driven notifier that journals a pending ask once.
-COPY scripts/mirage-ask.sh scripts/mirage-ask-notify.sh /usr/libexec/smortress-src/
+# The agent plane's live signal (SDLC #995): one inotify watch over every source
+# root, appended to the JSONL feed the agent reads. A python program, not a shell
+# helper, because the server image installs no distribution package and inotifywait
+# is one: the watch is inotify(7) through ctypes.
+COPY scripts/source-watch.py /usr/libexec/source-watch
 # The recovery reader's two programs (SDLC #953): the read-only guard that owns
 # the port, and the config renderer the guard is started through. The binary
 # itself is downloaded above; the image's own jq and python3 are what these run
@@ -209,10 +208,10 @@ RUN set -eux; \
     rm -rf /usr/libexec/smortress-src; \
     ln -sf /usr/libexec/smortress-deploy /usr/bin/smortress-deploy; \
     ln -sf /usr/libexec/smortress-restic-progress /usr/bin/smortress-restic-progress; \
-    chmod 0755 /usr/libexec/apps-schema /usr/libexec/secrets-index /usr/libexec/agent-shell-bridge \
-      /usr/libexec/agent-todos-watch \
-      /usr/libexec/mirage-ask /usr/libexec/mirage-ask-notify \
+    chmod 0755 /usr/libexec/apps-schema /usr/libexec/secrets-index \
+      /usr/libexec/source-watch \
       /usr/libexec/backrest-guard /usr/libexec/smortress-backrest-entrypoint; \
+    chmod 0755 /usr/libexec/boot-counter; \
     chmod 0644 /usr/share/smortress/secrets.index.json; \
     chmod 0644 /etc/pki/containers/smortress.pub /usr/share/smortress/secrets.manifest; \
     chmod 0600 /etc/smortress/secrets/*.json; \
@@ -269,6 +268,9 @@ RUN set -eux; \
 # window through bootc, and stateful Podman images are never auto-updated.
 RUN set -eux; \
     systemctl enable \
+      greenboot-healthcheck.service \
+      smortress-boot-counter.service \
+      smortress-boot-rw.service \
       zfs.target \
       zfs-import-scan.service \
       zfs-mount.service \
@@ -302,12 +304,8 @@ RUN set -eux; \
       zfs-ready@state-agent-model.service \
       smortress-app-secrets.service \
       smortress-agent-config.service \
-      smortress-agent-job-provision.service \
-      smortress-agent-shell-bridge.service \
-      smortress-agent-shell-bridge-personal.service \
       smortress-nvidia-cdi.service \
       smortress-selinux-nvidia-map.service \
-      smortress-selinux-agent-shell.service \
       smortress-selinux-caddy-proxy.service \
       smortress-apps-user.service \
       smortress-apps-quota.service \
@@ -333,8 +331,7 @@ RUN set -eux; \
       smortress-agent-brave-seed.service \
       smortress-agent-collect-brave.path \
       smortress-agent-collect-brave.timer \
-      smortress-agent-todos-watch.service \
-      smortress-mirage-asks.timer \
+      smortress-source-watch.service \
       smortress-agent-collect-notes.timer \
       smortress-agent-collect-tasks.timer \
       smortress-agent-collect-photos.timer \
@@ -349,9 +346,9 @@ RUN set -eux; \
     systemctl enable 'zfs-scrub-weekly@smortress.timer'; \
     systemctl mask \
       podman-auto-update.timer \
-      bootc-fetch-apply-updates.timer \
       rpm-ostreed-automatic.timer \
-      zincati.service
+      zincati.service; \
+    systemctl enable bootc-fetch-apply-updates.timer
 
 # Only tailscale0 carries SSH and application traffic; everything else lands
 # in the drop zone. The zone file binds tailscale0 and lists the permitted
@@ -376,6 +373,21 @@ RUN set -eux; \
     command -v python3 >/dev/null || { echo "the image has no python3 for the plan verifier" >&2; exit 1; }; \
     jq -e '.default[0].type == "reject"' /etc/containers/policy.json >/dev/null; \
     jq -e '.transports.docker["ghcr.io/smores56/homelab-platform"][0].keyPath == "/etc/pki/containers/smortress.pub"' /etc/containers/policy.json >/dev/null; \
+    test -e /etc/systemd/system/timers.target.wants/bootc-fetch-apply-updates.timer || { echo "the bootc update timer is not enabled: this host would never upgrade itself" >&2; exit 1; }; \
+    test ! -L /etc/systemd/system/bootc-fetch-apply-updates.timer || { echo "the bootc update timer is masked: this host would never upgrade itself" >&2; exit 1; }; \
+    grep -qxF 'OnCalendar=*-*-* 05:00:00 America/New_York' /usr/lib/systemd/system/bootc-fetch-apply-updates.timer.d/10-schedule.conf || { echo "smortress's update window is not its own 05:00 local" >&2; exit 1; }; \
+    grep -qxF 'OnUnitInactiveSec=' /usr/lib/systemd/system/bootc-fetch-apply-updates.timer.d/10-schedule.conf || { echo "the vendor 8h cycle is still in place: the host would upgrade besides its window" >&2; exit 1; }; \
+    grep -qxF 'Persistent=false' /usr/lib/systemd/system/bootc-fetch-apply-updates.timer.d/10-schedule.conf || { echo "the update timer is persistent: a power cut would fire every missed window at once" >&2; exit 1; }; \
+    rpm -q greenboot >/dev/null || { echo "greenboot is not installed: this host would have no boot counter and no after-boot rollback" >&2; exit 1; }; \
+    test -x /usr/libexec/boot-counter || { echo "the boot counter installer is missing or not executable: the counter would never reach the grub.cfg that reads it" >&2; exit 1; }; \
+    grep -qxF 'Environment=BOOT_COUNTER_SNIPPET=/usr/share/smortress/boot-counter.cfg' /usr/lib/systemd/system/smortress-boot-counter.service || { echo "the counter unit does not name this image's snippet path: the shared installer would look for the edge's and fail, leaving the host with no counter" >&2; exit 1; }; \
+    test -f /usr/share/smortress/boot-counter.cfg || { echo "the boot counter snippet is missing: the installer has nothing to put where grub.cfg reads it" >&2; exit 1; }; \
+    test ! -e /usr/lib/bootupd/grub2-static/configs.d/08_greenboot.cfg || { echo "greenboot's snippet is still in bootupd's directory: a regeneration would install the counter twice" >&2; exit 1; }; \
+    test -e /etc/systemd/system/multi-user.target.wants/smortress-boot-counter.service || { echo "the boot counter installer is not enabled: nothing would put the counter where grub.cfg reads it" >&2; exit 1; }; \
+    test -e /etc/systemd/system/multi-user.target.wants/smortress-boot-rw.service || { echo "/boot is left read-only: greenboot cannot write grubenv and the counter never arms" >&2; exit 1; }; \
+    test -e /etc/systemd/system/multi-user.target.wants/greenboot-healthcheck.service || { echo "greenboot's healthcheck is not enabled: a deployment that boots but is broken would never be rolled back" >&2; exit 1; }; \
+    test -x /etc/greenboot/check/required.d/10-smortress-health.sh || { echo "this host's greenboot check is missing or not executable: greenboot would mark every boot good" >&2; exit 1; }; \
+    grep -qxF 'TimeoutStartSec=600' /usr/lib/systemd/system/greenboot-healthcheck.service.d/10-timeout.conf || { echo "greenboot's healthcheck keeps systemd's 90s default: this host's units wait on the pool and the check would be killed mid-wait" >&2; exit 1; }; \
     test -s /etc/ssh/authorized_keys.d/smores || { echo "the shipped ssh key file is missing or empty: it is the only key sshd reads (design #767)" >&2; exit 1; }; \
     ! grep -q 'sk-ssh-ed25519' /etc/ssh/authorized_keys.d/smores || { echo "the shipped key file carries a FIDO handle; the image ships a plain ed25519 key (design #767)" >&2; exit 1; }; \
     test -f /usr/lib64/security/libpam_rssh.so || { echo "libpam_rssh.so is missing: it is sudo's touch factor (design #767)" >&2; exit 1; }; \

@@ -303,8 +303,11 @@ done
     grep -qF 'refuses a second restore into the same target' "$script"
 }
 
-@test "the FTS index is rebuilt from the restored records" {
-    grep -qF 'MemoryIndex' "$script"
+# The facade's memory index went with the facade (SDLC #995), so the drill no
+# longer rebuilds one; what must still be proven is that the restored tree is the
+# memory profile itself, which is what the reader now reads with a shell.
+@test "the restore checks the memory profile, not a derived index" {
+    grep -qF 'memory' "$script" && ! grep -qF 'MemoryIndex' "$script"
 }
 
 @test "an absent oneshot collector is classified, not failed" {

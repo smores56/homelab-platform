@@ -1,9 +1,10 @@
 [Unit]
-# One complete SimpleFIN enumeration into the personal replica, then one hledger
-# projection over it, then exit. Both stages run the repository's own code
-# (mounted read-only from the booted image) inside the pinned runtime image, so
-# the program that reads a bank account and the program that writes the ledger
-# are the ones this deployment ships and nothing else.
+# One complete SimpleFIN enumeration into the personal replica, then the
+# plain-file view the agent's own shell reads, then one hledger projection over
+# it, then exit. Every stage runs the repository's own code (mounted read-only
+# from the booted image) inside the pinned runtime image, so the program that
+# reads a bank account and the programs that publish its views are the ones this
+# deployment ships and nothing else.
 #
 # The collector reads with egress and writes into the personal dataset. That
 # pairing is the design, not a leak: the personal *deployment* has no route off
@@ -11,7 +12,7 @@
 # bounded read and one directory it owns. It cannot reach the gateway, the facade
 # or the model, because it is on its own network.
 #
-# The third stage is the projection: it turns the newest committed state into
+# The last stage is the projection: it turns the newest committed state into
 # `index/hledger/finance.journal`, which is a view of those objects and never a
 # second copy of them. It runs here, after the collector, and not on a timer of
 # its own because a committed state has to exist first: a projection that ran
@@ -45,9 +46,30 @@ ExecStart=/usr/bin/podman run --rm --name smortress-agent-collect-finance \
   --env PYTHONPATH=/usr/lib/agent-facade/libs:/usr/lib/agent-facade \
   --env PYTHONDONTWRITEBYTECODE=1 \
   --entrypoint python3 \
-  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:6c6964bf94dd2582dac51fe3d68dc5919df58541fbff68d2d0cf58e710d06ac4 \
+  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:a2097dc2f54142b75137779c91f2e90956a01687cdfd2424685d748c3669baa1 \
   -m data_plane.collectors.raw --root /replica/finance \
   finance --access-url-file /run/secrets/simplefin-access-url --include-pending
+# The plain-file view. The agent reads the state dataset through its own shell,
+# so what it needs from finance is a file it can `cat`, never a tool it must
+# ask: one line per account, one line per transaction inside the window, and a
+# `state.json` naming the run that wrote them. It reads the replica the stage
+# above just committed -- read-only, no network, no secret, no second copy of
+# anything -- and writes only the source directory the config seeder creates.
+# Nothing is passed for `--now`: an ExecStart has no way to compute an epoch, and
+# the module dates the run itself. A refusal exits 3 and publishes nothing, so
+# the previous view survives a bad run and its `state.json` is what shows it is
+# stale.
+ExecStart=/usr/bin/podman run --rm --name smortress-agent-collect-finance-publish \
+  --network none \
+  --read-only --cap-drop=all --security-opt no-new-privileges \
+  --tmpfs /tmp:rw,size=16m --user 1000:1000 \
+  --volume /var/lib/agent/local/replica:/replica:ro \
+  --volume /var/lib/agent/local/sources/finance:/out:z \
+  --env PYTHONPATH=/usr/lib/agent-facade/libs:/usr/lib/agent-facade \
+  --env PYTHONDONTWRITEBYTECODE=1 \
+  --entrypoint python3 \
+  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:a2097dc2f54142b75137779c91f2e90956a01687cdfd2424685d748c3669baa1 \
+  -m data_plane.collectors.raw.publish_finance --raw /replica/finance --out /out
 # The projection stage. It has no network (`--network none`, not the collector's),
 # no secret, and the replica read-only: its whole input is the committed state,
 # and its whole output is one file under the personal index dataset.
@@ -66,7 +88,7 @@ ExecStart=/usr/bin/podman run --rm --name smortress-agent-collect-finance-hledge
   --env PYTHONPATH=/usr/lib/agent-facade/libs:/usr/lib/agent-facade \
   --env PYTHONDONTWRITEBYTECODE=1 \
   --entrypoint python3 \
-  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:6c6964bf94dd2582dac51fe3d68dc5919df58541fbff68d2d0cf58e710d06ac4 \
+  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:a2097dc2f54142b75137779c91f2e90956a01687cdfd2424685d748c3669baa1 \
   -m data_plane.derived.hledger --replica /replica/finance \
   --accounts /index/hledger/accounts.json --out /index/hledger/finance.journal
 # A refusal exits 3 and publishes nothing; the next run tries again. Anything

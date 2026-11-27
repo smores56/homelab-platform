@@ -39,8 +39,7 @@ scripts/render-recovery-groups.py --check    # fail when it drifted
 scripts/render-recovery-groups.py --host-plan  # the host's /etc/homelab/backup.json
 ```
 
-`--check` is what CI runs: `tests/data-plane/test_host_secrets_bundle.py` and
-`tests/data-plane/test_inventory_contract.py` invoke the renderer and fail on
+`--check` is what CI runs, and it invokes the renderer and fails on
 drift, so a change to either inventory file must ship with the re-rendered
 manifest in the same commit. `--host-plan` prints the same model in the shape the
 host installs; the operator diffs it against `/etc/homelab/backup.json` on the

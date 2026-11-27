@@ -2,7 +2,7 @@
 
 Source of truth: SDLC #660, "Migration and retirement gates" and "Ordered
 migration". The gate implementation lives in
-`libs/data_plane/migration/`. The rescue access it was written against — the
+the migration gates. The rescue access they were written against — the
 `rescue` role and `rescue.yml` — is retired with `ansible/`: access is the
 console plus the host's own `sshd`, and a restore is `docs/core/restic-plane.md`,
 "Restore by hand".

@@ -44,7 +44,7 @@ row, tombstoned one, or marked one absent for the first time, and it stays put
 when the enumeration matched what the replica already held. The cursor still
 advances, because it is the provider's position rather than the state. The
 `snapshot` (`<state_id>-v<version>`) is what names a derived artifact, so an
-unchanged pass is also a pass that does not invalidate the facade's index;
+unchanged pass is also a pass that a reader can tell from one that changed;
 silence is reported as `"changed": false` in the pass's JSON line rather than as
 a version that moved for nothing (`null` on a dry run, which committed nothing).
 A source that has never changed is version 0.
@@ -413,7 +413,7 @@ new revision of the same note instead of a delete plus a create.
 secret; unchanged files keep their row and are not rewritten, so a run
 that changes one note costs one object.
 
-The write broker's file effect owner (`libs/data_plane/effects/notes.py`) may
+The write broker's file effect owner may
 delete a note on a person's behalf, and records each one in
 `<vault>/.data-plane/tombstones.jsonl` before unlinking. The collector never
 collects that file — it holds no `.md` — and the absence marker above keeps its
@@ -442,7 +442,7 @@ place, so the object id is a digest of the line's bytes.
 `smortress-agent-collect-tasks.timer` runs it hourly, with no network and no
 secret.
 
-A delete through the write broker (`libs/data_plane/effects/tasks.py`) removes
+A delete through the write broker removes
 every occurrence of the line — the collector collapsed them into one id, so
 removing one would leave the target alive — and writes
 `.data-plane/tombstones.jsonl` beside the two files. The collector reads only
@@ -507,23 +507,11 @@ secret.
 
 ## Who reads a state
 
-`apps/agent_facade/replica_sources.py` projects a committed state into the
-facade's record shape, so `sources.read` and `sources.search` answer from the raw
-objects instead of the fixtures. The projection is deliberately thin -- title and
-body -- and the adapter inherits its contract from the deployment's own source
-table, so pointing a facade at a directory cannot widen what it may reach
-(`docs/agent-facade.md`).
-
-Search over a replica is served by a derived full-text index
-(`apps/agent_facade/source_index.py`): one SQLite FTS5 file under the facade's
-index root, per source and per snapshot, built from those projections. It is
-derived and never authoritative -- the state is the record of what was
-collected, the index is a cache of reading it, and deleting the index costs one
-rebuild and no data. A new snapshot publishes a new file, a short-word query
-falls back to the scan, and nothing outside the facade reads the file. Because
-the snapshot is the file's name, a pass that changed nothing leaves the file
-where it is: the same state answers from the same index, and only a real change
-pays the projection and the write.
+Nothing projects a replica any more: the agent reads the collected tree through
+its mounted shell (SDLC #995), and the projection and its full-text index were
+part of the facade that is gone. A source's state is the record of what was
+collected; the reader greps it. Derived caches, when a source needs one, are
+rebuilt rather than restored.
 
 ## Running one
 

@@ -1,0 +1,22 @@
+[Unit]
+Description=Install greenboot's GRUB snippet as /boot/grub2/custom.cfg
+# The counter only exists when grub.cfg reads it, and on this host grub.cfg is
+# generated once by bootupd and never regenerated. /boot/grub2/custom.cfg is the
+# hook grub.cfg does source, so the snippet is installed there instead
+# (smoresnet-boot-counter has the argument in full).
+After=local-fs.target smoresnet-boot-rw.service
+Requires=smoresnet-boot-rw.service
+Before=greenboot-healthcheck.service
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/boot-counter
+# The install is one file write on a local filesystem; a mount that hangs is the
+# only thing that could keep this active, and it must not hold the boot.
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

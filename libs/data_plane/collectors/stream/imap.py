@@ -40,6 +40,8 @@ import ssl
 import sys
 import threading
 import time
+
+from ..raw import publish_mail
 from abc import ABC, abstractmethod
 from functools import partial
 from dataclasses import dataclass
@@ -410,6 +412,17 @@ def collect_mailbox(
     # an expunge, so no absence reason is needed: anything unaccounted for is a
     # refusal, and a loud one is what a mailbox that changed shape deserves.
     stats = state.commit(complete=True, captured_at=captured_at)
+
+    # The agent reads this replica through a shell (SDLC #995), so the plain view
+    # is rebuilt from the bytes just committed rather than by a second unit: a
+    # `Type=simple` unit starts every ExecStart at once, which would publish once
+    # at boot and never again after an IDLE-triggered pass. A publisher that
+    # refuses must not take the stream down with it -- the replica is committed
+    # and the next pass retries.
+    try:
+        publish_mail.publish(state.root, state.root)
+    except Exception as error:  # noqa: BLE001 - the stream outlives the view
+        print(f"mail stream: publish refused: {error}", file=sys.stderr, flush=True)
 
     return CollectReport(
         source_id=SOURCE_ID,

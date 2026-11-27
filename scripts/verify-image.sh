@@ -36,5 +36,10 @@ skopeo inspect --raw "docker://${ref%@*}:${digest/:/-}.sig" >/dev/null 2>&1 || {
   exit 1
 }
 jq -e '.default[0].type == "reject"' "$repo/bootc/server/rootfs/etc/containers/policy.json" >/dev/null
+# An array where containers/image expects a repository map is not a weaker rule,
+# it is an unreadable file: the ostree importer refuses the whole policy with
+# "JSON object expected, got 91", which is how `bootc switch` failed on the live
+# edge while the tag and the signature were both fine.
+jq -e '[.transports[] | type] | all(. == "object")' "$repo/bootc/server/rootfs/etc/containers/policy.json" >/dev/null
 echo "verified $ref"
 echo "install/rollback: sudo bootc switch --enforce-container-sigpolicy $ref ; sudo bootc status ; sudo bootc rollback"

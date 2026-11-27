@@ -64,7 +64,6 @@ default_drill_root() {
 }
 drill_root=${SMORTRESS_AGENT_DRILL_ROOT:-$(default_drill_root)}
 readonly drill_root
-readonly facade_tree=${AGENT_FACADE_TREE:-/usr/lib/agent-facade}
 
 cmd=""
 unit=""
@@ -121,7 +120,6 @@ Environment:
   SMORTRESS_AGENT_DRILL_ROOT       parent of the default restore target
                                    (default: the first mounted restic data disk,
                                    /var/lib/restic/ssd/drill or /var/lib/restic/hdd/drill)
-  AGENT_FACADE_TREE                the facade code tree (/usr/lib/agent-facade)
 EOF
 }
 
@@ -364,8 +362,6 @@ secrets=(
 agent_containers=(
   smortress-agent-local
   smortress-agent-general
-  smortress-agent-facade-personal
-  smortress-agent-facade-general
   smortress-agent-model
   smortress-agent-proxy
   smortress-agent-webui-personal
@@ -661,43 +657,6 @@ expect_ownership() { # expect_ownership <unit> <root>
   fi
 }
 
-fts_rebuild_py='import sys
-from apps.agent_facade.memory import MemoryIndex
-from data_plane.model import Visibility
-print(MemoryIndex(sys.argv[1], Visibility(sys.argv[2])).rebuild())'
-
-# The index is derived and disposable: a restore that loses it is still a
-# restore, so the drill proves it can be rebuilt from the records that came back
-# (docs/agent-facade.md, "Memory and index rules").
-expect_fts_rebuild() { # expect_fts_rebuild <unit> <root>
-  local root=$2 deployment=general profile=external out rc=0 indexed records
-  if [[ ${1#agent-} == local ]]; then
-    deployment=personal
-    profile=local
-  fi
-  if [[ ! -d $facade_tree ]]; then
-    record SKIP 'FTS index rebuilds from the restored records' "no facade tree at $facade_tree"
-    return 0
-  fi
-  capture out env "PYTHONPATH=$facade_tree/libs:$facade_tree" \
-    setpriv --reuid=1000 --regid=1000 --clear-groups python3 -c "$fts_rebuild_py" \
-    "$root/memory" "$deployment" || rc=$?
-  if ((rc != 0)); then
-    record FAIL 'FTS index rebuilds from the restored records' "$(last_line "$out")"
-    return 0
-  fi
-  indexed=$(last_line "$out")
-  records=$(find "$root/memory/$profile" -maxdepth 1 -type f -name '*.json' 2>/dev/null | wc -l) ||
-    records=0
-  if [[ $indexed =~ ^[0-9]+$ ]] && ((indexed > 0)) && ((indexed <= records)); then
-    record PASS 'FTS index rebuilds from the restored records' \
-      "$indexed of $records records indexed"
-  else
-    record FAIL 'FTS index rebuilds from the restored records' \
-      "rebuild reported '$indexed' with $records record files"
-  fi
-}
-
 expect_second_restore_refused() { # expect_second_restore_refused <backend> <unit> <target>
   local rc=0 out
   capture out "$restic_drill" "$1" "$2" --target "$3" || rc=$?
@@ -760,7 +719,6 @@ restore_one() { # restore_one <backend>
   expect_content "$unit" "$root"
   expect_second_restore_refused "$b" "$unit" "$tgt"
   expect_ownership "$unit" "$root"
-  expect_fts_rebuild "$unit" "$root"
 }
 
 restore_drill() {

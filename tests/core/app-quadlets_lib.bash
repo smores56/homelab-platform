@@ -42,8 +42,6 @@ readonly app_quadlets=(
   units/quadlet/agent-local.container
   units/quadlet/agent-general.container
   units/quadlet/agent-proxy.container
-  units/quadlet/agent-facade-personal.container
-  units/quadlet/agent-facade-general.container
   units/quadlet/agent-webui-personal.container
   units/quadlet/agent-webui-general.container
   units/quadlet/agent-tmail.container

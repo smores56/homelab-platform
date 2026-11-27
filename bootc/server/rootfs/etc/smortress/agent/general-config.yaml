@@ -18,10 +18,11 @@ model:
   default: deepseek-v4.1-flash
   context_length: 1048560
 
-# Nothing in this deployment approves its own tool use: an approval is presented
-# in the chat and decided outside the runtime.
+# Approvals are off (SDLC #995): what bounds this deployment is the network it
+# can reach and the two trees it mounts, not a prompt. See the personal template
+# for why `off` is the right value rather than `manual`.
 approvals:
-  mode: manual
+  mode: off
 
 # The toolsets stay at the runtime's defaults here on purpose. This is the
 # internet-connected side, it mounts no personal source, and it holds no
@@ -36,31 +37,3 @@ delegation:
   max_spawn_depth: 1
   child_timeout_seconds: 1800
   inherit_mcp_toolsets: true
-
-# The general deployment's source facade
-# (units/quadlet/agent-facade-general.container), reached by container name on
-# agent-general.network; it publishes nothing. Same shape as the personal one with
-# its own token and its own source table, so `repos` and `books` exist here and
-# nowhere else. The placeholder is substituted at seed time from
-# agent-facade-general-token.yaml, and no template carries a token.
-mcp_servers:
-  general:
-    url: http://smortress-agent-facade-general:18005/mcp
-    headers:
-      X-Deployment-Token: __FACADE_TOKEN__
-    trust: full
-
-# THE GENERAL MIRAGE WORKSPACE (SDLC #979, T5). The same surface as the personal
-# instance: `shell`, `read`, `write`, `edit`, `ls`, `grep` and `glob`, over
-# `/srv/git` and nothing else. The port is 18011 because two instances on one host
-# must not be reachable by the same address, and the container publishes nothing,
-# so this name is the only route to it.
-#
-# `Authorization` is not the facade token: Mirage takes a bearer header, and the
-# seed replaces `__MIRAGE_TOKEN__` with `Bearer <mirage-general-token>` the first
-# time this file is seeded.
-  mirage:
-    url: http://smortress-mirage-general:18011/v1/workspaces/general/mcp
-    headers:
-      Authorization: __MIRAGE_TOKEN__
-    trust: full

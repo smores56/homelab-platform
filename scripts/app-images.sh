@@ -46,19 +46,12 @@ app_images=(
   # (llama.cpp PR #32694, merged 2026-11-20): the previous pin, b12464 of
   # 2026-11-17, cannot load an `inkling2_loop` GGUF at all.
   'agent-model|ghcr.io/ggml-org/llama.cpp:server-cuda|sha256:26f89ebd3bf17a5ecf6caee62bdabfa55abea3058150879f6f07b1fc786baa2d'
-  # d773 is the first build whose facade can bind the `notes` and `tasks`
-  # replicas: the previous pin has their contracts and no projector, so the
-  # personal quadlet's flags made the facade refuse to start. 9cd82 is the same
-  # for `photos` and `music`. 6c696 is the build from fb39b0e: every collector
-  # and every reader keeps one replica state (objects plus `state.sqlite`) and
-  # the generation layer is gone, so the units, the facade flags and the drill
-  # only mean anything with this pin or later.
-  'agent-runtime|built:images/agent-runtime/Containerfile|sha256:6c6964bf94dd2582dac51fe3d68dc5919df58541fbff68d2d0cf58e710d06ac4'
-  # The personal agent's virtual terminal (SDLC #979, T1). Mirage publishes a
-  # Python package and no image at all, so there is no upstream digest to mirror:
-  # the version is pinned in images/mirage/Containerfile and this digest is the
-  # last publish-mirage run's.
-  'mirage|built:images/mirage/Containerfile|sha256:c284a9156f2da1fe0835c6cf49c319f05739249af289b9ebdd85168b6ab660f5'
+  # a2097d is the first build that carries both the plain views the agent's shell
+  # reads (SDLC #995, T2/T3/T4 -- `publish_*` live in `libs/data_plane/`, which the
+  # image COPYs) and the two tools they need and the base lacks (`jq`, `gh`).
+  # `sqlite3` is absent on purpose: the apt CLI and the image disagree about
+  # libsqlite3, so the plane documents `python3 -m sqlite3` instead.
+  'agent-runtime|built:images/agent-runtime/Containerfile|sha256:a2097dc2f54142b75137779c91f2e90956a01687cdfd2424685d748c3669baa1'
   # Built by this repository (SDLC #775), not mirrored: upstream's entrypoint
   # installs its Python dependencies from PyPI at container start, which a sealed
   # deployment can never do. The digest is the publish-agent-webui run for the

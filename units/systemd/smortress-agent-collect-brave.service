@@ -1,7 +1,7 @@
-# One browsing pass: snapshot the live profile, then commit the copy.
+# One browsing pass: snapshot the live profile, commit the copy, render the view.
 #
-# Two stages rather than two units for the same reason the calendar pass has two:
-# the collector refuses a database that is still being written (a `-wal` or
+# Three stages rather than three units, for the same reason the calendar pass has
+# two: the collector refuses a database that is still being written (a `-wal` or
 # `-journal` beside it), and only one process knows how to take a consistent copy
 # while the browser holds the file. Stage 1 is `apps/brave_ingest/snapshot.py`:
 # SQLite's backup API against a read-only connection, and -- when the live artifact
@@ -13,7 +13,12 @@
 # collection never reads a half-written one. It is disposable: every pass replaces
 # it, and the replica is what keeps history.
 #
-# Neither stage has a network. The provider half is `agent-brave.container`: it
+# `sources/brave` is not: it is the same snapshot as a file an agent's shell can
+# read, kept beside the replica rather than inside it (SDLC #995). Nothing but this
+# unit writes it, and it is replaced whole, so a client that wants to know whether
+# it is advancing reads `state.json`'s `last_run` rather than diffing the file.
+#
+# No stage has a network. The provider half is `agent-brave.container`: it
 # holds the chain membership and is the only process that talks to Brave's sync
 # server, through the allowlist proxy on `agent-brave.network`. This unit reads a
 # local file and writes the personal replica, so it needs no address at all --
@@ -26,10 +31,10 @@
 # by, and a second profile on this host would be a second label, not a second path.
 #
 # A refusal exits 3 and publishes nothing: a snapshot that could not be taken, a
-# database that fails `integrity_check`, a replica that cannot be written. That is
-# a failed unit on purpose -- the timer is the only signal that the replica stopped
-# advancing, and a red unit is better than a state that looks like the user
-# deleted everything.
+# database that fails `integrity_check`, a replica that cannot be written, a view
+# that cannot be rendered. That is a failed unit on purpose -- the timer is the only
+# signal that the replica stopped advancing, and a red unit is better than a state
+# that looks like the user deleted everything.
 [Unit]
 Description=Snapshot and collect Brave browsing history into the personal replica
 Requires=zfs-ready@state-agent-local.service smortress-agent-config.service
@@ -53,7 +58,7 @@ ExecStart=/usr/bin/podman run --rm --replace --name smortress-agent-brave-snapsh
   --env PYTHONPATH=/usr/lib/agent-facade/libs:/usr/lib/agent-facade \
   --env PYTHONDONTWRITEBYTECODE=1 \
   --entrypoint python3 \
-  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:6c6964bf94dd2582dac51fe3d68dc5919df58541fbff68d2d0cf58e710d06ac4 \
+  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:a2097dc2f54142b75137779c91f2e90956a01687cdfd2424685d748c3669baa1 \
   -m apps.brave_ingest.snapshot --database /profile/Default/History \
   --out /quarantine/History
 # Stage 2: publish what the snapshot wrote. The copy is mounted read-only here, so
@@ -70,10 +75,29 @@ ExecStart=/usr/bin/podman run --rm --replace --name smortress-agent-collect-brav
   --env PYTHONPATH=/usr/lib/agent-facade/libs:/usr/lib/agent-facade \
   --env PYTHONDONTWRITEBYTECODE=1 \
   --entrypoint python3 \
-  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:6c6964bf94dd2582dac51fe3d68dc5919df58541fbff68d2d0cf58e710d06ac4 \
+  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:a2097dc2f54142b75137779c91f2e90956a01687cdfd2424685d748c3669baa1 \
   -m data_plane.collectors.raw --root /replica/brave \
   brave --database /quarantine/History --device smortress --profile default
+# Stage 3: the plain-file view (SDLC #995). The replica above is the fidelity
+# anchor and is readable only through code that knows its layout; this is the same
+# snapshot rendered as a file an agent's own shell can read -- `cat`, `rg`, `jq` --
+# under `sources/brave`, which the personal gateway mounts. It copies the snapshot
+# to `/out/History` rather than moving it, so stage 2 could run again over the same
+# input, and it writes `state.json` last, so a pass that fails halfway leaves the
+# previous `last_run` saying the view is stale. Bounded on purpose: the newest 2000
+# visits inside 90 days, replaced whole on every pass.
+ExecStart=/usr/bin/podman run --rm --replace --name smortress-agent-brave-publish \
+  --network none \
+  --read-only --cap-drop=all --security-opt no-new-privileges \
+  --tmpfs /tmp:rw,size=16m --user 1000:1000 \
+  --volume /var/lib/agent/local/quarantine/brave:/quarantine:ro \
+  --volume /var/lib/agent/local/sources/brave:/out:z \
+  --env PYTHONPATH=/usr/lib/agent-facade/libs:/usr/lib/agent-facade \
+  --env PYTHONDONTWRITEBYTECODE=1 \
+  --entrypoint python3 \
+  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:a2097dc2f54142b75137779c91f2e90956a01687cdfd2424685d748c3669baa1 \
+  -m data_plane.collectors.raw.publish_brave --history /quarantine/History --out /out
 Restart=no
 # A snapshot of a large history and a full table dump: the limit is generous
-# because a slow one is still a complete one, and neither stage retries.
+# because a slow one is still a complete one, and no stage retries.
 TimeoutStartSec=600

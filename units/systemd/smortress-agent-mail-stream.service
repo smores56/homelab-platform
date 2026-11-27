@@ -5,8 +5,8 @@
 # mailbox or miss the event that woke it.
 #
 # The collector talks only to the bridge on the collectors' network and writes
-# only the personal replica. It cannot reach a deployment, the gateway or the
-# model: this unit's single network is agent-collect.network.
+# only the personal sources dataset. It cannot reach a deployment, the gateway or
+# the model: this unit's single network is agent-collect.network.
 #
 # `agent-tmail.service` is the Quadlet-generated name, not the container name:
 # `agent-tmail.container` generates that unit and it is what creates the bridge
@@ -39,14 +39,25 @@ ExecStart=/usr/bin/podman run --rm --replace --name smortress-agent-mail-stream 
   --tmpfs /tmp:rw,size=16m --user 1000:1000 \
   --secret tmail-bridge-password,type=mount,uid=1000,gid=1000,mode=0400 \
   --volume /var/lib/agent/local/quarantine/tmail/config/tutabridge/cert.pem:/bridge/cert.pem:ro \
-  --volume /var/lib/agent/local/replica:/replica:z \
+  --volume /var/lib/agent/local/sources/mail:/sources:z \
   --env PYTHONPATH=/usr/lib/agent-facade/libs:/usr/lib/agent-facade \
   --env PYTHONDONTWRITEBYTECODE=1 \
   --entrypoint python3 \
-  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:6c6964bf94dd2582dac51fe3d68dc5919df58541fbff68d2d0cf58e710d06ac4 \
-  -m data_plane.collectors.stream --root /replica/mail \
+  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:a2097dc2f54142b75137779c91f2e90956a01687cdfd2424685d748c3669baa1 \
+  -m data_plane.collectors.stream --root /sources \
   --host smortress-agent-tmail --port 1143 --user tuta \
   --password-file /run/secrets/tmail-bridge-password --ca-file /bridge/cert.pem
+# There is no second ExecStart. A `Type=simple` unit starts every ExecStart at
+# once, so a publisher there would run once at boot, race the stream's first pass,
+# and never run again after an IDLE-triggered one -- its failures would also take
+# the stream down with them. The stream publishes the view itself after each
+# committed pass (`libs/data_plane/collectors/stream/imap.py`), which is the only
+# place that knows a pass happened; a refusal is logged and the next pass retries.
+#
+# The tree is mounted twice on purpose: `/sources` is the state and its objects,
+# and `/opt/data/sources/mail` is the same directory at the path the gateway
+# mounts it, because that is what every index line records and the agent has to be
+# able to `cat` it. No network: nothing here leaves the host.
 # The process retries every socket error itself with exponential backoff, so a
 # restart here means the process died: a bug, or a refusal that exited non-zero.
 # SIGTERM is handled inside the process, which stops the IDLE connections and

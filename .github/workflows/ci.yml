@@ -73,9 +73,7 @@ jobs:
             xargs -0 bats \
               --filter-tags apps \
               --filter-tags python \
-              --filter-tags data-plane \
-              --filter-tags agent-shell-bridge \
-              --filter-tags agent-data-plane \
+              --filter-tags source-watch \
               --jobs "$(nproc)" --no-parallelize-within-files
 
   edge:
@@ -100,6 +98,8 @@ jobs:
               --filter-tags tailnet-names \
               --filter-tags agent-egress \
               --filter-tags brave \
+              --filter-tags finance \
+              --filter-tags mail \
               --jobs "$(nproc)" --no-parallelize-within-files
 
   image:

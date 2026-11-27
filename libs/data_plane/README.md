@@ -69,8 +69,6 @@ provider SDK. The same code runs in the local and external planes.
 
 ```sh
 # host Python is fine in CI; locally use nix-shell for python3
-PYTHONPATH=libs python3 -m unittest discover -s tests/data-plane -t tests/data-plane
-tests/data-plane/check.sh
 
 PYTHONPATH=libs python3 -m data_plane validate-catalog catalog.json
 PYTHONPATH=libs python3 -m data_plane render-confirmation operation.json
@@ -93,4 +91,3 @@ repository (`restic snapshots` and
 - The platform's SQLite journal is the single source for intent state; the
   broker reaches it through `broker_journal.BrokerJournal`.
 - The services that wrap these libraries still need OCI images and manifests;
-  see `images/data-plane/` and `deploy/data-plane/` in this repository.

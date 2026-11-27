@@ -20,8 +20,11 @@ setup() { aq_setup; }
 #     personal index -- the same directory the seed unit creates at uid 1000.
 readonly finance_unit=units/systemd/smortress-agent-collect-finance.service
 
-@test "units/systemd/smortress-agent-collect-finance.service is collect then project" {
-  assert_equal "$(grep -cE '^ExecStart=' "$finance_unit")" 2
+@test "units/systemd/smortress-agent-collect-finance.service is collect, publish, project" {
+  # Three stages: the pull, the plain view the agent reads (SDLC #995, T2) and
+  # the derived journal. `Type=oneshot` runs them in order, so the view is
+  # published from the state the pull just committed.
+  assert_equal "$(grep -cE '^ExecStart=' "$finance_unit")" 3
 }
 
 @test "units/systemd/smortress-agent-collect-finance.service projects the replica into the personal index" {
@@ -144,12 +147,25 @@ readonly stream=units/systemd/smortress-agent-mail-stream.service
   [[ -f $stream ]]
 }
 
-@test "units/systemd/smortress-agent-mail-stream.service names exactly one network" {
-  assert_equal "$(grep -cE -- '--network ' "$stream")" 1
+# Two stages now: the stream, and the publisher that writes the tree the agent
+# reads. Each names its own network, and a stage that named none would land on
+# podman's default with egress -- so the count is per container, not per file.
+@test "every container the mail stream runs names exactly one network" {
+  assert_equal \
+    "$(grep -cE '^ExecStart=' "$stream")" \
+    "$(grep -cE -- '--network ' "$stream")"
 }
 
 @test "the mail stream runs on the collectors' network" {
   grep -qE -- '--network systemd-agent-collect' "$stream"
+}
+
+@test "the mail stream publishes in-process and needs no second stage" {
+  # A `Type=simple` unit starts every ExecStart at once, so the view is published
+  # by the stream itself after each committed pass; a second ExecStart here would
+  # run once at boot and race the first pass.
+  assert_equal "$(grep -cE '^ExecStart=' "$stream")" 1
+  grep -qF -- 'publish_mail.publish(state.root, state.root)' libs/data_plane/collectors/stream/imap.py
 }
 
 @test "the mail stream requires the Quadlet-generated bridge unit" {

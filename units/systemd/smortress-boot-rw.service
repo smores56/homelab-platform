@@ -1,0 +1,19 @@
+[Unit]
+Description=Mount /boot writable for the boot counter and greenboot
+# /boot arrives read-only, and both the counter installer and greenboot need it
+# writable: greenboot writes grubenv through grub2-editenv on every boot, and a
+# read-only mount turns that into a silent "no counter" rather than a failure.
+DefaultDependencies=no
+After=local-fs.target
+Before=greenboot-healthcheck.service smortress-boot-counter.service
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/mount -o remount,rw /boot
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target

@@ -416,3 +416,14 @@ PY
     assert_success
     rm -f "$out"
 }
+
+# containers/image reads every transport as a repository -> requirements map, and
+# an array is not a weaker rule but an unreadable file: the ostree importer
+# refuses the whole policy with "JSON object expected, got 91". That is exactly
+# how `bootc switch` failed on the live edge, with the tag and the signature both
+# fine, because ignition had copied this document onto the host.
+@test "every policy transport is a repository map, not an array" {
+    run jq -e '[.transports[] | type] | all(. == "object")' \
+        "$BATS_TEST_DIRNAME/../../bootc/server/rootfs/etc/containers/policy.json"
+    assert_success
+}

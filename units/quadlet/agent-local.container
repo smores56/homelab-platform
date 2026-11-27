@@ -29,16 +29,25 @@
 #
 # ReadOnly=false is deliberate and is the one departure from the pattern: the
 # runtime writes its SQLite state, sessions, logs and skills under HERMES_HOME,
-# which is this container's only write target. There is no host path, no Podman
-# socket and no SSH identity in it.
+# which is this container's only write target. There is no Podman socket and no
+# SSH identity in it.
+#
+# /srv/files is the personal data plane (SDLC #995): todos, notes and the vault is
+# everything the agent reads, mounted rather than served, because the runtime's own
+# `terminal` and `file` toolsets are the interface now. The vault is the one rule
+# that did not disappear with the permission engine and it is a mount mode, not a
+# check: a nested ro bind wins over the rw parent, so a write under /srv/files/vault
+# fails at the kernel and no policy has to agree. raw/files is a Syncthing folder
+# owned by uid 1000 (core), which is the uid this gateway writes as, and the tree
+# already carries container_file_t, so no relabel and no ACL grant are involved.
 [Unit]
 Description=Hermes Agent gateway, personal deployment (no egress)
-Requires=zfs-ready@state-agent-local.service sops-decrypt.service smortress-app-secrets.service smortress-agent-config.service
-After=network-online.target zfs-ready@state-agent-local.service sops-decrypt.service smortress-app-secrets.service smortress-agent-config.service
+Requires=zfs-ready@state-agent-local.service zfs-ready@raw-files.service sops-decrypt.service smortress-app-secrets.service smortress-agent-config.service
+After=network-online.target zfs-ready@state-agent-local.service zfs-ready@raw-files.service sops-decrypt.service smortress-app-secrets.service smortress-agent-config.service
 Wants=network-online.target
 
 [Container]
-Image=ghcr.io/smores56/homelab-platform/agent-runtime@sha256:6c6964bf94dd2582dac51fe3d68dc5919df58541fbff68d2d0cf58e710d06ac4
+Image=ghcr.io/smores56/homelab-platform/agent-runtime@sha256:a2097dc2f54142b75137779c91f2e90956a01687cdfd2424685d748c3669baa1
 ContainerName=smortress-agent-local
 Network=agent-local.network
 Exec=gateway run
@@ -51,6 +60,13 @@ Environment=HERMES_UID=1000
 Environment=HERMES_GID=1000
 Environment=TZ=UTC
 Volume=/var/lib/agent/local:/opt/data:z
+# The personal plane. No :z: the dataset keeps its container_file_t label, and a
+# relabel on a Syncthing folder would churn a tree this unit does not own.
+Volume=/srv/files:/srv/files
+# The one surviving permission rule: the vault is read-only to the agent, and the
+# mount is what says so. Podman orders nested binds by path depth, so this wins
+# over the rw mount above.
+Volume=/srv/files/vault:/srv/files/vault:ro
 PublishPort=127.0.0.1:18001:18001
 # The runtime writes its state under /opt/data, so the root filesystem cannot be
 # read-only here. NoNewPrivileges stays; DropCapability cannot, see above.

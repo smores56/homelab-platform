@@ -64,6 +64,37 @@ gateway_network() { # quadlet
   assert_equal "$(gateway_network "$agent_general")" agent-general.network
 }
 
+# The personal plane is a mount, and the one permission rule left in the design is
+# its mode (SDLC #995): /srv/files read-write, the vault nested read-only. A volume
+# that dropped the vault line would hand the agent a writable vault and nothing
+# else in the stack would notice.
+@test "the personal gateway mounts the files tree and the vault read-only" {
+  run grep -E '^Volume=/srv/files:/srv/files$' "$agent_local"
+  assert_success
+  run grep -E '^Volume=/srv/files/vault:/srv/files/vault:ro$' "$agent_local"
+  assert_success
+  # Without the mount the shell sees an empty /srv/files and the agent reports a
+  # plane that has no data rather than a mount that never happened.
+  run grep -F 'zfs-ready@raw-files.service' "$agent_local"
+  assert_success
+}
+
+# The general plane is mounted, not served: `/srv/git` and `/srv/books` are the
+# two live trees and the agent writes both (SDLC #995). A unit that dropped either
+# line would leave a shell with an empty directory and no error.
+@test "the general gateway mounts the repo and book trees read-write" {
+  run grep -E '^Volume=/srv/git:/srv/git$' "$agent_general"
+  assert_success
+  run grep -E '^Volume=/srv/books:/srv/books$' "$agent_general"
+  assert_success
+  # Both datasets must be up first, or the bind mounts an empty directory over
+  # the mountpoint and the agent reads a plane that is not there yet.
+  run grep -F 'zfs-ready@raw-git.service' "$agent_general"
+  assert_success
+  run grep -F 'zfs-ready@raw-books.service' "$agent_general"
+  assert_success
+}
+
 @test "the proxy is on the egress network only" {
   assert_equal "$(gateway_network "$agent_proxy")" agent-general.network
 }
@@ -183,11 +214,37 @@ personal_config_disables_toolset() { # toolset
   grep -qE "^[[:space:]]+- $1$" <<<"$disabled"
 }
 
-for _toolset in web search browser terminal file memory code_execution catalog \
+for _toolset in web search browser memory code_execution catalog \
   computer_use cronjob skills image_gen connections; do
   registered "the personal config disables the $_toolset toolset" personal_config_disables_toolset "$_toolset"
 done
 unset _toolset
+
+# The data plane is the mount plus the runtime's own shell (SDLC #995). A
+# `terminal` or `file` entry in that list would leave the agent with a mounted
+# tree it has no way to read, which is the failure this assertion exists for: the
+# list is the only place the two toolsets can be closed and the mount cannot say
+# anything about them.
+@test "the personal config leaves the shell and file toolsets available" {
+  local disabled
+  disabled=$(sed -n '/^  disabled_toolsets:/,/^[^ ]/p' bootc/server/rootfs/etc/smortress/agent/local-config.yaml)
+  ! grep -qE '^    - (terminal|file)$' <<<"$disabled"
+}
+
+# `approvals.mode` has three values in the runtime (`/opt/hermes/tools/approval.py`):
+# `manual` prompts in the chat, `smart` asks a guardian model, and `off` is a pure
+# bypass. The plane's bound is the mount and the network, so a prompt here would
+# ask the operator to re-allow what the mount already allows.
+@test "both templates turn approvals off" {
+  local template
+  for template in bootc/server/rootfs/etc/smortress/agent/local-config.yaml \
+    bootc/server/rootfs/etc/smortress/agent/general-config.yaml; do
+    if ! sed -n '/^approvals:/,/^[^ ]/p' "$template" | grep -qE '^  mode: off$'; then
+      printf '%s does not set approvals.mode: off\n' "$template" >&2
+      return 1
+    fi
+  done
+}
 
 # Subagents are wanted, and they are the one runtime default the personal side
 # keeps on purpose: a child inherits this process's provider and MCP toolsets, so
@@ -213,8 +270,8 @@ unset _toolset
 
 # The runtime has no _FILE variant, so the key reaches it through .env written by
 # the seed unit -- from the decrypted ciphertext, at the container's uid. The unit
-# delegates to a script now that seeding also splices a token into a YAML file: a
-# value built inside an `ExecStart` line is a value in the process table.
+# delegates to a script: a value built inside an `ExecStart` line is a value in the
+# process table.
 
 # shellcheck disable=SC2016  # the matched text is the seed script's own source line
 @test "the seed unit derives both gateway keys from their ciphertext" {
@@ -229,16 +286,9 @@ unset _toolset
     grep -qF 'cp -n "$template" "$config"' "$seed_script"
 }
 
-# The facade token must not travel through argv or a command substitution: the
-# script reads it with `read` and splices it with parameter expansion.
-@test "the facade token is read into a variable, never into argv" {
-  grep -qF 'while IFS= read -r line' "$seed_script" &&
-    ! grep -vE '^[[:space:]]*#' "$seed_script" | grep -qE '\$\(cat|sed .*\$\(|awk -v token'
-}
-
-# The personal facade bind-mounts its index directory, and a bind source podman
-# has to create would land root-owned inside the dataset, so the seed unit creates
-# it at the container's uid -- on the personal side only, where the replicas are.
+# A bind source podman has to create would land root-owned inside a dataset owned
+# by uid 1000, so the seed unit creates the derived-index directory at the
+# container's uid -- on the personal side only, where the collectors write.
 # shellcheck disable=SC2016  # the matched text is the seed script's own source line
 @test "the seed unit creates the personal index directory at the container uid" {
   grep -qF 'if [[ $state == local ]]; then' "$seed_script" &&
@@ -327,18 +377,6 @@ for _q in "${app_quadlets[@]}"; do
   done <"$_q"
 done
 unset _q _line _path _seen
-
-# The same rule for the facade in particular: its program is a Python package, so
-# what has to be inside the container is the directory PYTHONPATH names.
-names_a_tree_its_own_image_carries() { # quadlet
-  [[ $(sed -n 's/^Environment=PYTHONPATH=//p' "$1") == /usr/lib/agent-facade/libs:/usr/lib/agent-facade ]] &&
-    baked_by_runtime_image /usr/lib/agent-facade
-}
-
-for _q in units/quadlet/agent-facade-personal.container units/quadlet/agent-facade-general.container; do
-  registered "$_q names a tree its own image carries" names_a_tree_its_own_image_carries "$_q"
-done
-unset _q
 
 # The collectors run the same package through a plain podman unit, where the
 # environment is a podman argument rather than Quadlet's Environment=. The rule

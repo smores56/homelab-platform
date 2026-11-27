@@ -1,0 +1,24 @@
+[Unit]
+Description=Install greenboot's GRUB snippet as /boot/grub2/custom.cfg
+# grub.cfg is generated once by bootupd and never regenerated, so the snippet
+# greenboot ships in bootupd's configs.d never reaches it. /boot/grub2/custom.cfg
+# is the hook grub.cfg does source, and /usr/libexec/boot-counter is the same
+# program the edge runs (scripts/boot-counter-install.sh has the argument).
+After=local-fs.target smortress-boot-rw.service
+Requires=smortress-boot-rw.service
+Before=greenboot-healthcheck.service
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# The installer is shared with the edge and defaults to that image's path, so
+# this image names its own: without it the unit fails with a missing snippet and
+# the host silently has no counter (found on the first real boot).
+Environment=BOOT_COUNTER_SNIPPET=/usr/share/smortress/boot-counter.cfg
+ExecStart=/usr/libexec/boot-counter
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

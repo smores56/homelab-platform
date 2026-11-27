@@ -42,6 +42,8 @@ on:
       # change to what this image runs.
       - "scripts/deploy-state.sh"
       - "scripts/lib/**"
+      # The boot counter installer both images run (SDLC #939).
+      - "scripts/boot-counter-install.sh"
       # The dead-man beat is the server's program under the edge's own limits
       # (design #939, T8), so a change to it changes what this image runs.
       - "scripts/deploy-heartbeat.sh"
@@ -157,18 +159,44 @@ jobs:
           # The lookaside tag is <repo>:<sha256-hex>.sig, not repo:tag:<hex>.sig.
           skopeo inspect --raw "docker://${EDGE_IMAGE_REPO}:${digest/:/-}.sig" >/dev/null
           cosign verify --key bootc/server/cosign.pub "$image@$digest"
-          # No `latest` handle. The edge's first install and every update are
-          # digest-only (`bootc switch --enforce-container-sigpolicy` on a digest,
-          # T9 and T10); a moving tag here would be a second answer to "which
-          # image runs". The deploy trigger is the notify job below, and it is a
-          # dispatch rather than this push.
+          # `latest` is the edge's update handle: `bootc switch` adopts it once
+          # and `bootc upgrade` re-resolves it every night, so the host follows a
+          # pointer that only ever names a signed digest. It moves only after the
+          # digest is signed and verified, and only from main, so a dispatch from
+          # a branch cannot point the host at a build that would not have
+          # deployed. The guards are the server's verbatim: builds are serialised
+          # in push order, so the newest push is the last to run, and the one way
+          # to walk the tag backwards is a rerun of an older push, which must not
+          # move it (publish-server-image.yml has the argument in full).
+          moved_latest=false
+          if [[ $GITHUB_REF != refs/heads/main ]]; then
+            echo "::notice::not moving :latest; this run is $GITHUB_REF, not main"
+          elif [[ $GITHUB_RUN_ATTEMPT != 1 ]]; then
+            echo "::notice::not moving :latest; attempt $GITHUB_RUN_ATTEMPT is a rerun"
+          else
+            # Copy the signed manifest by digest instead of re-pushing by tag:
+            # --all copies the exact manifest, so the resulting digest cannot
+            # drift from the one that was verified.
+            skopeo copy --all --authfile "$authfile" \
+              "docker://${EDGE_IMAGE_REPO}@${digest}" "docker://${EDGE_IMAGE_REPO}:latest"
+            latest_digest=$(skopeo inspect --format '{{.Digest}}' \
+              "docker://${EDGE_IMAGE_REPO}:latest")
+            if [[ $latest_digest != "$digest" ]]; then
+              echo "::error::latest resolves to $latest_digest, not $digest"
+              exit 1
+            fi
+            moved_latest=true
+          fi
           {
             echo "### Derived edge image"
             echo
             echo "- \`$image\`"
             echo "- \`${EDGE_IMAGE_REPO}@${digest}\`"
+            if [[ $moved_latest == true ]]; then
+              echo "- \`${EDGE_IMAGE_REPO}:latest\` (the host's update handle)"
+            fi
             echo
-            echo "The edge install path takes this digest (T9 and T10)."
+            echo "The edge's first install takes this digest (T9 and T10); every upgrade after it follows \`:latest\`."
           } >>"$GITHUB_STEP_SUMMARY"
           echo "pin: ${EDGE_IMAGE_REPO}@${digest}"
 

@@ -17,22 +17,32 @@ model:
   default: local-agent
   context_length: 65536
 
-# Nothing in this deployment approves its own tool use: an approval is presented
-# in the chat and decided outside the runtime.
+# Approvals are off (SDLC #995): the permission model is the mount and the
+# network, so a prompt in the chat that asks the agent's own operator to re-allow
+# a `cat` would be a check with nothing behind it. `/opt/hermes/tools/approval.py`
+# treats `off` as a pure bypass -- the same state the Desktop's "Approvals: off"
+# toggle writes -- and the denial breaker and gateway queue stop applying with it.
 approvals:
-  mode: manual
+  mode: off
 
 agent:
-  # The personal side. Every toolset that can reach a network, start a process,
-  # write a file, or persist something the model chose is off, so the
-  # zero-egress network is not the only thing between the model and the world.
-  # Disabling is per toolset, so a toolset listed here is entirely unavailable.
+  # The personal side. `terminal` and `file` are ON: the data plane is the mounted
+  # /srv/files tree and the shell is the interface (SDLC #995), which is why the
+  # gateway mounts it and why there is no source facade left to read it through.
+  #
+  # What stays off is everything that would reach past the mount: web, search and
+  # browser cannot work on a network with no default route, and leaving them on
+  # would only add a toolset whose failures look like faults. memory, skills,
+  # cronjob and connections stay off because the runtime's own persistence is not
+  # the plane's business; code_execution is the same capability as terminal;
+  # computer_use and image_gen need a surface this deployment does not have.
+  #
+  # Disabling is per toolset, so an unlisted toolset is fully available to the
+  # model and to every child it spawns.
   disabled_toolsets:
     - web
     - search
     - browser
-    - terminal
-    - file
     - memory
     - code_execution
     - catalog
@@ -43,9 +53,9 @@ agent:
     - connections
 
 # One level of subagents, deliberately. A child is not a new authority: it runs in
-# this process, with this deployment's provider and this deployment's MCP toolsets
-# (the `personal` facade and its one token), so it can reach exactly what the
-# parent can and nothing more -- and `disabled_toolsets` above applies to it too.
+# this process, with this deployment's provider and this deployment's tools, so it
+# can reach exactly what the parent can and nothing more -- the mount is the
+# boundary, and `disabled_toolsets` above applies to it too.
 # What it does add is concurrency, which is bounded here because the 3090 serves
 # four llama.cpp slots and the queue is shared with every other turn. Spawn depth
 # stays at 1 so the graph is flat; a child cannot spawn.
@@ -55,38 +65,3 @@ delegation:
   max_spawn_depth: 1
   child_timeout_seconds: 1200
   inherit_mcp_toolsets: true
-
-# The personal deployment's source facade (units/quadlet/agent-facade-personal.container),
-# reached by container name on agent-local.network: it publishes nothing, so this
-# name is the only route to it. `personal` is the server name the runtime prefixes
-# every tool with (`mcp__personal__sources_describe`), and `trust: full` is right
-# because the facade is ours and its tools are typed and capped -- a source it does
-# not have is absent from its table, not refused by a permission check.
-#
-# The token is a placeholder, not a credential: smortress-agent-config.service
-# replaces it with the decrypted agent-facade-personal-token.yaml value when this
-# file is first seeded, and this template stays in the image with no token in it.
-mcp_servers:
-  personal:
-    url: http://smortress-agent-facade-personal:18004/mcp
-    headers:
-      X-Deployment-Token: __FACADE_TOKEN__
-    trust: full
-
-# THE MIRAGE WORKSPACE (SDLC #979, T1). One virtual terminal, one workspace, and
-# the native surface the facade's fixed source verbs were standing in for:
-# `shell`, `read`, `write`, `edit`, `ls`, `grep` and `glob`.
-#
-# The URL goes to socat's port, not the daemon's. The daemon binds 127.0.0.1
-# inside its own container and no config key moves it, so 18010 is the address the
-# bridge network can reach; `smortress-mirage-personal` is the container name and
-# the instance publishes nothing, so this name is the only route to it.
-#
-# `Authorization` is the one value in this file that is not the facade token:
-# Mirage takes a bearer header, and the seed replaces `__MIRAGE_TOKEN__` with
-# `Bearer <mirage-personal-token>` the first time this file is seeded.
-  mirage:
-    url: http://smortress-mirage-personal:18010/v1/workspaces/personal/mcp
-    headers:
-      Authorization: __MIRAGE_TOKEN__
-    trust: full

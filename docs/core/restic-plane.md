@@ -84,7 +84,7 @@ other application dataset.
 The two groups are one dataset each, not one group split in two: the personal
 deployment writes everything it owns under `/var/lib/agent/local` and the general
 deployment everything under `/var/lib/agent/general`, including the collectors'
-quarantine and replica trees and the facades' memory and index. That is what makes
+quarantine and replica trees and the gateways' memory and index. That is what makes
 them restore-united — one snapshot, one restore, no half deployment. It is also
 the boundary: no unit on either side mounts the other's dataset, and the general
 group restores exactly its own. Both are in every destination's run, retention and

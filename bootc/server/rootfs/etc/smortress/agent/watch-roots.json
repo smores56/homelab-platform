@@ -1,0 +1,24 @@
+{
+  "exclude": [
+    ".stfolder",
+    ".stversions",
+    ".stversions/*",
+    ".obsidian",
+    ".syncthing.*.tmp",
+    "~$*",
+    "*.swp",
+    "tmp",
+    "tmp/*",
+    "*/tmp/*"
+  ],
+  "roots": [
+    {
+      "source": "files",
+      "path": "/srv/files"
+    },
+    {
+      "source": "sources",
+      "path": "/var/lib/agent/local/sources"
+    }
+  ]
+}

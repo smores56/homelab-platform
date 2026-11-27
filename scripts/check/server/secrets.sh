@@ -476,19 +476,22 @@ declare -A unlisted_why=(
   [smortress-cryptsetup-hdd.service]='best-effort HDD unlock (ExecStart=-) is green with the backup disk unplugged, so it asserts nothing about the disk'
   [smortress-tailscale-ssh-off.service]='ConditionPathExists on tailscaled.state: a missing state file makes systemd skip it before the first enrollment, and a skip reads inactive'
   [smortress-agent-config.service]='seeds the agent state datasets: an agent-plane fault must not roll the platform digest back'
-  [smortress-agent-job-provision.service]='provisions the rootless job runners: an agent-plane fault must not roll the platform digest back'
-  [smortress-agent-shell-bridge.service]='serves the agent shell socket: an agent-plane fault must not roll the platform digest back'
-  [smortress-agent-shell-bridge-personal.service]='serves the personal agent shell socket: an agent-plane fault must not roll the platform digest back'
   [smortress-nvidia-cdi.service]='ConditionPathExists on /usr/bin/nvidia-ctk: on a host with no NVIDIA tooling the unit is skipped, not failed'
   [smortress-selinux-nvidia-map.service]='ConditionPathExists on the model CIL module: without SELinux or that module it is skipped, not failed'
-  [smortress-selinux-agent-shell.service]='ConditionPathExists on the shell CIL module: without SELinux or that module it is skipped, not failed'
   [smortress-selinux-caddy-proxy.service]='ConditionSecurity on SELinux: without SELinux there is no port label to write and the unit is skipped, not failed, and a oneshot that stays active after success reads as running for the rest of the boot'
-  [smortress-agent-todos-watch.service]='ConditionPathIsDirectory on /srv/files/todos: before the todos root exists systemd skips it, and a skipped unit reads inactive; a stopped feed degrades the agent plane, not the host'
+  [smortress-source-watch.service]='ConditionPathIsDirectory on /srv/files: before raw/files is mounted systemd skips it and a skip reads inactive, and the watcher skips any single missing root to keep the rest; a stopped feed degrades the agent plane, not the host'
   [smortress-agent-mail-stream.service]='ConditionPathExists on the Tuta bridge cert: without the cert it is skipped, not failed, until the bridge is provisioned'
   [smortress-backrest.service]='the recovery reader: its credential is the operator file /etc/backrest/env, so a reader that cannot start is a tailnet Service with no listener and pages through its watchdog, never a reason to roll an image that deployed cleanly back'
   [smortress-syncthing-hostcheck.service]='the host-check enforcement (design #897, T2) is a oneshot that stays active after success, so systemd reads it as running for the rest of the boot: it is not a serving signal, because a failure here is already visible as the GUI proxy it gates going down, and rolling the image back cannot fix a config.xml it could not read'
   [smortress-syncthing-gui-proxy.service]='the loopback proxy in front of the Syncthing GUI (design #897, T1/T2): it is that GUI route, so a dead proxy is a URL that 502s, not a host that rolled back onto an image that deployed cleanly'
   [smortress-restic-init.service]='initialises the Restic repositories: a backup-plane fault must not roll the platform digest back'
+  # The boot counter's two units are boot plumbing, not serving signals: a host
+  # that cannot write /boot has no counter, and greenboot journals that, but
+  # rolling the image back would not create a writable mount or a GRUB snippet.
+  # The deployments that reach this host are the ones a missing counter would
+  # fail to protect, and that is a reason to fix /boot, not to boot an old image.
+  [smortress-boot-rw.service]='remounts /boot writable before greenboot writes grubenv: a failed remount is reported by the counter unit, and rolling back would not create the mount'
+  [smortress-boot-counter.service]='installs greenboot GRUB snippet as /boot/grub2/custom.cfg: boot plumbing, and a rolled-back image would not have a different /boot'
   # The two Restic repository mounts are enabled and long-running, and `nofail` is
   # what makes them the opposite of a serving signal: an absent or unpowered backup
   # disk is a red destination, not a failed host. The hourly verifier pings the
