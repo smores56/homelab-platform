@@ -160,3 +160,15 @@ run_check() {
         units/systemd/smortress-syncthing-gui-proxy.service
     assert_success
 }
+
+@test "the proxy is ordered after the port label Caddy binds on" {
+    # A confined Caddy may bind only an http_port_t port, and the label lives in the
+    # host's policy store rather than in a unit file, so the write is its own boot
+    # step: a proxy that starts first is denied at the bind and stays down.
+    run grep -x 'Requires=smortress-selinux-caddy-proxy.service' \
+        units/systemd/smortress-syncthing-gui-proxy.service
+    assert_success
+    run grep -E '^After=.*\bsmortress-selinux-caddy-proxy\.service\b' \
+        units/systemd/smortress-syncthing-gui-proxy.service
+    assert_success
+}

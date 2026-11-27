@@ -342,6 +342,7 @@ contains() {
         "$server_containerfile"
     contains '      smortress-syncthing-gui-proxy.service \' "$server_containerfile"
     contains '      smortress-syncthing-hostcheck.service \' "$server_containerfile"
+    contains '      smortress-selinux-caddy-proxy.service \' "$server_containerfile"
     contains 'scripts/syncthing-hostcheck.sh' "$server_containerfile"
 
     # One listener, on loopback, rewriting the one header the GUI checks. A bind
@@ -370,6 +371,19 @@ contains() {
     # a port above 1024 does not need.
     if grep -qE '^(AmbientCapabilities|CapabilityBoundingSet)=[[:space:]]*[^[:space:]]' "$unit"; then
         fail "$unit grants a capability the loopback bind does not need"
+    fi
+
+    # The port label ships as its own unit and is installed by the directory COPY,
+    # enabled with its siblings: the bind needs a host label no unit file can carry,
+    # so the write is a boot step that runs before the proxy rather than build state.
+    label=units/systemd/smortress-selinux-caddy-proxy.service
+    run test -s "$label"
+    assert_success
+    contains 'COPY units/systemd/ /usr/lib/systemd/system/' "$server_containerfile"
+    contains 'semanage port -a -t http_port_t -p tcp 8385' "$label"
+    if grep -qxF 'smortress-selinux-caddy-proxy.service' \
+        bootc/server/rootfs/usr/share/smortress/deploy-units.txt; then
+        fail "the port label is a deploy unit: a label it could not write must not roll an image back"
     fi
 
     # Not a deploy unit: a proxy that is down is a broken route, not a host that

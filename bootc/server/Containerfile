@@ -308,6 +308,7 @@ RUN set -eux; \
       smortress-nvidia-cdi.service \
       smortress-selinux-nvidia-map.service \
       smortress-selinux-agent-shell.service \
+      smortress-selinux-caddy-proxy.service \
       smortress-apps-user.service \
       smortress-apps-quota.service \
       smortress-apps-deny.service \

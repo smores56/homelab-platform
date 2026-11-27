@@ -23,11 +23,17 @@
 # Host would be the exposure the split was meant to end. A failed enforcement
 # therefore takes the route down instead of trusting a setting nobody verified.
 #
+# Requires= the port label (T2): a confined Caddy may bind only an http_port_t
+# port, so the proxy that starts before the label exists is denied at its first
+# bind and stays down for the rest of the boot. The label unit is a no-op on a
+# store that already carries it, which is every boot after the first.
+#
 # Not in deploy-units.txt on purpose: a proxy that is not running is a broken
 # route, not a host that rolled back onto an image that deployed cleanly.
 Description=Loopback proxy in front of the Syncthing GUI
-After=network.target syncthing.service smortress-syncthing-hostcheck.service
+After=network.target syncthing.service smortress-syncthing-hostcheck.service smortress-selinux-caddy-proxy.service
 Requires=smortress-syncthing-hostcheck.service
+Requires=smortress-selinux-caddy-proxy.service
 Wants=network.target
 
 [Service]
