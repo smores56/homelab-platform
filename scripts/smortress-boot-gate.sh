@@ -66,9 +66,10 @@
 # a failed rollback, an apps revert that could not run while a platform deployment
 # is pending) or the health gate failed and the rollback was issued.
 #
-# Every knob is environment-overridable so tests/deploy/boot.bats can drive this
-# exact code against fakes and a throwaway state directory. Production sets none
-# of them: the defaults are the host contract, not a way to skip a check.
+# Every knob is environment-overridable so the tests/deploy/boot-*.bats suites
+# can drive this exact code against fakes and a throwaway state directory.
+# Production sets none of them: the defaults are the host contract, not a way to
+# skip a check.
 #
 # shellcheck disable=SC2154  # deploy-state.sh assigns these at source time
 set -euo pipefail

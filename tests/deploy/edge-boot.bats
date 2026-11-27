@@ -15,8 +15,8 @@
 # resolves are the ones the image gives it. No root, no reboot, no image, no
 # network.
 #
-# The server's gate is tests/deploy/boot.bats: same shape, a snapshot plane, a
-# tenant and a GRUB counter behind it.
+# The server's gate is tests/deploy/boot-gate-*.bats: same shape, a snapshot
+# plane, a tenant and a GRUB counter behind it.
 #
 #   bats tests/deploy/edge-boot.bats
 load ../helpers
