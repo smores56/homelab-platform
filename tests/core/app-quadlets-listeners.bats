@@ -21,6 +21,15 @@ setup() { aq_setup; }
 # only widen who can spend the provider key.
 readonly no_serve_ports=(18003)
 
+# Loopback listeners that reach the tailnet through a proxy the image ships rather
+# than through a route of their own. The Syncthing GUI refuses a foreign Host, so
+# 8384 sits behind Caddy on 8385 (design #897): the Serve table names the proxy,
+# and the proxy is what makes the GUI reachable at all.
+# A list, not an associative array: the test bodies in this file are registered
+# through `bats_test_function`, and an associative array declared here does not
+# survive into them (a readonly indexed one does).
+readonly proxied_pairs=(8384:8385)
+
 # 4. Every loopback listener is fronted by a Serve route, and there is no route
 #    to nothing. The Syncthing GUI is a listener too, even though it is not a
 #    published port: it runs in the host network namespace.
@@ -35,22 +44,37 @@ serve_route_ports() {
   grep -oE '\[[^]]*\]=[0-9]+' scripts/tailscale-serve.sh | cut -d= -f2 | sort -u
 }
 
+# The targets of the named routes. A listener can be fronted without a host port
+# (`--service=svc:sync --https=443 http://127.0.0.1:8385`), and those targets are
+# not all Quadlet listeners: the zellij terminal is a system unit, so this set is
+# read only when asking whether a *listener* has a route, never the reverse.
+serve_service_ports() {
+  grep -oE -- '--service=[^ ]+ --https=[0-9]+ http://127\.0\.0\.1:[0-9]+' \
+    scripts/tailscale-serve.sh | grep -oE '[0-9]+$' | sort -u
+}
+
 # Both directions of the listener/Serve map live in this check: the shell suite
 # only printed a line when a route pointed at no listener, so the reverse
 # direction rides along here rather than standing as an ok of its own.
 port_has_a_serve_route() { # port
-  local port=$1 stray route_port
+  local port=$1 front stray route_port pair
+  front=$port
+  for pair in "${proxied_pairs[@]}"; do
+    [[ ${pair%%:*} == "$port" ]] && front=${pair##*:}
+  done
   if [[ " ${no_serve_ports[*]} " != *" $port "* ]]; then
-    if ! grep -qE "\[[^]]*\]=${port}$" scripts/tailscale-serve.sh; then
-      printf 'no Serve route for %s\n' "$port" >&2
+    if ! { serve_route_ports; serve_service_ports; } | grep -qx -- "$front"; then
+      printf 'no Serve route for %s (through %s)\n' "$port" "$front" >&2
       return 1
     fi
   fi
   stray=''
   for route_port in $(serve_route_ports); do
-    if ! grep -qw "$route_port" <<<"$(published_ports)"; then
-      stray="$stray $route_port"
-    fi
+    grep -qw "$route_port" <<<"$(published_ports)" && continue
+    for pair in "${proxied_pairs[@]}"; do
+      [[ ${pair##*:} == "$route_port" ]] && continue 2
+    done
+    stray="$stray $route_port"
   done
   if [[ -n $stray ]]; then
     printf 'Serve route to no loopback listener:%s\n' "$stray" >&2

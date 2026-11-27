@@ -110,7 +110,7 @@ path is the machine user's PAT through the shell, measured above.
   the same fail-closed table: a placeholder with the allow-list's name drops the
   whole account from earlier in boot, so a ruleset that fails to load leaves the
   tenant dropped rather than open (see Boot order).
-- **Ingress.** Only Serve: core apps own the root paths on 443, 8443 and 10000,
+- **Ingress.** Only Serve: core apps own the root paths on 443 and 8443,
   so `tailscale-serve` puts each app on `/apps/<name>` at 443 and
   removes a path the plan no longer names. Serve proxies to the app's
   `loopbackPort` on the host, and that listener belongs to

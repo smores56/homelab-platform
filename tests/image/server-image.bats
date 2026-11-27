@@ -330,17 +330,19 @@ contains() {
     done < <(grep '^COPY ' "$edge_containerfile")
 }
 
-# The Syncthing GUI's route goes through a loopback proxy (design #897, T1).
-# Serve forwards the client's Host unchanged, so the route reaches the GUI through
-# a proxy that rewrites that header; T2 then clears the GUI's skip-host-check PATCH
-# and retires the 10000 rollback. What makes it true is three shipped pieces, and
-# this pins all three plus the build gate that proves the config parses -- a
-# Caddyfile that does not would be a crash-loop on the box, not a failed review.
+# The Syncthing GUI's route goes through a loopback proxy and nothing else (design
+# #897, T1/T2). Serve forwards the client's Host unchanged, so the route reaches the
+# GUI through a proxy that rewrites that header; the GUI's own check is on, enforced
+# at every boot. What makes it true is four shipped pieces, and this pins all of
+# them plus the build gate that proves the config parses -- a Caddyfile that does not
+# would be a crash-loop on the box, not a failed review.
 @test "the server image ships a loopback proxy in front of the Syncthing GUI" {
     contains 'dnf5 -y --setopt=install_weak_deps=False install caddy' "$server_containerfile"
     contains 'caddy validate --config /usr/share/smortress/syncthing-gui.Caddyfile' \
         "$server_containerfile"
     contains '      smortress-syncthing-gui-proxy.service \' "$server_containerfile"
+    contains '      smortress-syncthing-hostcheck.service \' "$server_containerfile"
+    contains 'scripts/syncthing-hostcheck.sh' "$server_containerfile"
 
     # One listener, on loopback, rewriting the one header the GUI checks. A bind
     # on 0.0.0.0 here would publish the GUI past the firewall.
@@ -371,10 +373,20 @@ contains() {
     fi
 
     # Not a deploy unit: a proxy that is down is a broken route, not a host that
-    # rolled back onto an image that deployed cleanly. The GUI's own 10000 route
-    # is the rollback until T2 retires it.
+    # rolled back onto an image that deployed cleanly. There is no host route left
+    # to fall back to, which is why the enforcement unit is required by the proxy.
     if grep -qxF 'smortress-syncthing-gui-proxy.service' \
         bootc/server/rootfs/usr/share/smortress/deploy-units.txt; then
         fail "the GUI proxy is a deploy unit: it would roll back a healthy host"
+    fi
+    if grep -qxF 'smortress-syncthing-hostcheck.service' \
+        bootc/server/rootfs/usr/share/smortress/deploy-units.txt; then
+        fail "the host-check unit is a deploy unit: a config it cannot read must not roll an image back"
+    fi
+
+    # The bypass the GUI used to run with is gone from every shipped route: no host
+    # port 10000, and the Serve table names the Service only.
+    if grep -qF '[10000]=' scripts/tailscale-serve.sh; then
+        fail "the Serve script still declares a host route on 10000"
     fi
 }

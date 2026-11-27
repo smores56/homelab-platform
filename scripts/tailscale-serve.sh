@@ -43,9 +43,10 @@ fail() {
 
 command -v jq >/dev/null 2>&1 || fail "jq is missing"
 
-# https port -> loopback port. 443 Immich, 8443 OPDShelf, 10000 Syncthing GUI,
-# 8444 the personal web UI, 8445 the general one, 8448 Navidrome. Every one of them
-# serves the owner's own tailnet clients; the public edge does not read them. It
+# https port -> loopback port. 443 Immich, 8443 OPDShelf, 8444 the personal web UI,
+# 8445 the general one, 8448 Navidrome. Every one of them serves the owner's own
+# tailnet clients; the public edge does not read them. The Syncthing GUI has no host
+# port: since #897 T2 its only route is the `svc:sync` Service below. It
 # proxies the `svc:immich` and `svc:opds` Services instead (design #725), because
 # the edge may not use 443, which also carries the agent gateways and the
 # wallpaper tree, and a port-scoped tailnet rule cannot express a path. The
@@ -54,7 +55,6 @@ command -v jq >/dev/null 2>&1 || fail "jq is missing"
 declare -A core_routes=(
   [443]=2283
   [8443]=8083
-  [10000]=8384
   [8444]=18006
   [8445]=18007
   [8448]=4533
@@ -167,7 +167,7 @@ fi
 # auto-approver (tofu/tailscale.tf) has taken it, so a pending advertisement is
 # not a failed one. Syncthing's GUI is advertised as a Service below, through the
 # loopback proxy that rewrites the Host Serve forwards unchanged (design #897,
-# T1), and its 10000 route is unchanged.
+# T1/T2), and it has no host route: 10000 was retired with the bypass.
 if ! "$tailscale_bin" serve --bg --service=svc:immich --https=443 http://127.0.0.1:2283; then
   fail "could not advertise the Immich Service on svc:immich https/443"
 fi
@@ -180,12 +180,11 @@ fi
 if ! "$tailscale_bin" serve --bg --service=svc:agent --https=443 http://127.0.0.1:18007; then
   fail "could not advertise the general web UI Service on svc:agent https/443"
 fi
-# The Syncthing GUI, on a Service like the rest, through the loopback proxy this
-# host runs in front of it (design #897, T1): the GUI keeps its Host check on, so
-# Serve's unchanged Host is rewritten to the address the GUI trusts on 8385 rather
-# than the check being turned off. The 10000 host route stays as the rollback and
-# still targets the GUI itself, as does `insecureSkipHostcheck` until T2 retires
-# both.
+# The Syncthing GUI, on a Service and nothing else, through the loopback proxy this
+# host runs in front of it (design #897, T1/T2): the GUI's Host check is on, so
+# Serve's unchanged Host is rewritten to the address the GUI trusts. There is no
+# 10000 host route and no `insecureSkipHostcheck`: the Service name is the only way
+# in, and `smortress-syncthing-hostcheck.service` is what keeps the bypass off.
 if ! "$tailscale_bin" serve --bg --service=svc:sync --https=443 http://127.0.0.1:8385; then
   fail "could not advertise the Syncthing GUI Service on svc:sync https/443"
 fi

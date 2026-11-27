@@ -1,15 +1,17 @@
-# The loopback proxy in front of the Syncthing GUI (design #897, T1).
+# The loopback proxy in front of the Syncthing GUI (design #897, T1/T2).
 #
 # The GUI answers 403 to a Host header it does not expect, and Tailscale Serve
-# forwards the client's Host unchanged, so `svc:sync` cannot reach the GUI while
-# the check is on -- which is why `insecureSkipHostcheck` was turned off on the
-# host. This file is what lets T2 turn the check back on: Caddy listens on loopback only,
-# rewrites Host to the address the GUI's own config expects (the container's
-# STGUIADDRESS, units/quadlet/syncthing.container), and forwards. Nothing here is
-# reachable from outside this host: the site address is 127.0.0.1, and the port is
-# above 1024, so the unit runs it as `caddy` with no capability at all. T1 ships
-# with the skip PATCH still applied, so the 10000 route and a one-line revert are
-# both intact until the check clears.
+# forwards the client's Host unchanged, so `svc:sync` cannot reach the GUI unless
+# the header is the one the GUI trusts. The host's old answer was
+# `insecureSkipHostcheck`, which turns the check off for every caller; T2 makes the
+# check the steady state and this file is what keeps the route working with it on:
+# Caddy listens on loopback only, rewrites Host to the address the GUI's own config
+# expects (the container's STGUIADDRESS, units/quadlet/syncthing.container), and
+# forwards. Nothing here is reachable from outside this host: the site address is
+# 127.0.0.1, and the port is above 1024, so the unit runs it as `caddy` with no
+# capability at all. The 10000 host route is gone, so a proxy that dies is a GUI
+# nobody can open -- the unit restarts, and `scripts/tailscale-serve.sh` is the
+# producer if the route itself is missing.
 #
 # Under /usr/share and not under /etc/caddy: bootc merges a host's /etc once and
 # keeps what it finds there, so a Caddyfile there would be frozen at the install's

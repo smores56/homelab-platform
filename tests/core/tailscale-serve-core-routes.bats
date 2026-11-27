@@ -31,11 +31,6 @@ setup() { ts_setup; }
     serves host:8443 / http://127.0.0.1:8083
 }
 
-@test "10000 still fronts Syncthing" {
-    core_run
-    serves host:10000 / http://127.0.0.1:8384
-}
-
 @test "8448 fronts Navidrome" {
     core_run
     serves host:8448 / http://127.0.0.1:4533

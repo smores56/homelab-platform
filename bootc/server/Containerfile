@@ -118,7 +118,7 @@ COPY scripts/storage-layout.sh scripts/zfs-ready.sh scripts/sops-decrypt.sh \
      scripts/app-secrets.sh scripts/immich-dump.sh scripts/tailscale-serve.sh \
      scripts/apps-quota.sh scripts/apps-user.sh scripts/apps-ingress.sh \
      scripts/apps-ingress-reconcile.sh \
-     scripts/smortress-apps-health.sh \
+     scripts/smortress-apps-health.sh scripts/syncthing-hostcheck.sh \
      scripts/deploy-state.sh scripts/deploy-drain.sh \
      scripts/deploy-platform.sh scripts/smortress-boot-gate.sh \
      scripts/deploy-apps.sh scripts/deploy-poll.sh scripts/deploy-heartbeat.sh \
@@ -309,6 +309,7 @@ RUN set -eux; \
       smortress-apps-egress.service \
       smortress-app-ingress-reconcile.service \
       smortress-tailscale-serve.service \
+      smortress-syncthing-hostcheck.service \
       smortress-syncthing-gui-proxy.service \
       smortress-backrest.service \
       smortress-backrest-watchdog.timer \

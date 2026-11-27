@@ -485,7 +485,8 @@ declare -A unlisted_why=(
   [smortress-agent-todos-watch.service]='ConditionPathIsDirectory on /srv/files/todos: before the todos root exists systemd skips it, and a skipped unit reads inactive; a stopped feed degrades the agent plane, not the host'
   [smortress-agent-mail-stream.service]='ConditionPathExists on the Tuta bridge cert: without the cert it is skipped, not failed, until the bridge is provisioned'
   [smortress-backrest.service]='the recovery reader: its credential is the operator file /etc/backrest/env, so a reader that cannot start is a tailnet Service with no listener and pages through its watchdog, never a reason to roll an image that deployed cleanly back'
-  [smortress-syncthing-gui-proxy.service]='the loopback proxy in front of the Syncthing GUI (design #897, T1): it fronts one application route, and the GUI keeps its own 10000 route until T2 retires it, so a dead proxy is a broken route and not a host that rolled back onto an image that deployed cleanly'
+  [smortress-syncthing-hostcheck.service]='the host-check enforcement (design #897, T2) is a oneshot that stays active after success, so systemd reads it as running for the rest of the boot: it is not a serving signal, because a failure here is already visible as the GUI proxy it gates going down, and rolling the image back cannot fix a config.xml it could not read'
+  [smortress-syncthing-gui-proxy.service]='the loopback proxy in front of the Syncthing GUI (design #897, T1/T2): it is that GUI route, so a dead proxy is a URL that 502s, not a host that rolled back onto an image that deployed cleanly'
   [smortress-restic-init.service]='initialises the Restic repositories: a backup-plane fault must not roll the platform digest back'
   # The two Restic repository mounts are enabled and long-running, and `nofail` is
   # what makes them the opposite of a serving signal: an absent or unpowered backup
