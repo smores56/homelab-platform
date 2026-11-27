@@ -1,0 +1,44 @@
+[Unit]
+# The personal workspace's live signal (SDLC #979, T1): one inotify watch over the
+# todos root, appended to the JSONL feed the workspace reads read-only.
+#
+# It is a service, not a timer, because there is nothing to poll: inotify delivers
+# the edit, and the feed is a ring buffer of what happened, not a queue to drain.
+# A restart resumes the sequence from the last record, so the gap in `seq` is the
+# only trace a restart leaves.
+#
+# The watch is the todos root alone. The vault is read on use; a recursive watch
+# over it would wake on every synced file and every restore.
+Description=Append todo changes to the personal Mirage feed
+Requires=zfs-ready@raw-files.service zfs-ready@state-agent-local.service
+After=zfs-ready@raw-files.service zfs-ready@state-agent-local.service
+# The feed directory is created by smortress-agent-config.service, and podman is
+# not involved: a missing dataset must not turn this into a restart loop.
+ConditionPathIsDirectory=/srv/files/todos
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+UMask=0077
+# The dataset and the todos root are owned by uid 1000, and so is the feed: the
+# workspace container reads it as the same uid.
+User=1000
+Group=1000
+ExecStart=/usr/libexec/agent-todos-watch
+# The watcher exits only when its fd dies. Anything that ends it is worth a
+# restart, including the dataset remount that takes the watch with it.
+Restart=always
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+# One write path, no sockets, no devices: this process's whole job is to append
+# lines to a file inside the personal dataset.
+ReadWritePaths=/var/lib/agent/local/mirage/feed
+RestrictAddressFamilies=AF_UNIX
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
