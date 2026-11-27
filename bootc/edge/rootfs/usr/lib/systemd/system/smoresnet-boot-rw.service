@@ -1,0 +1,21 @@
+[Unit]
+Description=Mount /boot writable for the boot counter and greenboot
+# /boot arrives read-only, and both the counter installer and greenboot need it
+# writable: greenboot writes grubenv through grub2-editenv on every boot, and a
+# read-only mount turns that into a silent "no counter" rather than a failure.
+# The ostree model already remounts /boot when it stages a deployment, so this
+# only makes the steady state match the moment the model assumes.
+DefaultDependencies=no
+After=local-fs.target
+Before=greenboot-healthcheck.service smoresnet-boot-counter.service
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/mount -o remount,rw /boot
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target

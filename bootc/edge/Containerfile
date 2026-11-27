@@ -37,8 +37,8 @@ LABEL org.opencontainers.image.title="smoresnet edge image" \
       org.opencontainers.image.base.digest="${BASE_DIGEST}" \
       org.opencontainers.image.vendor="smores56"
 
-# The one package this image adds, and the one place it departs from the server's
-# no-package-layer rule for a stated reason: uCore minimal carries firewalld,
+# The packages this image adds, and the places it departs from the server's
+# no-package-layer rule for stated reasons: uCore minimal carries firewalld,
 # Tailscale, sshd, nftables and Podman, but no Caddy, and the edge's whole job is
 # Caddy. Fedora packages it (2.11.x on f45, above the 2.6 floor the Caddyfile's
 # `tls` block needs -- public-edge.md:19 records why 2.4 cannot parse it), and the
@@ -48,10 +48,27 @@ LABEL org.opencontainers.image.title="smoresnet edge image" \
 # server's doctrine instead, at the cost of hand-rolling that unit, the account
 # and the capability -- for a binary whose config is validated at build time
 # below. The build fails on a Caddy older than 2.6 or without that unit.
+#
+# greenboot is the second package, and it is the answer to a question this
+# repository used to own: boot_success/boot_counter, the health checks that run
+# after boot, and the `bootc rollback` a failed one triggers are the package's
+# (#941's mechanism as a distribution package rather than a snippet here). Its
+# GRUB script is installed by smoresnet-boot-counter, because bootupd will not
+# regenerate the grub.cfg that would source it (public-edge.md).
 RUN set -eux; \
-    dnf5 -y --setopt=install_weak_deps=False install caddy; \
+    dnf5 -y --setopt=install_weak_deps=False install caddy greenboot; \
     dnf5 clean all; \
     rm -rf /var/cache/dnf /var/cache/libdnf5
+
+# greenboot ships its GRUB snippet for bootupd to inject, and bootupd injects
+# nothing on this host: grub.cfg was generated once and is never regenerated.
+# The snippet is kept as image content under the image's own path and removed
+# from bootupd's directory, because a regeneration that did inject it would run
+# the counter twice in one boot and spend two of the three attempts.
+RUN set -eux; \
+    install -d -m 0755 /usr/share/smoresnet; \
+    install -m 0644 /usr/lib/bootupd/grub2-static/configs.d/08_greenboot.cfg /usr/share/smoresnet/boot-counter.cfg; \
+    rm -f /usr/lib/bootupd/grub2-static/configs.d/08_greenboot.cfg
 
 # The whole rootfs: the Caddyfile and the firewalld zones under /usr/share, the
 # firewall helpers under /usr/libexec, the units under /usr/lib/systemd/system and
@@ -94,6 +111,7 @@ RUN set -eux; \
     chmod 0755 /usr/libexec/smoresnet-firewall-prejoin; \
     chmod 0755 /usr/libexec/edge-boot-gate /usr/libexec/deploy-drain-edge; \
     chmod 0755 /usr/libexec/deploy-heartbeat /usr/libexec/deploy-poll; \
+    chmod 0755 /usr/libexec/smoresnet-boot-counter; \
     chmod 0644 /usr/share/smoresnet/Caddyfile /usr/share/smoresnet/firewalld/zones/public.xml /usr/share/smoresnet/firewalld/zones/tailscale.xml; \
     chmod 0644 /usr/share/smoresnet/deploy-units.txt; \
     chmod 0644 /etc/ssh/sshd_config.d/05-edge-hardening.conf; \
@@ -103,6 +121,9 @@ RUN set -eux; \
       caddy.service \
       edge-boot-gate.service \
       firewalld.service \
+      greenboot-healthcheck.service \
+      smoresnet-boot-counter.service \
+      smoresnet-boot-rw.service \
       smoresnet-deploy-listener.service \
       smoresnet-deploy.path \
       smoresnet-deploy-forward.service \
@@ -226,6 +247,14 @@ RUN set -eux; \
     test ! -L /etc/tmpfiles.d/smoresnet-deploy.conf || { echo "/etc/tmpfiles.d/smoresnet-deploy.conf is a mask: the deploy tree would never be created and every deploy unit would fail on its ReadWritePaths" >&2; exit 1; }; \
     test -f /etc/tmpfiles.d/smoresnet-edge.conf || { echo "the edge state fragment is missing: Caddy would start with no /var/lib/caddy, fail every ACME order with 'mkdir /var/lib/caddy: permission denied' and answer 500 on all three names" >&2; exit 1; }; \
     grep -qxF 'd /var/lib/caddy 0750 caddy caddy -' /etc/tmpfiles.d/smoresnet-edge.conf || { echo "the edge state fragment does not create Caddy's storage directory as Caddy's own account: every ACME order would fail" >&2; exit 1; }; \
-    grep -qxF 'd /var/lib/smoresnet 0700 root root -' /etc/tmpfiles.d/smoresnet-edge.conf || { echo "the edge state fragment does not create /var/lib/smoresnet: edge-boot-gate.service fails with 226/NAMESPACE in namespace setup on the boot after an install" >&2; exit 1; }; \
+     grep -qxF 'd /var/lib/smoresnet 0700 root root -' /etc/tmpfiles.d/smoresnet-edge.conf || { echo "the edge state fragment does not create /var/lib/smoresnet: edge-boot-gate.service fails with 226/NAMESPACE in namespace setup on the boot after an install" >&2; exit 1; }; \
+    rpm -q greenboot >/dev/null || { echo "greenboot is not installed: this host would have no boot counter and no after-boot rollback" >&2; exit 1; }; \
+    test -x /usr/libexec/smoresnet-boot-counter || { echo "the boot counter installer is missing or not executable: the counter would never reach the grub.cfg that reads it" >&2; exit 1; }; \
+    test ! -e /usr/lib/bootupd/grub2-static/configs.d/08_greenboot.cfg || { echo "greenboot's snippet is still in bootupd's directory: a regeneration would install the counter twice and spend two attempts in one boot" >&2; exit 1; }; \
+    test -f /usr/share/smoresnet/boot-counter.cfg || { echo "the boot counter snippet is missing: the installer has nothing to put where grub.cfg reads it" >&2; exit 1; }; \
+    grep -q 'boot_counter' /usr/share/smoresnet/boot-counter.cfg || { echo "the shipped boot counter snippet does not read boot_counter: the counter would never move" >&2; exit 1; }; \
+    test -e /etc/systemd/system/multi-user.target.wants/smoresnet-boot-counter.service || { echo "the boot counter installer is not enabled: nothing would put the counter where grub.cfg reads it" >&2; exit 1; }; \
+    test -e /etc/systemd/system/multi-user.target.wants/smoresnet-boot-rw.service || { echo "/boot is left read-only: greenboot cannot write grubenv and the counter never arms" >&2; exit 1; }; \
+    test -e /etc/systemd/system/multi-user.target.wants/greenboot-healthcheck.service || { echo "greenboot's healthcheck is not enabled: a deployment that boots but is broken would never be rolled back" >&2; exit 1; }; \
     grep -qxF 'ReadWritePaths=/var/lib/caddy' /usr/lib/systemd/system/caddy.service.d/10-smoresnet.conf || { echo "the caddy unit no longer names its storage directory: the path would leave bootc/edge/unit-paths.tsv, and with it the check that something creates it" >&2; exit 1; }; \
     test -e /etc/systemd/system/multi-user.target.wants/smoresnet-deploy-forward.service || { echo "the deploy forward is not enabled: dispatch-triggered deploys would never arrive" >&2; exit 1; }
