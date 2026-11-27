@@ -577,6 +577,27 @@ fi
     has 'if [[ -t 0 ]]' "$dir/scripts/hash-password.sh"
 }
 
+# The printed value is the whole output, so its shape is worth running rather
+# than grepping the source for: base64 of exactly one bcrypt hash, rewritten to
+# $2a$. A host whose policy refuses docker.io cannot run the throwaway
+# container, and the script says so instead of leaking podman's error.
+hash_once() { printf 'throwaway-hash-probe' | "$dir/scripts/hash-password.sh" | base64 -d; }
+
+hash_ok() {
+    local hash
+    hash=$(hash_once) || return 1
+    [[ $hash =~ ^\$2a\$12\$[./A-Za-z0-9]{53}$ ]]
+}
+
+podman_serves_docker_io() { podman run --rm docker.io/library/alpine:3.22 true >/dev/null 2>&1; }
+
+if command -v podman >/dev/null 2>&1 && podman_serves_docker_io; then
+    register "password hashing prints base64 of one bare bcrypt hash" hash_ok
+else
+    register_skip "password hashing prints base64 of one bare bcrypt hash" \
+        "run it on a host whose container policy allows docker.io (smorespro)"
+fi
+
 @test "guard refusals and rewrites ($guard_ok checks)" {
     run cat "$BATS_FILE_TMPDIR/guard.rc"
     printf '%s\n' "$(cat "$BATS_FILE_TMPDIR/guard.out")"

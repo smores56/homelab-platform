@@ -1637,6 +1637,12 @@ runs are that document's own sections. The reader runs on smortress since SDLC
 thing here the image does not carry: `/etc/backrest/env`, root-only, written once
 from the operator store and never committed.
 
+The two hashes come from a host whose container policy allows `docker.io`.
+smortress carries the distro policy, which answers `rejected by policy` for
+anything it does not name; `smorespro` allows `docker.io`, so run the two
+`hash-password.sh` calls there and paste the two printed values into the block
+below on smortress.
+
 ```sh
 # The two login hashes are base64(bcrypt), and the script that makes them runs a
 # throwaway container, so they are computed first and pasted into the file below.
