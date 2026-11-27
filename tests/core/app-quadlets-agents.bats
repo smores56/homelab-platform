@@ -286,6 +286,21 @@ unset _toolset
     grep -qF 'cp -n "$template" "$config"' "$seed_script"
 }
 
+@test "every source directory a publisher mounts is created by the seed" {
+  # Podman refuses a `--volume` whose host path is missing, and the collector
+  # units run with a read-only root, so nothing else can create it. A publisher
+  # whose directory the seed forgets fails before it projects a byte -- which is
+  # how the calendar stage failed on its first run.
+  local name
+  for name in $(grep -rhoE '/var/lib/agent/local/sources/[a-z]+:/out:z' units/ |
+      sed -E 's#^.*/sources/([a-z]+):/out:z#\1#' | sort -u); do
+    grep -qF -- "\"\$home/sources/$name\"" "$seed_script" || {
+      printf 'the seed never creates $home/sources/%s\n' "$name" >&2
+      return 1
+    }
+  done
+}
+
 # A bind source podman has to create would land root-owned inside a dataset owned
 # by uid 1000, so the seed unit creates the derived-index directory at the
 # container's uid -- on the personal side only, where the collectors write.
