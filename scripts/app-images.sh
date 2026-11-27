@@ -39,19 +39,20 @@ app_images=(
   # is a state dataset in the music restore unit, not a second one.
   'navidrome|docker.io/navidrome/navidrome:0.64.2|sha256:38dc2727bfcfd5ede290f8ada114fc90368146f265ae4701ddddbcbe2a44ee52'
   # Agent deployments (SDLC #711). agent-model is the pinned local inference
-  # server. agent-runtime is Hermes with this repository's facade, collector and
-  # proxy code baked in: those programs used to ride the bootc image and be
+  # server. agent-runtime is Hermes with this repository's collector and proxy
+  # code baked in: those programs used to ride the bootc image and be
   # bind-mounted in, which made an agent change an OS rebuild and a reboot.
   # b12602 is the first build carrying the merged Inkling 2 loop architecture
   # (llama.cpp PR #32694, merged 2026-11-20): the previous pin, b12464 of
   # 2026-11-17, cannot load an `inkling2_loop` GGUF at all.
   'agent-model|ghcr.io/ggml-org/llama.cpp:server-cuda|sha256:26f89ebd3bf17a5ecf6caee62bdabfa55abea3058150879f6f07b1fc786baa2d'
-  # a2097d is the first build that carries both the plain views the agent's shell
-  # reads (SDLC #995, T2/T3/T4 -- `publish_*` live in `libs/data_plane/`, which the
-  # image COPYs) and the two tools they need and the base lacks (`jq`, `gh`).
+  # 7246da also carries the calendar view (SDLC #983): `publish_calendar`
+  # projects the replica into a vdir, and the mail stream reports a successful
+  # republish instead of only a refusal. The package path inside the image is
+  # now `/usr/lib/data-plane`, the facade name having outlived the facade.
   # `sqlite3` is absent on purpose: the apt CLI and the image disagree about
   # libsqlite3, so the plane documents `python3 -m sqlite3` instead.
-  'agent-runtime|built:images/agent-runtime/Containerfile|sha256:a2097dc2f54142b75137779c91f2e90956a01687cdfd2424685d748c3669baa1'
+  'agent-runtime|built:images/agent-runtime/Containerfile|sha256:7246da5a75bf2eb3d33923e8c5915c914ae505df1ed5edd11a8c36b55c11b50a'
   # Built by this repository (SDLC #775), not mirrored: upstream's entrypoint
   # installs its Python dependencies from PyPI at container start, which a sealed
   # deployment can never do. The digest is the publish-agent-webui run for the

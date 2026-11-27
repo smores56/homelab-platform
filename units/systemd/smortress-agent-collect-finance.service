@@ -46,7 +46,7 @@ ExecStart=/usr/bin/podman run --rm --name smortress-agent-collect-finance \
   --env PYTHONPATH=/usr/lib/data-plane/libs:/usr/lib/data-plane \
   --env PYTHONDONTWRITEBYTECODE=1 \
   --entrypoint python3 \
-  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:a2097dc2f54142b75137779c91f2e90956a01687cdfd2424685d748c3669baa1 \
+  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:7246da5a75bf2eb3d33923e8c5915c914ae505df1ed5edd11a8c36b55c11b50a \
   -m data_plane.collectors.raw --root /replica/finance \
   finance --access-url-file /run/secrets/simplefin-access-url --include-pending
 # The plain-file view. The agent reads the state dataset through its own shell,
@@ -68,7 +68,7 @@ ExecStart=/usr/bin/podman run --rm --name smortress-agent-collect-finance-publis
   --env PYTHONPATH=/usr/lib/data-plane/libs:/usr/lib/data-plane \
   --env PYTHONDONTWRITEBYTECODE=1 \
   --entrypoint python3 \
-  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:a2097dc2f54142b75137779c91f2e90956a01687cdfd2424685d748c3669baa1 \
+  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:7246da5a75bf2eb3d33923e8c5915c914ae505df1ed5edd11a8c36b55c11b50a \
   -m data_plane.collectors.raw.publish_finance --raw /replica/finance --out /out
 # The projection stage. It has no network (`--network none`, not the collector's),
 # no secret, and the replica read-only: its whole input is the committed state,
@@ -88,7 +88,7 @@ ExecStart=/usr/bin/podman run --rm --name smortress-agent-collect-finance-hledge
   --env PYTHONPATH=/usr/lib/data-plane/libs:/usr/lib/data-plane \
   --env PYTHONDONTWRITEBYTECODE=1 \
   --entrypoint python3 \
-  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:a2097dc2f54142b75137779c91f2e90956a01687cdfd2424685d748c3669baa1 \
+  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:7246da5a75bf2eb3d33923e8c5915c914ae505df1ed5edd11a8c36b55c11b50a \
   -m data_plane.derived.hledger --replica /replica/finance \
   --accounts /index/hledger/accounts.json --out /index/hledger/finance.journal
 # A refusal exits 3 and publishes nothing; the next run tries again. Anything
