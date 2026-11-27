@@ -28,3 +28,20 @@ COPY apps/agent_proxy/proxy.py /usr/libexec/agent-proxy
 # The proxy's own unit execs the file directly, so it carries the executable bit
 # the bootc image gave it.
 RUN chmod 0755 /usr/libexec/agent-proxy
+
+# The shell the agent now runs (SDLC #995) needs two tools the base lacks. `rg`,
+# `git` and `curl` are already there; `jq` and `gh` are not.
+#
+# `sqlite3` is deliberately NOT installed. The apt CLI links the system
+# libsqlite3 while the image already carries a different one, and the first query
+# answers "SQLite header and source version mismatch" -- measured in this image,
+# not assumed. Python ships the same CLI against the library it actually uses:
+# `python3 -m sqlite3 <db> 'select ...'` prints 3.53.1 here, which is the version
+# worth having. Nothing in the plane needs the apt binary.
+#
+# The lists are removed in the same layer so a rebuilt image does not carry an
+# apt index that goes stale between pins.
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends jq gh; \
+    rm -rf /var/lib/apt/lists/*
