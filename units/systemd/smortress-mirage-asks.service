@@ -1,0 +1,27 @@
+[Unit]
+# The ask notifier (SDLC #979, T7): one journal line per pending decision.
+#
+# A Mirage ask is stored inside the daemon and nothing pushes it, so without this
+# a delete waiting for sign-off is invisible until someone lists it. The timer is
+# what makes it a notice; the unit itself writes nothing when there is nothing
+# new.
+Description=Journal new pending Mirage asks
+Requires=zfs-ready@state-agent-local.service
+After=zfs-ready@state-agent-local.service
+# The container creates the state directory; before that there is no ask list and
+# nothing to journal. A skipped unit is not a failure.
+ConditionPathIsDirectory=/var/lib/agent/local/mirage
+
+[Service]
+Type=oneshot
+UMask=0077
+ExecStart=/usr/libexec/mirage-ask-notify
+# An ask list that cannot be read is a real fault -- the daemon is up (the
+# container exists) but the CLI could not answer -- so the run exits non-zero and
+# the journal names it, once per timer tick.
+TimeoutStartSec=120
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

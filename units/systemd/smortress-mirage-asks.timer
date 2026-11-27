@@ -1,0 +1,14 @@
+[Unit]
+# Poll the ask list (SDLC #979, T7). Thirty seconds is well inside a human's
+# attention span and far cheaper than a request per line: the daemon serves the
+# list from memory, and the notifier journals only what it has not seen.
+Description=Poll Mirage for pending asks
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=30s
+AccuracySec=5s
+Unit=smortress-mirage-asks.service
+
+[Install]
+WantedBy=timers.target

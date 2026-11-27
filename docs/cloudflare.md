@@ -42,7 +42,8 @@ a typo publishes nothing while the config claims the name is served.
 
 Every name in the table answers its own origin: nothing left in the zone is
 gated, proxied or tunnelled, so there is no edge policy to consult when one of
-them misbehaves — go to the box (`provision/edge/verify.sh`) or the host.
+them misbehaves — go to the box (`journalctl -u edge-boot-gate.service` and
+`journalctl -u caddy`) or the host.
 
 ### What is not served
 
@@ -374,6 +375,6 @@ serves is the public probe, which resolves the names and checks each answers as
 its own application:
 
 ```sh
-scripts/verify-public-edge.sh     # photos and opds, over valid TLS
-ssh root@smoresnet /root/edge/verify.sh   # the box: firewall, Caddy, three site blocks
+scripts/verify-public-edge.sh     # all three names, over valid TLS, each as its application
+ssh root@smoresnet journalctl -u edge-boot-gate.service -b   # the box's own verdict on the boot
 ```

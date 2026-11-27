@@ -1,0 +1,57 @@
+# The general Mirage virtual terminal (SDLC #979, T5).
+#
+# The same image and the same daemon shape as the personal instance, and nothing
+# else: no personal mount, no personal token, no path to the other workspace. What
+# it adds is `/srv/git`, read-write, which is the general side's whole authority --
+# books and repositories are the only sources this deployment has.
+#
+# It joins agent-general.network, which has egress, and that is the difference the
+# split is about: this instance may reach Komga and GitHub when the sources that
+# need them land (T6), the personal one never can.
+#
+# The proxy port is 18011 rather than 18010 so two instances on one host cannot be
+# confused by a stale route, and the gateway's `mcp_servers.mirage` entry in
+# general-config.yaml names this container and this port.
+#
+# The token is the general instance's own: a leak on one deployment must not open
+# the other, which is why `mirage.env` here is seeded from
+# mirage-general-token.yaml and not from the personal file.
+#
+# No machine is attached, for the reason in #980: Mirage 0.1.0 cannot run real
+# binaries on a provider machine, so `git` is the virtual CLI it ships and real
+# `gh` waits for that upstream fix. The workspace's `network: false` therefore
+# describes what is: the shell has no socket of its own, and the instance's egress
+# is available to the containers that need it, not to the agent's shell.
+[Unit]
+Description=Mirage virtual terminal, general deployment
+Requires=zfs-ready@state-agent-general.service zfs-ready@raw-git.service sops-decrypt.service smortress-agent-config.service
+After=network-online.target zfs-ready@state-agent-general.service zfs-ready@raw-git.service sops-decrypt.service smortress-agent-config.service agent-general-network.service
+Wants=network-online.target
+
+[Container]
+Image=ghcr.io/smores56/homelab-platform/mirage@sha256:c284a9156f2da1fe0835c6cf49c319f05739249af289b9ebdd85168b6ab660f5
+ContainerName=smortress-mirage-general
+Network=agent-general.network
+User=1000:1000
+EnvironmentFile=/var/lib/agent/general/mirage.env
+Environment=MIRAGE_HOME=/state
+Environment=MIRAGE_DAEMON_PORT=8765
+Environment=MIRAGE_PROXY_PORT=18011
+Environment=MIRAGE_WORKSPACE_ID=general
+Environment=MIRAGE_WORKSPACE_CONFIG=/etc/mirage/workspace.yaml
+Environment=TZ=UTC
+Volume=/var/lib/agent/general/mirage:/state:z
+Volume=/srv/git:/srv/git:z
+Volume=/etc/smortress/mirage/general.yaml:/etc/mirage/workspace.yaml:ro
+ReadOnly=true
+Tmpfs=/tmp:rw,size=64m
+NoNewPrivileges=true
+DropCapability=ALL
+
+[Service]
+SuccessExitStatus=143
+Restart=on-failure
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

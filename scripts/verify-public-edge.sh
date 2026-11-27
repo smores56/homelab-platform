@@ -2,7 +2,8 @@
 # Prove the public edge (design #725) answers for the three names and for
 # nothing else. Run it after the DNS cutover; before that the names do not
 # resolve here and no certificate can exist, so the pre-cutover proof is the
-# box's own `provision/edge/verify.sh` with EXPECT_UPSTREAM=1.
+# box's own: edge-boot-gate.service requires each name to resolve and Caddy to
+# complete a handshake on loopback before it blesses a boot.
 #
 # The probes are the design's claims, not a smoke test:
 #
@@ -20,8 +21,9 @@
 #     text/plain 404, so neither can satisfy those.
 #
 # Exit 0 only when every probe passes. No repository check can see the VPS: this
-# script, `.github/workflows/verify-public-edge.yml` on its daily schedule and
-# `provision/edge/verify.sh` are the gate.
+# script and `.github/workflows/verify-public-edge.yml` on its daily schedule are
+# the outside-in gate, and the box's own static half is
+# `bootc/edge/tests/check.sh`.
 #
 #   scripts/verify-public-edge.sh
 #

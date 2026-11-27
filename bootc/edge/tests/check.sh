@@ -3,17 +3,17 @@
 #
 #   bootc/edge/tests/check.sh [--root DIR] [--lint|--no-lint]
 #
-# The image is the edge's whole configuration, so the shape provision/edge/verify.sh
-# proves at runtime on the provisioned box is asserted here against the tree the
+# The image is the edge's whole configuration, so the shape an on-box verify
+# proved at runtime is asserted here against the tree the
 # image ships: bootc/edge/rootfs, the Containerfile that copies it, the pins it
 # builds from, and the workflow that publishes it. tests/image/edge-image.bats
 # drives this file and reverts each invariant one at a time, so a check that
 # cannot fail for the reason it exists is a failing test rather than a silent one.
 #
-# One verify.sh check has no image-side equivalent and is reported as a `skip` row
-# instead of being dropped: unattended upgrades on the Ubuntu box become bootc's
-# update path (T7/T10), and verify.sh stays the proof of it until T14 deletes
-# provision/edge. Caddy's storage directory was the second until T15 moved its
+# One check has no image-side equivalent and is reported as a `skip` row instead of
+# being dropped: unattended upgrades on the old hand-installed box became bootc's
+# update path (T7/T10), whose proof is a deploy and the boot gate that judges it,
+# never a static tree. Caddy's storage directory was the second until T15 moved its
 # creation into the image (the tmpfiles fragment, and the unit-path row below that
 # proves something creates it).
 #
@@ -112,8 +112,9 @@ count() { grep -cE -- "$1" "$2" 2>/dev/null || true; }
 
 # --- Caddy: the whole of what the edge serves ---------------------------------
 
-# verify.sh's first check, moved to where the failure is cheap: the unit validates
-# the same file it runs, and the build validates it before it is in an image.
+# The retired on-box verify's first check, moved to where the failure is cheap:
+# the unit validates the same file it runs, and the build validates it before it
+# is in an image.
 caddyfile_validated() {
   grep -qE '^ExecStartPre=/usr/bin/caddy validate --config /usr/share/smoresnet/Caddyfile' \
     "$caddy_unit" || return 1
@@ -164,8 +165,8 @@ no_port_80() {
   ! grep -vE '^[[:space:]]*#' "$caddyfile" | grep -qE ':80([^0-9]|$)'
 }
 
-# verify.sh proves the file is 0640 on the box; in the image the invariant is that
-# it is absent. The ACME address and the two Service names are derived from the
+# The retired on-box verify proved the file is 0640 on the box; in the image the
+# invariant is that it is absent. The ACME address and the two Service names are derived from the
 # tailnet domain, so they are the operator's and can never be image content.
 operator_env_file() {
   grep -qE '^EnvironmentFile=/etc/caddy/edge.env$' "$caddy_unit" || return 1
@@ -276,8 +277,8 @@ sshd_refuses_a_root_password() {
 
 # --- the boot: every unit the design depends on ------------------------------
 
-# verify.sh asks systemctl; the image's answer is the enable list plus the unit
-# files themselves. A unit that is shipped but not enabled never runs, and a name
+# The retired on-box verify asked systemctl; the image's answer is the enable list
+# plus the unit files themselves. A unit that is shipped but not enabled never runs, and a name
 # in the enable list with no file fails the build, which is why both halves are
 # asserted.
 units_enabled() {
@@ -463,8 +464,8 @@ check 'the queue starts the drain when a request lands' queue_starts_the_drain
 check_build 'the edge is told to deploy by a main dispatch, never by a push' notify_is_a_main_dispatch
 check_build 'every path the units name is created before boot' unit_paths_are_created
 
-# The verify.sh invariant the image cannot state, kept visible so the port is not
-# mistaken for the whole of the provisioned box's proof.
+# The invariant the image cannot state, kept visible so the port is not mistaken
+# for the whole of the provisioned box's proof.
 note 'unattended upgrades are on (runtime: bootc updates the image, T7/T10; nothing in an image to assert)'
 
 # `bootc container lint` is the image's own analysis and only works inside it.

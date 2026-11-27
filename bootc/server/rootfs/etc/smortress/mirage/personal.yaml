@@ -46,6 +46,12 @@ mode: write
 profiles:
   agent:
     cwd: /data/todos
+    # Hiding is not a mount: this workspace cannot reach /state or /run at all.
+    # It is here so that a mount added later cannot expose the daemon's home (the
+    # ssh host key, the session store) or the decrypted token directory by
+    # accident, and so the denial is visible where the policy is read.
+    paths:
+      hide: [/state, /run, /etc]
     commands:
       "*": allow
       mirage:
