@@ -13,7 +13,7 @@ Before=shutdown.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/libexec/smoresnet-boot-counter
+ExecStart=/usr/libexec/boot-counter
 # The install is one file write on a local filesystem; a mount that hangs is the
 # only thing that could keep this active, and it must not hold the boot.
 TimeoutStartSec=120

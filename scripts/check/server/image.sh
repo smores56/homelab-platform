@@ -72,7 +72,8 @@ check "the publish workflow resolves a base digest" \
 check "nothing rewrites a base pin" lacks 'sed -i' scripts/refresh-pins.sh
 check "Containerfile installs the public key" has 'bootc/server/cosign.pub /etc/pki/containers/smortress.pub' bootc/server/Containerfile
 check "Containerfile masks Podman auto-update" has 'podman-auto-update.timer' bootc/server/Containerfile
-check "Containerfile masks bootc auto-update" has 'bootc-fetch-apply-updates.timer' bootc/server/Containerfile
+check "Containerfile enables the bootc update timer" has 'systemctl enable bootc-fetch-apply-updates.timer' bootc/server/Containerfile
+check "Containerfile no longer masks bootc auto-update" lacks "      bootc-fetch-apply-updates.timer \\" bootc/server/Containerfile
 check "Containerfile sets the default firewall zone to drop" has '--set-default-zone=drop' bootc/server/Containerfile
 
 # No Cloudflare SSH route (design #767 T6). SSH is tailnet-only, so the connector

@@ -20,7 +20,9 @@ runtime_stage_dnf() { # <containerfile> -- the dnf lines after the image's FROM
   awk -v start="$line" 'NR > start && /dnf/' "$1"
 }
 # The install is matched whole, not by the package name alone: `install caddy git`
-# installs both, and the second name is what this refuses.
+# installs both, and any name this does not list is what it refuses. greenboot is
+# listed because it is not a convenience: it owns boot_success/boot_counter and
+# the after-boot rollback this host's upgrades depend on (SDLC #939).
 runtime_installs_only_caddy() { # <containerfile>
   local dnf_lines line bad=0
   dnf_lines=$(runtime_stage_dnf "$1") || return 1
@@ -28,7 +30,7 @@ runtime_installs_only_caddy() { # <containerfile>
     [[ $line == *[![:space:]]* ]] || continue
     case $line in
       # The one install, exactly as the Containerfile writes it.
-      *'--setopt=install_weak_deps=False install caddy;'*) ;;
+      *'--setopt=install_weak_deps=False install caddy greenboot;'*) ;;
       # The cleanup that follows it: removing the cache is not a second package.
       *'dnf5 clean all;'* | *'rm -rf /var/cache/dnf /var/cache/libdnf5'*) ;;
       *) bad=1 ;;
@@ -36,7 +38,7 @@ runtime_installs_only_caddy() { # <containerfile>
   done <<<"$dnf_lines"
   ((!bad))
 }
-check "the runtime stage installs only the GUI proxy's caddy" \
+check "the runtime stage installs only the GUI proxy's caddy and greenboot" \
   runtime_installs_only_caddy bootc/server/Containerfile
 stage_fixture=$(mktemp -d)
 printf 'FROM ${BASE_IMAGE} AS sudo-build\nRUN dnf install -y git\nFROM ${BASE_IMAGE} AS runtime\nCOPY bootc/server/rootfs/ /\n' \
@@ -46,7 +48,7 @@ if runtime_installs_only_caddy "$stage_fixture/Containerfile"; then
 else
   bad "a named final stage is still the runtime stage"
 fi
-printf '    dnf5 -y --setopt=install_weak_deps=False install caddy; \\\n' \
+printf '    dnf5 -y --setopt=install_weak_deps=False install caddy greenboot; \\\n' \
   >>"$stage_fixture/Containerfile"
 if runtime_installs_only_caddy "$stage_fixture/Containerfile"; then
   ok "the GUI proxy's caddy install in the runtime stage is accepted"

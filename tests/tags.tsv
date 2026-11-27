@@ -39,6 +39,7 @@ core/tailscale-serve-no-plan	tests/core/tailscale-serve-no-plan.bats scripts/tai
 core/tailscale-serve-status	tests/core/tailscale-serve-status.bats scripts/tailscale-serve.sh scripts/apps-schema.py tests/core/*
 core/tailscale-serve-wallpaper-refused	tests/core/tailscale-serve-wallpaper-refused.bats scripts/tailscale-serve.sh scripts/apps-schema.py tests/core/*
 core/tailscale-serve-bad-plan	tests/core/tailscale-serve-bad-plan.bats scripts/tailscale-serve.sh scripts/apps-schema.py tests/core/*
+deploy/smortress-health	tests/deploy/smortress-health.bats bootc/server/rootfs/etc/greenboot/check/required.d/10-smortress-health.sh units/systemd/smortress-boot-*.service bootc/server/Containerfile
 deploy/state	tests/deploy/state.bats scripts/deploy-state.sh scripts/deploy-drain.sh scripts/deploy-platform.sh scripts/deploy-apps.sh units/systemd/smortress-deploy.service units/systemd/smortress-boot-gate.service scripts/storage-layout.sh tests/deploy/*
 deploy/atomic	tests/deploy/atomic.bats scripts/deploy-state.sh bootc/server/rootfs/usr/libexec/deploy-verify.py bootc/lib/deploy/* tests/deploy/*
 deploy/receiver	tests/deploy/receiver.bats scripts/deploy-state.sh bootc/lib/deploy/* tests/deploy/*
@@ -109,7 +110,7 @@ deploy/verify	tests/deploy/verify.bats bootc/server/rootfs/usr/libexec/deploy-ve
 deploy/fixtures	tests/deploy/fixtures.bats bootc/lib/deploy/* tests/deploy/*
 deploy/edge-verify	tests/deploy/edge-verify.bats bootc/edge/rootfs/usr/libexec/deploy-verify.py bootc/lib/deploy/* tests/deploy/fixture-server.py tests/deploy/fixtures.bats tests/deploy/*
 deploy/edge-boot	tests/deploy/edge-boot.bats bootc/edge/rootfs/usr/libexec/edge-boot-gate bootc/edge/rootfs/usr/lib/systemd/system/edge-boot-gate.service bootc/edge/rootfs/usr/share/smoresnet/deploy-units.txt bootc/edge/Containerfile .github/workflows/publish-edge-image.yml scripts/deploy-state.sh tests/deploy/*
-deploy/edge-boot-counter	tests/deploy/edge-boot-counter.bats bootc/edge/rootfs/usr/libexec/smoresnet-boot-counter bootc/edge/rootfs/usr/lib/systemd/system/smoresnet-boot-*.service bootc/edge/Containerfile
+deploy/edge-boot-counter	tests/deploy/edge-boot-counter.bats scripts/boot-counter-install.sh bootc/edge/rootfs/usr/lib/systemd/system/smoresnet-boot-*.service bootc/edge/Containerfile
 deploy/edge-health	tests/deploy/edge-health.bats bootc/edge/rootfs/etc/greenboot/check/required.d/10-edge-health.sh bootc/edge/Containerfile
 deploy/edge-drain	tests/deploy/edge-drain.bats bootc/edge/rootfs/usr/libexec/deploy-drain-edge bootc/edge/rootfs/usr/lib/systemd/system/smoresnet-deploy* bootc/edge/rootfs/usr/lib/tmpfiles.d/smoresnet-deploy.conf bootc/edge/Containerfile bootc/lib/deploy/* scripts/deploy-heartbeat.sh scripts/deploy-state.sh tests/deploy/edge-drain.bats .github/workflows/publish-edge-image.yml tests/deploy/*
 deploy/edge-bootstrap	tests/deploy/edge-bootstrap.bats scripts/edge-bootstrap.sh scripts/deploy-state.sh tests/deploy/*

@@ -53,7 +53,7 @@ LABEL org.opencontainers.image.title="smoresnet edge image" \
 # repository used to own: boot_success/boot_counter, the health checks that run
 # after boot, and the `bootc rollback` a failed one triggers are the package's
 # (#941's mechanism as a distribution package rather than a snippet here). Its
-# GRUB script is installed by smoresnet-boot-counter, because bootupd will not
+# GRUB script is installed by /usr/libexec/boot-counter, because bootupd will not
 # regenerate the grub.cfg that would source it (public-edge.md).
 RUN set -eux; \
     dnf5 -y --setopt=install_weak_deps=False install caddy greenboot; \
@@ -91,6 +91,7 @@ COPY bootc/lib/deploy/decisions.py /usr/libexec/deploy/decisions.py
 # suffix; here it arrives as a file under the name that loop would give it, beside
 # the shared output helpers. Both are sourced, never executed.
 COPY scripts/lib/ /usr/libexec/lib/
+COPY scripts/boot-counter-install.sh /usr/libexec/boot-counter
 COPY scripts/deploy-state.sh /usr/libexec/deploy-state
 # The deploy plane's programs, under the names the units run them by (design #939,
 # T8). The receiver is shared with the server and identical; the drain loop is the
@@ -111,7 +112,7 @@ RUN set -eux; \
     chmod 0755 /usr/libexec/smoresnet-firewall-prejoin; \
     chmod 0755 /usr/libexec/edge-boot-gate /usr/libexec/deploy-drain-edge; \
     chmod 0755 /usr/libexec/deploy-heartbeat /usr/libexec/deploy-poll; \
-    chmod 0755 /usr/libexec/smoresnet-boot-counter; \
+    chmod 0755 /usr/libexec/boot-counter; \
     chmod 0644 /usr/share/smoresnet/Caddyfile /usr/share/smoresnet/firewalld/zones/public.xml /usr/share/smoresnet/firewalld/zones/tailscale.xml; \
     chmod 0644 /usr/share/smoresnet/deploy-units.txt; \
     chmod 0644 /etc/ssh/sshd_config.d/05-edge-hardening.conf; \
@@ -250,7 +251,7 @@ RUN set -eux; \
     grep -qxF 'd /var/lib/caddy 0750 caddy caddy -' /etc/tmpfiles.d/smoresnet-edge.conf || { echo "the edge state fragment does not create Caddy's storage directory as Caddy's own account: every ACME order would fail" >&2; exit 1; }; \
      grep -qxF 'd /var/lib/smoresnet 0700 root root -' /etc/tmpfiles.d/smoresnet-edge.conf || { echo "the edge state fragment does not create /var/lib/smoresnet: edge-boot-gate.service fails with 226/NAMESPACE in namespace setup on the boot after an install" >&2; exit 1; }; \
     rpm -q greenboot >/dev/null || { echo "greenboot is not installed: this host would have no boot counter and no after-boot rollback" >&2; exit 1; }; \
-    test -x /usr/libexec/smoresnet-boot-counter || { echo "the boot counter installer is missing or not executable: the counter would never reach the grub.cfg that reads it" >&2; exit 1; }; \
+    test -x /usr/libexec/boot-counter || { echo "the boot counter installer is missing or not executable: the counter would never reach the grub.cfg that reads it" >&2; exit 1; }; \
     test ! -e /usr/lib/bootupd/grub2-static/configs.d/08_greenboot.cfg || { echo "greenboot's snippet is still in bootupd's directory: a regeneration would install the counter twice and spend two attempts in one boot" >&2; exit 1; }; \
     test -f /usr/share/smoresnet/boot-counter.cfg || { echo "the boot counter snippet is missing: the installer has nothing to put where grub.cfg reads it" >&2; exit 1; }; \
     grep -q 'boot_counter' /usr/share/smoresnet/boot-counter.cfg || { echo "the shipped boot counter snippet does not read boot_counter: the counter would never move" >&2; exit 1; }; \

@@ -487,6 +487,13 @@ declare -A unlisted_why=(
   [smortress-backrest.service]='the recovery reader: its credential is the operator file /etc/backrest/env, so a reader that cannot start is a tailnet Service with no listener and pages through its watchdog, never a reason to roll an image that deployed cleanly back'
   [smortress-syncthing-gui-proxy.service]='the loopback proxy in front of the Syncthing GUI (design #897, T1): it fronts one application route, and the GUI keeps its own 10000 route until T2 retires it, so a dead proxy is a broken route and not a host that rolled back onto an image that deployed cleanly'
   [smortress-restic-init.service]='initialises the Restic repositories: a backup-plane fault must not roll the platform digest back'
+  # The boot counter's two units are boot plumbing, not serving signals: a host
+  # that cannot write /boot has no counter, and greenboot journals that, but
+  # rolling the image back would not create a writable mount or a GRUB snippet.
+  # The deployments that reach this host are the ones a missing counter would
+  # fail to protect, and that is a reason to fix /boot, not to boot an old image.
+  [smortress-boot-rw.service]='remounts /boot writable before greenboot writes grubenv: a failed remount is reported by the counter unit, and rolling back would not create the mount'
+  [smortress-boot-counter.service]='installs greenboot GRUB snippet as /boot/grub2/custom.cfg: boot plumbing, and a rolled-back image would not have a different /boot'
   # The two Restic repository mounts are enabled and long-running, and `nofail` is
   # what makes them the opposite of a serving signal: an absent or unpowered backup
   # disk is a red destination, not a failed host. The hourly verifier pings the

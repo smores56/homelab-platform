@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Install greenboot's GRUB snippet where this host's grub.cfg actually reads it.
 #
+# Both images ship this one program: a counter is a property of the boot loader,
+# not of a host's role, and two copies of it would be two chances to drift.
+#
 # grub.cfg is generated once by bootupd, which reports every component current
 # and will not regenerate (docs/core/public-edge.md, "There is no boot counting
 # on this box"), so the snippet greenboot ships in
@@ -10,12 +13,12 @@
 # the counter needs no bootupd, and it survives a regeneration of grub.cfg
 # because 41_custom.cfg is one of the generator's own inputs.
 #
-# The image keeps greenboot's script at /usr/share/smoresnet/boot-counter.cfg and
-# removes the package's copy from bootupd's directory, so a regeneration cannot
-# install it twice: two passes in one boot would spend two of the three attempts.
-# The content is greenboot's own, byte for byte -- its package is the definition
-# of boot_success and boot_counter, and a copy written here would be a second
-# answer to a question the package already answers.
+# Each image keeps greenboot's script under /usr/share and removes the package's
+# copy from bootupd's directory, so a regeneration cannot install it twice: two
+# passes in one boot would spend two of the three attempts. The content is
+# greenboot's own, byte for byte -- its package is the definition of boot_success
+# and boot_counter, and a copy written here would be a second answer to a
+# question the package already answers.
 set -euo pipefail
 
 _smolib=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/lib/log.sh

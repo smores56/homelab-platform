@@ -1,0 +1,20 @@
+[Unit]
+Description=Install greenboot's GRUB snippet as /boot/grub2/custom.cfg
+# grub.cfg is generated once by bootupd and never regenerated, so the snippet
+# greenboot ships in bootupd's configs.d never reaches it. /boot/grub2/custom.cfg
+# is the hook grub.cfg does source, and /usr/libexec/boot-counter is the same
+# program the edge runs (scripts/boot-counter-install.sh has the argument).
+After=local-fs.target smortress-boot-rw.service
+Requires=smortress-boot-rw.service
+Before=greenboot-healthcheck.service
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/boot-counter
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

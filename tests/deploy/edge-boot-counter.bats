@@ -14,7 +14,7 @@
 #   bats tests/deploy/edge-boot-counter.bats
 load ../helpers
 
-counter=bootc/edge/rootfs/usr/libexec/smoresnet-boot-counter
+counter=scripts/boot-counter-install.sh
 installer_unit=bootc/edge/rootfs/usr/lib/systemd/system/smoresnet-boot-counter.service
 rw_unit=bootc/edge/rootfs/usr/lib/systemd/system/smoresnet-boot-rw.service
 
@@ -27,7 +27,7 @@ setup() {
     bin=$BATS_TEST_TMPDIR/bin
     rm -rf "$root" "$bin"
     mkdir -p "$bin"
-    install -D -m 0755 "$counter" "$root/usr/libexec/smoresnet-boot-counter"
+    install -D -m 0755 "$counter" "$root/usr/libexec/boot-counter"
     install -D -m 0644 scripts/lib/log.sh "$root/usr/libexec/lib/log.sh"
     snippet=$root/usr/lib/bootupd/grub2-static/configs.d/08_greenboot.cfg
     install -D -m 0644 /dev/null "$snippet"
@@ -53,7 +53,7 @@ STUB
 }
 
 run_installer() {
-    run "$root/usr/libexec/smoresnet-boot-counter"
+    run "$root/usr/libexec/boot-counter"
 }
 
 @test "the snippet is installed where grub.cfg sources it" {
@@ -103,7 +103,7 @@ run_installer() {
         fail "greenboot could health-check before the counter it writes exists"
     grep -qxF 'Requires=smoresnet-boot-rw.service' "$installer_unit" ||
         fail "the installer no longer depends on the writable /boot it needs"
-    grep -qxF 'ExecStart=/usr/libexec/smoresnet-boot-counter' "$installer_unit" ||
+    grep -qxF 'ExecStart=/usr/libexec/boot-counter' "$installer_unit" ||
         fail "the unit does not run the installed program"
     grep -qxF 'Before=greenboot-healthcheck.service smoresnet-boot-counter.service' "$rw_unit" ||
         fail "/boot is remounted after the units that write it"
