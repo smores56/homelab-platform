@@ -64,12 +64,16 @@ gateway_network() { # quadlet
   assert_equal "$(gateway_network "$agent_general")" agent-general.network
 }
 
-# The personal plane is a mount, and the one permission rule left in the design is
-# its mode (SDLC #995): /srv/files read-write, the vault nested read-only. A volume
-# that dropped the vault line would hand the agent a writable vault and nothing
-# else in the stack would notice.
-@test "the personal gateway mounts the files tree and the vault read-only" {
-  run grep -E '^Volume=/srv/files:/srv/files$' "$agent_local"
+# The personal plane is three explicit mounts (SDLC #1000): a read-only root, the
+# writable todo list and notes, and the vault nested read-only. A volume that
+# dropped a mode would hand the agent a writable vault or an unwritable list and
+# nothing else in the stack would notice.
+@test "the personal gateway mounts a read-only root with writable todos and notes" {
+  run grep -E '^Volume=/srv/files:/srv/files:ro$' "$agent_local"
+  assert_success
+  run grep -E '^Volume=/srv/files/todos:/srv/files/todos:rw$' "$agent_local"
+  assert_success
+  run grep -E '^Volume=/srv/files/notes:/srv/files/notes:rw$' "$agent_local"
   assert_success
   run grep -E '^Volume=/srv/files/vault:/srv/files/vault:ro$' "$agent_local"
   assert_success
