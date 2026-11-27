@@ -345,17 +345,14 @@ PY
 @test "the unit publishes into the tree the gateway mounts, from a read-only raw tree" {
     grep -qF -- '--volume /var/lib/agent/local/sources/mail:/sources:z' "$unit" &&
         grep -qF -- '-m data_plane.collectors.stream --root /sources' "$unit" &&
-        grep -qF -- '--volume /var/lib/agent/local/sources/mail:/raw:ro' "$unit" &&
-        grep -qF -- \
-            '-m data_plane.collectors.raw.publish_mail --raw /raw --out /opt/data/sources/mail' \
-            "$unit"
+        assert_equal "$(grep -cE '^ExecStart=' "$unit")" 1 &&
+        grep -qF -- 'publish_mail.publish(state.root, state.root)' \
+            libs/data_plane/collectors/stream/imap.py
 }
 
 @test "both stages of the unit run the image's own package" {
-    assert_equal "$(grep -cE '^ExecStart=' "$unit")" 2
-    assert_equal \
-        "$(grep -cF -- '--env PYTHONPATH=/usr/lib/agent-facade/libs:/usr/lib/agent-facade' "$unit")" \
-        2
-    assert_equal "$(grep -cF -- '--user 1000:1000' "$unit")" 2
-    assert_equal "$(grep -cF -- '--cap-drop=all' "$unit")" 2
+    assert_equal "$(grep -cE '^ExecStart=' "$unit")" 1
+    grep -qF -- '--env PYTHONPATH=/usr/lib/agent-facade/libs:/usr/lib/agent-facade' "$unit" &&
+        grep -qF -- '--user 1000:1000' "$unit" &&
+        grep -qF -- '--cap-drop=all' "$unit"
 }

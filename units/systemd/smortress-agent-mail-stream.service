@@ -47,33 +47,17 @@ ExecStart=/usr/bin/podman run --rm --replace --name smortress-agent-mail-stream 
   -m data_plane.collectors.stream --root /sources \
   --host smortress-agent-tmail --port 1143 --user tuta \
   --password-file /run/secrets/tmail-bridge-password --ca-file /bridge/cert.pem
-# The second stage publishes what the stream wrote where the agent's own shell
-# reads it: a Maildir of the provider's bytes plus the bounded newest-first
-# index (libs/data_plane/collectors/raw/publish_mail.py). The agent's data plane
-# is a mount and its shell, so this is the only stage the agent ever reads.
+# There is no second ExecStart. A `Type=simple` unit starts every ExecStart at
+# once, so a publisher there would run once at boot, race the stream's first pass,
+# and never run again after an IDLE-triggered one -- its failures would also take
+# the stream down with them. The stream publishes the view itself after each
+# committed pass (`libs/data_plane/collectors/stream/imap.py`), which is the only
+# place that knows a pass happened; a refusal is logged and the next pass retries.
 #
-# `Type=simple` starts both ExecStart lines at once, so this stage can run before
-# the stream's first pass has committed a state: an absent replica exits 1, and
-# that fails the unit and restarts the pair, which is what the StartLimit below
-# bounds. It runs once per unit start, and `Restart=on-failure` is the only thing
-# that reruns it; a timer of its own is the follow-up if the index must track
-# every pass.
-#
-# The raw tree is mounted twice. `/raw` is read-only and is where the state and
-# its objects are read; `/opt/data/sources/mail` is the path the gateway mounts
-# the same directory at, because that is what every index line records and the
-# agent has to be able to `cat` it. No network: nothing here leaves the host.
-ExecStart=/usr/bin/podman run --rm --replace --name smortress-agent-mail-publish \
-  --network none \
-  --read-only --cap-drop=all --security-opt no-new-privileges \
-  --tmpfs /tmp:rw,size=16m --user 1000:1000 \
-  --volume /var/lib/agent/local/sources/mail:/raw:ro \
-  --volume /var/lib/agent/local/sources/mail:/opt/data/sources/mail:z \
-  --env PYTHONPATH=/usr/lib/agent-facade/libs:/usr/lib/agent-facade \
-  --env PYTHONDONTWRITEBYTECODE=1 \
-  --entrypoint python3 \
-  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:6c6964bf94dd2582dac51fe3d68dc5919df58541fbff68d2d0cf58e710d06ac4 \
-  -m data_plane.collectors.raw.publish_mail --raw /raw --out /opt/data/sources/mail
+# The tree is mounted twice on purpose: `/sources` is the state and its objects,
+# and `/opt/data/sources/mail` is the same directory at the path the gateway
+# mounts it, because that is what every index line records and the agent has to be
+# able to `cat` it. No network: nothing here leaves the host.
 # The process retries every socket error itself with exponential backoff, so a
 # restart here means the process died: a bug, or a refusal that exited non-zero.
 # SIGTERM is handled inside the process, which stops the IDLE connections and
