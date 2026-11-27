@@ -46,13 +46,12 @@ app_images=(
   # (llama.cpp PR #32694, merged 2026-11-20): the previous pin, b12464 of
   # 2026-11-17, cannot load an `inkling2_loop` GGUF at all.
   'agent-model|ghcr.io/ggml-org/llama.cpp:server-cuda|sha256:26f89ebd3bf17a5ecf6caee62bdabfa55abea3058150879f6f07b1fc786baa2d'
-  # 0643a8 is the first build that carries the plain views the agent's shell
-  # reads (SDLC #995, T2/T3/T4): `publish_finance`, `publish_mail` and
-  # `publish_brave` live in `libs/data_plane/` and the image COPYs that tree, so
-  # the collector units name a module this pin has. The facade is gone from the
-  # image as well; an older pin would start a gateway that could not import its
-  # own shell surface.
-  'agent-runtime|built:images/agent-runtime/Containerfile|sha256:0643a8414b5b125714505a60a2704d519b0b650a2803554f963ac1864d576f5c'
+  # a2097d is the first build that carries both the plain views the agent's shell
+  # reads (SDLC #995, T2/T3/T4 -- `publish_*` live in `libs/data_plane/`, which the
+  # image COPYs) and the two tools they need and the base lacks (`jq`, `gh`).
+  # `sqlite3` is absent on purpose: the apt CLI and the image disagree about
+  # libsqlite3, so the plane documents `python3 -m sqlite3` instead.
+  'agent-runtime|built:images/agent-runtime/Containerfile|sha256:a2097dc2f54142b75137779c91f2e90956a01687cdfd2424685d748c3669baa1'
   # Built by this repository (SDLC #775), not mirrored: upstream's entrypoint
   # installs its Python dependencies from PyPI at container start, which a sealed
   # deployment can never do. The digest is the publish-agent-webui run for the

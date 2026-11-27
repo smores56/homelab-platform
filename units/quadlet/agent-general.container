@@ -32,7 +32,7 @@ After=network-online.target zfs-ready@state-agent-general.service zfs-ready@raw-
 Wants=network-online.target agent-proxy.service
 
 [Container]
-Image=ghcr.io/smores56/homelab-platform/agent-runtime@sha256:0643a8414b5b125714505a60a2704d519b0b650a2803554f963ac1864d576f5c
+Image=ghcr.io/smores56/homelab-platform/agent-runtime@sha256:a2097dc2f54142b75137779c91f2e90956a01687cdfd2424685d748c3669baa1
 ContainerName=smortress-agent-general
 Network=agent-general.network
 Exec=gateway run
