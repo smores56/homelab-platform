@@ -1416,13 +1416,19 @@ notes are read-write, the vault is a read-only bind, and the runtime's own
 `terminal` and `file` toolsets are the interface. There is no source facade and no
 virtual terminal to start, so nothing here needs staging.
 
-Two settings need an operator, because the gateway's `config.yaml` is seeded once
+Three settings need an operator, because the gateway's `config.yaml` is seeded once
 (`cp -n`) and never reconciled: a deployment seeded before this change still
 carries `mcp_servers` entries for containers that no longer exist (every turn pays
-a connect timeout against them) and keeps `approvals.mode: manual`, which prompts
-in the chat for every command the shell now runs.
+a connect timeout against them), keeps `approvals.mode: manual`, which prompts in
+the chat for every command the shell now runs, and -- on the personal side --
+still lists `terminal` and `file` under `disabled_toolsets`, which are the two
+toolsets the plane is read through. Left alone, the upgrade reaches the host and
+changes nothing the model can see.
 
-    sudo python3 - <<'PY'
+`sudo` resolves `python3` from its own path, so name the system interpreter: a
+development shim earlier in `PATH` has no PyYAML and the block dies on the import.
+
+    sudo /usr/bin/python3 - <<'PY'
     import yaml
     for state in ("local", "general"):
         path = f"/var/lib/agent/{state}/config.yaml"
@@ -1435,12 +1441,24 @@ in the chat for every command the shell now runs.
             approvals["mode"] = "off"
             config["approvals"] = approvals
             changed.append("approvals.mode: off")
+        agent = config.get("agent") or {}
+        disabled = agent.get("disabled_toolsets") or []
+        opened = [t for t in ("terminal", "file") if t in disabled]
+        if opened:
+            agent["disabled_toolsets"] = [t for t in disabled if t not in opened]
+            config["agent"] = agent
+            changed.append("enabled: " + ", ".join(opened))
         if changed:
             yaml.safe_dump(config, open(path, "w"), sort_keys=False)
             print(f"{path}: " + ", ".join(changed))
     PY
     sudo systemctl restart agent-local.service agent-general.service
+    sudo grep -E '^(approvals|  mode:|  disabled_toolsets:|    - )' /var/lib/agent/local/config.yaml
     sudo journalctl -u agent-local.service -n 20 --no-pager
+
+The grep must show `mode: off` and a `disabled_toolsets` list without `terminal`
+or `file`; a line still naming either one means the block did not write, and the
+model has no shell to reach the mount with.
 
 The watcher that publishes changes into `/var/lib/agent/local/watch/changes.jsonl`
 is `smortress-source-watch.service`; it starts with the host and needs no action.
