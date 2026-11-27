@@ -206,7 +206,7 @@ ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever(poll_interval=0.
 PY
 
     # The platform snapshot gate is T3 and has its own suite
-    # (tests/deploy/platform.bats); what this suite proves is that a verified
+    # (tests/deploy/platform-*.bats); what this suite proves is that a verified
     # platform entry reaches it with the digests the verdict resolved.
     cat >"$dir/fake-platform" <<'STUB'
 #!/usr/bin/env bash
