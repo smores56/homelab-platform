@@ -1,0 +1,42 @@
+# Mirage, the personal agent's virtual terminal (SDLC #979, T1).
+#
+# Mirage ships as a Python package and nothing else: there is no upstream image,
+# no tag to mirror and no digest to copy. The pin is the released version on
+# PyPI, and the bytes are ours, so this is a `built:` row in scripts/app-images.sh
+# published by .github/workflows/publish-mirage.yml.
+#
+# Two things are baked in, and each one removes a boot-time fetch the personal
+# deployment cannot make (it has no route off the host):
+#   * mirage-ai itself, exact version, binary wheel from PyPI;
+#   * socat, because the daemon binds 127.0.0.1 only and has no host or port key,
+#     so a container that must be reachable by name needs a forwarder in front of
+#     it. `ssh` is the extra that brings asyncssh, which serves the workspace over
+#     its own SSH port.
+#
+# The base is pinned by digest: a tag would let a base rebuild change these bytes
+# without changing this file, and the published digest is the deployment's pin.
+FROM docker.io/library/python@sha256:7249d5587b78209a006dc4a3b5340678f84ea729239193aa559962cd8c1fce50
+
+# No build toolchain and no compiler: mirage-ai publishes abi3 and musllinux
+# wheels, so the install is a download and an unpack.
+RUN set -eux; \
+    python3 -m pip install --no-cache-dir --disable-pip-version-check \
+      'mirage-ai[ssh]==0.1.0'; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends socat; \
+    rm -rf /var/lib/apt/lists/*; \
+    test -x /usr/local/bin/mirage
+
+COPY images/mirage/mirage-entrypoint.sh /usr/local/bin/mirage-entrypoint
+
+# The state dataset is the only writable path, and it is mounted at /state; the
+# daemon's home, the workspace's own state and the ssh host key all live there.
+ENV MIRAGE_HOME=/state \
+    MIRAGE_DAEMON_PORT=8765 \
+    MIRAGE_PROXY_PORT=18010 \
+    MIRAGE_WORKSPACE_ID=personal \
+    PYTHONUNBUFFERED=1 \
+    TZ=UTC
+
+USER 1000:1000
+ENTRYPOINT ["/usr/local/bin/mirage-entrypoint"]
