@@ -17,14 +17,19 @@ setup() { pt_setup; }
 # --- 5. an exhausted budget holds instead of running on ---------------------
 # The ping secret is deliberately absent here: a host mid-bootstrap has none, and
 # a missing page must not turn a hold into a crash. files and books are stale and
-# a backup of books outlives the 2 s budget the gate is given.
+# a backup of books outlives the 2 s budget the gate is given. The clock is
+# virtual (#993): `date -u +%s` reads $work/clock and the backup toy for books
+# advances it by 3 s, so the budget expires between the two units on any host,
+# however loaded.
 exhausted_budget() {
     seed_doc true true "$(fresh_without files)"
     jq -c '.ssd.units.books.fresh = false | .hdd.units.books.fresh = false' \
         "$STUB_VERIFY_DOC" >"$STUB_VERIFY_DOC.tmp" && mv "$STUB_VERIFY_DOC.tmp" "$STUB_VERIFY_DOC"
+    printf '1000\n' >"$work/clock"
     rc=0
-    out=$(STUB_BACKUP_SLEEP=3 STUB_BACKUP_SLEEP_UNIT=books DEPLOY_GATE_BUDGET=2 bash "$platform" \
-        prepare --commit "$commit" --digests "$digests" 2>&1) || rc=$?
+    out=$(STUB_CLOCK_FILE=$work/clock STUB_BACKUP_ADVANCE=3 STUB_BACKUP_ADVANCE_UNIT=books \
+        STUB_BACKUP_EXIT=124 STUB_BACKUP_EXIT_UNIT=books DEPLOY_GATE_BUDGET=2 \
+        bash "$platform" prepare --commit "$commit" --digests "$digests" 2>&1) || rc=$?
     held=$(cat "$state_dir/held.json" 2>/dev/null) || held='{}'
 }
 
