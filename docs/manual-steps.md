@@ -859,10 +859,32 @@ One sitting, in this order — step 1 can block everything after it.
    the commit and re-apply; never edit the zone by hand
    (`docs/cloudflare.md`, "CAA").
 3. **Force the renewal** on the VPS — owner only, destructive; delete the name's
-   certificate directory and restart because `admin off` exposes no API. The
-   exact commands are `provision/edge/README.md`, "Order" step 6. Then
-   `scripts/verify-caa.sh` exits 0 and `scripts/verify-public-edge.sh` shows a
-   fresh window.
+   certificate directory and restart because `admin off` exposes no API. List
+   first, copy the path into the delete — `rm -rf` on the wrong path takes every
+   name's certificate with it:
+
+   ```sh
+   ssh root@smoresnet
+   ls -d /var/lib/caddy/.local/share/caddy/certificates/*/photos.sammohr.dev
+   rm -rf /var/lib/caddy/.local/share/caddy/certificates/*/photos.sammohr.dev
+   systemctl restart caddy
+   openssl s_client -connect photos.sammohr.dev:443 -servername photos.sammohr.dev \
+     </dev/null 2>/dev/null | openssl x509 -noout -subject -dates
+   ```
+
+   `subject` must be `photos.sammohr.dev` and `notAfter` the new window. If
+   finalize fails with `urn:ietf:params:acme:error:unauthorized - authorizations
+   for these identifiers not found`, the account's reused authorization has gone
+   stale on Let's Encrypt's side: stop Caddy, move
+   `/var/lib/caddy/.local/share/caddy/acme` aside, start Caddy so it registers a
+   fresh account, and let it obtain — `CAA` names the CA, not an account, so the
+   replacement is authorized immediately. The issuer under
+   `/var/lib/caddy/.local/share/caddy/certificates/` must be `acme-v02`, not
+   `acme-staging-v02`: a staging certificate verifies against no public store,
+   and `admin off` means a replaced Caddyfile takes effect only on
+   `systemctl restart caddy`, so a staging run can outlive the file that replaced
+   it. Then `scripts/verify-caa.sh` exits 0 and `scripts/verify-public-edge.sh`
+   shows a fresh window.
 4. **Kanbei's Universal SSL re-validation**: SSL/TLS → Edge Certificates must
    show `kanbei.sammohr.dev` (and the zone's wildcard) active, not pending or
    expired. Cloudflare re-validates on its own against the union of the two
@@ -2039,11 +2061,12 @@ sudo scripts/legacy/retirement-gate.sh --keep           # leave the targets for 
 
 ## Public edge VPS
 
-The edge VPS order — tailnet policy, `tag:vps` key, panel firewall, console join,
-bootstrap, Serve routes, the cutover and the timed rebuild drill — is
-`docs/core/public-edge.md`, "The operator order". The box terminates TLS for
-three names (`photos`, `opds`, `recovery`); `provision/edge/verify.sh` asserts
-exactly those three site blocks and never a fourth.
+The edge VPS order — tailnet policy, `tag:vps` key, panel firewall, the install
+from the live ISO, bootstrap, Serve routes, the cutover and the timed rebuild
+drill — is `docs/core/public-edge.md`, "The operator order". The box runs the
+repository's own signed image and terminates TLS for three names (`photos`,
+`opds`, `recovery`); `bootc/edge/tests/check.sh` asserts exactly those three site
+blocks and never a fourth.
 
 ### Before the install: what the image makes and what a person does
 

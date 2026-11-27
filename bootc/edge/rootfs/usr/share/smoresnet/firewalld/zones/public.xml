@@ -7,7 +7,7 @@
        and everything else falls to the zone's policy. ICMP errors for an
        established flow are "related" and pass without being named. This is the
        nftables edge ruleset's `icmp type echo-request limit rate 10/second`
-       without the rate limit firewalld cannot express (provision/edge/nftables.conf). -->
+       without the rate limit firewalld cannot express. -->
   <icmp-block-inversion/>
   <icmp-block name="echo-request"/>
   <port port="443" protocol="tcp"/>

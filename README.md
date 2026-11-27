@@ -29,7 +29,7 @@ changes by pull request from a fork, so no PR workflow can read a secret.
 | `backrest/` | The Backrest reader Worker: source, TypeScript typecheck and static tests (`docs/core/backrest.md`) |
 | `images/` | Container image sources: agent egress, agent mail, agent WebUI, data-plane, brave, tuta-calendar |
 | `tofu/` | Cloudflare OpenTofu (provider v5): the zone's DNS, the CAA pin (`docs/cloudflare.md`), tailnet policy |
-| `provision/edge/` | The public edge VPS bootstrap, Caddyfile, firewall and on-box verify (`docs/core/public-edge.md`) |
+| `bootc/edge/` | The edge image: Caddyfile, firewalld zones, sshd drop-in and deploy units (`docs/core/public-edge.md`) |
 | `provision/smortress/` | Autoinstall user-data for the bootc host |
 | `secrets/` | SOPS+age ciphertext, decrypted at boot or by the operator; CI references none |
 | `tests/core/` | Offline checks for the core gate, the Restic plane, the apps tenant and the Serve routes |

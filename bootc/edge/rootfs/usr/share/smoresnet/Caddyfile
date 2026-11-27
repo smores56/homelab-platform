@@ -1,5 +1,5 @@
-# The edge's Caddyfile (design #939, T4), carried from provision/edge/Caddyfile
-# unchanged apart from the admin comment below.
+# The edge's Caddyfile (design #939, T4), carried from the retired hand
+# bootstrap's copy unchanged apart from the admin comment below.
 #
 # It ships under /usr/share rather than /etc/caddy, and caddy.service is told so
 # through /usr/lib/systemd/system/caddy.service.d/10-smoresnet.conf: bootc merges
@@ -7,8 +7,8 @@
 # would be frozen at the install's version and a route change would never reach
 # a running box. /usr is the image's, so a deploy that bumps the image bumps this
 # file. The four environment values it substitutes are the operator's, in
-# /etc/caddy/edge.env (0640 root:caddy, written by edge-bootstrap), which is also
-# what provision/edge/verify.sh reads on a hand-provisioned box.
+# /etc/caddy/edge.env (0640 root:caddy, written by edge-bootstrap), and the unit
+# that runs this file is skipped while that file is absent.
 {
 	# One ACME address for both names; Let's Encrypt uses it for expiry notices
 	# only. The zone's `CAA` pin is at the CA level, `letsencrypt.org` for both

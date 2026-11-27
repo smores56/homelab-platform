@@ -1,7 +1,7 @@
 [Unit]
 # Join the edge to the tailnet as smoresnet, the tagged node the ACL admits to
-# svc:immich and svc:opds and nothing else. This replaces the `tailscale up` line
-# in provision/edge/bootstrap.sh, with one difference that matters: the key is a
+# svc:immich and svc:opds and nothing else. This replaces the retired hand
+# bootstrap's `tailscale up` line, with one difference that matters: the key is a
 # systemd credential, not a shell argument and not a file the command names.
 #
 # LoadCredential= reads /etc/smoresnet/tailscale-authkey as root and hands the

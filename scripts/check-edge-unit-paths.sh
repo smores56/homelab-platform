@@ -2,7 +2,7 @@
 # Hold bootc/edge/unit-paths.tsv and the edge's units to each other.
 #
 # Four units on the from-scratch install of the edge assumed state the retired
-# hand bootstrap (provision/edge/bootstrap.sh) had made on the old VPS, and each
+# hand bootstrap had made on the old VPS, and each
 # was patched on the console after it happened. The worst was /var/lib/caddy:
 # without it Caddy starts, fails every ACME order with `mkdir /var/lib/caddy:
 # permission denied`, and answers 500 on all three names. The quietest was

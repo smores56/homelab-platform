@@ -36,8 +36,8 @@ passwd:
   users:
     - name: root
       # The one operator key, from the copy the image already ships (design
-      # #767) and byte-identical to the provision/edge/authorized_keys the
-      # bootstrap appends. Root logs in by key or not at all: the image's
+      # #767) and byte-identical to the authorized_keys the retired hand
+      # bootstrap appended. Root logs in by key or not at all: the image's
       # 05-edge-hardening.conf sets PermitRootLogin prohibit-password, and 22 is
       # reachable on the public interface only until the tailnet join unit closes
       # it.

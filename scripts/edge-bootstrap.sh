@@ -5,9 +5,9 @@
 # The image is the whole host, so what is left for a person is exactly what an
 # image may not carry: the operator's Caddy values, the four plaintext secrets,
 # the kit's SSH host key, the tailnet node identity and the first deploy record.
-# The rest of provision/edge/bootstrap.sh -- packages, firewall, sshd policy, the
-# Caddyfile, the units -- is image content now, and bootc/edge/tests/check.sh is
-# what asserts it.
+# The rest of what a hand bootstrap used to do -- packages, firewall, sshd policy,
+# the Caddyfile, the units -- is image content (bootc/edge/), and
+# bootc/edge/tests/check.sh is what asserts it.
 #
 # The secrets arrive on stdin, never in argv: an argument is in
 # /proc/<pid>/cmdline for every user on the box and in the shell's history, and a

@@ -81,25 +81,31 @@ done
 }
 
 @test "the edge serves recovery.sammohr.dev" {
-    has "recovery.sammohr.dev {" provision/edge/Caddyfile
+    has "recovery.sammohr.dev {" "$edge_caddyfile"
 }
 
 # The reader is on smortress (SDLC #953), so the third name is a tailnet proxy
 # like the other two and the edge keeps no process and no credential for it.
 @test "the edge proxies the reader to the tailnet, not to loopback" {
-    for caddyfile in provision/edge/Caddyfile "$edge_caddyfile"; do
-        has 'reverse_proxy {$RECOVERY_UPSTREAM}' "$caddyfile"
-        hasnt '127.0.0.1:9898' "$caddyfile"
-    done
+    has 'reverse_proxy {$RECOVERY_UPSTREAM}' "$edge_caddyfile"
+    hasnt '127.0.0.1:9898' "$edge_caddyfile"
 }
 
 @test "the bootstrap derives the reader's Service upstream" {
-    has 'RECOVERY_UPSTREAM=https://recovery.$tailnet_domain' provision/edge/bootstrap.sh
-    has 'RECOVERY_UPSTREAM=$RECOVERY_UPSTREAM' provision/edge/bootstrap.sh
+    has 'RECOVERY_UPSTREAM=https://recovery.$tailnet_domain' scripts/edge-bootstrap.sh
+    has 'RECOVERY_UPSTREAM=%s' scripts/edge-bootstrap.sh
 }
 
-@test "the verify refuses a box with no reader upstream" {
-    has 'RECOVERY_UPSTREAM' provision/edge/verify.sh
+# The on-box verify that refused an environment file with no reader upstream went
+# with the hand bootstrap. The image refuses the same box earlier, at Caddy's own
+# parse: the packaged unit's ExecStartPre validates the image Caddyfile against
+# /etc/caddy/edge.env, and an unsets {$RECOVERY_UPSTREAM} is a proxy that does not
+# start rather than three names that serve two applications.
+@test "the image refuses a box with no reader upstream" {
+    has 'ExecStartPre=/usr/bin/caddy validate --config /usr/share/smoresnet/Caddyfile' \
+        bootc/edge/rootfs/usr/lib/systemd/system/caddy.service.d/10-smoresnet.conf
+    has 'EnvironmentFile=/etc/caddy/edge.env' \
+        bootc/edge/rootfs/usr/lib/systemd/system/caddy.service.d/10-smoresnet.conf
 }
 
 @test "repository location is not a checked-in default" {
@@ -483,7 +489,7 @@ done
     has 'ExecStart=/usr/libexec/smortress-backrest-watchdog' "$watchdog_unit"
     has 'ConditionPathExists=/etc/backrest/env' "$watchdog_unit"
     has 'OnUnitActiveSec=5min' "$watchdog_timer"
-    run test -e provision/edge/backrest-watchdog.sh
+    run grep -rlF 'backrest-watchdog' bootc/edge
     assert_failure
 }
 
@@ -504,7 +510,7 @@ done
 # because a credential reintroduced in either place is the same downgrade.
 @test "the edge image and its /etc carry no restic or R2 credential" {
     hits=$(grep -rInE 'RESTIC_PASSWORD|R2_(ACCESS|SECRET)_ACCESS_KEY|AWS_(ACCESS|SECRET)_ACCESS_KEY|restic-password|r2-credentials' \
-        bootc/edge provision/edge || true)
+        bootc/edge || true)
     if [[ -n $hits ]]; then
         printf '%s\n' "$hits" >&2
         return 1
@@ -516,7 +522,7 @@ done
 # directory are as much of the credential's old home as the key was.
 @test "the edge runs no reader of its own" {
     hits=$(grep -rInE 'backrest\.(service|container)|/etc/backrest|/usr/local/bin/backrest|/etc/containers/systemd/backrest' \
-        bootc/edge provision/edge || true)
+        bootc/edge || true)
     if [[ -n $hits ]]; then
         printf '%s\n' "$hits" >&2
         return 1

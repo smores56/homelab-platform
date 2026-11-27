@@ -22,7 +22,7 @@ host that is running: the image, its Quadlets, its backups and its edge.
 | `core/restic-plane.md` | The three Restic destinations, their restore units, freshness and restore procedures. |
 | `core/recovery-kit.md` | The offline recovery kit: its items, its drill and its rotation. |
 | `core/t0-gate.md` | The T0 gate the core migration had to pass, and the evidence it left. |
-| `core/public-edge.md` | The edge VPS: what runs, DNS and cutover, metering, failure modes, rebuild. |
+| `core/public-edge.md` | The edge VPS: what runs, DNS and cutover, metering, failure modes, and the rebuild from the image artifact. |
 | `core/applications.md` | The application and agent Quadlets: images, storage, secrets, access and restore paths. |
 | `core/apps-tenant.md` | The unprivileged `homelab-apps` tenant: plan, bounds, boot order, apply. |
 | `core/backrest.md` | The hosted Backrest reader: the read-only boundary, readiness and its gate matrix. |
