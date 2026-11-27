@@ -9,9 +9,9 @@
 # holds neither file, so a mistyped or unmounted path stops the replica advancing
 # instead of committing an empty list that carries every task away.
 Description=Publish the todo.txt list into the personal replica
-Requires=zfs-ready@state-agent-local.service
-After=zfs-ready@state-agent-local.service
-ConditionPathExists=/srv/files/notes
+Requires=zfs-ready@state-agent-local.service zfs-ready@raw-files.service
+After=zfs-ready@state-agent-local.service zfs-ready@raw-files.service
+ConditionPathExists=/srv/files/todos/todo.txt
 
 [Service]
 Type=oneshot
@@ -20,7 +20,7 @@ ExecStart=/usr/bin/podman run --rm --replace --name smortress-agent-collect-task
   --network none \
   --read-only --cap-drop=all --security-opt no-new-privileges \
   --tmpfs /tmp:rw,size=16m --user 1000:1000 \
-  --volume /srv/files/notes:/entities:ro \
+  --volume /srv/files/todos:/entities:ro \
   --volume /var/lib/agent/local/replica:/replica:z \
   --env PYTHONPATH=/usr/lib/data-plane/libs:/usr/lib/data-plane \
   --env PYTHONDONTWRITEBYTECODE=1 \

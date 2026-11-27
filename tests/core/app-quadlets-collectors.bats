@@ -122,7 +122,7 @@ unset _case _name _collector _timer _secret _flag _image
 #      read-only source mount and the writable replica tree.
 local_collectors=(
   "notes|units/systemd/smortress-agent-collect-notes.service|units/systemd/smortress-agent-collect-notes.timer|/srv/files/vault"
-  "tasks|units/systemd/smortress-agent-collect-tasks.service|units/systemd/smortress-agent-collect-tasks.timer|/srv/files/notes"
+  "tasks|units/systemd/smortress-agent-collect-tasks.service|units/systemd/smortress-agent-collect-tasks.timer|/srv/files/todos"
   "photos|units/systemd/smortress-agent-collect-photos.service|units/systemd/smortress-agent-collect-photos.timer|/srv/photos"
   "music|units/systemd/smortress-agent-collect-music.service|units/systemd/smortress-agent-collect-music.timer|/srv/music"
 )
@@ -175,6 +175,13 @@ local_collector_waits_for_the_replica_dataset() { # spec
     grep -qE '^After=.*zfs-ready@state-agent-local\.service' "$unit"
 }
 
+local_collector_waits_for_the_files_dataset() { # spec
+  local unit
+  unit=$(local_collector_field "$1" 2)
+  grep -qE '^Requires=.*zfs-ready@raw-files\.service' "$unit" &&
+    grep -qE '^After=.*zfs-ready@raw-files\.service' "$unit"
+}
+
 local_collector_timer_runs_and_closes_a_missed_run() { # spec
   local timer
   timer=$(local_collector_field "$1" 3)
@@ -198,6 +205,12 @@ for _case in "${local_collectors[@]}"; do
   registered "$_name collector holds no secret" local_collector_holds_no_secret "$_case"
   registered "$_name collector waits for the replica dataset" \
     local_collector_waits_for_the_replica_dataset "$_case"
+  case $_name in
+    notes|tasks)
+      registered "$_name collector waits for the files dataset" \
+        local_collector_waits_for_the_files_dataset "$_case"
+      ;;
+  esac
   registered "$_name collector runs the collector subcommand" local_collector_runs_the_subcommand "$_case"
   while IFS= read -r _image; do
     registered "$_name collector runs a pinned image from the table" \

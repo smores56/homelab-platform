@@ -15,8 +15,8 @@
 # collector will not read needs a human, and the timer is the only signal that
 # the replica stopped advancing.
 Description=Publish the Markdown vault into the personal replica
-Requires=zfs-ready@state-agent-local.service
-After=zfs-ready@state-agent-local.service
+Requires=zfs-ready@state-agent-local.service zfs-ready@raw-files.service
+After=zfs-ready@state-agent-local.service zfs-ready@raw-files.service
 # Nothing to publish before the vault is present; until then the timed run is
 # skipped rather than reported as broken.
 ConditionPathExists=/srv/files/vault
