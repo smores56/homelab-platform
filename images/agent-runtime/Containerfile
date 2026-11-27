@@ -44,3 +44,11 @@ RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends jq gh; \
     rm -rf /var/lib/apt/lists/*
+
+# `git` refuses a repository whose owner is not the effective uid, and the general
+# deployment edits /srv/git, which the operator owns (SDLC #1009). The check
+# compares uids, so a shared group would not clear it either. Naming every path
+# safe is the only lever that does not move repository ownership, and the tree it
+# exposes is the operator's own bare repos on a read-write mount -- the grant is
+# the mount, and this only stops git second-guessing it.
+RUN git config --system --add safe.directory '*'

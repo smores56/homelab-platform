@@ -100,8 +100,27 @@ declare -A dataset_root_mode=(
 #: container-owned tree would silently vanish on the next reboot.
 dataset_acl_mode=passthrough
 
+#: Datasets whose tree a container writes while the operator still owns it.
+#: `aclmode=passthrough` keeps such a grant's *entries* across the chmod above,
+#: not its effect: chmod re-derives the POSIX ACL mask, so a grant written once
+#: reads back as `#effective:r-x` after the next boot. init-zpool therefore
+#: applies these after its chmod, and the mask is part of the spec rather than
+#: something it inherits.
+declare -A dataset_root_acl=(
+  # /srv/git is the operator's bare-repo tree and the general deployment edits it
+  # (SDLC #995, #1009). uid 1000 is the container's contract, deliberately not a
+  # name: the account behind it is an implementation detail of this host.
+  [raw/git]='u:1000:rwX,m::rwx'
+)
+declare -A dataset_root_acl_default=(
+  # So a repo the operator clones after the boot is writable without another pass.
+  [raw/git]='d:u:1000:rwX,d:m::rwx'
+)
+
 dataset_owner_for() { printf '%s\n' "${dataset_root_owner[$1]:-$dataset_root_owner_default}"; }
 dataset_mode_for() { printf '%s\n' "${dataset_root_mode[$1]:-$dataset_root_mode_default}"; }
+dataset_acl_for() { printf '%s\n' "${dataset_root_acl[$1]:-}"; }
+dataset_acl_default_for() { printf '%s\n' "${dataset_root_acl_default[$1]:-}"; }
 
 #: Restore units, in backup order, and the datasets each one restores together.
 declare -A unit_datasets=(

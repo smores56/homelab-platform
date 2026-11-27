@@ -166,3 +166,10 @@ built_row_probe() {
   assert_equal "$(app_image_ref probe)" \
     "ghcr.io/smores56/homelab-platform/probe@sha256:$(printf 'a%.0s' {1..64})"
 }
+@test "the runtime image names repositories safe for git" {
+    # SDLC #1009: git refuses a repository owned by another uid, and it compares
+    # uids -- a shared group would not clear it. The general deployment edits the
+    # operator's bare repos under /srv/git, so the image says so once.
+    grep -qF -- "git config --system --add safe.directory '*'" \
+        images/agent-runtime/Containerfile
+}

@@ -49,6 +49,38 @@ load ../helpers
     assert_equal "$(dataset_owner_for raw/git)" smores:smores
 }
 
+@test "the git dataset grants the container uid a writable ACL" {
+    # The operator owns the tree, the general deployment runs as uid 1000 and
+    # edits it (SDLC #995), so the grant has to be named rather than inherited.
+    # shellcheck source=/dev/null
+    source scripts/storage-layout.sh
+    assert_equal "$(dataset_acl_for raw/git)" 'u:1000:rwX,m::rwx'
+    assert_equal "$(dataset_acl_default_for raw/git)" 'd:u:1000:rwX,d:m::rwx'
+}
+
+@test "init-zpool applies the ACL after the chmod that would cap it" {
+    # chmod re-derives the ACL mask, so a grant applied before it survives as an
+    # entry with `#effective:r-x` -- which is exactly how the general plane lost
+    # its write access. The line order is the property under test.
+    chmod_line=$(grep -n 'chmod "$(dataset_mode_for' scripts/init-zpool.sh | cut -d: -f1)
+    acl_line=$(grep -n 'setfacl -R -m "$acl"' scripts/init-zpool.sh | cut -d: -f1)
+    [[ -n $chmod_line && -n $acl_line ]]
+    [[ $acl_line -gt $chmod_line ]]
+}
+
+@test "every dataset with an access ACL also declares a default" {
+    # Without it, a repo the operator clones after boot is unwritable until the
+    # next pass, which reads as a flaky agent rather than a missing grant.
+    # shellcheck source=/dev/null
+    source scripts/storage-layout.sh
+    for key in "${!dataset_root_acl[@]}"; do
+        [[ -n $(dataset_acl_default_for "$key") ]] || {
+            printf 'no default ACL declared for %s\n' "$key" >&2
+            return 1
+        }
+    done
+}
+
 @test "the operator owns the repo archive" {
     # shellcheck source=/dev/null
     source scripts/storage-layout.sh

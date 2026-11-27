@@ -85,6 +85,15 @@ for key in "${dataset_order[@]}"; do
     # to the tenant account and is 0700.
     chown "$(dataset_owner_for "$key")" "$mountpoint"
     chmod "$(dataset_mode_for "$key")" "$mountpoint"
+    # Only now, and never before: chmod re-derives the ACL mask, so a grant
+    # applied above it would survive as an entry with no effect -- which is how
+    # the general plane lost its write access to /srv/git (SDLC #1009). `set -e`
+    # is on, so a failure here stops the boot rather than leaving a tree the
+    # plane cannot use while everything still looks healthy.
+    if acl=$(dataset_acl_for "$key") && [[ -n $acl ]]; then
+      setfacl -R -m "$acl" -- "$mountpoint"
+      setfacl -R -m "$(dataset_acl_default_for "$key")" -- "$mountpoint"
+    fi
     # Only the tenant's dataset has a quota in the table today; the applier
     # re-asserts it at every deploy, this makes the first boot match.
     if [[ -n ${dataset_quota[$key]:-} ]]; then
