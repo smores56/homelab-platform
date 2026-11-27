@@ -423,9 +423,10 @@ meaning: a pass that did not see a note says nothing about who removed it.
 
 `collect_tasks(entities_dir, state, *, captured_at=...)`
 
-The input is a todo.txt directory: `todo.txt` and `done.txt`, each optional. A
-todo.txt line carries no id and the tools that write the file rewrite it in
-place, so the object id is a digest of the line's bytes.
+The input is a todo.txt directory: `todo.txt` required, `done.txt` optional
+(`/srv/files/todos` on the host). A todo.txt line carries no id and the tools
+that write the file rewrite it in place, so the object id is a digest of the
+line's bytes.
 
 - An edited line is therefore a new task, and the line it replaced is carried
   forward as absent: a reorder or a rewrite looks exactly like a deletion, so
@@ -436,8 +437,11 @@ place, so the object id is a digest of the line's bytes.
 - Parsed fields are `done`, `priority`, `projects`, `contexts`, `key:value`
   tokens and the first bare `YYYY-MM-DD` as `created`; `text` stays the whole
   line so search sees exactly what the file said.
-- A directory holding neither file is refused, so a mistyped path cannot publish
-  an empty state that carries every previous task away.
+- A directory without `todo.txt` is refused, so a mistyped or half-moved path
+  cannot publish an empty state that carries every previous task away. `done.txt`
+  alone is not evidence: both todo.txt-cli and tuxedo create it on first use.
+- A `*.sync-conflict-*` copy is not a note and is skipped by the notes
+  collector; source-watch ignores conflict copies and `*.bak` too.
 
 `smortress-agent-collect-tasks.timer` runs it hourly, with no network and no
 secret.
@@ -529,7 +533,7 @@ python3 -m data_plane.collectors.raw --root /var/lib/agent/local/replica/finance
 python3 -m data_plane.collectors.raw --root /var/lib/agent/local/replica/notes \
   notes --entities /srv/files/vault
 python3 -m data_plane.collectors.raw --root /var/lib/agent/local/replica/tasks \
-  tasks --entities /srv/files/notes
+  tasks --entities /srv/files/todos
 ```
 
 On the host the same command runs from `smortress-agent-collect-finance.service`,
