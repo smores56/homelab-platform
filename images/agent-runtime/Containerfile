@@ -52,3 +52,26 @@ RUN set -eux; \
 # exposes is the operator's own bare repos on a read-write mount -- the grant is
 # the mount, and this only stops git second-guessing it.
 RUN git config --system --add safe.directory '*'
+
+# The agent's todo interface (SDLC #1000): todo.txt-cli 2.14.0 from the pinned
+# release tarball. Debian's todotxt-cli is 2.11.0-2, which still sources
+# ./VERSION-FILE from the CWD -- a path the agent can write -- and installs a
+# renamed binary under a second global config (GHSA-pm3w-5f88-pwpq). 2.14.0
+# reads no external VERSION-FILE, and the checksum is the release's own.
+ARG TODOTXT_VERSION=2.14.0
+ARG TODOTXT_SHA256=71a703ecbf79a163f1aa9b831e7ea0e6036cdbb06fdfc6b5c3502b627efb873d
+RUN set -eux; \
+    curl -fsSLo /tmp/todo.tgz \
+      "https://github.com/todotxt/todo.txt-cli/releases/download/v${TODOTXT_VERSION}/todo.txt_cli-${TODOTXT_VERSION}.tar.gz"; \
+    echo "${TODOTXT_SHA256}  /tmp/todo.tgz" | sha256sum -c -; \
+    tar -xzf /tmp/todo.tgz -C /tmp; \
+    install -m 0755 "/tmp/todo.txt_cli-${TODOTXT_VERSION}/todo.sh" /usr/local/bin/todo.sh; \
+    install -D -m 0644 "/tmp/todo.txt_cli-${TODOTXT_VERSION}/todo_completion" \
+      /usr/local/share/bash-completion/completions/todo.sh; \
+    rm -rf /tmp/todo.tgz "/tmp/todo.txt_cli-${TODOTXT_VERSION}"
+
+# The config is not optional: todo.sh exits 1 without one. The wrapper names it
+# with -d, so an agent-writable $HOME cannot shadow it.
+COPY images/agent-runtime/todo.cfg /etc/todo/config
+COPY images/agent-runtime/todo /usr/local/bin/todo
+RUN chmod 0755 /usr/local/bin/todo

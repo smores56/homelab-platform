@@ -410,3 +410,33 @@ contains() {
         fail "the Serve script still declares a host route on 10000"
     fi
 }
+
+# The agent runtime carries its own todo interface (SDLC #1000). The tarball is
+# pinned by checksum instead of Debian's todotxt-cli 2.11.0-2, which sources
+# ./VERSION-FILE from the CWD the agent can write (GHSA-pm3w-5f88-pwpq).
+agent_containerfile=images/agent-runtime/Containerfile
+agent_todo_cfg=images/agent-runtime/todo.cfg
+agent_todo=images/agent-runtime/todo
+
+@test "the agent runtime installs the pinned todo.txt-cli release" {
+    contains 'ARG TODOTXT_VERSION=2.14.0' "$agent_containerfile"
+    contains 'ARG TODOTXT_SHA256=71a703ecbf79a163f1aa9b831e7ea0e6036cdbb06fdfc6b5c3502b627efb873d' "$agent_containerfile"
+    contains 'sha256sum -c -' "$agent_containerfile"
+    contains 'COPY images/agent-runtime/todo.cfg /etc/todo/config' "$agent_containerfile"
+    contains 'COPY images/agent-runtime/todo /usr/local/bin/todo' "$agent_containerfile"
+}
+
+@test "the agent todo config writes the shared list" {
+    contains 'TODO_DIR=/srv/files/todos' "$agent_todo_cfg"
+    contains 'TODOTXT_AUTO_ARCHIVE=0' "$agent_todo_cfg"
+    contains 'TODOTXT_DATE_ON_ADD=1' "$agent_todo_cfg"
+    run grep -qE '^export TODOTXT_SED_COMMAND' "$agent_todo_cfg"
+    assert_failure
+}
+
+@test "the agent todo wrapper pins the config and serializes writers" {
+    contains 'flock -x 9' "$agent_todo"
+    contains 'todo.sh -d /etc/todo/config' "$agent_todo"
+    run shellcheck "$agent_todo"
+    assert_success
+}
