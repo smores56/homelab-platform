@@ -1625,13 +1625,21 @@ gateway's `mcp_servers.mirage` entry in
 `smortress-mirage-personal:18010`. If Hermes reports the server as unreachable,
 that name and that port are the two things to check before anything else.
 
-A delete is an ask, so an agent that runs `rm` gets a pending decision. Answer it
-on smortress; the workspace has no network and cannot answer its own:
+A delete is an ask, so an agent that runs `rm` gets a pending decision. The
+workspace has no network and cannot answer its own: the answer is a host command,
+and `smortress-mirage-asks.timer` journals every pending ask once so it does not
+sit unseen inside a container:
 
 ```sh
-sudo podman exec smortress-mirage-personal mirage workspace list-asks -w personal
-sudo podman exec smortress-mirage-personal mirage workspace allow personal <ask> --scope once
+sudo journalctl -t smortress-mirage -n 20 --no-pager
+sudo /usr/libexec/mirage-ask list
+sudo /usr/libexec/mirage-ask allow <ask>              # this line only
+sudo /usr/libexec/mirage-ask allow <ask> --scope session
+sudo /usr/libexec/mirage-ask deny <ask>
 ```
+
+`once` is spent on the retry of that line; `session` covers everything the ask
+covers for the session. Both are the daemon's semantics, passed through.
 
 Rotating the token is the same three steps in a different order: `scripts/secret.sh
 edit mirage-personal-token.yaml`, `scripts/secret.sh stage mirage-personal-token.yaml`,
