@@ -540,7 +540,12 @@ A view's shape follows three rules, the same in all four:
   bodies is one Tuta pass, and an 18-minute one.
 - **A refusal publishes nothing.** A missing or damaged store exits 3 and leaves
   the previous view in place, so a reader finds either a fresh view or the last
-  good one, and `state.json`'s `last_run` is what says which.
+  good one, and `state.json`'s `last_run` is what says which. The same rule
+  covers a folder that still exists and lists nothing while the replica holds
+  messages for it: an empty listing is what a mail bridge catching up after a
+  restart looks like, so the pass refuses rather than recording a mass expunge,
+  and `--allow-empty-folder` is how an operator records one that really was
+  emptied.
 - **A file per record, and no index where the record has no single time.** Mail
   keeps its `.eml` mirror although the same bytes are in `objects/`, because a
   shell can list a folder and open one message, and restic stores identical

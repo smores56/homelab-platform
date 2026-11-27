@@ -20,7 +20,11 @@ Three properties matter more than the happy path:
 * A UID that disappeared from a folder whose UIDVALIDITY did not change is an
   expunge, and the only thing this collector tombstones. A whole folder that
   disappeared is a refusal: nothing on this host can remove one, so the mailbox
-  was replaced or is half written.
+  was replaced or is half written. A folder that still exists and lists *nothing*
+  is a refusal as well, because an empty reading is what a bridge catching up
+  looks like and treating it as an expunge deletes the replica's copy of a
+  mailbox; ``--allow-empty-folder`` is how an operator records one that really
+  was emptied.
 
 ``collect_mailbox`` commits one complete pass into the replica state: the
 folder's rows, its expunges as explicit tombstones and the next UIDVALIDITY map
@@ -230,6 +234,8 @@ def collect_folder(
     captured_at: str,
     earlier: dict[str, int],
     progress: Callable[[str], None] | None = None,
+    *,
+    allow_empty: bool = False,
 ) -> FolderReport:
     """Write one folder's changes into ``state``; the caller commits.
 
@@ -268,6 +274,20 @@ def collect_folder(
 
     previous_uids = [object_id[len(prefix) :] for object_id in held]
     current = _uids(mailbox.uid_search_all())
+
+    if previous_uids and not current and not allow_empty:
+        # A folder that still exists and lists nothing is what a bridge catching
+        # up after a restart looks like, and it is indistinguishable from a
+        # provider-side expunge of every message in it. Taking the second
+        # reading would delete the replica's copy of the mailbox, so the pass
+        # refuses and the stream retries: a real expunge keeps looking empty and
+        # is recorded only by an operator who says so.
+        raise PublishError(
+            f"folder {folder}: the replica holds {len(previous_uids)} messages "
+            "and the provider listed none. An empty listing is not an expunge "
+            "of everything; rerun with --allow-empty-folder "
+            f"{folder} to record it"
+        )
     added, removed = uid_diff(previous_uids, current)
     added_set = set(added)
 
@@ -354,6 +374,8 @@ def collect_mailbox(
     state: ReplicaState,
     captured_at: str,
     progress: Callable[[str], None] | None = None,
+    *,
+    allow_empty_folders: frozenset[str] = frozenset(),
 ) -> CollectReport:
     """Enumerate every folder, then commit the pass into ``state``.
 
@@ -398,7 +420,13 @@ def collect_mailbox(
             progress(f"{heading}: collecting")
             folder_progress = partial(_announce, progress, heading)
         report = collect_folder(
-            mailbox, folder, state, captured_at, earlier, folder_progress
+            mailbox,
+            folder,
+            state,
+            captured_at,
+            earlier,
+            folder_progress,
+            allow_empty=folder in allow_empty_folders,
         )
         epochs[folder] = report.uidvalidity
         counts[folder] = report.objects
@@ -734,6 +762,7 @@ class StreamCollector:
         ca_file: str | Path,
         debounce: float,
         reconcile: float,
+        allow_empty_folders: frozenset[str] = frozenset(),
     ) -> None:
         self._root = Path(root)
         self._host = host
@@ -743,6 +772,7 @@ class StreamCollector:
         self._ca_file = Path(ca_file)
         self._debounce = debounce
         self._reconcile = reconcile
+        self._allow_empty_folders = allow_empty_folders
         self._stop = threading.Event()
         self._lock = threading.Lock()
         self._first_event: float | None = None
@@ -794,7 +824,11 @@ class StreamCollector:
                 # epoch map untouched, and only unreferenced bytes behind, which
                 # the next complete pass collects.
                 report = collect_mailbox(
-                    mailbox, state, _captured_at(), self._progress
+                    mailbox,
+                    state,
+                    _captured_at(),
+                    self._progress,
+                    allow_empty_folders=self._allow_empty_folders,
                 )
             finally:
                 mailbox.close()
@@ -970,6 +1004,16 @@ def _parser() -> argparse.ArgumentParser:
         help="quiet time after a pushed event before the next pass (default: 30)",
     )
     parser.add_argument(
+        "--allow-empty-folder",
+        action="append",
+        default=[],
+        metavar="FOLDER",
+        help=(
+            "record a folder that still exists as emptied, instead of refusing "
+            "the pass; repeat for more than one folder"
+        ),
+    )
+    parser.add_argument(
         "--reconcile-interval",
         type=float,
         default=3600.0,
@@ -1013,6 +1057,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         ca_file=args.ca_file,
         debounce=args.events_debounce,
         reconcile=args.reconcile_interval,
+        allow_empty_folders=frozenset(args.allow_empty_folder),
     )
     return collector.run()
 
