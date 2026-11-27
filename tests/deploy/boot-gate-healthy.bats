@@ -71,7 +71,7 @@ gate_on_staged_deployment() {
 
 # The gate judges the host, and the plan's app is not part of that: the port
 # below nothing listens on and a Serve query it never makes are the prober's
-# business (tests/deploy/apps-health.bats).
+# business (tests/deploy/apps-health-*.bats).
 @test "the gate probes no tenant unit" {
     gate_on_staged_deployment
     refute grep -qF -- 'demo.service' "$log/systemctl-calls"
