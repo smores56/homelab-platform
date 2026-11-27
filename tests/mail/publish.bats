@@ -350,6 +350,30 @@ PY
             libs/data_plane/collectors/stream/imap.py
 }
 
+@test "a successful republish reports one line, so success is not silent" {
+    run python3 - <<'PY'
+import io
+import json
+from contextlib import redirect_stdout
+
+from data_plane.collectors.stream import imap
+
+buffer = io.StringIO()
+with redirect_stdout(buffer):
+    imap._report_publish({"source": "mail", "messages": 5000, "removed": 0})
+line = json.loads(buffer.getvalue())
+assert line == {
+    "event": "publish",
+    "messages": 5000,
+    "removed": 0,
+    "source": "mail",
+}, line
+print("reported")
+PY
+    assert_success
+    assert_contains "$output" reported
+}
+
 @test "both stages of the unit run the image's own package" {
     assert_equal "$(grep -cE '^ExecStart=' "$unit")" 1
     grep -qF -- '--env PYTHONPATH=/usr/lib/data-plane/libs:/usr/lib/data-plane' "$unit" &&

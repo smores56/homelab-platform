@@ -48,7 +48,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from urllib.parse import quote
 from pathlib import Path
-from typing import Callable, Iterable
+from typing import Callable, Iterable, Mapping
 
 from ...errors import DataPlaneError, EpochError, PublishError, ValidationError
 from ..raw.mail import SOURCE_ID, UIDVALIDITY_OBJECT, _headers, epoch_map
@@ -337,6 +337,18 @@ def collect_folder(
     )
 
 
+def _report_publish(summary: Mapping[str, object]) -> None:
+    """One line per successful republish.
+
+    A refusal already printed; success printed nothing, so the only evidence that
+    the view had been rebuilt was its mtime on the host. The journal is where a
+    pass is read, so it says so here, in the one-line shape the brave publisher
+    already reports with.
+    """
+
+    print(json.dumps({"event": "publish", **summary}, sort_keys=True), flush=True)
+
+
 def collect_mailbox(
     mailbox: Mailbox,
     state: ReplicaState,
@@ -420,7 +432,7 @@ def collect_mailbox(
     # refuses must not take the stream down with it -- the replica is committed
     # and the next pass retries.
     try:
-        publish_mail.publish(state.root, state.root)
+        _report_publish(publish_mail.publish(state.root, state.root))
     except Exception as error:  # noqa: BLE001 - the stream outlives the view
         print(f"mail stream: publish refused: {error}", file=sys.stderr, flush=True)
 
