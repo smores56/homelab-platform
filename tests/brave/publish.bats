@@ -171,7 +171,8 @@ PY
     assert_success
     assert_equal "$(grep -c . "$out/visits.jsonl")" 1
     grep -qF 'https://example.com/recent' "$out/visits.jsonl"
-    ! grep -qF 'https://example.com/old' "$out/visits.jsonl"
+    # `! cmd` in a bats test never fails it (SC2314), so the negative is `refute`.
+    refute test -n "$(grep -F 'https://example.com/old' "$out/visits.jsonl")"
     assert_equal "$(json_field "$out/state.json" window_days)" 90
     assert_equal "$(json_field "$out/state.json" visits)" 1
     # A wider window is what brings the old visit back: the bound is the flag's,
