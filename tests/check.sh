@@ -202,17 +202,18 @@ else
   bad "no package the session never calls"
 fi
 
-# Syncthing is the vault's second copy. It is a user service, so the unit is
-# enabled globally at build time: there is no logged-in user to preset it for,
-# and without the symlink the first login would start nothing. The folder root
-# is a tmpfiles entry so bootc regenerates it with the right owner instead of
-# carrying unpacked /var content in the image.
+# Syncthing is the file plane's second copy. It is a user service, so the unit
+# is enabled globally at build time: there is no logged-in user to preset it
+# for, and without the symlink the first login would start nothing. The folder
+# root and the todo directory are tmpfiles entries so bootc regenerates them
+# with the right owner instead of carrying unpacked /var content in the image.
 if grep -qE '^ +(.* )?syncthing[ ;]' image/Containerfile \
     && grep -q 'systemctl --global enable syncthing.service' image/Containerfile \
-    && grep -qxF 'd /var/srv/files 0700 smores smores -' image/rootfs/usr/lib/tmpfiles.d/smorespro.conf; then
-  ok "syncthing is installed, enabled globally, and /var/srv/files is declared"
+    && grep -qxF 'd /var/srv/files 0700 smores smores -' image/rootfs/usr/lib/tmpfiles.d/smorespro.conf \
+    && grep -qxF 'd /var/srv/files/todos 0700 smores smores -' image/rootfs/usr/lib/tmpfiles.d/smorespro.conf; then
+  ok "syncthing is installed, enabled globally, and the file roots are declared"
 else
-  bad "syncthing is installed, enabled globally, and /var/srv/files is declared"
+  bad "syncthing is installed, enabled globally, and the file roots are declared"
 fi
 
 # The Noctalia Tailnet widget runs the CLI as smores. Tailscale only persists
