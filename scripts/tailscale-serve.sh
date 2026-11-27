@@ -239,7 +239,7 @@ done < <(
 # name the declarations above do not make is cleared on the next run.
 #
 # This list is the declarations' index, not a second declaration: every `--service=`
-# above is named here once, and tests/core/tailscale-serve.bats fails when a
+# above is named here once, and tests/core/tailscale-serve-*.bats fails when a
 # declaration and this list disagree. `clear` removes the whole Service, which is
 # what a retired name needs; the per-path `off` above would leave it behind.
 #
