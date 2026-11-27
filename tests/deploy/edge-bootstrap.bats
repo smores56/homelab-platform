@@ -368,10 +368,22 @@ wrote_nothing() {
     assert grep -q '^restart caddy ' "$log/systemctl-calls"
 }
 
-@test "a missing kit host key is a refusal that names the path" {
+@test "no --host-key keeps what sshd generated" {
+    # The edge's identity is the machine's own: logins arrive over the tailnet,
+    # whose node key authenticates the host, and the pre-join window is minutes of
+    # key-only sshd. A copy of the key in a recovery kit bought a stable
+    # known_hosts line and cost a credential to fetch and rotate.
+    run_ok "$(standard_document)"
+    assert_contains "$out" "keeping the host key sshd generated"
+    refute grep -qF 'restart sshd' "$log/systemctl-calls"
+    [[ ! -e $EDGE_SSH_DIR/ssh_host_ed25519_key ]] ||
+        fail 'the bootstrap installed a host key nobody gave it'
+}
+
+@test "--host-key names a path that must exist" {
     bootstrap "$(standard_document)" --host-key "$work/absent"
     assert_not_equal "$rc" 0
-    assert_contains "$out" "no kit host key at $work/absent"
+    assert_contains "$out" "no host key at $work/absent"
 }
 
 # --- the tailnet node identity --------------------------------------------

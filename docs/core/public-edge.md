@@ -270,8 +270,7 @@ A reinstall erases the disk; there is no snapshot to fall back to. The drill is
 the rebuild, run once and timed before the cutover:
 
 1. Confirm the kit has the ctrl login with its 2FA recovery codes, the Tailscale
-   admin login with its 2FA recovery codes, the SSH host key and Caddy's data
-   directory. The reinstall destroys the node identity, so a new preauthorized
+   admin login with its 2FA recovery codes and Caddy's data directory. The reinstall destroys the node identity, so a new preauthorized
    `tag:vps` key has to be minted in the Tailscale console (`docs/manual-steps.md#public-edge-vps`); without
    that login the box never rejoins.
 2. In the ctrl panel, reinstall the Ubuntu 24.04 template. Note whether the IPv4
@@ -302,7 +301,7 @@ what the repository *cannot* reproduce, with what is done about each item.
 | First login on a replacement box | The template installs the order form's key, or the console. `authorized_keys` in the repo is appended by the bootstrap, so *this* login is reproducible after that first contact. |
 | ctrl account and its second factor | Recovery-kit row. Without it there is no console and no reinstall. |
 | Tailnet identity (the join key) | A preauthorized `tag:vps` key is single-use and minted in the Tailscale console per rebuild; the admin login and 2FA codes are a kit row. Not automated on purpose: the alternative is a long-lived, reusable credential on a public box's rebuild path. |
-| SSH host key (ed25519 only) | Kit row plus `EDGE_HOST_KEY`; omitted, the box generates a new one and every `known_hosts` entry goes stale. The template's rsa and ecdsa pairs are deleted, because they are in no kit and would be a second, never-verified identity. |
+| SSH host key | Not carried. sshd generates an ed25519 identity at first boot and this build keeps it: logins arrive over the tailnet, where the node key is what authenticates the machine, so a pinned sshd key buys a stable `known_hosts` line and costs a credential to fetch, trust and rotate. The cost is real: after a reinstall the first `ssh` over the tailnet reports a changed host key, and the pre-join window cannot be verified from the outside. |
 | Caddy's data directory (ACME account, certificates) | Not restored. A rebuild re-issues, which costs seconds and needs nothing from the kit; the account it replaces is not pinned by CAA, so a new one is valid immediately. |
 | Panel network firewall | Not enabled (owner decision). The host nftables ruleset is the only layer; the cost is that a boot-time firewall failure or a compromised host is unbounded, and 443 depends on the host rules being right. |
 | The public IPv4 | May change on a replacement (not on a reinstall). DNS takes it in `var.edge_ipv4`, which is already set; an update to that one value plus an apply repoints all three names. |
@@ -429,6 +428,6 @@ waits for the retirement gate and the origin-parity comparison, not for the box.
 8. **The rebuild drill, timed.** Reinstall the template from the panel on the real
    box, then repeat steps 2 through 6 (the reinstall destroyed the node identity, so
    the key is new too). The kit rows must already hold the ctrl login with its 2FA
-   recovery codes, the edge SSH host key and Caddy's data directory. Record the
+   recovery codes and Caddy's data directory. Record the
    elapsed time and the panel bandwidth graph; if the rebuild is not minutes,
    the reader's outage is longer than it should be.

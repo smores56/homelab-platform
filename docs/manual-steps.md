@@ -1981,7 +1981,7 @@ on the public interface only until the tailnet join unit closes it.
 The image is the whole host — packages, the Caddyfile, the units, the firewall
 and the sshd policy arrive with it — so what is left for a person is exactly what
 a public repository cannot carry: the values and secrets the box serves with, the
-kit's SSH host key, the tailnet node identity and the first deploy record.
+tailnet node identity and the first deploy record.
 `scripts/edge-bootstrap.sh` is that one step. It runs on the box as root, refuses
 a bad value before it writes anything, and is idempotent.
 
@@ -2018,12 +2018,11 @@ capability URL.
 
 What it refuses, before writing anything: an `SMORTRESS_FQDN` with no tailnet
 domain, a missing `EDGE_ACME_EMAIL`, a key that is not `tskey-`-shaped, a secret
-carrying whitespace, a kit host key whose `.pub` disagrees with the public half
-`ssh-keygen -y` derives, and `caddy validate` on the values about to be installed
+carrying whitespace and `caddy validate` on the values about to be installed
 — so a truncated paste leaves the box exactly as it booted.
 
 A re-run — after a rebuild's reinstall, or to fix one input — converges the
-derived files (the Caddy environment, the host key, the node ID, the record) and
+derived files (the Caddy environment, the node ID, the record) and
 leaves every secret already written alone; a value for a file that holds a
 different one is refused, and `--force` is what rotates it. Nothing else is
 forced: the record is the descendancy anchor every later deploy is checked
