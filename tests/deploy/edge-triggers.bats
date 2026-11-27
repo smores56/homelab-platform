@@ -208,3 +208,76 @@ PY
 @test "CI runs the deploy group" {
     assert grep -qE -- "--filter-tags 'deploy'" .github/workflows/ci.yml
 }
+
+# --- the receiver is reachable from the tailnet ------------------------------
+#
+# The receiver binds loopback, so without a forward the notify job's POST reaches
+# a port that exists on this host and nowhere else. The forward is `tailscale
+# serve`, which keeps its configuration in the node's own state, so the unit only
+# has to assert it once per boot.
+
+@test "the deploy forward ships and is enabled" {
+    local unit=$units/smoresnet-deploy-forward.service
+    [[ -f $unit ]] || fail 'smoresnet-deploy-forward.service is missing'
+    assert grep -qxF 'ExecStart=/usr/bin/tailscale serve --bg --tcp=8484 tcp://127.0.0.1:8484' "$unit"
+    assert grep -qxF 'WantedBy=multi-user.target' "$unit"
+    assert grep -qxF '      smoresnet-deploy-forward.service \' "$containerfile"
+}
+
+@test "the forward waits for the join and repeats safely" {
+    local unit=$units/smoresnet-deploy-forward.service
+    assert grep -qxF 'ConditionPathExists=/var/lib/smoresnet/tailscale-enrolled' "$unit"
+    assert grep -qE '^After=.*smoresnet-tailscale-up\.service' "$unit"
+    # Type=oneshot with RemainAfterExit: `tailscale serve --bg` is idempotent, and a
+    # unit that kept running would hold a socket it does not need.
+    assert grep -qxF 'Type=oneshot' "$unit"
+    assert grep -qxF 'RemainAfterExit=yes' "$unit"
+}
+
+@test "the forward advertises the port the receiver binds and the ACL admits" {
+    local receiver=bootc/lib/deploy/deploy-receiver.py
+    # 8484 in three places: the program's default, the forward's TCP port, and the
+    # ACL grant that lets tag:deploy reach it.
+    assert grep -qE '8484' "$receiver"
+    assert grep -qF 'tag:vps:8484' tofu/tailscale.tf
+    assert grep -qF 'src    = ["tag:deploy"]' tofu/tailscale.tf
+}
+
+# --- the public ssh window before the join ----------------------------------
+#
+# The image admits no ssh on the public zone, and that is right for a host with a
+# tailnet. It is wrong for one without: before the join there is no other way in,
+# and the key the join needs can only arrive over ssh. Design #939 section 3 step
+# 5 states the window; the unit is its implementation.
+
+@test "the pre-join window ships, runs the helper, and is decided by the marker" {
+    local unit=$units/smoresnet-firewall-prejoin.service
+    local helper=$rootfs/usr/libexec/smoresnet-firewall-prejoin
+    [[ -f $unit ]] || fail 'smoresnet-firewall-prejoin.service is missing'
+    [[ -x $helper ]] || fail 'smoresnet-firewall-prejoin is missing or not executable'
+    assert grep -qxF 'ExecStart=/usr/libexec/smoresnet-firewall-prejoin' "$unit"
+    assert grep -qxF '      smoresnet-firewall-prejoin.service \' "$containerfile"
+    # The marker is the helper's own decision, so the unit carries no condition:
+    # both states have work to do, and only one of them is "do nothing".
+    refute grep -qE '^ConditionPathExists' "$unit"
+    assert grep -qF '/var/lib/smoresnet/tailscale-enrolled' "$helper"
+}
+
+@test "the pre-join helper opens ssh on the public zone and closes it after" {
+    local helper=$rootfs/usr/libexec/smoresnet-firewall-prejoin
+    assert grep -qF -- '--add-service=ssh' "$helper"
+    assert grep -qF -- '--remove-service=ssh' "$helper"
+    # Runtime rules only: the shipped zone is the reviewed answer, and a second
+    # copy of "which ports does the edge accept" is how the two drift apart.
+    refute grep -qF 'firewall-cmd --permanent' "$helper"
+    refute grep -qF -- '--permanent' "$helper"
+}
+
+@test "the pre-join window is the only place 22 reaches the public zone" {
+    # The shipped zones are unchanged: ssh is in the tailscale zone and nowhere
+    # else, so the runtime rule is the whole of the difference.
+    local public=$rootfs/usr/share/smoresnet/firewalld/zones/public.xml
+    local tailnet=$rootfs/usr/share/smoresnet/firewalld/zones/tailscale.xml
+    refute grep -qE '<service name="ssh"/>|<port port="22"' "$public"
+    assert grep -qxF '  <port port="22" protocol="tcp"/>' "$tailnet"
+}

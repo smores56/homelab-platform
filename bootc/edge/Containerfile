@@ -91,6 +91,7 @@ COPY scripts/deploy-poll.sh /usr/libexec/deploy-poll
 
 RUN set -eux; \
     chmod 0755 /usr/libexec/smoresnet-firewall-zones /usr/libexec/smoresnet-firewall-bind; \
+    chmod 0755 /usr/libexec/smoresnet-firewall-prejoin; \
     chmod 0755 /usr/libexec/edge-boot-gate /usr/libexec/deploy-drain-edge; \
     chmod 0755 /usr/libexec/deploy-heartbeat /usr/libexec/deploy-poll; \
     chmod 0644 /usr/share/smoresnet/Caddyfile /usr/share/smoresnet/firewalld/zones/public.xml /usr/share/smoresnet/firewalld/zones/tailscale.xml; \
@@ -104,10 +105,12 @@ RUN set -eux; \
       firewalld.service \
       smoresnet-deploy-listener.service \
       smoresnet-deploy.path \
+      smoresnet-deploy-forward.service \
       smoresnet-deploy-heartbeat.timer \
       smoresnet-deploy-poll.timer \
       smoresnet-firewall-zones.service \
       smoresnet-firewall-public.service \
+      smoresnet-firewall-prejoin.service \
       smoresnet-firewall-tailscale.service \
       smoresnet-tailscale-up.service \
       tailscaled.service
@@ -212,4 +215,9 @@ RUN set -eux; \
     test -e /etc/systemd/system/timers.target.wants/smoresnet-deploy-poll.timer || { echo "the poll timer is not enabled: the backstop would never fire" >&2; exit 1; }; \
     grep -qxF 'DirectoryNotEmpty=/var/lib/homelab/deploy/queue' /usr/lib/systemd/system/smoresnet-deploy.path || { echo "the queue does not start the drain: a trigger would enqueue a request nothing consumes" >&2; exit 1; }; \
     grep -qxF 'Unit=smoresnet-deploy.service' /usr/lib/systemd/system/smoresnet-deploy.path || { echo "the path unit does not start the edge drain" >&2; exit 1; }; \
-    test -e /etc/systemd/system/paths.target.wants/smoresnet-deploy.path || { echo "the queue path unit is not enabled: both triggers would enqueue into a queue nobody drains" >&2; exit 1; }
+    test -e /etc/systemd/system/paths.target.wants/smoresnet-deploy.path || { echo "the queue path unit is not enabled: both triggers would enqueue into a queue nobody drains" >&2; exit 1; }; \
+    test -x /usr/libexec/smoresnet-firewall-prejoin || { echo "the pre-join firewall helper is missing: a host that cannot join the tailnet would have no way in at all" >&2; exit 1; }; \
+    grep -qxF 'ExecStart=/usr/libexec/smoresnet-firewall-prejoin' /usr/lib/systemd/system/smoresnet-firewall-prejoin.service || { echo "the pre-join unit does not run the installed helper" >&2; exit 1; }; \
+    test -e /etc/systemd/system/multi-user.target.wants/smoresnet-firewall-prejoin.service || { echo "the pre-join unit is not enabled: the public ssh window would never be decided" >&2; exit 1; }; \
+    grep -qxF 'ExecStart=/usr/bin/tailscale serve --bg --tcp=8484 tcp://127.0.0.1:8484' /usr/lib/systemd/system/smoresnet-deploy-forward.service || { echo "the deploy forward does not advertise the receiver: a notify job would post to a port only this host can reach" >&2; exit 1; }; \
+    test -e /etc/systemd/system/multi-user.target.wants/smoresnet-deploy-forward.service || { echo "the deploy forward is not enabled: dispatch-triggered deploys would never arrive" >&2; exit 1; }
