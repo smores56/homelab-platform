@@ -354,9 +354,9 @@ RUN set -eux; \
     systemctl enable 'zfs-scrub-weekly@smortress.timer'; \
     systemctl mask \
       podman-auto-update.timer \
-      bootc-fetch-apply-updates.timer \
       rpm-ostreed-automatic.timer \
-      zincati.service
+      zincati.service; \
+    systemctl enable bootc-fetch-apply-updates.timer
 
 # Only tailscale0 carries SSH and application traffic; everything else lands
 # in the drop zone. The zone file binds tailscale0 and lists the permitted
@@ -381,6 +381,11 @@ RUN set -eux; \
     command -v python3 >/dev/null || { echo "the image has no python3 for the plan verifier" >&2; exit 1; }; \
     jq -e '.default[0].type == "reject"' /etc/containers/policy.json >/dev/null; \
     jq -e '.transports.docker["ghcr.io/smores56/homelab-platform"][0].keyPath == "/etc/pki/containers/smortress.pub"' /etc/containers/policy.json >/dev/null; \
+    test -e /etc/systemd/system/timers.target.wants/bootc-fetch-apply-updates.timer || { echo "the bootc update timer is not enabled: this host would never upgrade itself" >&2; exit 1; }; \
+    test ! -L /etc/systemd/system/bootc-fetch-apply-updates.timer || { echo "the bootc update timer is masked: this host would never upgrade itself" >&2; exit 1; }; \
+    grep -qxF 'OnCalendar=*-*-* 05:00:00 America/New_York' /usr/lib/systemd/system/bootc-fetch-apply-updates.timer.d/10-schedule.conf || { echo "smortress's update window is not its own 05:00 local" >&2; exit 1; }; \
+    grep -qxF 'OnUnitInactiveSec=' /usr/lib/systemd/system/bootc-fetch-apply-updates.timer.d/10-schedule.conf || { echo "the vendor 8h cycle is still in place: the host would upgrade besides its window" >&2; exit 1; }; \
+    grep -qxF 'Persistent=false' /usr/lib/systemd/system/bootc-fetch-apply-updates.timer.d/10-schedule.conf || { echo "the update timer is persistent: a power cut would fire every missed window at once" >&2; exit 1; }; \
     test -s /etc/ssh/authorized_keys.d/smores || { echo "the shipped ssh key file is missing or empty: it is the only key sshd reads (design #767)" >&2; exit 1; }; \
     ! grep -q 'sk-ssh-ed25519' /etc/ssh/authorized_keys.d/smores || { echo "the shipped key file carries a FIDO handle; the image ships a plain ed25519 key (design #767)" >&2; exit 1; }; \
     test -f /usr/lib64/security/libpam_rssh.so || { echo "libpam_rssh.so is missing: it is sudo's touch factor (design #767)" >&2; exit 1; }; \

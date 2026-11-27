@@ -118,6 +118,7 @@ RUN set -eux; \
     chmod 0644 /usr/lib/systemd/system/caddy.service.d/10-smoresnet.conf; \
     rm -f /etc/caddy/Caddyfile; \
     systemctl enable \
+      bootc-fetch-apply-updates.timer \
       caddy.service \
       edge-boot-gate.service \
       firewalld.service \
@@ -256,5 +257,10 @@ RUN set -eux; \
     test -e /etc/systemd/system/multi-user.target.wants/smoresnet-boot-counter.service || { echo "the boot counter installer is not enabled: nothing would put the counter where grub.cfg reads it" >&2; exit 1; }; \
     test -e /etc/systemd/system/multi-user.target.wants/smoresnet-boot-rw.service || { echo "/boot is left read-only: greenboot cannot write grubenv and the counter never arms" >&2; exit 1; }; \
     test -e /etc/systemd/system/multi-user.target.wants/greenboot-healthcheck.service || { echo "greenboot's healthcheck is not enabled: a deployment that boots but is broken would never be rolled back" >&2; exit 1; }; \
+    test -e /etc/systemd/system/timers.target.wants/bootc-fetch-apply-updates.timer || { echo "the bootc update timer is not enabled: this host would never upgrade itself" >&2; exit 1; }; \
+    grep -qxF 'OnCalendar=*-*-* 04:00:00 America/New_York' /usr/lib/systemd/system/bootc-fetch-apply-updates.timer.d/10-schedule.conf || { echo "the edge's update window is not its own 04:00 local" >&2; exit 1; }; \
+    grep -qxF 'RandomizedDelaySec=0' /usr/lib/systemd/system/bootc-fetch-apply-updates.timer.d/10-schedule.conf || { echo "the update timer keeps the vendor jitter: two hosts' windows can drift into each other" >&2; exit 1; }; \
+    grep -qxF 'Persistent=false' /usr/lib/systemd/system/bootc-fetch-apply-updates.timer.d/10-schedule.conf || { echo "the update timer is persistent: a power cut would fire every missed window at once" >&2; exit 1; }; \
+    grep -qxF 'OnUnitInactiveSec=' /usr/lib/systemd/system/bootc-fetch-apply-updates.timer.d/10-schedule.conf || { echo "the vendor 8h cycle is still in place: the host would upgrade besides its window" >&2; exit 1; }; \
     grep -qxF 'ReadWritePaths=/var/lib/caddy' /usr/lib/systemd/system/caddy.service.d/10-smoresnet.conf || { echo "the caddy unit no longer names its storage directory: the path would leave bootc/edge/unit-paths.tsv, and with it the check that something creates it" >&2; exit 1; }; \
     test -e /etc/systemd/system/multi-user.target.wants/smoresnet-deploy-forward.service || { echo "the deploy forward is not enabled: dispatch-triggered deploys would never arrive" >&2; exit 1; }
