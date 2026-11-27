@@ -152,6 +152,14 @@ run_check() {
     assert_success
 }
 
+@test "the unit's timeout is above the wait the script budgets" {
+    # The script waits SYNCTHING_ATTEMPTS x SYNCTHING_PAUSE (60 x 5 s here). The
+    # oneshot default is 90 s, which would kill the unit mid-wait and take the
+    # Requires= proxy down on a host whose GUI was merely slow to start.
+    run grep -x 'TimeoutStartSec=360' "$unit"
+    assert_success
+}
+
 @test "the proxy requires the enforcement rather than trusting the bypass" {
     run grep -x 'Requires=smortress-syncthing-hostcheck.service' \
         units/systemd/smortress-syncthing-gui-proxy.service

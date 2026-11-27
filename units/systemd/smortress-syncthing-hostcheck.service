@@ -20,6 +20,11 @@ Wants=network.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
+# The script budgets 60 attempts of 5 s, and systemd's default for a oneshot is
+# 90 s: a GUI that answers at 100 s would fail a unit whose only job is to wait
+# for it, and the proxy Requires= it. Above the script's budget, so a GUI slower
+# than the wait is the script's own message in the journal.
+TimeoutStartSec=360
 ExecStart=/usr/libexec/syncthing-hostcheck
 # Root: the API key is in config.xml, which is 0700 core:core. The script reads
 # that one file and talks to loopback; nothing here needs a writable filesystem.

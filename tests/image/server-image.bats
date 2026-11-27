@@ -380,7 +380,13 @@ contains() {
     run test -s "$label"
     assert_success
     contains 'COPY units/systemd/ /usr/lib/systemd/system/' "$server_containerfile"
-    contains 'semanage port -a -t http_port_t -p tcp 8385' "$label"
+    contains 'semanage port -a -t http_port_t -p tcp "$port"' "$label"
+    # Both halves of the path: Caddy binds 8385 (name_bind) and forwards to the
+    # GUI's 8384 (name_connect), and each is denied without the http_port_t label.
+    contains 'for port in 8385 8384; do' "$label"
+    # The label is written by a binary the base must carry; the image asserts it at
+    # build time rather than finding out at a boot that cannot bind.
+    contains 'test -x /usr/bin/semanage' "$server_containerfile"
     if grep -qxF 'smortress-selinux-caddy-proxy.service' \
         bootc/server/rootfs/usr/share/smortress/deploy-units.txt; then
         fail "the port label is a deploy unit: a label it could not write must not roll an image back"

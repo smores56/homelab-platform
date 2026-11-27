@@ -1,29 +1,31 @@
 # /usr/lib/systemd/system/smortress-selinux-caddy-proxy.service
 [Unit]
-Description=Label the loopback port the GUI proxy binds as an HTTP port
+Description=Label the loopback ports the GUI proxy binds and forwards to as HTTP
 # A confined domain may bind only a port whose label is http_port_t, and 8385 is
 # not one: the bind is denied at `name_bind` and Caddy exits at every start, on a
-# host where nothing about the Caddyfile changed. The label is host SELinux state
-# rather than a file the image carries, so a reinstall or a policy store that
-# predates the port loses it; this unit writes it again on every boot.
+# host where nothing about the Caddyfile changed. The forward it then makes is a
+# `name_connect` to the GUI's 8384, and that needs the same label for the same
+# reason, so both halves of the path are written here. The label is host SELinux
+# state rather than a file the image carries, so a reinstall or a policy store
+# that predates the ports loses it; this unit writes it again on every boot.
 ConditionSecurity=selinux
 After=local-fs.target
 # The proxy must not start before the port is labelled: a Caddy that loses this
 # race is denied once and its own Restart= is not a retry path for a host label.
 Before=smortress-syncthing-gui-proxy.service
-# libsemanage takes one store-wide lock, so the module loaders settle first and
-# this unit writes the port store after them, rather than losing either side to a
+# libsemanage takes one store-wide lock, so the other writer settles first and
+# this unit writes the port store after it, rather than losing either side to a
 # lock timeout.
-After=smortress-selinux-agent-shell.service smortress-selinux-nvidia-map.service
+After=smortress-selinux-nvidia-map.service
 StartLimitIntervalSec=0
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
 # `-a` fails once the port is defined and `-m` fails until it is, so the pair is the
-# idempotent form of "tcp/8385 is http_port_t": the first boot on a store that never
-# saw the port takes the add, every later boot takes the modify.
-ExecStart=/bin/sh -c '/usr/bin/semanage port -a -t http_port_t -p tcp 8385 || /usr/bin/semanage port -m -t http_port_t -p tcp 8385'
+# idempotent form of "this tcp port is http_port_t": the first boot on a store that
+# never saw the port takes the add, every later boot takes the modify.
+ExecStart=/bin/sh -c 'for port in 8385 8384; do /usr/bin/semanage port -a -t http_port_t -p tcp "$port" || /usr/bin/semanage port -m -t http_port_t -p tcp "$port"; done'
 TimeoutStartSec=120
 Restart=on-failure
 RestartSec=5
