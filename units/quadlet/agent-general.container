@@ -17,14 +17,22 @@
 # arbitrary uid and asks for HERMES_UID/HERMES_GID, so the container starts as
 # root and the image's own supervisor drops to the remapped uid 1000. See
 # units/quadlet/agent-local.container for the full note.
+#
+# The general plane is the two live trees, mounted read-write because the agent
+# writes them (SDLC #995): `/srv/git` is the clean-bare clone root and `/srv/books`
+# the library. Nothing is served through a facade any more, so the mount mode is
+# the whole policy -- there is no read-only rule on this side, and a mistake here
+# is what Restic and GitHub's own branch protection are for. Both trees already
+# carry container_file_t, so neither bind relabels: a `:z` would rewrite the label
+# of a tree a Syncthing or a git service also owns.
 [Unit]
 Description=Hermes Agent gateway, general deployment (hosted models via the proxy)
-Requires=zfs-ready@state-agent-general.service sops-decrypt.service smortress-app-secrets.service smortress-agent-config.service
-After=network-online.target zfs-ready@state-agent-general.service sops-decrypt.service smortress-app-secrets.service smortress-agent-config.service agent-proxy.service
+Requires=zfs-ready@state-agent-general.service zfs-ready@raw-git.service zfs-ready@raw-books.service sops-decrypt.service smortress-app-secrets.service smortress-agent-config.service
+After=network-online.target zfs-ready@state-agent-general.service zfs-ready@raw-git.service zfs-ready@raw-books.service sops-decrypt.service smortress-app-secrets.service smortress-agent-config.service agent-proxy.service
 Wants=network-online.target agent-proxy.service
 
 [Container]
-Image=ghcr.io/smores56/homelab-platform/agent-runtime@sha256:6c6964bf94dd2582dac51fe3d68dc5919df58541fbff68d2d0cf58e710d06ac4
+Image=ghcr.io/smores56/homelab-platform/agent-runtime@sha256:0643a8414b5b125714505a60a2704d519b0b650a2803554f963ac1864d576f5c
 ContainerName=smortress-agent-general
 Network=agent-general.network
 Exec=gateway run
@@ -37,6 +45,8 @@ Environment=HERMES_UID=1000
 Environment=HERMES_GID=1000
 Environment=TZ=UTC
 Volume=/var/lib/agent/general:/opt/data:z
+Volume=/srv/git:/srv/git
+Volume=/srv/books:/srv/books
 PublishPort=127.0.0.1:18002:18002
 ReadOnly=false
 NoNewPrivileges=true

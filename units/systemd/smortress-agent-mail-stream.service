@@ -43,7 +43,7 @@ ExecStart=/usr/bin/podman run --rm --replace --name smortress-agent-mail-stream 
   --env PYTHONPATH=/usr/lib/agent-facade/libs:/usr/lib/agent-facade \
   --env PYTHONDONTWRITEBYTECODE=1 \
   --entrypoint python3 \
-  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:6c6964bf94dd2582dac51fe3d68dc5919df58541fbff68d2d0cf58e710d06ac4 \
+  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:0643a8414b5b125714505a60a2704d519b0b650a2803554f963ac1864d576f5c \
   -m data_plane.collectors.stream --root /sources \
   --host smortress-agent-tmail --port 1143 --user tuta \
   --password-file /run/secrets/tmail-bridge-password --ca-file /bridge/cert.pem

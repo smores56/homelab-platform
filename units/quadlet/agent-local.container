@@ -47,7 +47,7 @@ After=network-online.target zfs-ready@state-agent-local.service zfs-ready@raw-fi
 Wants=network-online.target
 
 [Container]
-Image=ghcr.io/smores56/homelab-platform/agent-runtime@sha256:6c6964bf94dd2582dac51fe3d68dc5919df58541fbff68d2d0cf58e710d06ac4
+Image=ghcr.io/smores56/homelab-platform/agent-runtime@sha256:0643a8414b5b125714505a60a2704d519b0b650a2803554f963ac1864d576f5c
 ContainerName=smortress-agent-local
 Network=agent-local.network
 Exec=gateway run

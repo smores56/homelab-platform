@@ -46,7 +46,7 @@ ExecStart=/usr/bin/podman run --rm --replace --name smortress-agent-brave-seed \
   --env PYTHONPATH=/usr/lib/agent-facade/libs:/usr/lib/agent-facade \
   --env PYTHONDONTWRITEBYTECODE=1 \
   --entrypoint python3 \
-  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:6c6964bf94dd2582dac51fe3d68dc5919df58541fbff68d2d0cf58e710d06ac4 \
+  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:0643a8414b5b125714505a60a2704d519b0b650a2803554f963ac1864d576f5c \
   -m apps.brave_ingest.seed --prefs /data/Default/Preferences \
   --seed-file /run/secrets/brave-sync-seed
 # A refusal (missing secret, empty or malformed seed, unwritable profile) is exit 3

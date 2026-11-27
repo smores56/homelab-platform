@@ -58,7 +58,7 @@ ExecStart=/usr/bin/podman run --rm --replace --name smortress-agent-brave-snapsh
   --env PYTHONPATH=/usr/lib/agent-facade/libs:/usr/lib/agent-facade \
   --env PYTHONDONTWRITEBYTECODE=1 \
   --entrypoint python3 \
-  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:6c6964bf94dd2582dac51fe3d68dc5919df58541fbff68d2d0cf58e710d06ac4 \
+  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:0643a8414b5b125714505a60a2704d519b0b650a2803554f963ac1864d576f5c \
   -m apps.brave_ingest.snapshot --database /profile/Default/History \
   --out /quarantine/History
 # Stage 2: publish what the snapshot wrote. The copy is mounted read-only here, so
@@ -75,7 +75,7 @@ ExecStart=/usr/bin/podman run --rm --replace --name smortress-agent-collect-brav
   --env PYTHONPATH=/usr/lib/agent-facade/libs:/usr/lib/agent-facade \
   --env PYTHONDONTWRITEBYTECODE=1 \
   --entrypoint python3 \
-  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:6c6964bf94dd2582dac51fe3d68dc5919df58541fbff68d2d0cf58e710d06ac4 \
+  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:0643a8414b5b125714505a60a2704d519b0b650a2803554f963ac1864d576f5c \
   -m data_plane.collectors.raw --root /replica/brave \
   brave --database /quarantine/History --device smortress --profile default
 # Stage 3: the plain-file view (SDLC #995). The replica above is the fidelity
@@ -95,7 +95,7 @@ ExecStart=/usr/bin/podman run --rm --replace --name smortress-agent-brave-publis
   --env PYTHONPATH=/usr/lib/agent-facade/libs:/usr/lib/agent-facade \
   --env PYTHONDONTWRITEBYTECODE=1 \
   --entrypoint python3 \
-  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:6c6964bf94dd2582dac51fe3d68dc5919df58541fbff68d2d0cf58e710d06ac4 \
+  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:0643a8414b5b125714505a60a2704d519b0b650a2803554f963ac1864d576f5c \
   -m data_plane.collectors.raw.publish_brave --history /quarantine/History --out /out
 Restart=no
 # A snapshot of a large history and a full table dump: the limit is generous

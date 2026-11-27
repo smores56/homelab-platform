@@ -79,6 +79,22 @@ gateway_network() { # quadlet
   assert_success
 }
 
+# The general plane is mounted, not served: `/srv/git` and `/srv/books` are the
+# two live trees and the agent writes both (SDLC #995). A unit that dropped either
+# line would leave a shell with an empty directory and no error.
+@test "the general gateway mounts the repo and book trees read-write" {
+  run grep -E '^Volume=/srv/git:/srv/git$' "$agent_general"
+  assert_success
+  run grep -E '^Volume=/srv/books:/srv/books$' "$agent_general"
+  assert_success
+  # Both datasets must be up first, or the bind mounts an empty directory over
+  # the mountpoint and the agent reads a plane that is not there yet.
+  run grep -F 'zfs-ready@raw-git.service' "$agent_general"
+  assert_success
+  run grep -F 'zfs-ready@raw-books.service' "$agent_general"
+  assert_success
+}
+
 @test "the proxy is on the egress network only" {
   assert_equal "$(gateway_network "$agent_proxy")" agent-general.network
 }
