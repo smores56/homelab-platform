@@ -73,8 +73,8 @@ collector_runs_a_pinned_image() { # spec image
 }
 
 collector_runs_the_code_its_own_image_ships() { # spec
-  baked_by_runtime_image /usr/lib/agent-facade &&
-    ! grep -qF -- '/usr/lib/agent-facade:/usr/lib/agent-facade:ro' "$(collector_field "$1" 2)"
+  baked_by_runtime_image /usr/lib/data-plane &&
+    ! grep -qF -- '/usr/lib/data-plane:/usr/lib/data-plane:ro' "$(collector_field "$1" 2)"
 }
 
 collector_timer_runs_the_collector() { # spec

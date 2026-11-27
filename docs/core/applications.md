@@ -392,7 +392,7 @@ The network is deliberately not `agent-general.network` even though both have
 egress: the general side carries the hosted provider key, and a bank collector has
 no business on that segment. A collector unit runs the pinned `agent-runtime`
 digest with `--read-only --cap-drop=all --user 1000:1000` and imports its program
-from `/usr/lib/agent-facade` in that image, so the program that reads an account
+from `/usr/lib/data-plane` in that image, so the program that reads an account
 or a database is the one the pin names. A refusal exits 3 and publishes no
 state; the timers are `Persistent=true`, so a missed run is closed on the next
 boot instead of leaving a hole in the replica.

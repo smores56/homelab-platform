@@ -55,7 +55,7 @@ ExecStart=/usr/bin/podman run --rm --replace --name smortress-agent-brave-snapsh
   --tmpfs /tmp:rw,size=64m --user 1000:1000 \
   --volume /var/lib/agent/local/quarantine/brave-profile:/profile:ro \
   --volume /var/lib/agent/local/quarantine/brave:/quarantine:z \
-  --env PYTHONPATH=/usr/lib/agent-facade/libs:/usr/lib/agent-facade \
+  --env PYTHONPATH=/usr/lib/data-plane/libs:/usr/lib/data-plane \
   --env PYTHONDONTWRITEBYTECODE=1 \
   --entrypoint python3 \
   ghcr.io/smores56/homelab-platform/agent-runtime@sha256:a2097dc2f54142b75137779c91f2e90956a01687cdfd2424685d748c3669baa1 \
@@ -72,7 +72,7 @@ ExecStart=/usr/bin/podman run --rm --replace --name smortress-agent-collect-brav
   --tmpfs /tmp:rw,size=16m --user 1000:1000 \
   --volume /var/lib/agent/local/quarantine/brave:/quarantine:ro \
   --volume /var/lib/agent/local/replica:/replica:z \
-  --env PYTHONPATH=/usr/lib/agent-facade/libs:/usr/lib/agent-facade \
+  --env PYTHONPATH=/usr/lib/data-plane/libs:/usr/lib/data-plane \
   --env PYTHONDONTWRITEBYTECODE=1 \
   --entrypoint python3 \
   ghcr.io/smores56/homelab-platform/agent-runtime@sha256:a2097dc2f54142b75137779c91f2e90956a01687cdfd2424685d748c3669baa1 \
@@ -92,7 +92,7 @@ ExecStart=/usr/bin/podman run --rm --replace --name smortress-agent-brave-publis
   --tmpfs /tmp:rw,size=16m --user 1000:1000 \
   --volume /var/lib/agent/local/quarantine/brave:/quarantine:ro \
   --volume /var/lib/agent/local/sources/brave:/out:z \
-  --env PYTHONPATH=/usr/lib/agent-facade/libs:/usr/lib/agent-facade \
+  --env PYTHONPATH=/usr/lib/data-plane/libs:/usr/lib/data-plane \
   --env PYTHONDONTWRITEBYTECODE=1 \
   --entrypoint python3 \
   ghcr.io/smores56/homelab-platform/agent-runtime@sha256:a2097dc2f54142b75137779c91f2e90956a01687cdfd2424685d748c3669baa1 \

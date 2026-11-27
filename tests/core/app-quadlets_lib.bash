@@ -115,7 +115,7 @@ baked_by_runtime_image() { # path
       continue
     fi
     # A parent directory is delivered too: installing a file creates it, which is
-    # how /usr/lib/agent-facade resolves though only its children are COPYed.
+    # how /usr/lib/data-plane resolves though only its children are COPYed.
     if [[ $1 == "$dest" || $1 == "$dest"/* || $dest == "$1"/* ]]; then
       return 0
     fi

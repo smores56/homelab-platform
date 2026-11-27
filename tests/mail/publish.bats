@@ -352,7 +352,7 @@ PY
 
 @test "both stages of the unit run the image's own package" {
     assert_equal "$(grep -cE '^ExecStart=' "$unit")" 1
-    grep -qF -- '--env PYTHONPATH=/usr/lib/agent-facade/libs:/usr/lib/agent-facade' "$unit" &&
+    grep -qF -- '--env PYTHONPATH=/usr/lib/data-plane/libs:/usr/lib/data-plane' "$unit" &&
         grep -qF -- '--user 1000:1000' "$unit" &&
         grep -qF -- '--cap-drop=all' "$unit"
 }

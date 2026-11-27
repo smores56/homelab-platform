@@ -370,11 +370,11 @@ unset _module
 }
 
 # A unit that runs the data plane has to hand the container the package, not
-# only the facade tree: `-m data_plane` with `/usr/lib/agent-facade` alone is
+# only the facade tree: `-m data_plane` with `/usr/lib/data-plane` alone is
 # `No module named data_plane` on every tick. The calendar collector shipped
 # that way and failed its first real run after a clean dump.
 puts_the_data_plane_on_pythonpath() { # unit
-  if ! grep -q -- '--env PYTHONPATH=/usr/lib/agent-facade/libs:/usr/lib/agent-facade' "$1"; then
+  if ! grep -q -- '--env PYTHONPATH=/usr/lib/data-plane/libs:/usr/lib/data-plane' "$1"; then
     printf '%s\n' "$(grep -n 'PYTHONPATH' "$1" || echo 'no PYTHONPATH at all')" >&2
     return 1
   fi
