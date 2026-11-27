@@ -1,0 +1,53 @@
+[Unit]
+# The agent plane's one live signal (SDLC #995): inotify over the source roots,
+# appended to the JSONL feed the agent reads in its own container.
+#
+# It lives on the host and not in the agent container on purpose. A watch
+# established inside a container dies with the container, loses everything that
+# happened while it was down, and ties change detection to one runtime; this
+# service keeps its watches across agent restarts and outlives the runtime.
+#
+# It is a service, not a timer, because there is nothing to poll: inotify
+# delivers the edit and the feed is a ring buffer of what happened, not a queue
+# to drain. A restart resumes the sequence from the last record and writes one
+# `rescan` line per source, so a reader can tell "nothing happened" from "the
+# watcher was down and missed whatever it missed".
+Description=Append agent source changes to the JSONL feed
+Requires=zfs-ready@raw-files.service zfs-ready@state-agent-local.service
+Requires=smortress-agent-config.service
+After=zfs-ready@raw-files.service zfs-ready@state-agent-local.service
+After=smortress-agent-config.service
+# The roots live on raw/files. A dataset that is not mounted yet is a skip, not a
+# restart loop; the watcher itself skips any single missing root and keeps the
+# rest.
+ConditionPathIsDirectory=/srv/files
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+UMask=0077
+# The datasets are uid 1000's, and the feed is read by the agent as the same uid;
+# the watcher needs no root and no capability.
+User=1000
+Group=1000
+ExecStart=/usr/libexec/source-watch --roots /etc/smortress/agent/watch-roots.json --feed /var/lib/agent/local/watch/changes.jsonl
+# The watcher exits only when its fd dies. Anything that ends it is worth a
+# restart, including the dataset remount that takes the watches with it.
+Restart=always
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+# One write path: the feed directory, which smortress-agent-config.service
+# creates inside the dataset. No `-` prefix, because a path that does not exist
+# would be left read-only by ProtectSystem=strict and the watcher would die on
+# its first mkdir -- a unit that cannot write its feed must fail, not run silent.
+ReadWritePaths=/var/lib/agent/local/watch
+ReadOnlyPaths=/srv/files
+RestrictAddressFamilies=AF_UNIX
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

@@ -134,6 +134,11 @@ for spec in personal:local general:general; do
 
   install -d -o 1000 -g 1000 -m 0750 "$home/memory" \
     "$home/replica" "$home/webui" "$home/webui/state" "$home/webui/workspace"
+  # The source watcher's feed (SDLC #995): the one file the agent reads to learn
+  # that a tree changed. Created here because the watcher unit runs with
+  # ProtectSystem=strict and a directory Podman or systemd has to create would
+  # land root-owned inside a dataset owned by uid 1000 at 0750.
+  install -d -o 1000 -g 1000 -m 0750 "$home/watch"
 
   # The mail half and the derived index exist only on the personal side: every
   # raw collector is personal, and the general deployment has no source to

@@ -76,6 +76,7 @@ jobs:
               --filter-tags data-plane \
               --filter-tags agent-shell-bridge \
               --filter-tags agent-data-plane \
+              --filter-tags source-watch \
               --jobs "$(nproc)" --no-parallelize-within-files
 
   edge:

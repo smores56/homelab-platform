@@ -1,0 +1,16 @@
+{
+  "exclude": [
+    ".stfolder",
+    ".stversions",
+    ".stversions/*",
+    ".syncthing.*.tmp",
+    "~$*",
+    "*.swp",
+    "*/tmp/*"
+  ],
+  "roots": [
+    {"source": "todos", "path": "/srv/files/todos"},
+    {"source": "notes", "path": "/srv/files/notes"},
+    {"source": "vault", "path": "/srv/files/vault"}
+  ]
+}
