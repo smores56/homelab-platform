@@ -51,7 +51,15 @@ deploy/boot-gate-unrecorded	tests/deploy/boot-gate-unrecorded.bats scripts/deplo
 deploy/boot-grub-snippet	tests/deploy/boot-grub-snippet.bats scripts/deploy-platform.sh scripts/smortress-boot-gate.sh scripts/deploy-state.sh bootc/server/rootfs/usr/lib/bootupd/grub2-static/configs.d/*.cfg bootc/server/rootfs/etc/systemd/system.conf.d/*.conf tests/deploy/*
 deploy/heartbeat	tests/deploy/heartbeat.bats scripts/deploy-heartbeat.sh scripts/deploy-state.sh units/systemd/smortress-deploy-heartbeat.* bootc/server/Containerfile tests/deploy/*
 deploy/notify	tests/deploy/notify.bats .github/workflows/publish-server-image.yml .github/workflows/ci.yml scripts/check-action-pins.sh scripts/check-pr-secret-boundary.sh tests/deploy/*
-deploy/platform	tests/deploy/platform.bats scripts/deploy-platform.sh scripts/deploy-cli.sh scripts/deploy-state.sh tests/deploy/fake-curl.sh tests/deploy/*
+deploy/platform-gate	tests/deploy/platform-gate.bats scripts/deploy-platform.sh scripts/deploy-cli.sh scripts/deploy-state.sh tests/deploy/fake-curl.sh tests/deploy/*
+deploy/platform-backup	tests/deploy/platform-backup.bats scripts/deploy-platform.sh scripts/deploy-cli.sh scripts/deploy-state.sh tests/deploy/fake-curl.sh tests/deploy/*
+deploy/platform-fallback	tests/deploy/platform-fallback.bats scripts/deploy-platform.sh scripts/deploy-cli.sh scripts/deploy-state.sh tests/deploy/fake-curl.sh tests/deploy/*
+deploy/platform-hold	tests/deploy/platform-hold.bats scripts/deploy-platform.sh scripts/deploy-cli.sh scripts/deploy-state.sh tests/deploy/fake-curl.sh tests/deploy/*
+deploy/platform-budget	tests/deploy/platform-budget.bats scripts/deploy-platform.sh scripts/deploy-cli.sh scripts/deploy-state.sh tests/deploy/fake-curl.sh tests/deploy/*
+deploy/platform-break-glass	tests/deploy/platform-break-glass.bats scripts/deploy-platform.sh scripts/deploy-cli.sh scripts/deploy-state.sh tests/deploy/fake-curl.sh tests/deploy/*
+deploy/platform-released	tests/deploy/platform-released.bats scripts/deploy-platform.sh scripts/deploy-cli.sh scripts/deploy-state.sh tests/deploy/fake-curl.sh tests/deploy/*
+deploy/platform-denylist	tests/deploy/platform-denylist.bats scripts/deploy-platform.sh scripts/deploy-cli.sh scripts/deploy-state.sh tests/deploy/fake-curl.sh tests/deploy/*
+deploy/platform-recover	tests/deploy/platform-recover.bats scripts/deploy-platform.sh scripts/deploy-cli.sh scripts/deploy-state.sh tests/deploy/fake-curl.sh tests/deploy/*
 deploy/poll	tests/deploy/poll.bats scripts/deploy-poll.sh scripts/deploy-state.sh bootc/server/rootfs/usr/libexec/deploy-verify.py units/systemd/smortress-deploy-poll.* bootc/server/Containerfile tests/deploy/*
 deploy/verify	tests/deploy/verify.bats bootc/server/rootfs/usr/libexec/deploy-verify.py scripts/deploy-state.sh scripts/deploy-drain.sh bootc/lib/deploy/* tests/deploy/*
 deploy/fixtures	tests/deploy/fixtures.bats bootc/lib/deploy/* tests/deploy/*
