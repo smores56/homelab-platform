@@ -442,15 +442,16 @@ so one outage is one line. The journal is the record: read it with
 `journalctl -u smortress-apps-health.service`.
 
 Paging is the tenant's own Healthchecks check, `apps`, five-minute period and
-five-minute grace (`docs/manual-steps.md` 49.3): a healthy tick, a plan with no
-apps and an apply in flight all ping it green, and a failure pings `/fail` with
-`not serving: <reason>` as the body, so the page names the app instead of only
-reporting silence. It is deliberately a different check from `deploy`: one check
-answered by the heartbeat and by the prober would turn one crash-looping app
-into a down/recover pair every five minutes, and `deploy`'s dead-man needs
-silence as a signal. The URL is read from `/run/smortress/secrets/healthchecks.yaml`
-(key `apps-ping-url`), and until the operator stages that key the prober
-journals only.
+five-minute grace (`docs/manual-steps.md`, "Create the tenant apps check"): a
+healthy tick, a plan with no apps and an apply in flight all ping it green, and a
+failure pings `/fail` with `not serving: <reason>` as the body, so the page names
+the app instead of only reporting silence. It is deliberately a different check
+from `deploy`: one check answered by the heartbeat and by the prober would turn
+one crash-looping app into a down/recover pair every five minutes, and `deploy`'s
+dead-man needs silence as a signal. The URL is read from
+`/run/smortress/secrets/healthchecks.yaml` (key `apps-ping-url`, staged in
+`secrets/boot.json`'s `healthchecks`), so the prober pages on its own; the one
+silent mode is that key being absent, which leaves it journaling without pinging.
 
 An apply in flight passes silently rather than reporting: `deploy-apps` installs
 the new plan before it writes the units and restarts Serve, and both the drain

@@ -878,6 +878,46 @@ One sitting, in this order — step 1 can block everything after it.
    red and the page arrive — the ping takes the `${EDGE_PING_URL%/}/fail` form.
    Delete the branch; the next green run `/` the same URL.
 
+### Create the tenant apps check
+
+`smortress-apps-health.timer` asks the three serving questions every five minutes
+and answers a Healthchecks check of its own, `apps`: a five-minute period with a
+five-minute grace, because the probe answers every five minutes and one late tick
+should not page. It is not the `deploy` check: that one is the heartbeat's
+dead-man and has to stay silent to mean anything (`docs/core/server-image.md`,
+"The tenant prober").
+
+The ping URL lives on the host rather than in an Environment, because the prober
+reads it there: `/run/smortress/secrets/healthchecks.yaml` under `apps-ping-url`,
+sops-encrypted in `secrets/boot.json`'s `healthchecks` object beside
+`restic-ping-url`. Create the check in the project with a `5 minute` period and a
+`5 minute` grace, put its ping URL there, and let the decrypt units carry it:
+
+```sh
+sops secrets/boot.json     # healthchecks: apps-ping-url: <ping url>
+sudo systemctl restart sops-decrypt.service smortress-app-secrets.service
+sudo grep -o '^[a-z-]*ping-url:' /run/smortress/secrets/healthchecks.yaml | sort -u
+```
+
+Both keys must print and no value is echoed. Then prove the page once, which is
+the only evidence the check is wired: stop the tenant's one app, wait for the next
+tick, read the page, and put the app back.
+
+```sh
+quadlet=$(sudo jq -r '.apps | to_entries[0] | .value.unitName // (.key + ".container")' \
+  /var/lib/homelab/apps/plan.json)
+sudo systemctl --user --machine=apps@.host stop "${quadlet%.container}.service"
+journalctl -u smortress-apps-health.service -n 3 --no-pager   # within 5 minutes
+sudo tail -n 5 /var/lib/homelab/deploy/journal.jsonl | jq -c 'select(.event=="apps-health-failed")'
+sudo systemctl --user --machine=apps@.host start "${quadlet%.container}.service"
+```
+
+The journal line and the page carry the same body,
+`not serving: tenant-unit-inactive:<app>`, and the next tick after the restart
+pings green. Quicker evidence that the URL is staged and accepted: the prober
+warns `could not be pinged` on every tick when the check answers 404, and stays
+silent only when it has no key at all.
+
 ### The operator's view of the receiver
 
 `/usr/libexec/smortress-deploy` is the whole operator surface, and `/usr/libexec`
@@ -971,7 +1011,7 @@ sudo systemctl list-timers 'smortress-apps-*'
 Bounds, plan format and boot order are `docs/core/apps-tenant.md`. The prober
 `smortress-apps-health.timer` runs every five minutes: it rolls nothing back, pings
 the `apps` check when an app is not serving, and journals `apps-health-failed` with
-the reason, the app and the unit.
+the reason, the app and the unit ("Create the tenant apps check").
 
 ### Serve routes
 

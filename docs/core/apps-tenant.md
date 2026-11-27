@@ -309,8 +309,8 @@ same way, without waiting for a rejection: `smortress-deploy block commit <sha>`
    cannot act on — and why the apply, not the gate, is what refuses a revision.
    The prober reboots nothing, stages nothing and rolls back nothing, and it
    stands down while `apply.json` says an apply is in flight. It journals
-   `apps-health-failed` with the app and the reason — the tenant's signal until it
-   has a Healthchecks check of its own (`docs/core/server-image.md`).
+   `apps-health-failed` with the app and the reason and pings the tenant's own
+   Healthchecks check (`docs/core/server-image.md`, "The tenant prober").
 7. **Commit, then Serve.** `state.json` records the commit and the unit and
    secret content hashes, `apply.json`, `render.prev` and `work/prev-secrets/`
    are removed, and `smortress-tailscale-serve.service` is restarted. It is a
