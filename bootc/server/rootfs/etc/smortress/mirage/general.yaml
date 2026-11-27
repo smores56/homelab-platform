@@ -1,0 +1,34 @@
+# The general Mirage workspace (SDLC #979, T5).
+#
+# One mount, one authority: `/srv/git` read-write. There is no personal path here
+# and there must never be one -- not the vault, not the todos root, not the feed.
+# The split is exclusive-or: general sees books and repositories, personal sees
+# mail, calendar, finance, history, todos and vault, and neither sees the other.
+#
+# No `rm` ask. Git is the one writable source left to the agent by decision:
+# branch protection, signed commits, GitHub's own RBAC and Restic are the bounds,
+# and an ask per `rm` inside a working tree would turn every rebase into a
+# decision. Deletes in books are a different question and belong to T6.
+#
+# `network: false` describes the workspace shell, which has no socket of its own:
+# `git` is Mirage's virtual CLI and no machine is attached for the reason in #980.
+# The instance's egress is agent-general.network, which is what T6's Komga client
+# and any real `gh` will use; when a machine lands it brings its own allowlist and
+# this line stays for the shell.
+mounts:
+  /data/git:
+    vfs: disk
+    mode: write
+    config:
+      root: /srv/git
+
+mode: write
+
+profiles:
+  agent:
+    cwd: /data/git
+    commands:
+      "*": allow
+    network: false
+
+profile: agent

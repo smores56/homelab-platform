@@ -49,3 +49,18 @@ mcp_servers:
     headers:
       X-Deployment-Token: __FACADE_TOKEN__
     trust: full
+
+# THE GENERAL MIRAGE WORKSPACE (SDLC #979, T5). The same surface as the personal
+# instance: `shell`, `read`, `write`, `edit`, `ls`, `grep` and `glob`, over
+# `/srv/git` and nothing else. The port is 18011 because two instances on one host
+# must not be reachable by the same address, and the container publishes nothing,
+# so this name is the only route to it.
+#
+# `Authorization` is not the facade token: Mirage takes a bearer header, and the
+# seed replaces `__MIRAGE_TOKEN__` with `Bearer <mirage-general-token>` the first
+# time this file is seeded.
+  mirage:
+    url: http://smortress-mirage-general:18011/v1/workspaces/general/mcp
+    headers:
+      Authorization: __MIRAGE_TOKEN__
+    trust: full

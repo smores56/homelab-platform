@@ -173,8 +173,18 @@ for spec in personal:local general:general; do
   # ciphertext's trailing newline, so the value is written here with the newline
   # dropped and passed with `EnvironmentFile=`. Rewritten every boot, so a
   # rotation lands on the next restart of mirage-personal.
-  if [[ $state == local ]]; then
-    mirage_token=$secrets_dir/mirage-personal-token.yaml
+  # Every deployment has its own workspace token, named for the deployment and
+  # never shared: a leak on one side must not open the other. The file's name is
+  # the only thing that differs, so the body is written once.
+  {
+    # Named literally, not built from $deployment: scripts/secrets-check.py holds
+    # every manifest output to a consumer that names it, and a name assembled at
+    # run time is invisible to that check.
+    case $deployment in
+      personal) mirage_token=$secrets_dir/mirage-personal-token.yaml ;;
+      general) mirage_token=$secrets_dir/mirage-general-token.yaml ;;
+      *) die "no workspace token for deployment $deployment" ;;
+    esac
     [[ -s $mirage_token ]] || die "$mirage_token is missing; sops-decrypt did not produce it"
     mirage_token_value=$(read_secret "$mirage_token")
     [[ -n $mirage_token_value ]] || die "$mirage_token is empty"
@@ -191,7 +201,7 @@ for spec in personal:local general:general; do
       rm -f "$config.new"
     fi
     unset mirage_token_value
-  fi
+  }
 
   echo "agent-config-seed: $state is seeded" \
     "(config, .env, webui.env, memory, index, UI roots)"
