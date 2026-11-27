@@ -81,7 +81,9 @@ for root in roots:
     assert root["path"].startswith("/"), root
     assert root["source"] not in seen, root
     seen.add(root["source"])
-assert "todos" in seen, seen
+# One root, the whole Syncthing folder: todo.txt lives at notes/todo.txt and the
+# vault beside it, so a second root would watch the same inodes twice.
+assert seen == {"files"}, seen
 print("ok")
 PY
   assert_success

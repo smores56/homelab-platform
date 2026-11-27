@@ -23,16 +23,23 @@ approvals:
   mode: manual
 
 agent:
-  # The personal side. Every toolset that can reach a network, start a process,
-  # write a file, or persist something the model chose is off, so the
-  # zero-egress network is not the only thing between the model and the world.
-  # Disabling is per toolset, so a toolset listed here is entirely unavailable.
+  # The personal side. `terminal` and `file` are ON: the data plane is the mounted
+  # /srv/files tree and the shell is the interface (SDLC #995), which is why the
+  # gateway mounts it and why there is no source facade left to read it through.
+  #
+  # What stays off is everything that would reach past the mount: web, search and
+  # browser cannot work on a network with no default route, and leaving them on
+  # would only add a toolset whose failures look like faults. memory, skills,
+  # cronjob and connections stay off because the runtime's own persistence is not
+  # the plane's business; code_execution is the same capability as terminal;
+  # computer_use and image_gen need a surface this deployment does not have.
+  #
+  # Disabling is per toolset, so an unlisted toolset is fully available to the
+  # model and to every child it spawns.
   disabled_toolsets:
     - web
     - search
     - browser
-    - terminal
-    - file
     - memory
     - code_execution
     - catalog

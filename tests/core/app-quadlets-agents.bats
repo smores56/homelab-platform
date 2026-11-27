@@ -64,6 +64,21 @@ gateway_network() { # quadlet
   assert_equal "$(gateway_network "$agent_general")" agent-general.network
 }
 
+# The personal plane is a mount, and the one permission rule left in the design is
+# its mode (SDLC #995): /srv/files read-write, the vault nested read-only. A volume
+# that dropped the vault line would hand the agent a writable vault and nothing
+# else in the stack would notice.
+@test "the personal gateway mounts the files tree and the vault read-only" {
+  run grep -E '^Volume=/srv/files:/srv/files$' "$agent_local"
+  assert_success
+  run grep -E '^Volume=/srv/files/vault:/srv/files/vault:ro$' "$agent_local"
+  assert_success
+  # Without the mount the shell sees an empty /srv/files and the agent reports a
+  # plane that has no data rather than a mount that never happened.
+  run grep -F 'zfs-ready@raw-files.service' "$agent_local"
+  assert_success
+}
+
 @test "the proxy is on the egress network only" {
   assert_equal "$(gateway_network "$agent_proxy")" agent-general.network
 }
@@ -183,11 +198,22 @@ personal_config_disables_toolset() { # toolset
   grep -qE "^[[:space:]]+- $1$" <<<"$disabled"
 }
 
-for _toolset in web search browser terminal file memory code_execution catalog \
+for _toolset in web search browser memory code_execution catalog \
   computer_use cronjob skills image_gen connections; do
   registered "the personal config disables the $_toolset toolset" personal_config_disables_toolset "$_toolset"
 done
 unset _toolset
+
+# The data plane is the mount plus the runtime's own shell (SDLC #995). A
+# `terminal` or `file` entry in that list would leave the agent with a mounted
+# tree it has no way to read, which is the failure this assertion exists for: the
+# list is the only place the two toolsets can be closed and the mount cannot say
+# anything about them.
+@test "the personal config leaves the shell and file toolsets available" {
+  local disabled
+  disabled=$(sed -n '/^  disabled_toolsets:/,/^[^ ]/p' bootc/server/rootfs/etc/smortress/agent/local-config.yaml)
+  ! grep -qE '^    - (terminal|file)$' <<<"$disabled"
+}
 
 # Subagents are wanted, and they are the one runtime default the personal side
 # keeps on purpose: a child inherits this process's provider and MCP toolsets, so

@@ -3,14 +3,15 @@
     ".stfolder",
     ".stversions",
     ".stversions/*",
+    ".obsidian",
     ".syncthing.*.tmp",
     "~$*",
     "*.swp",
+    "tmp",
+    "tmp/*",
     "*/tmp/*"
   ],
   "roots": [
-    {"source": "todos", "path": "/srv/files/todos"},
-    {"source": "notes", "path": "/srv/files/notes"},
-    {"source": "vault", "path": "/srv/files/vault"}
+    {"source": "files", "path": "/srv/files"}
   ]
 }
