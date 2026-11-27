@@ -60,6 +60,21 @@ fi
 cat "$STUB_VERIFY_DOC"
 STUB
 
+    # The gate's budget is wall clock (`date -u +%s`). A test that needs a
+    # deadline to pass cannot wait for one, and cannot rely on small budgets
+    # either: under load the pre-loop work alone outlives a 2 s budget, which is
+    # #993. STUB_CLOCK_FILE makes `-u +%s` read a file the backup toy advances,
+    # so a budget expires between two units on any host. Every other form is the
+    # real date, because journal timestamps and --rfc-3339 must stay real.
+    cat >"$bin/date" <<'STUB'
+#!/usr/bin/env bash
+if [[ -n ${STUB_CLOCK_FILE:-} && $# -eq 2 && $1 == -u && $2 == +%s ]]; then
+  cat "$STUB_CLOCK_FILE"
+  exit 0
+fi
+exec "$REAL_DATE" "$@"
+STUB
+
     cat >"$bin/smortress-restic-backup" <<'STUB'
 #!/usr/bin/env bash
 printf '%s|lock=%s|%s\n' "$1" "${RESTIC_LOCK_WAIT:-unset}" "$*" >>"$STUB_LOG/backup-calls"
@@ -76,7 +91,16 @@ if [[ -n ${STUB_BACKUP_SLEEP:-} ]] &&
   [[ -z ${STUB_BACKUP_SLEEP_UNIT:-} || ${STUB_BACKUP_SLEEP_UNIT:-} == "$unit" ]]; then
   sleep "$STUB_BACKUP_SLEEP"
 fi
-if [[ -n ${STUB_BACKUP_EXIT:-} ]]; then exit "$STUB_BACKUP_EXIT"; fi
+# The virtual clock the budget tests read: advancing it stands in for a backup
+# that outlived the gate's remaining budget, with no wall-clock wait.
+if [[ -n ${STUB_BACKUP_ADVANCE:-} ]] &&
+  [[ -z ${STUB_BACKUP_ADVANCE_UNIT:-} || ${STUB_BACKUP_ADVANCE_UNIT:-} == "$unit" ]]; then
+  printf '%s\n' $(($(cat "$STUB_CLOCK_FILE") + STUB_BACKUP_ADVANCE)) >"$STUB_CLOCK_FILE"
+fi
+if [[ -n ${STUB_BACKUP_EXIT:-} ]] &&
+  [[ -z ${STUB_BACKUP_EXIT_UNIT:-} || ${STUB_BACKUP_EXIT_UNIT:-} == "$unit" ]]; then
+  exit "$STUB_BACKUP_EXIT"
+fi
 jq --arg b "$backend" --arg u "$unit" \
   '.[$b].units[$u] = {fresh:true,reason:"ok",snapshot:"snap",age:1}' \
   "$STUB_VERIFY_DOC" >"$STUB_VERIFY_DOC.tmp" && mv "$STUB_VERIFY_DOC.tmp" "$STUB_VERIFY_DOC"
@@ -150,6 +174,9 @@ pt_setup() {
     # fake's directory joins PATH.
     REAL_TIMEOUT=$(type -P timeout) || fail "no timeout on PATH"
     export REAL_TIMEOUT
+    # The fake `date` delegates to this, so it is resolved before $bin joins PATH.
+    REAL_DATE=$(type -P date) || fail "no date on PATH"
+    export REAL_DATE
     export DEPLOY_STATE_DIR=$state_dir
     export DEPLOY_LOCK_FILE=$work/deploy.lock
     export DEPLOY_PING_SECRET=$work/deploy-ping-url.yaml
