@@ -34,6 +34,10 @@ LoadCredential=tailscale-authkey:/etc/smoresnet/tailscale-authkey
 # apply the tag. --accept-routes stays off: the edge serves the internet, it does
 # not route for the tailnet.
 ExecStart=/usr/bin/tailscale up --hostname=smoresnet --advertise-tags=tag:vps --accept-routes=false --ssh=false --auth-key=file:${CREDENTIALS_DIRECTORY}/tailscale-authkey
+# tmpfiles creates /var/lib/smoresnet 0700 at boot (etc/tmpfiles.d/
+# smoresnet-edge.conf) because it is edge-boot-gate.service's ReadWritePaths
+# target, and a missing one fails that unit with 226/NAMESPACE before this line
+# could ever run. This stays as a re-assert for a box whose fragment was dropped.
 ExecStart=/usr/bin/install -d -m 0700 /var/lib/smoresnet
 ExecStart=/usr/bin/touch /var/lib/smoresnet/tailscale-enrolled
 

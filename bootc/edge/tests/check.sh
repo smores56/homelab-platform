@@ -10,10 +10,12 @@
 # drives this file and reverts each invariant one at a time, so a check that
 # cannot fail for the reason it exists is a failing test rather than a silent one.
 #
-# Two verify.sh checks have no image-side equivalent and are reported as `skip`
-# rows instead of being dropped. Caddy's storage directory is created writable at
-# first boot, and unattended upgrades on the Ubuntu box become bootc's update path
-# (T7/T10). verify.sh stays the proof of both until T14 deletes provision/edge.
+# One verify.sh check has no image-side equivalent and is reported as a `skip` row
+# instead of being dropped: unattended upgrades on the Ubuntu box become bootc's
+# update path (T7/T10), and verify.sh stays the proof of it until T14 deletes
+# provision/edge. Caddy's storage directory was the second until T15 moved its
+# creation into the image (the tmpfiles fragment, and the unit-path row below that
+# proves something creates it).
 #
 # `bootc container lint` is the image's own static analysis and only makes sense
 # inside the built image: against a tree it fails on an empty /dev and /sysroot
@@ -349,6 +351,25 @@ pull_request_runs_this_checker() {
   return 1
 }
 
+# --- the paths the units name (T15) ------------------------------------------
+
+# Every path a unit writes, reads or watches is one row of
+# bootc/edge/unit-paths.tsv, with what creates it. The table is the single answer
+# to "who makes this directory", and scripts/check-edge-unit-paths.sh holds both
+# halves to the tree: a missing row, a stale row and a creator that is not there
+# all exit non-zero. It reads the repository (the rootfs, the bootstrap script and
+# the manual steps), none of which is in the image, so it is a build-side row.
+#
+# The failures are printed verbatim: "FAIL <path>: <why>" is what names the
+# directory an operator would have found on the console.
+unit_paths_are_created() {
+  local out
+  out=$("$repo/scripts/check-edge-unit-paths.sh" 2>&1) || {
+    printf '%s\n' "$out" | grep -E '^FAIL' >&2
+    return 1
+  }
+}
+
 # --- the deploy triggers (T11) ------------------------------------------------
 
 poll_service=$root/usr/lib/systemd/system/smoresnet-deploy-poll.service
@@ -440,10 +461,10 @@ check_build 'a pull_request workflow runs this checker on the edge tree' pull_re
 check 'the 03:00 poll backstop ships and its timer is enabled' poll_backstop_ships
 check 'the queue starts the drain when a request lands' queue_starts_the_drain
 check_build 'the edge is told to deploy by a main dispatch, never by a push' notify_is_a_main_dispatch
+check_build 'every path the units name is created before boot' unit_paths_are_created
 
-# The two verify.sh invariants the image cannot state, kept visible so the port is
-# not mistaken for the whole of the provisioned box's proof.
-note "Caddy's storage directory is writable by its user (runtime: created at first boot; provision/edge/verify.sh proves it)"
+# The verify.sh invariant the image cannot state, kept visible so the port is not
+# mistaken for the whole of the provisioned box's proof.
 note 'unattended upgrades are on (runtime: bootc updates the image, T7/T10; nothing in an image to assert)'
 
 # `bootc container lint` is the image's own analysis and only works inside it.

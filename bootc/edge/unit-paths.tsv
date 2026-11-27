@@ -1,0 +1,31 @@
+# Every path the edge's units name, and what creates it before the unit runs.
+# One row per path: <path> <created_by> <reason>, tab-separated.
+#
+# Each of the four defects the console found on the from-scratch install was one
+# shape: a unit named a path the retired hand bootstrap had made on the old VPS,
+# and nothing in the image made it. `scripts/check-edge-unit-paths.sh` holds this
+# table to the units and each claim to the tree, so a row that is missing, unused
+# or wrong fails a pull request instead of a boot.
+#
+# created_by is one of:
+#   image-dir  a directory in bootc/edge/rootfs/ itself
+#   tmpfiles   a fragment under etc/tmpfiles.d or usr/lib/tmpfiles.d creates it
+#   bootstrap  scripts/edge-bootstrap.sh creates it (the reason names the function);
+#              no row uses it today: every state directory the units write comes
+#              from tmpfiles, because a unit cannot wait for a hand step
+#   operator   the operator makes it before the box is useful (the reason names
+#              the step in docs/manual-steps.md)
+#   system     the OS owns it, so nothing has to create it
+#
+# A unit may prefix a path with `-`, systemd's ignore-if-missing marker. The
+# checker strips it and the row's reason says the path is optional.
+/boot	system	the boot partition is mounted before any unit runs; `bootc switch` writes the boot entry there
+/etc/caddy/edge.env	operator	the ACME address and the two Service upstreams the Caddyfile substitutes, written on the box at docs/manual-steps.md#bootstrap-the-fresh-edge
+/etc/smoresnet/tailscale-authkey	operator	the preauthorized tag:vps key the join unit reads as a credential, entered on stdin at docs/manual-steps.md#bootstrap-the-fresh-edge
+/sysroot	system	the ostree root is always mounted; `bootc rollback --apply` remounts it writable
+/tmp	system	tmpfs the OS mounts; bootc's SELinux install_t probe writes a scratch file there
+/var/lib/caddy	tmpfiles	Caddy's ACME account key and certificates live here and nothing else creates it, so every order would fail `mkdir /var/lib/caddy: permission denied`
+/var/lib/homelab/deploy	tmpfiles	the deploy state tree the listener, poll, heartbeat, gate and drain all write; a ReadWritePaths target's namespace setup fails with 226/NAMESPACE when it is absent
+/var/lib/homelab/deploy/queue	tmpfiles	the queue smoresnet-deploy.path watches with DirectoryNotEmpty= to start the drain; 226/NAMESPACE when absent
+/var/lib/smoresnet	tmpfiles	the boot gate's ReadWritePaths target and the tailnet node identity, 0700; its namespace setup fails with 226/NAMESPACE when it is absent on the boot after an install
+/var/tmp	system	the OS owns it; bootc stages under it and PrivateTmp= confines the unit's copy

@@ -2037,6 +2037,39 @@ bootstrap, Serve routes, the cutover and the timed rebuild drill — is
 three names (`photos`, `opds`, `recovery`); `provision/edge/verify.sh` asserts
 exactly those three site blocks and never a fourth.
 
+### Before the install: what the image makes and what a person does
+
+Every path the edge's units name, and what creates it, is one row of
+`bootc/edge/unit-paths.tsv`. That table is the list of record; this is only what
+each kind of row asks of you around an install, and
+`scripts/check-edge-unit-paths.sh` fails a pull request that lets a row and the
+tree disagree.
+
+- **`image-dir`, `tmpfiles`, `system`** — nothing to do, and nothing to leave to
+  a later step: `systemd-tmpfiles` makes `/var/lib/caddy`,
+  `/var/lib/homelab/deploy` with its queue, and `/var/lib/smoresnet` from
+  `/etc/tmpfiles.d/smoresnet-edge.conf` and
+  `/usr/lib/tmpfiles.d/smoresnet-deploy.conf` at every boot, and the OS owns
+  `/boot`, `/sysroot`, `/tmp` and `/var/tmp`. Most of them are `ReadWritePaths`
+  targets, so one missing is a unit that dies in namespace setup with
+  `226/NAMESPACE` before its own program runs — `edge-boot-gate.service` was lost
+  that way on the boot after the first install. After the install, before the
+  bootstrap, `systemd-tmpfiles --cat-config | grep -E
+  '/var/lib/(caddy|homelab/deploy|smoresnet)'` names each one.
+- **`operator`** — before the install, have the values and the kit at hand: the
+  preauthorized `tag:vps` key, the webhook secret, the deploy ping URL, the
+  `SMORTRESS_FQDN` and the ACME address, plus Caddy's data directory from the
+  recovery kit. Nothing in the image writes them, and none of them is image
+  content. (The edge's key is not in the kit: since #185 the edge keeps the host
+  key sshd made on the box, so a reinstall presents a new one — smortress's key
+  is still the kit's.) After the install they exist because you ran
+  [Bootstrap the fresh edge](#bootstrap-the-fresh-edge).
+- **`bootstrap`** — no row is one today, and that is the point of the table:
+  `edge-bootstrap` writes values and secrets, never a state directory, because no
+  unit can wait for a hand step to make the path it needs. Its own `install -d`
+  lines on `/var/lib/caddy` and `/var/lib/smoresnet` only re-assert the mode
+  tmpfiles already set, which is what keeps a re-run harmless.
+
 ### Render and commit the edge Ignition
 
 The edge's document is committed to this repository instead of uploaded

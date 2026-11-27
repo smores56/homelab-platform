@@ -50,6 +50,22 @@ browser-only rule list that no diff or CI can see.
 `udp/41641` is open so the tailnet keeps a direct WireGuard path to smortress;
 without it every proxied byte is relayed through DERP and Immich uploads crawl.
 
+The state directories the units write are image content, not something a
+person's bootstrap leaves behind. `systemd-tmpfiles` makes `/var/lib/caddy`
+(Caddy's ACME account key and certificates), the deploy tree at
+`/var/lib/homelab/deploy` with its queue, and `/var/lib/smoresnet` (the node
+identity, 0700) from `bootc/edge/rootfs/etc/tmpfiles.d/smoresnet-edge.conf` and
+`bootc/edge/rootfs/usr/lib/tmpfiles.d/smoresnet-deploy.conf` at every boot,
+because each of them is a `ReadWritePaths` target: a unit whose target is missing
+fails in namespace setup with `226/NAMESPACE` before its own program runs, which
+is how the boot gate was lost on the boot after the first install.
+`bootc/edge/unit-paths.tsv` is the list of record: one row per path a unit names,
+with which of those makes it, and `scripts/check-edge-unit-paths.sh` fails a pull
+request where a unit names a path nothing creates. A from-scratch install that
+never reaches the bootstrap therefore has a Caddy storage directory, a deploy
+queue and a boot gate that can start, rather than the four missing paths the
+2026-11 reinstall found on the console.
+
 ### Why a Service per application and not the host's 443
 
 Serve's 443 on the host's own name carries Immich's root **and**

@@ -488,10 +488,12 @@ check_secrets
 caddy_validate
 write_edge_env
 # Caddy runs as User=caddy and keeps its account key and certificates under
-# /var/lib/caddy, which the package expects to exist and the image does not ship:
-# the service starts, then fails every order with `mkdir /var/lib/caddy:
-# permission denied` -- a 500 from every name with nothing else to read. The
-# directory belongs to the package's user, so this creates it as that user.
+# /var/lib/caddy. The image creates that directory at boot
+# (/etc/tmpfiles.d/smoresnet-edge.conf, 0750 caddy:caddy), and this repeats it at
+# the same mode and owner so a box that lost the fragment -- or whose data
+# directory came back from the recovery kit under another account -- serves
+# before the next boot, not after it. `install -d` on an existing directory of
+# the same owner and mode changes nothing, which is what keeps this idempotent.
 caddy_home=${EDGE_CADDY_HOME:-/var/lib/caddy}
 install -d -o "$caddy_user" -g "$caddy_group" -m 0750 "$caddy_home" ||
   die "cannot create $caddy_home for $caddy_group"

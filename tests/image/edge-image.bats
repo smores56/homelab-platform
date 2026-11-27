@@ -20,13 +20,17 @@ load ../helpers
 checker=bootc/edge/tests/check.sh
 
 # fixture <dir>: the tree the checker derives from its own location (repo,
-# Containerfile, pins, build script, both workflows) and nothing else.
+# Containerfile, pins, build script, both workflows) and nothing else. The
+# unit-path row shells out to scripts/check-edge-unit-paths.sh, which reads the
+# table, the bootstrap script and the manual steps the table's reasons name, so a
+# fixture without them fails that row for the wrong reason.
 fixture() {
     local dir=$1
-    mkdir -p "$dir/bootc/edge" "$dir/bootc/lib" "$dir/scripts" "$dir/.github/workflows"
+    mkdir -p "$dir/bootc/edge" "$dir/bootc/lib" "$dir/scripts" "$dir/docs" "$dir/.github/workflows"
     cp -a bootc/edge/. "$dir/bootc/edge/"
     cp bootc/lib/pins.env "$dir/bootc/lib/"
-    cp scripts/build-image.sh "$dir/scripts/"
+    cp scripts/build-image.sh scripts/check-edge-unit-paths.sh "$dir/scripts/"
+    cp docs/manual-steps.md "$dir/docs/"
     cp .github/workflows/publish-edge-image.yml "$dir/.github/workflows/"
     cp .github/workflows/server-image-static.yml "$dir/.github/workflows/"
 }
@@ -130,6 +134,11 @@ the poll waits for a sops unit the image does not ship|the 03:00 poll backstop s
 the queue no longer starts the drain|the queue starts the drain when a request lands|bootc/edge/rootfs/usr/lib/systemd/system/smoresnet-deploy.path|sed|\#^DirectoryNotEmpty=#d
 the drain installs itself at boot|the queue starts the drain when a request lands|bootc/edge/rootfs/usr/lib/systemd/system/smoresnet-deploy.service|sed|s#^Before=shutdown.target$#Before=shutdown.target\n\n[Install]\nWantedBy=multi-user.target#
 the release trigger comes back on push|the edge is told to deploy by a main dispatch, never by a push|.github/workflows/publish-edge-image.yml|sed|s#^    if: github.event_name == .workflow_dispatch.*#    if: github.event_name == 'push'#
+the boot gate's state directory is not created|every path the units name is created before boot|bootc/edge/rootfs/etc/tmpfiles.d/smoresnet-edge.conf|sed|\#^d /var/lib/smoresnet #d
+the Caddy storage directory is not created|every path the units name is created before boot|bootc/edge/rootfs/etc/tmpfiles.d/smoresnet-edge.conf|sed|\#^d /var/lib/caddy #d
+a unit's state directory loses its row|every path the units name is created before boot|bootc/edge/unit-paths.tsv|sed|\#^/var/lib/smoresnet[[:space:]]#d
+a unit names a path nothing creates|every path the units name is created before boot|bootc/edge/rootfs/usr/lib/systemd/system/smoresnet-deploy-poll.service|append|ReadWritePaths=/var/lib/nothere
+the caddy unit stops naming its storage directory|every path the units name is created before boot|bootc/edge/rootfs/usr/lib/systemd/system/caddy.service.d/10-smoresnet.conf|sed|\#^ReadWritePaths=/var/lib/caddy#d
 EOF
 }
 
