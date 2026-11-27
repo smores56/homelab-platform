@@ -219,6 +219,32 @@ The admin password is required even though the service is tailnet-only: it is th
 one credential that keeps a compromised tailnet device from rewriting the
 library.
 
+The catalogue has one consumer that cannot be reconfigured from here: the
+e-readers, which run CrossPoint firmware and read `https://opds.sammohr.dev/`
+over the tailnet. What that firmware accepts, from its own parser, is the
+contract this server must keep:
+
+- **EPUB only.** An acquisition link is kept only when its `type` is exactly
+  `application/epub+zip`; PDF, CBZ and CBR are dropped without a message.
+  Anything else the library holds is invisible to a reader, however present it
+  is in the tree.
+- **Absolute hrefs.** CrossPoint's relative-href resolution is not RFC 3986: a
+  root-relative path loses the mount prefix and a bare relative one is appended
+  to the base including its last segment (their issue #3044). Absolute URLs are
+  the only safe shape, which is why `BASE_URL` must stay derivable and correct.
+- **Typed navigation.** A nav entry counts only when its link `type` contains
+  `application/atom+xml`; a plain `href` to the next feed is not followed.
+- **Small feeds.** About 62 entries is the hard cap and 45–50 already exhausts
+  the smaller devices (their issue #4369), so pagination at 20–30 is the shape
+  to keep.
+- **Basic auth, not digest,** as the challenge the server offers.
+
+OPDShelf is therefore not a candidate for replacement on paper: a catalogue
+behind an API is what a reader needs, and the agent's own access is the mount.
+The check that matters after any upgrade is the feed itself —
+`curl -su <user> -H 'Accept: application/atom+xml' https://opds.sammohr.dev/`
+and read the three things above off the output.
+
 ## Navidrome
 
 One container, two datasets: the library (`raw/music`, mounted read-only at
