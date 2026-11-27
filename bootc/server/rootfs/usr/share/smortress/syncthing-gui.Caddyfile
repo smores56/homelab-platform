@@ -1,0 +1,36 @@
+# The loopback proxy in front of the Syncthing GUI (design #897, T1).
+#
+# The GUI answers 403 to a Host header it does not expect, and Tailscale Serve
+# forwards the client's Host unchanged, so `svc:sync` cannot reach the GUI while
+# the check is on -- which is why `insecureSkipHostcheck` was turned off on the
+# host. This file is what lets T2 turn the check back on: Caddy listens on loopback only,
+# rewrites Host to the address the GUI's own config expects (the container's
+# STGUIADDRESS, units/quadlet/syncthing.container), and forwards. Nothing here is
+# reachable from outside this host: the site address is 127.0.0.1, and the port is
+# above 1024, so the unit runs it as `caddy` with no capability at all. T1 ships
+# with the skip PATCH still applied, so the 10000 route and a one-line revert are
+# both intact until the check clears.
+#
+# Under /usr/share and not under /etc/caddy: bootc merges a host's /etc once and
+# keeps what it finds there, so a Caddyfile there would be frozen at the install's
+# version and a route change would never reach a running box. /usr is the image's,
+# so a deploy that bumps the image bumps this file.
+# smortress-syncthing-gui-proxy.service is what passes it with `--config`.
+{
+	# No admin API. The config ships with the image, so changing it is a commit and
+	# a deploy: with the API off there is no second answer to "what is Caddy
+	# serving", and `caddy reload` has nothing to reach.
+	admin off
+
+	# No certificate and no port-80 redirect: this is plain HTTP on loopback, and
+	# Caddy would otherwise try to manage TLS for the name.
+	auto_https off
+}
+
+http://127.0.0.1:8385 {
+	# Host, and not only X-Forwarded-Host: the GUI reads the request's Host when it
+	# decides the check, so the value has to be the one its config trusts.
+	reverse_proxy 127.0.0.1:8384 {
+		header_up Host 127.0.0.1:8384
+	}
+}

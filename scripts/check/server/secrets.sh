@@ -484,6 +484,7 @@ declare -A unlisted_why=(
   [smortress-selinux-agent-shell.service]='ConditionPathExists on the shell CIL module: without SELinux or that module it is skipped, not failed'
   [smortress-agent-mail-stream.service]='ConditionPathExists on the Tuta bridge cert: without the cert it is skipped, not failed, until the bridge is provisioned'
   [smortress-backrest.service]='the recovery reader: its credential is the operator file /etc/backrest/env, so a reader that cannot start is a tailnet Service with no listener and pages through its watchdog, never a reason to roll an image that deployed cleanly back'
+  [smortress-syncthing-gui-proxy.service]='the loopback proxy in front of the Syncthing GUI (design #897, T1): it fronts one application route, and the GUI keeps its own 10000 route until T2 retires it, so a dead proxy is a broken route and not a host that rolled back onto an image that deployed cleanly'
   [smortress-restic-init.service]='initialises the Restic repositories: a backup-plane fault must not roll the platform digest back'
   # The two Restic repository mounts are enabled and long-running, and `nofail` is
   # what makes them the opposite of a serving signal: an absent or unpowered backup
