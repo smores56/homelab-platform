@@ -1,34 +1,64 @@
 # shellcheck shell=bash
 # shellcheck disable=SC2016,SC2034,SC2154  # helpers and globals come from the entrypoint
-# The feature installs no distribution package: graph and signature questions are
-# answered by the GitHub API and bootc's own policy, so the only dnf run in the
-# build is the discarded sudo-build stage.
+# The runtime image installs exactly one distribution package: Caddy, for the
+# loopback proxy in front of the Syncthing GUI (design #897, T1). Everything else
+# it ships is a file -- a hash-pinned binary, a rootfs copy, a build-stage
+# artifact -- so a second package name would be the package layer this image keeps
+# out. Graph and signature questions are answered by the GitHub API and bootc's
+# own policy, which is why the discarded sudo-build stage's dnf run is not the
+# image's.
+#
 # The last `FROM ${BASE_IMAGE}` is the image, and it may be named (`AS runtime`);
 # the earlier one is a discarded build stage, so taking the first match -- or
 # refusing to match a named stage -- looks for a package install in the wrong half
 # of the file, or fails a correct edit.
-runtime_stage_is_clean() { # <containerfile>
+runtime_stage_dnf() { # <containerfile> -- the dnf lines after the image's FROM
   local line
   line=$(grep -nE '^FROM \$\{BASE_IMAGE\}([[:space:]]+AS[[:space:]]+[A-Za-z0-9_.-]+)?[[:space:]]*$' "$1" |
     tail -n 1 | cut -d: -f1)
   [[ -n $line ]] || return 1
-  ! awk -v start="$line" 'NR > start && /dnf/' "$1" | grep -q .
+  awk -v start="$line" 'NR > start && /dnf/' "$1"
 }
-check "the runtime stage installs no distribution package" \
-  runtime_stage_is_clean bootc/server/Containerfile
+# The install is matched whole, not by the package name alone: `install caddy git`
+# installs both, and the second name is what this refuses.
+runtime_installs_only_caddy() { # <containerfile>
+  local dnf_lines line bad=0
+  dnf_lines=$(runtime_stage_dnf "$1") || return 1
+  while IFS= read -r line; do
+    [[ $line == *[![:space:]]* ]] || continue
+    case $line in
+      # The one install, exactly as the Containerfile writes it.
+      *'--setopt=install_weak_deps=False install caddy;'*) ;;
+      # The cleanup that follows it: removing the cache is not a second package.
+      *'dnf5 clean all;'* | *'rm -rf /var/cache/dnf /var/cache/libdnf5'*) ;;
+      *) bad=1 ;;
+    esac
+  done <<<"$dnf_lines"
+  ((!bad))
+}
+check "the runtime stage installs only the GUI proxy's caddy" \
+  runtime_installs_only_caddy bootc/server/Containerfile
 stage_fixture=$(mktemp -d)
 printf 'FROM ${BASE_IMAGE} AS sudo-build\nRUN dnf install -y git\nFROM ${BASE_IMAGE} AS runtime\nCOPY bootc/server/rootfs/ /\n' \
   >"$stage_fixture/Containerfile"
-if runtime_stage_is_clean "$stage_fixture/Containerfile"; then
+if runtime_installs_only_caddy "$stage_fixture/Containerfile"; then
   ok "a named final stage is still the runtime stage"
 else
   bad "a named final stage is still the runtime stage"
 fi
-printf 'RUN dnf install -y git\n' >>"$stage_fixture/Containerfile"
-if runtime_stage_is_clean "$stage_fixture/Containerfile"; then
-  bad "a package install in the runtime stage is still refused"
+printf '    dnf5 -y --setopt=install_weak_deps=False install caddy; \\\n' \
+  >>"$stage_fixture/Containerfile"
+if runtime_installs_only_caddy "$stage_fixture/Containerfile"; then
+  ok "the GUI proxy's caddy install in the runtime stage is accepted"
 else
-  ok "a package install in the runtime stage is still refused"
+  bad "the GUI proxy's caddy install in the runtime stage is accepted"
+fi
+printf '    dnf5 -y --setopt=install_weak_deps=False install caddy git; \\\n' \
+  >>"$stage_fixture/Containerfile"
+if runtime_installs_only_caddy "$stage_fixture/Containerfile"; then
+  bad "a second package in the runtime stage is still refused"
+else
+  ok "a second package in the runtime stage is still refused"
 fi
 rm -rf "$stage_fixture"
 

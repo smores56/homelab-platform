@@ -29,6 +29,7 @@ load ../helpers
 
 static_checks=scripts/check-server-image.sh
 renderer=scripts/render-ignition.sh
+server_containerfile=bootc/server/Containerfile
 edge_containerfile=bootc/edge/Containerfile
 edge_workflow=.github/workflows/publish-edge-image.yml
 edge_rootfs=bootc/edge/rootfs
@@ -327,4 +328,53 @@ contains() {
         done
         $covered || fail "COPY $src is not matched by a path filter in $edge_workflow"
     done < <(grep '^COPY ' "$edge_containerfile")
+}
+
+# The Syncthing GUI's route goes through a loopback proxy (design #897, T1).
+# Serve forwards the client's Host unchanged, so the route reaches the GUI through
+# a proxy that rewrites that header; T2 then clears the GUI's skip-host-check PATCH
+# and retires the 10000 rollback. What makes it true is three shipped pieces, and
+# this pins all three plus the build gate that proves the config parses -- a
+# Caddyfile that does not would be a crash-loop on the box, not a failed review.
+@test "the server image ships a loopback proxy in front of the Syncthing GUI" {
+    contains 'dnf5 -y --setopt=install_weak_deps=False install caddy' "$server_containerfile"
+    contains 'caddy validate --config /usr/share/smortress/syncthing-gui.Caddyfile' \
+        "$server_containerfile"
+    contains '      smortress-syncthing-gui-proxy.service \' "$server_containerfile"
+
+    # One listener, on loopback, rewriting the one header the GUI checks. A bind
+    # on 0.0.0.0 here would publish the GUI past the firewall.
+    cfg=bootc/server/rootfs/usr/share/smortress/syncthing-gui.Caddyfile
+    run test -s "$cfg"
+    assert_success
+    contains 'admin off' "$cfg"
+    contains 'auto_https off' "$cfg"
+    contains 'http://127.0.0.1:8385 {' "$cfg"
+    contains 'reverse_proxy 127.0.0.1:8384 {' "$cfg"
+    contains 'header_up Host 127.0.0.1:8384' "$cfg"
+
+    # The unit runs the package's account, restarts a dead proxy, passes the
+    # shipped config, and grants no capability: 8385 is above 1024 and
+    # loopback-only, so there is nothing for a capability to buy.
+    unit=units/systemd/smortress-syncthing-gui-proxy.service
+    contains 'User=caddy' "$unit"
+    contains 'Restart=on-failure' "$unit"
+    contains '--config /usr/share/smortress/syncthing-gui.Caddyfile' "$unit"
+    # `syncthing.service` is the Quadlet unit of units/quadlet/syncthing.container;
+    # ContainerName=smortress-syncthing names the container, not the unit.
+    grep -qE '^After=(\S+ )*syncthing\.service( |$)' "$unit" ||
+        fail "the proxy is not ordered after the GUI's unit"
+    # Both assignments empty: a capability here is a privilege a loopback bind on
+    # a port above 1024 does not need.
+    if grep -qE '^(AmbientCapabilities|CapabilityBoundingSet)=[[:space:]]*[^[:space:]]' "$unit"; then
+        fail "$unit grants a capability the loopback bind does not need"
+    fi
+
+    # Not a deploy unit: a proxy that is down is a broken route, not a host that
+    # rolled back onto an image that deployed cleanly. The GUI's own 10000 route
+    # is the rollback until T2 retires it.
+    if grep -qxF 'smortress-syncthing-gui-proxy.service' \
+        bootc/server/rootfs/usr/share/smortress/deploy-units.txt; then
+        fail "the GUI proxy is a deploy unit: it would roll back a healthy host"
+    fi
 }

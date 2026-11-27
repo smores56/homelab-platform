@@ -165,10 +165,9 @@ fi
 # certificate for each service name. A Service that is a few minutes old prints
 # "approval from an admin is required" and answers nothing until the tailnet's
 # auto-approver (tofu/tailscale.tf) has taken it, so a pending advertisement is
-# not a failed one. Syncthing's GUI is advertised as a Service below: Serve
-# forwards the client's Host unchanged, so the host check has to be off on the
-# host (docs/manual-steps.md, "Syncthing refuses a proxied Host header"), and
-# its 10000 route is unchanged.
+# not a failed one. Syncthing's GUI is advertised as a Service below, through the
+# loopback proxy that rewrites the Host Serve forwards unchanged (design #897,
+# T1), and its 10000 route is unchanged.
 if ! "$tailscale_bin" serve --bg --service=svc:immich --https=443 http://127.0.0.1:2283; then
   fail "could not advertise the Immich Service on svc:immich https/443"
 fi
@@ -181,10 +180,13 @@ fi
 if ! "$tailscale_bin" serve --bg --service=svc:agent --https=443 http://127.0.0.1:18007; then
   fail "could not advertise the general web UI Service on svc:agent https/443"
 fi
-# The Syncthing GUI, on a Service like the rest now that its host check is off.
-# Serve forwards the client's Host unchanged, so a GUI that checks it answers 403
-# to this name; the 10000 host route stays as the rollback and still works.
-if ! "$tailscale_bin" serve --bg --service=svc:sync --https=443 http://127.0.0.1:8384; then
+# The Syncthing GUI, on a Service like the rest, through the loopback proxy this
+# host runs in front of it (design #897, T1): the GUI keeps its Host check on, so
+# Serve's unchanged Host is rewritten to the address the GUI trusts on 8385 rather
+# than the check being turned off. The 10000 host route stays as the rollback and
+# still targets the GUI itself, as does `insecureSkipHostcheck` until T2 retires
+# both.
+if ! "$tailscale_bin" serve --bg --service=svc:sync --https=443 http://127.0.0.1:8385; then
   fail "could not advertise the Syncthing GUI Service on svc:sync https/443"
 fi
 # The recovery reader (SDLC #953), which runs on this host now: the guard owns

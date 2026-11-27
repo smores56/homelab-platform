@@ -20,8 +20,11 @@ setup() { ts_setup; }
 # catalogue off the per-port scheme: each declaration is `--https` against a
 # Service of its own, so Tailscale terminates TLS for that name, and each is
 # additive -- the host routes (443, 8448, 8444, 8445, 10000) stay declared above
-# as the rollback. The GUI is only here because its host check is off: Serve
-# forwards the client's Host unchanged (docs/manual-steps.md).
+# as the rollback. The GUI is here through the loopback proxy in front of it
+# (design #897, T1): Serve forwards the client's Host unchanged, so `svc:sync`
+# targets 8385, where Caddy rewrites the Host to the one the GUI checks. The skip
+# PATCH stays on the host until T2 clears it, so 8384 and the 10000 route remain
+# the rollback.
 
 @test "the Immich Service endpoint is declared exactly once, over https/443" {
     core_run
@@ -70,12 +73,12 @@ setup() { ts_setup; }
 @test "the Syncthing GUI Service endpoint is declared exactly once, over https/443" {
     core_run
     assert_equal \
-        "$(grep -cF -- 'serve --bg --service=svc:sync --https=443 http://127.0.0.1:8384' "$log" || true)" 1
+        "$(grep -cF -- 'serve --bg --service=svc:sync --https=443 http://127.0.0.1:8385' "$log" || true)" 1
 }
 
 @test "svc:sync advertises the Syncthing GUI on its own port, not a host port" {
     core_run
-    assert_equal "$(service_served svc:sync:443)" 'http://127.0.0.1:8384'
+    assert_equal "$(service_served svc:sync:443)" 'http://127.0.0.1:8385'
 }
 
 # The terminal is the last Service declared: `fail()` aborts the script, so a
