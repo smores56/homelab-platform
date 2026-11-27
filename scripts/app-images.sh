@@ -54,11 +54,6 @@ app_images=(
   # the generation layer is gone, so the units, the facade flags and the drill
   # only mean anything with this pin or later.
   'agent-runtime|built:images/agent-runtime/Containerfile|sha256:6c6964bf94dd2582dac51fe3d68dc5919df58541fbff68d2d0cf58e710d06ac4'
-  # The personal agent's virtual terminal (SDLC #979, T1). Mirage publishes a
-  # Python package and no image at all, so there is no upstream digest to mirror:
-  # the version is pinned in images/mirage/Containerfile and this digest is the
-  # last publish-mirage run's.
-  'mirage|built:images/mirage/Containerfile|sha256:c284a9156f2da1fe0835c6cf49c319f05739249af289b9ebdd85168b6ab660f5'
   # Built by this repository (SDLC #775), not mirrored: upstream's entrypoint
   # installs its Python dependencies from PyPI at container start, which a sealed
   # deployment can never do. The digest is the publish-agent-webui run for the

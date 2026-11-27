@@ -44,10 +44,6 @@ agent_root=${SMORTRESS_AGENT_ROOT:-/var/lib/agent}
 #: The one value the image never carries. The template holds the placeholder; the
 #: ciphertext holds the token; this script is the only place they meet.
 readonly placeholder=__FACADE_TOKEN__
-#: The Mirage token's placeholder. It is replaced with `Bearer <token>`, because
-#: the workspace MCP route takes an Authorization header and the facade took a
-#: header of its own.
-readonly mirage_placeholder=__MIRAGE_TOKEN__
 
 die() {
   echo "agent-config-seed: $*" >&2
@@ -167,46 +163,6 @@ for spec in personal:local general:general; do
     install -d -o 1000 -g 1000 -m 0700 "$home/quarantine/brave-profile"
     install -d -o 1000 -g 1000 -m 0750 "$home/quarantine/brave"
   fi
-
-  # Mirage's home, its feed and its token (SDLC #979, T1). The home is the
-  # daemon's state -- sessions, the ssh host key, snapshots -- so it is 0750 in
-  # the dataset and never shared with the workspace's read paths; the feed is the
-  # one directory the container mounts read-only.
-  install -d -o 1000 -g 1000 -m 0750 "$home/mirage" "$home/mirage/feed"
-
-  # The daemon has no `_FILE` variant and Podman's `type=env` secret keeps the
-  # ciphertext's trailing newline, so the value is written here with the newline
-  # dropped and passed with `EnvironmentFile=`. Rewritten every boot, so a
-  # rotation lands on the next restart of mirage-personal.
-  # Every deployment has its own workspace token, named for the deployment and
-  # never shared: a leak on one side must not open the other. The file's name is
-  # the only thing that differs, so the body is written once.
-  {
-    # Named literally, not built from $deployment: scripts/secrets-check.py holds
-    # every manifest output to a consumer that names it, and a name assembled at
-    # run time is invisible to that check.
-    case $deployment in
-      personal) mirage_token=$secrets_dir/mirage-personal-token.yaml ;;
-      general) mirage_token=$secrets_dir/mirage-general-token.yaml ;;
-      *) die "no workspace token for deployment $deployment" ;;
-    esac
-    [[ -s $mirage_token ]] || die "$mirage_token is missing; sops-decrypt did not produce it"
-    mirage_token_value=$(read_secret "$mirage_token")
-    [[ -n $mirage_token_value ]] || die "$mirage_token is empty"
-    printf 'MIRAGE_AUTH_TOKEN=%s\n' "$mirage_token_value" >"$home/mirage.env.new"
-    install -o 1000 -g 1000 -m 0400 "$home/mirage.env.new" "$home/mirage.env"
-    rm -f "$home/mirage.env.new"
-
-    # The gateway's MCP entry carries the same value as a bearer header. Only a
-    # template that still has the placeholder is rewritten, for the same reason
-    # config.yaml is seeded once.
-    if grep -qF -- "$mirage_placeholder" "$config"; then
-      substitute_placeholder "$config" "Bearer $mirage_token_value" "$mirage_placeholder" >"$config.new"
-      install -o 1000 -g 1000 -m 0600 "$config.new" "$config"
-      rm -f "$config.new"
-    fi
-    unset mirage_token_value
-  }
 
   echo "agent-config-seed: $state is seeded" \
     "(config, .env, webui.env, memory, index, UI roots)"

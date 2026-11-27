@@ -482,7 +482,6 @@ declare -A unlisted_why=(
   [smortress-nvidia-cdi.service]='ConditionPathExists on /usr/bin/nvidia-ctk: on a host with no NVIDIA tooling the unit is skipped, not failed'
   [smortress-selinux-nvidia-map.service]='ConditionPathExists on the model CIL module: without SELinux or that module it is skipped, not failed'
   [smortress-selinux-agent-shell.service]='ConditionPathExists on the shell CIL module: without SELinux or that module it is skipped, not failed'
-  [smortress-agent-todos-watch.service]='ConditionPathIsDirectory on /srv/files/todos: before the todos root exists systemd skips it, and a skipped unit reads inactive; a stopped feed degrades the agent plane, not the host'
   [smortress-source-watch.service]='ConditionPathIsDirectory on /srv/files: before raw/files is mounted systemd skips it and a skip reads inactive, and the watcher skips any single missing root to keep the rest; a stopped feed degrades the agent plane, not the host'
   [smortress-agent-mail-stream.service]='ConditionPathExists on the Tuta bridge cert: without the cert it is skipped, not failed, until the bridge is provisioned'
   [smortress-backrest.service]='the recovery reader: its credential is the operator file /etc/backrest/env, so a reader that cannot start is a tailnet Service with no listener and pages through its watchdog, never a reason to roll an image that deployed cleanly back'

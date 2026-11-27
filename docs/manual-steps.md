@@ -1605,71 +1605,33 @@ while its report's `objects` is the row count across those tables. A source with
 `state.sqlite` answers `unavailable` and the facade stays up; its first
 `sources.read` or `sources.search` pays one projection over that source.
 
-### Bring up the personal Mirage workspace
+### The agent data plane is a mount, not a service
 
-The personal agent's virtual terminal is one Quadlet, `mirage-personal`, and its
-token is the only value the image does not carry. The ciphertext is already in
-the tree (`secrets/mirage.json`, output `mirage-personal-token.yaml`); staging it
-is what puts it on a host that was built before this change:
+The personal gateway reads `/srv/files` directly (SDLC #995): `todo.txt` and the
+notes are read-write, the vault is a read-only bind, and the runtime's own
+`terminal` and `file` toolsets are the interface. There is no source facade and no
+virtual terminal to start, so nothing here needs staging.
 
-```sh
-scripts/secret.sh stage mirage-personal-token.yaml
-sudo systemctl restart sops-decrypt.service smortress-agent-config.service
-```
+One thing does need an operator, because the gateway's `config.yaml` is seeded
+once (`cp -n`) and never reconciled: a deployment seeded before this change still
+carries `mcp_servers` entries for containers that no longer exist, and every turn
+pays a connect timeout against them.
 
-`sops-decrypt` writes `/run/smortress/secrets/mirage-personal-token.yaml`, and
-`smortress-agent-config.service` turns it into `/var/lib/agent/local/mirage.env`
-with the trailing newline stripped -- Podman's `type=env` secret would keep it
-and the daemon would compare a token that never matches. The Quadlet reads that
-file with `EnvironmentFile=` and starts only after both units, so one reboot is
-the whole procedure:
+    sudo python3 - <<'PY'
+    import yaml
+    for state in ("local", "general"):
+        path = f"/var/lib/agent/{state}/config.yaml"
+        config = yaml.safe_load(open(path)) or {}
+        if config.pop("mcp_servers", None) is not None:
+            yaml.safe_dump(config, open(path, "w"), sort_keys=False)
+            print(f"{path}: mcp_servers removed")
+    PY
+    sudo systemctl restart agent-local.service agent-general.service
+    sudo journalctl -u agent-local.service -n 20 --no-pager
 
-```sh
-sudo reboot
-```
-
-Prove it came up. The workspace must list, the todos mount must be there, and the
-feed must have a record after an edit:
-
-```sh
-sudo systemctl status mirage-personal.service --no-pager
-sudo podman exec smortress-mirage-personal mirage workspace list
-sudo podman exec smortress-mirage-personal mirage shell -w personal -c 'ls /data/todos'
-echo '- a note' | sudo tee /srv/files/todos/probe.md
-sudo tail -n 1 /var/lib/agent/local/mirage/feed/changes.jsonl
-rm -f /srv/files/todos/probe.md
-```
-
-The MCP surface the gateway sees is the proxy port, not the daemon's: the daemon
-binds 127.0.0.1 inside its own container and no config key moves it, so the
-gateway's `mcp_servers.mirage` entry in
-`bootc/server/rootfs/etc/smortress/agent/local-config.yaml` names
-`smortress-mirage-personal:18010`. If Hermes reports the server as unreachable,
-that name and that port are the two things to check before anything else.
-
-A delete is an ask, so an agent that runs `rm` gets a pending decision. The
-workspace has no network and cannot answer its own: the answer is a host command,
-and `smortress-mirage-asks.timer` journals every pending ask once so it does not
-sit unseen inside a container:
-
-```sh
-sudo journalctl -t smortress-mirage -n 20 --no-pager
-sudo /usr/libexec/mirage-ask list
-sudo /usr/libexec/mirage-ask allow <ask>              # this line only
-sudo /usr/libexec/mirage-ask allow <ask> --scope session
-sudo /usr/libexec/mirage-ask deny <ask>
-```
-
-`once` is spent on the retry of that line; `session` covers everything the ask
-covers for the session. Both are the daemon's semantics, passed through.
-
-Rotating the token is the same three steps in a different order: `scripts/secret.sh
-edit mirage-personal-token.yaml`, `scripts/secret.sh stage mirage-personal-token.yaml`,
-`sudo systemctl restart sops-decrypt.service smortress-agent-config.service`, then
-delete `/var/lib/agent/local/config.yaml` and restart
-`smortress-agent-config.service` so the gateway's seeded copy picks up the new
-`Authorization` header, then `sudo systemctl restart mirage-personal.service
-agent-local.service`.
+The watcher that publishes changes into `/var/lib/agent/local/watch/changes.jsonl`
+is `smortress-source-watch.service`; it starts with the host and needs no action.
+Its roots are `/etc/smortress/agent/watch-roots.json`.
 
 ## Recover
 
