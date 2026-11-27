@@ -73,7 +73,6 @@ jobs:
             xargs -0 bats \
               --filter-tags apps \
               --filter-tags python \
-              --filter-tags data-plane \
               --filter-tags source-watch \
               --jobs "$(nproc)" --no-parallelize-within-files
 
