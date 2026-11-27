@@ -231,6 +231,21 @@ unset _toolset
   ! grep -qE '^    - (terminal|file)$' <<<"$disabled"
 }
 
+# `approvals.mode` has three values in the runtime (`/opt/hermes/tools/approval.py`):
+# `manual` prompts in the chat, `smart` asks a guardian model, and `off` is a pure
+# bypass. The plane's bound is the mount and the network, so a prompt here would
+# ask the operator to re-allow what the mount already allows.
+@test "both templates turn approvals off" {
+  local template
+  for template in bootc/server/rootfs/etc/smortress/agent/local-config.yaml \
+    bootc/server/rootfs/etc/smortress/agent/general-config.yaml; do
+    if ! sed -n '/^approvals:/,/^[^ ]/p' "$template" | grep -qE '^  mode: off$'; then
+      printf '%s does not set approvals.mode: off\n' "$template" >&2
+      return 1
+    fi
+  done
+}
+
 # Subagents are wanted, and they are the one runtime default the personal side
 # keeps on purpose: a child inherits this process's provider and MCP toolsets, so
 # it adds concurrency, not authority. The cap is what keeps it inside four llama.cpp

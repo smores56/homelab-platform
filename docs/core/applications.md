@@ -483,6 +483,11 @@ or SSH identity is mounted into either one. The proxy is the opposite case: it r
 one file as uid 1000 with every capability dropped, because its unit replaces the
 image's entrypoint with `python3`.
 
+The runtime's approval gate is off in both deployments (`approvals.mode: off`, the
+runtime's pure-bypass value). A prompt in the chat would ask the operator to
+re-allow what the mount and the network already allow, and the plane's own rule is
+that the mount mode is the whole policy.
+
 ### The agent data plane
 
 Each collector publishes a plain view beside its raw artifact under

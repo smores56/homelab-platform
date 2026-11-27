@@ -18,10 +18,11 @@ model:
   default: deepseek-v4.1-flash
   context_length: 1048560
 
-# Nothing in this deployment approves its own tool use: an approval is presented
-# in the chat and decided outside the runtime.
+# Approvals are off (SDLC #995): what bounds this deployment is the network it
+# can reach and the two trees it mounts, not a prompt. See the personal template
+# for why `off` is the right value rather than `manual`.
 approvals:
-  mode: manual
+  mode: off
 
 # The toolsets stay at the runtime's defaults here on purpose. This is the
 # internet-connected side, it mounts no personal source, and it holds no

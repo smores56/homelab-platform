@@ -1416,19 +1416,28 @@ notes are read-write, the vault is a read-only bind, and the runtime's own
 `terminal` and `file` toolsets are the interface. There is no source facade and no
 virtual terminal to start, so nothing here needs staging.
 
-One thing does need an operator, because the gateway's `config.yaml` is seeded
-once (`cp -n`) and never reconciled: a deployment seeded before this change still
-carries `mcp_servers` entries for containers that no longer exist, and every turn
-pays a connect timeout against them.
+Two settings need an operator, because the gateway's `config.yaml` is seeded once
+(`cp -n`) and never reconciled: a deployment seeded before this change still
+carries `mcp_servers` entries for containers that no longer exist (every turn pays
+a connect timeout against them) and keeps `approvals.mode: manual`, which prompts
+in the chat for every command the shell now runs.
 
     sudo python3 - <<'PY'
     import yaml
     for state in ("local", "general"):
         path = f"/var/lib/agent/{state}/config.yaml"
         config = yaml.safe_load(open(path)) or {}
+        changed = []
         if config.pop("mcp_servers", None) is not None:
+            changed.append("mcp_servers removed")
+        approvals = config.get("approvals") or {}
+        if approvals.get("mode") != "off":
+            approvals["mode"] = "off"
+            config["approvals"] = approvals
+            changed.append("approvals.mode: off")
+        if changed:
             yaml.safe_dump(config, open(path, "w"), sort_keys=False)
-            print(f"{path}: mcp_servers removed")
+            print(f"{path}: " + ", ".join(changed))
     PY
     sudo systemctl restart agent-local.service agent-general.service
     sudo journalctl -u agent-local.service -n 20 --no-pager
