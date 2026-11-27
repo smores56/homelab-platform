@@ -136,7 +136,13 @@ RUN set -eux; \
       smoresnet-firewall-prejoin.service \
       smoresnet-firewall-tailscale.service \
       smoresnet-tailscale-up.service \
-      tailscaled.service
+      tailscaled.service; \
+    # The base ships rpm-ostree's own updater with AutomaticUpdatePolicy=stage,
+    # and on this host it staged an update at 16:34 on 2026-11-27 -- outside the
+    # 04:00 window, deciding for itself which image the host should be on. One
+    # updater: bootc-fetch-apply-updates.timer below, at a time the operator
+    # chose. The server image masks the same unit.
+    systemctl mask rpm-ostreed-automatic.timer
 
 # firewalld has to parse the shipped zones before this image can boot, and the one
 # thing that proves it is firewalld's own validator: the zones are staged into
@@ -260,6 +266,7 @@ RUN set -eux; \
     test -e /etc/systemd/system/multi-user.target.wants/greenboot-healthcheck.service || { echo "greenboot's healthcheck is not enabled: a deployment that boots but is broken would never be rolled back" >&2; exit 1; }; \
     test -x /etc/greenboot/check/required.d/10-edge-health.sh || { echo "the edge's greenboot check is missing or not executable: greenboot would mark every boot good and never roll back a sick deployment" >&2; exit 1; }; \
     test -e /etc/systemd/system/timers.target.wants/bootc-fetch-apply-updates.timer || { echo "the bootc update timer is not enabled: this host would never upgrade itself" >&2; exit 1; }; \
+    test -L /etc/systemd/system/rpm-ostreed-automatic.timer || { echo "rpm-ostree's own updater is not masked: it stages images outside the 04:00 window and would be a second answer to which image runs" >&2; exit 1; }; \
     grep -qxF 'OnCalendar=*-*-* 04:00:00 America/New_York' /usr/lib/systemd/system/bootc-fetch-apply-updates.timer.d/10-schedule.conf || { echo "the edge's update window is not its own 04:00 local" >&2; exit 1; }; \
     grep -qxF 'RandomizedDelaySec=0' /usr/lib/systemd/system/bootc-fetch-apply-updates.timer.d/10-schedule.conf || { echo "the update timer keeps the vendor jitter: two hosts' windows can drift into each other" >&2; exit 1; }; \
     grep -qxF 'Persistent=false' /usr/lib/systemd/system/bootc-fetch-apply-updates.timer.d/10-schedule.conf || { echo "the update timer is persistent: a power cut would fire every missed window at once" >&2; exit 1; }; \
