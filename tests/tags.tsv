@@ -25,7 +25,20 @@ core/apps-egress	tests/core/apps-egress.bats units/systemd/smortress-apps-deny.s
 core/apps-user	tests/core/apps-user.bats scripts/apps-user.sh units/systemd/smortress-apps-user.service units/systemd/smortress-apps-quota.service units/systemd/smortress-apps-egress.service bootc/server/rootfs/etc/sysusers.d/smortress-apps.conf bootc/server/rootfs/etc/tmpfiles.d/smortress.conf bootc/server/rootfs/usr/share/smortress/apps-policy.json bootc/server/rootfs/etc/nftables/smortress-apps.nft tests/core/*
 core/restic-drill	tests/core/restic-drill.bats scripts/restic-plane-common.sh scripts/smortress-restic-restore-drill.sh tests/core/*
 core/agent-drill	tests/core/agent-drill.bats scripts/agent-runtime-drill.sh tests/core/*
-core/tailscale-serve	tests/core/tailscale-serve.bats scripts/tailscale-serve.sh scripts/apps-schema.py tests/core/*
+core/tailscale-serve-core-routes	tests/core/tailscale-serve-core-routes.bats scripts/tailscale-serve.sh scripts/apps-schema.py tests/core/*
+core/tailscale-serve-receiver	tests/core/tailscale-serve-receiver.bats scripts/tailscale-serve.sh scripts/apps-schema.py tests/core/*
+core/tailscale-serve-opdshelf	tests/core/tailscale-serve-opdshelf.bats scripts/tailscale-serve.sh scripts/apps-schema.py tests/core/*
+core/tailscale-serve-app-services	tests/core/tailscale-serve-app-services.bats scripts/tailscale-serve.sh scripts/apps-schema.py tests/core/*
+core/tailscale-serve-gateways	tests/core/tailscale-serve-gateways.bats scripts/tailscale-serve.sh scripts/apps-schema.py tests/core/*
+core/tailscale-serve-wallpapers	tests/core/tailscale-serve-wallpapers.bats scripts/tailscale-serve.sh scripts/apps-schema.py tests/core/*
+core/tailscale-serve-plan-routes	tests/core/tailscale-serve-plan-routes.bats scripts/tailscale-serve.sh scripts/apps-schema.py tests/core/*
+core/tailscale-serve-prune	tests/core/tailscale-serve-prune.bats scripts/tailscale-serve.sh scripts/apps-schema.py tests/core/*
+core/tailscale-serve-port-off	tests/core/tailscale-serve-port-off.bats scripts/tailscale-serve.sh scripts/apps-schema.py tests/core/*
+core/tailscale-serve-service-clear	tests/core/tailscale-serve-service-clear.bats scripts/tailscale-serve.sh scripts/apps-schema.py tests/core/*
+core/tailscale-serve-no-plan	tests/core/tailscale-serve-no-plan.bats scripts/tailscale-serve.sh scripts/apps-schema.py tests/core/*
+core/tailscale-serve-status	tests/core/tailscale-serve-status.bats scripts/tailscale-serve.sh scripts/apps-schema.py tests/core/*
+core/tailscale-serve-wallpaper-refused	tests/core/tailscale-serve-wallpaper-refused.bats scripts/tailscale-serve.sh scripts/apps-schema.py tests/core/*
+core/tailscale-serve-bad-plan	tests/core/tailscale-serve-bad-plan.bats scripts/tailscale-serve.sh scripts/apps-schema.py tests/core/*
 deploy/state	tests/deploy/state.bats scripts/deploy-state.sh scripts/deploy-drain.sh scripts/deploy-platform.sh scripts/deploy-apps.sh units/systemd/smortress-deploy.service units/systemd/smortress-boot-gate.service scripts/storage-layout.sh tests/deploy/*
 deploy/atomic	tests/deploy/atomic.bats scripts/deploy-state.sh bootc/server/rootfs/usr/libexec/deploy-verify.py bootc/lib/deploy/* tests/deploy/*
 deploy/receiver	tests/deploy/receiver.bats scripts/deploy-state.sh bootc/lib/deploy/* tests/deploy/*
