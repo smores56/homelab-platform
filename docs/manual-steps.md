@@ -298,7 +298,7 @@ this single-user laptop, and it is why the grant belongs to `smores` alone.
 ## 5. Join the Syncthing cluster
 
 The image ships the package and enables the user unit globally, so the service
-starts at the first login with nothing to type. It keeps the vault's second
+starts at the first login with nothing to type. It keeps the file plane's second
 copy, fed by smortress over the tailnet.
 
 The GUI is loopback only: open `http://127.0.0.1:8384`. Its host check is a
@@ -307,23 +307,30 @@ non-issue here because the browser and the service agree on `localhost`.
 Add smortress as a device by the ID its own GUI shows under Actions → Show ID,
 with the address `tcp://smortress:22000`. Tailscale must be up: the ACL admits
 22000 only on the tailnet, and without it the connection falls back to a relay.
-Then accept the laptop on the smortress GUI and share both folders with it as
+Then accept the laptop on the smortress GUI and share the one folder with it as
 Send & Receive.
 
-The two shares belong at the paths the tmpfiles entry created:
+The share is one folder at the root the tmpfiles entry created:
 
-| Folder | Path |
-| --- | --- |
-| `vault` | `/srv/files/vault` |
-| `notes` | `/srv/files/notes` |
+| Folder | Path | Holds |
+| --- | --- | --- |
+| `files` | `/srv/files` | `todos/`, `notes/`, `vault/` |
+
+`todos/` holds `todo.txt`, `done.txt` and `inbox.txt` (the list managed with
+tuxedo); `notes/` is the Obsidian vault; `vault/` is arbitrary files. The list
+used to live inside `notes/`, and Syncthing used to share `notes` and `vault` as
+two folders; the migration in the platform's `docs/manual-steps.md` retires both
+and replaces them with this one folder. Do not run both layouts on one device in
+the same window: Syncthing does not support nesting folders.
 
 `/srv` is a symlink to `var/srv`, and `/var/srv/files` is `smores:smores 0700`,
 so Syncthing writes as the login user and needs no elevation. The first sync is
-about 5.1G; subsequent ones are incremental.
+about 5.1G; subsequent ones are incremental. A phone that should not hold the
+vault can ignore `/vault` in its own `.stignore`.
 
 Check it without the GUI:
 
 ```sh
 systemctl --user status syncthing
-ls -ld /var/srv/files
+ls -ld /var/srv/files /var/srv/files/todos
 ```
