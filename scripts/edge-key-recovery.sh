@@ -54,12 +54,12 @@ if [[ -n $explicit ]]; then
   has_deployments "$explicit" || die "$explicit holds no deployment (ostree/deploy/*/deploy/*/etc)"
   rootdirs+=("$explicit")
 else
-  for cand in /mnt /sysroot; do
-    if has_deployments "$cand"; then
-      rootdirs+=("$cand")
-      break
-    fi
-  done
+  # /mnt only. /sysroot is the live environment's own deployment -- an ostree
+  # tree on a read-only loop device -- and it matches the same shape, so
+  # including it means writing into the ISO and failing to remount it.
+  if has_deployments /mnt; then
+    rootdirs+=("/mnt")
+  fi
 fi
 
 if ((${#rootdirs[@]} == 0)); then
@@ -112,12 +112,20 @@ fi
 [[ $key != *[[:space:]]* ]] || die "the key carries whitespace; re-mint it"
 
 rc=0
+wrote=0
 for root in "${rootdirs[@]}"; do
-  # The scan mounted read-only; writing needs it writable.
+  # The scan mounted read-only; writing needs it writable. A root that cannot be
+  # made writable is not the disk we are looking for -- skipping it keeps a
+  # read-only deployment (the live medium, a mounted snapshot) from filling the
+  # run with a failure that reads like the box is broken.
   if ! touch "$root/.edge-key-probe" 2>/dev/null; then
-    mount -o remount,rw "$root" || die "cannot remount $root writable"
+    if ! mount -o remount,rw "$root" 2>/dev/null; then
+      say "skipping $root: read-only and not remountable"
+      continue
+    fi
   fi
   rm -f -- "$root/.edge-key-probe"
+  wrote=$((wrote + 1))
 
   for d in "$root"/ostree/deploy/*/deploy/*/etc; do
     deployment=$(dirname -- "$d")
@@ -162,6 +170,7 @@ for root in "${rootdirs[@]}"; do
   done
 done
 
+((wrote > 0)) || die "found deployment trees but none writable; is the disk mounted read-only?"
 ((rc == 0)) || die "a deployment above is incomplete; report it before rebooting"
 
 say "done. next, in this order:"
