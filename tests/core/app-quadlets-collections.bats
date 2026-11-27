@@ -144,12 +144,21 @@ readonly stream=units/systemd/smortress-agent-mail-stream.service
   [[ -f $stream ]]
 }
 
-@test "units/systemd/smortress-agent-mail-stream.service names exactly one network" {
-  assert_equal "$(grep -cE -- '--network ' "$stream")" 1
+# Two stages now: the stream, and the publisher that writes the tree the agent
+# reads. Each names its own network, and a stage that named none would land on
+# podman's default with egress -- so the count is per container, not per file.
+@test "every container the mail stream runs names exactly one network" {
+  assert_equal \
+    "$(grep -cE '^ExecStart=' "$stream")" \
+    "$(grep -cE -- '--network ' "$stream")"
 }
 
 @test "the mail stream runs on the collectors' network" {
   grep -qE -- '--network systemd-agent-collect' "$stream"
+}
+
+@test "the mail publisher needs no network at all" {
+  grep -qE -- '--network none' "$stream"
 }
 
 @test "the mail stream requires the Quadlet-generated bridge unit" {
