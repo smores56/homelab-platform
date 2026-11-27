@@ -384,6 +384,7 @@ RUN set -eux; \
     test -e /etc/systemd/system/multi-user.target.wants/smortress-boot-rw.service || { echo "/boot is left read-only: greenboot cannot write grubenv and the counter never arms" >&2; exit 1; }; \
     test -e /etc/systemd/system/multi-user.target.wants/greenboot-healthcheck.service || { echo "greenboot's healthcheck is not enabled: a deployment that boots but is broken would never be rolled back" >&2; exit 1; }; \
     test -x /etc/greenboot/check/required.d/10-smortress-health.sh || { echo "this host's greenboot check is missing or not executable: greenboot would mark every boot good" >&2; exit 1; }; \
+    grep -qxF 'TimeoutStartSec=600' /usr/lib/systemd/system/greenboot-healthcheck.service.d/10-timeout.conf || { echo "greenboot's healthcheck keeps systemd's 90s default: this host's units wait on the pool and the check would be killed mid-wait" >&2; exit 1; }; \
     test -s /etc/ssh/authorized_keys.d/smores || { echo "the shipped ssh key file is missing or empty: it is the only key sshd reads (design #767)" >&2; exit 1; }; \
     ! grep -q 'sk-ssh-ed25519' /etc/ssh/authorized_keys.d/smores || { echo "the shipped key file carries a FIDO handle; the image ships a plain ed25519 key (design #767)" >&2; exit 1; }; \
     test -f /usr/lib64/security/libpam_rssh.so || { echo "libpam_rssh.so is missing: it is sudo's touch factor (design #767)" >&2; exit 1; }; \

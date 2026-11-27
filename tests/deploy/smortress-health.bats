@@ -10,6 +10,7 @@
 load ../helpers
 
 check=bootc/server/rootfs/etc/greenboot/check/required.d/10-smortress-health.sh
+drop_in=units/systemd/greenboot-healthcheck.service.d/10-timeout.conf
 
 setup() {
     bin=$BATS_TEST_TMPDIR/bin
@@ -67,9 +68,11 @@ STUB
     [[ -x $check ]] || fail "$check is not executable: greenboot would skip it silently"
 }
 
-@test "the budget stays inside greenboot's oneshot timeout" {
-    local budget
+@test "the budget stays inside the timeout the drop-in gives the unit" {
+    local budget limit
     budget=$(grep -o 'GREENBOOT_SMORTRESS_BUDGET:-[0-9]*' "$check" | grep -o '[0-9]*$')
+    limit=$(grep -o 'TimeoutStartSec=[0-9]*' "$drop_in" | grep -o '[0-9]*$')
     [[ -n $budget ]] || fail "the budget is not a literal"
-    ((budget < 90)) || fail "a ${budget}s budget outlives the unit's 90s start limit"
+    [[ -n $limit ]] || fail "the drop-in sets no timeout"
+    ((budget < limit)) || fail "a ${budget}s budget outlives the unit's ${limit}s limit"
 }

@@ -12,12 +12,13 @@
 # the one definition of this host's job, and a second list would drift from it.
 #
 # The check waits rather than failing on first look: a boot is not a steady
-# state, units that depend on the pool come up over a minute, and greenboot's
-# unit is a oneshot under systemd's 90 s default. A probe that gave up after
-# five seconds would roll back a healthy deployment on every slow boot.
+# state, and units that depend on the ZFS pool come up over a minute. The 300 s
+# budget is the one the post-boot gate used for the same wait, and the
+# greenboot-healthcheck drop-in raises the unit's timeout to cover it -- a
+# probe that gave up early would roll back a healthy deployment on a slow boot.
 set -uo pipefail
 
-budget=${GREENBOOT_SMORTRESS_BUDGET:-60}
+budget=${GREENBOOT_SMORTRESS_BUDGET:-300}
 deadline=$((SECONDS + budget))
 units_file=${GREENBOOT_DEPLOY_UNITS:-/usr/share/smortress/deploy-units.txt}
 failures=0
