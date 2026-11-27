@@ -33,7 +33,7 @@ ExecStart=/usr/bin/podman run --rm --replace --name smortress-agent-collect-note
   --env PYTHONPATH=/usr/lib/data-plane/libs:/usr/lib/data-plane \
   --env PYTHONDONTWRITEBYTECODE=1 \
   --entrypoint python3 \
-  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:773b64860909522576e58dbfe112415371d374f5bfcddf528e7e471c236d2f9a \
+  ghcr.io/smores56/homelab-platform/agent-runtime@sha256:dd5dc3547ed57bd7b797ddb2afa4b7536f336257a358be3c801bb5da5d37c5c7 \
   -m data_plane.collectors.raw --root /replica/notes \
   notes --entities /entities
 Restart=no
