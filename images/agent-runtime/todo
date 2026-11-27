@@ -1,0 +1,9 @@
+#!/bin/sh
+# The agent's todo interface (SDLC #1000): one config and one writer at a time.
+# The explicit -d matters because todo.sh looks in $HOME/.todo/config,
+# $HOME/todo.cfg and ~/.config/todo/config first, and this container's HOME is
+# inside the writable agent state dataset.
+set -eu
+exec 9>/tmp/todo.lock
+flock -x 9
+exec todo.sh -d /etc/todo/config "$@"
