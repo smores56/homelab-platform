@@ -1609,24 +1609,21 @@ The gate's baseline and evidence are on #703; the kit contract is
 `docs/core/recovery-kit.md`. Nothing in T1–T6 may repartition or wipe a disk until
 every step below is done and its evidence is posted on #703.
 
+The freeze, the legacy-repository proofs and the inventory ran from the decommission
+scripts task #1030 deleted; their output is on #703 and git is the record. What a
+reinstall still needs from that gate is the one file no backup holds:
+
 ```sh
-sudo scripts/legacy/freeze-legacy.sh --check
-sudo scripts/legacy/freeze-legacy.sh --apply     # --resume restores the recorded state
 sudo systemctl stop syncthing.service 2>/dev/null || true
 sudo tar -C /var/lib -c syncthing syncthing-versions \
   | zstd -T0 -o /var/backup/t0-syncthing-state.tar.zst
 sudo sha256sum /var/backup/t0-syncthing-state.tar.zst
 sudo systemctl start syncthing.service 2>/dev/null || true
-sudo systemctl start restic-backups-local.service restic-backups-r2.service
-sudo scripts/legacy/verify-legacy-backups.sh --keep
-sudo scripts/legacy/legacy-audit.sh --out /var/tmp/t0-audit.md
 ```
 
 The Syncthing step rescues what no backup holds: the identity and the vault version
 history live outside restic's source path, and `/var/backup` is the HDD, which
 survives the migration — copy the archive into the kit before the HDD is converted.
-`pg_restore` is not on the host's PATH, so the verifier reports the exact
-`pg_restore --list <file>` line it needed, and that counts as a failure.
 
 ### Bringing the plane up
 
@@ -1656,8 +1653,7 @@ A restored tree is root-owned and unlabelled, because the restore runs as root a
 Restic does not carry `security.selinux`: the `chown` and `chcon` are what make it a
 tree the application can write and Podman may mount, and a real restore needs both.
 Start the units again as "Validate the units" gives, then the dump timer.
-`scripts/legacy/retirement-gate.sh` runs the same helper over every unit and destination
-for the T6 gate.
+The same helper run over every unit and destination is the T6 gate.
 
 
 ### The boot gate and its counter
@@ -1981,11 +1977,10 @@ its own log while the zone carries no tunnel for it to join.
 The gate's evidence is a cold restore of every recovery unit from every destination,
 plus the two agent drills:
 
-```sh
-sudo scripts/legacy/retirement-gate.sh --dry-run
-sudo scripts/legacy/retirement-gate.sh                  # the whole matrix
-sudo scripts/legacy/retirement-gate.sh --keep           # leave the targets for inspection
-```
+The matrix is the restore-by-hand helper over every recovery unit and every
+destination (`docs/core/restic-plane.md`, "Restore by hand"), with
+`scripts/agent-runtime-drill.sh` running `mounts`, `credentials` and `restore` for
+both agent datasets. The gate's own evidence table is on #709.
 
 ### Decommission checklist
 
@@ -1993,9 +1988,9 @@ sudo scripts/legacy/retirement-gate.sh --keep           # leave the targets for 
    kit drill dated in `docs/core/recovery-kit.md`.
 2. **The three repositories are fresh** — "Bring the restic plane up", and
    `smortress-restic-verify` exits 0 on every unit.
-3. **The retirement matrix is green** — `scripts/legacy/retirement-gate.sh` with no failed
-   row, plus `scripts/agent-runtime-drill.sh mounts`, `credentials` and `restore`
-   for both agent datasets.
+3. **The retirement matrix is green** — a cold restore of every recovery unit from
+   every destination with no failed row, plus `scripts/agent-runtime-drill.sh`
+   mounts, `credentials` and `restore` for both agent datasets.
 4. **The old plane is proven and then frozen** — the T0 verifier tables; stop
    writing and pruning the old repositories, record the date in the kit, and delete
    them only after 90 days through the reviewed retention process.

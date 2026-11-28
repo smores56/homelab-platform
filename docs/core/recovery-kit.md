@@ -28,7 +28,7 @@ needs `pg_restore`.
 | HDD LUKS passphrase | opens `/var/backup` on a replacement host | 2026-11-15 (T0) | — |
 | 980 root LUKS passphrase (current install) | reads the legacy OS disk before it is wiped | 2026-11-15 (T0) | — |
 | 970 LUKS passphrase (current rollback disk) | opens the old-generation rollback before it is converted into the SSD repository | 2026-11-15 (T0) | — |
-| smortress SSH host private key | the host's SOPS age identity and what `provision/smortress/build-seed.sh` carries into a reinstall | 2026-11-15 (T0) | — |
+| smortress SSH host private key | the host's SOPS age identity, and the identity a reinstall restores before sshd starts | 2026-11-15 (T0) | — |
 | SOPS admin age identity | decrypts the versioned secret files; passphrase-encrypted copy per machine | existing | — |
 | YubiKey restore bundle (FIDO2 credential records) | FIDO2 credential handles; PIV keys cannot be exported and are unaffected | existing | — |
 | New 980 root LUKS passphrase | offline unlock of the new OS disk (Tang + TPM2 is the unattended path) | T2 | — |

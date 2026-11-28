@@ -135,8 +135,9 @@ tcp_open() { # <port>
     2>/dev/null
 }
 
-# The handlers on 443 are the tenant's namespace: Serve exposes root-path HTTPS
-# only on 443 and 8443, and those belong to the core applications.
+# The handlers on 443 are the tenant's namespace: the applications answer on their
+# own Service names, so 443 is where the gateways, the wallpaper tree and the
+# tenant paths live and nothing else is read here.
 serve_status_paths() {
   local doc
   doc=$(timeout --signal=TERM --kill-after=10 "$(clamp_timeout "$probe_timeout")" \

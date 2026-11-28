@@ -504,11 +504,10 @@ These need the physical host and are not claimed by the repository tests:
 - A cold restore of every group from each destination (the T6 gate), including
   ownership and database recovery.
 
-`scripts/legacy/retirement-gate.sh` is the matrix runner for #709's gate: run it on the
-host as root and it restores every unit from every destination with the drill
-helper, checks one sample file per restored dataset against the live tree, and
-prints the evidence table. It cannot prove database recovery or application
-startup; those remain #716's operator rows.
+The matrix runner for #709's gate was one of the decommission scripts task #1030
+deleted; the gate's evidence table is on #709. "Restore by hand" below is what it
+ran, unit by unit and destination by destination, and a cold restore cannot prove
+database recovery or application startup: those remain #716's operator rows.
 
 ## Local proof
 

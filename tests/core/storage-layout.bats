@@ -281,9 +281,8 @@ load ../helpers
     assert_output ""
 }
 
-# The old layout is gone from everything the image ships or the tests read.
-# `provision/` and the retired `apps/data_plane` tests keep their historical
-# wording until those paths are deleted.
+# The old layout is gone from everything the image ships or the tests read. The
+# retired `apps/data_plane` tests keep their historical wording.
 @test "no script, unit, image file, test or doc names /var/tank" {
     # shellcheck source=/dev/null
     source scripts/storage-layout.sh

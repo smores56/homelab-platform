@@ -273,7 +273,7 @@ the reliable path over a bind-mounted dataset. `ND_BASEURL` is unset because Ser
 forwards `Host` and sets `X-Forwarded-Host`/`Proto`, which Navidrome uses for the
 absolute URLs it emits.
 
-The first visit to `https://smortress.<tailnet>.ts.net:8448/` shows "Create
+The first visit to `https://navidrome.<tailnet>.ts.net/` shows "Create
 Admin"; Navidrome has no supported way to pre-create one, so the operator does it
 once (`docs/manual-steps.md`). The restore sequence is the `music` unit's: stop
 `navidrome.service`, restore `raw/music` and `state/navidrome` from the same
@@ -606,29 +606,33 @@ disk to be read.
 | Application | Direct listener | Tailnet URL |
 | --- | --- | --- |
 | Immich | `127.0.0.1:2283` | `https://immich.<tailnet>.ts.net/` (the `svc:immich` Service, which is also the edge's upstream) and `https://smortress.<tailnet>.ts.net/` |
-| OPDShelf | `127.0.0.1:8083` | `https://opds.<tailnet>.ts.net/` (the `svc:opds` Service, which is also the edge's upstream) and `https://smortress.<tailnet>.ts.net:8443/` |
+| OPDShelf | `127.0.0.1:8083` | `https://opds.<tailnet>.ts.net/` (the `svc:opds` Service, which is also the edge's upstream) |
 | Syncthing GUI | `127.0.0.1:8384`, through the loopback proxy on `127.0.0.1:8385` | `https://sync.<tailnet>.ts.net/` |
-| Navidrome | `127.0.0.1:4533` | `https://navidrome.<tailnet>.ts.net/` and `https://smortress.<tailnet>.ts.net:8448/` |
+| Navidrome | `127.0.0.1:4533` | `https://navidrome.<tailnet>.ts.net/` |
 | Wallpapers | `/srv/wallpapers` (static files) | `https://smortress.<tailnet>.ts.net/wallpapers/` |
 | Personal agent gateway | `127.0.0.1:18001` | `https://smortress.<tailnet>.ts.net/apps/agent-local/v1` |
 | General agent gateway | `127.0.0.1:18002` | `https://smortress.<tailnet>.ts.net/apps/agent-general/v1` |
 | Hosted proxy | `127.0.0.1:18003` | none, on purpose: a tailnet path would let any device spend the provider key |
-| Personal workspace | `127.0.0.1:18008` | `https://assistant.<tailnet>.ts.net/` and `https://smortress.<tailnet>.ts.net:8444/` |
-| General web UI | `127.0.0.1:18007` | `https://agent.<tailnet>.ts.net/` and `https://smortress.<tailnet>.ts.net:8445/` |
+| Personal workspace | `127.0.0.1:18008` | `https://assistant.<tailnet>.ts.net/` |
+| General web UI | `127.0.0.1:18007` | `https://agent.<tailnet>.ts.net/` |
 | zellij web terminal | `127.0.0.1:8082` | `https://terminal.<tailnet>.ts.net/` |
 
 The two agent paths are a second table in `scripts/tailscale-serve.sh`
 (`core_path_routes`): the clients that address those APIs already use a path, and
-443 and 8443 were the ports already taken. The browser UIs cannot work that
-way -- a web UI emits absolute asset and link URLs, so a path prefix on 443 would
-send the browser to the tailnet root, which is Immich -- and they get two more
-entries in `core_routes` (8444 and 8445) instead. A tenant
-plan that claims either path is refused whole, and the stale-route pruning skips
+443 is the port left once every application had a Service name. The browser UIs
+cannot work that way -- a web UI emits absolute asset and link URLs, so a path
+prefix on 443 would send the browser to the tailnet root, which is Immich -- which
+is why each answers on a Service name of its own instead. 443 is the only host port
+the script declares: it carries Immich's root, the two gateways, the wallpaper tree
+and the tenant paths, and the per-port routes the other applications sat behind
+were retired once the names had replaced them (task #1030). A tenant plan that
+claims either gateway path is refused whole, and the stale-route pruning skips
 both, so a run without a plan cannot delete them. A port dropped from `core_routes`
 is turned off on the next run of that script, because Serve keeps answering a
-handler that nothing declares any more -- and a Service dropped from the script's
-`--service=` declarations is cleared on that run for the same reason, so a name no
-declaration makes stops advertising itself.
+handler that nothing declares any more -- which is how a box loses a retired route
+-- and a Service dropped from the script's `--service=` declarations is cleared on
+that run for the same reason, so a name no declaration makes stops advertising
+itself.
 
 The personal workspace and the general web UI answer on a Service each, like every
 other application behind the tailnet name service (design #834): `svc:assistant`
@@ -640,23 +644,19 @@ deleted, and nothing on the host answers those names. The VIPs these Services ow
 are in `100.64.0.0/10`, so the names resolve anywhere and route only on the
 tailnet. Each is granted to the owner and to the scheduled probe, below.
 
-The `:8444` and `:8445` Serve routes stay declared as the rollback: they answer
-the workspace and the general UI on the host's own name, so a certificate fault
-or a Service the tailnet dropped costs the named URL and not the UI. Nothing is
-provisioned for them, one line each in `scripts/tailscale-serve.sh`.
-
-`scripts/verify-tailnet-names.sh` is the probe on that path (task #848), and
-`.github/workflows/verify-tailnet-names.yml` runs it daily from a CI node that
-joins as `tag:deploy` — the one non-owner client there is. It asserts what a user
-would notice rather than a status code: each name resolves into the tailnet on a
-VIP of its own and no two names share one, the chain verifies against the public
+`scripts/verify-fleet.sh` is the probe on that path (tasks #848 and #1030), and
+`.github/workflows/verify-fleet.yml` runs it daily from a CI node that joins as
+`tag:deploy` — the one non-owner client there is. Its tailnet class asserts what a
+user would notice rather than a status code: each name resolves into the tailnet on
+a VIP of its own and no two names share one, the chain verifies against the public
 roots with the name in it, the certificate is not within 14 days of expiry, and
 `GET /` answers the status class the application owns -- 2xx for Immich and the
 Syncthing GUI, 3xx for the three that redirect a stranger to a login, 4xx for the
-catalogue -- rather than a 502 or a 200 from something else. A stopped
-application answers 502 or refuses, a drained Service times out, and both are
-red. The result pages through Healthchecks via the `NAMES_PING_URL` secret; the
-operator commands are in `docs/manual-steps.md`.
+catalogue -- rather than a 502 or a 200 from something else. A stopped application
+answers 502 or refuses, a drained Service times out, and both are red. The same run
+checks the three public names and the zone's CAA policy, and the result pages once
+through Healthchecks via the `FLEET_PING_URL` secret; the operator commands are in
+`docs/manual-steps.md`.
 
 Historical: `agent.sammohr.dev` was a proxied CNAME to the dead cluster tunnel,
 and Cloudflare refuses two records at one name, so the two applies could not

@@ -93,8 +93,8 @@ readonly agent_local=units/quadlet/agent-local.container
     ! grep -qE '\[[0-9]+\]=18006|svc:assistant .*:18006' scripts/tailscale-serve.sh
 }
 
-@test "the tailnet probe expects the workspace's served shell" {
-  grep -qE '^\s*\[assistant\]=2$' scripts/verify-tailnet-names.sh
+@test "the fleet probe expects the workspace's served shell" {
+  grep -qE '^\s*\[assistant\]=2$' scripts/verify-fleet.sh
 }
 
 @test "the restore drill covers the workspace container" {

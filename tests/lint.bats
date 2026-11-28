@@ -14,13 +14,13 @@ load helpers
 
 @test "the tracked yaml passes yamllint" {
     # shellcheck disable=SC2046
-    run yamllint -c .yamllint.yaml $(git ls-files '*.yaml' '*.yml') provision/smortress/user-data
+    run yamllint -c .yamllint.yaml $(git ls-files '*.yaml' '*.yml')
     assert_success
 }
 
 @test "every shell script passes shellcheck" {
     # shellcheck disable=SC2046
-    run shellcheck scripts/*.sh provision/*/*.sh scripts/lib/*.sh scripts/deploy/apps/*.sh bootc/lib/deploy/*.sh scripts/check/server/*.sh scripts/legacy/*.sh backrest/scripts/*.sh backrest/container/entrypoint.sh .githooks/* hosts/*/scripts/*.sh $(git ls-files 'tests/*.sh' 'tests/*/*.sh' 'tests/*.bash' 'tests/*/*.bash' 'bootc/*/tests/*.sh' 'hosts/*/tests/*.sh')
+    run shellcheck scripts/*.sh scripts/lib/*.sh scripts/deploy/apps/*.sh bootc/lib/deploy/*.sh scripts/check/server/*.sh backrest/scripts/*.sh backrest/container/entrypoint.sh .githooks/* hosts/*/scripts/*.sh $(git ls-files 'tests/*.sh' 'tests/*/*.sh' 'tests/*.bash' 'tests/*/*.bash' 'bootc/*/tests/*.sh' 'hosts/*/tests/*.sh')
     assert_success
 }
 

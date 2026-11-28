@@ -142,9 +142,9 @@ are retired (SDLC #833) — so one field carries the records: setting `edge_ipv4
 creates them, dropping it removes them, and the only window left is the seconds
 between the apply and Caddy's next order.
 
-Before the first cutover, `scripts/legacy/compare-photos-origin.sh` compared
-`/api/server/statistics` on the cluster copy against the host's; the cluster copy
-is gone, so there is one library now and no comparison to run.
+Before the first cutover a decommission script compared `/api/server/statistics` on
+the cluster copy against the host's; the cluster copy is gone, so there is one
+library now and no comparison to run.
 
 The cutover waited on #709's retirement gate because it changed which Immich is
 authoritative, a data decision rather than a DNS one.
@@ -152,17 +152,17 @@ authoritative, a data decision rather than a DNS one.
 The public probe is a post-cutover step, run once Caddy has ordered:
 
 ```sh
-scripts/verify-public-edge.sh   # thirteen checks: three names, certificates, three applications
+scripts/verify-fleet.sh   # the three names, their certificates and their applications
 ```
 
 There is no separate pre-cutover on-box run to make: while a name still resolves
 into Cloudflare no ACME order can succeed anywhere, and the boot gate's
 infrastructure inputs are what a box proves about itself in the meantime.
 
-Afterwards both probes run daily in
-`.github/workflows/verify-public-edge.yml`: `scripts/verify-public-edge.sh` for
-the names and `scripts/verify-caa.sh` for the CA the zone's `CAA` records admit
-(setup: `docs/manual-steps.md`, "Create the public edge check").
+Afterwards the whole fleet is probed daily in
+`.github/workflows/verify-fleet.yml`: `scripts/verify-fleet.sh` checks the three
+names over TLS and, in the same run, the CA the zone's `CAA` records admit
+(`scripts/verify-caa.sh`). Setup: `docs/manual-steps.md`.
 
 ## Metering
 
@@ -179,7 +179,7 @@ photo allowance, and a null-route would then take both roles down at once.
 
 | Symptom | Cause | Action |
 | --- | --- | --- |
-| 502 with a valid certificate | tailnet down, smortress down, or `svc:immich`/`svc:opds` not advertised | `scripts/verify-public-edge.sh`; `tailscale status` on both ends; `systemctl status smortress-tailscale-serve` |
+| 502 with a valid certificate | tailnet down, smortress down, or `svc:immich`/`svc:opds` not advertised | `scripts/verify-fleet.sh`; `tailscale status` on both ends; `systemctl status smortress-tailscale-serve` |
 | certificate expired | ctrl firewall blocks 443, clock wrong, or ACME account refused | `journalctl -u caddy`; `timedatectl`; check the panel rule list |
 | every name dead, tailnet fine | panel null-route, suspension, or host down | ctrl panel; reboot; console |
 | new IP after rebuild | a replacement VPS, not an OS reinstall | update `edge_ipv4`, apply, re-run the probe |
@@ -254,7 +254,7 @@ A hold exits 1 on purpose: the deployment was neither blessed nor refused, and a
 clean `boot-complete.target` would be the host claiming otherwise. The tests are
 `tests/deploy/edge-boot.bats`, and the outside-in assertions — 443 answering, 22
 and 8484 closed to the internet — are the scheduled probe's
-(`scripts/verify-public-edge.sh`), not this gate's.
+(`scripts/verify-fleet.sh`), not this gate's.
 
 ## The deploy plane
 
@@ -332,8 +332,8 @@ what a rebuild costs and in what order it is paid; the drill that times it is
    tailnet join needs the key this step writes — run `scripts/edge-bootstrap.sh`
    with the fresh `tag:vps` key and the rest of the secret document
    (`docs/manual-steps.md#bootstrap-the-fresh-edge`).
-4. Run `scripts/verify-public-edge.sh` from a checkout: thirteen checks, the three
-   names over valid TLS and each answering as its own application.
+4. Run `scripts/verify-fleet.sh` from a checkout: the three names over valid TLS
+   and each answering as its own application.
 5. If the IPv4 changed, update `edge_ipv4` and apply; otherwise nothing to do.
 6. Record the elapsed time. The reader no longer runs here (SDLC #953), so a
    rebuild costs `recovery.sammohr.dev` only for the seconds Caddy spends ordering
@@ -368,7 +368,7 @@ the repository *cannot* reproduce, with what is done about each item.
 
 Nothing here is proved by a human reading the console. The image's static half
 runs in CI, the boot gate judges every boot on the box, and the outside-in probe
-runs daily (`.github/workflows/verify-public-edge.yml`).
+runs daily (`.github/workflows/verify-fleet.yml`).
 
 - `bootc/edge/tests/check.sh` in CI's `image` area
   (`.github/workflows/server-image-static.yml`, on any `bootc/**` pull request):
@@ -381,12 +381,12 @@ runs daily (`.github/workflows/verify-public-edge.yml`).
   each of the three names resolving, Caddy completing a loopback handshake and
   this host's public address being the one the names resolve to — the half of the
   design that no repository check can see, judged before the boot is blessed.
-- `scripts/verify-public-edge.sh` from anywhere, after the cutover: all three
-  names over valid TLS with life above 14 days, and each path answering as its own
-  application — Immich's HTML shell, OPDShelf's 401 challenge, Backrest's own
-  page behind its guard — never as the agent gateway, a text/plain 404, or the
-  wallpaper listing. A status code alone cannot prove that: Immich answers 200
-  and OPDShelf 401 for any path.
+- `scripts/verify-fleet.sh` from anywhere, after the cutover: its edge class
+  checks all three names over valid TLS with life above 14 days, and each path
+  answering as its own application — Immich's HTML shell, OPDShelf's 401
+  challenge, Backrest's own page behind its guard — never as the agent gateway, a
+  text/plain 404, or the wallpaper listing. A status code alone cannot prove that:
+  Immich answers 200 and OPDShelf 401 for any path.
 - `scripts/verify-caa.sh`: reads the zone's `CAA` records and the issuer of the
   certificate `photos.sammohr.dev` serves, and requires the issuer's CA domain in
   an `issue` value — Google Trust Services to `pki.goog`, Let's
@@ -436,7 +436,7 @@ disagree with itself.
    ```sh
    sudo firewall-cmd --reload
    sudo systemctl restart smortress-tailscale-serve.service
-   scripts/verify-public-edge.sh   # thirteen ok lines
+   scripts/verify-fleet.sh   # every ok line, the edge's sixteen included
    ```
 
    Expect the previous routes unchanged plus `svc:immich` → `http://127.0.0.1:2283`,
@@ -449,7 +449,7 @@ disagree with itself.
    30 days of `photos` + `opds` transfer from before the cutover against the ctrl
    panel's graph now, and stop to size the plan if the traffic is a meaningful
    fraction of 10 TB. The library comparison that gated the first cutover compared
-   a cluster copy that no longer exists (`scripts/legacy/compare-photos-origin.sh`).
+   a cluster copy that no longer exists.
 
    The records exist: `edge_ipv4` is committed, so `photos`, `opds` and `recovery`
    already point here. A replacement box with a new address is one value and one
@@ -460,7 +460,7 @@ disagree with itself.
    $EDITOR tofu/terraform.tfvars   # edge_ipv4 = "<vps-ipv4>"
    git commit -qm 'feat(tofu): point the edge names at the VPS'
    git push
-   scripts/verify-public-edge.sh   # all thirteen green, certificates included
+   scripts/verify-fleet.sh   # all green, certificates included
    ```
 
    The probe checks each name answers *as its application*: Immich's own HTML shell

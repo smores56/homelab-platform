@@ -14,12 +14,12 @@ core/app-quadlets-datasets	tests/core/app-quadlets-datasets.bats units/quadlet/*
 core/app-quadlets-host	tests/core/app-quadlets-host.bats units/quadlet/* units/systemd/* bootc/server/* scripts/app-images.sh scripts/storage-layout.sh tests/core/*
 core/app-quadlets-agents	tests/core/app-quadlets-agents.bats units/quadlet/* units/systemd/* bootc/server/* scripts/app-images.sh scripts/storage-layout.sh tests/core/*
 core/app-quadlets-webui	tests/core/app-quadlets-webui.bats units/quadlet/* units/systemd/* bootc/server/* scripts/app-images.sh scripts/storage-layout.sh tests/core/*
-core/app-quadlets-workspace	tests/core/app-quadlets-workspace.bats units/quadlet/* units/systemd/* bootc/server/* scripts/app-images.sh scripts/storage-layout.sh scripts/agent-config-seed.sh scripts/tailscale-serve.sh scripts/verify-tailnet-names.sh scripts/agent-runtime-drill.sh tests/core/*
+core/app-quadlets-workspace	tests/core/app-quadlets-workspace.bats units/quadlet/* units/systemd/* bootc/server/* scripts/app-images.sh scripts/storage-layout.sh scripts/agent-config-seed.sh scripts/tailscale-serve.sh scripts/verify-fleet.sh scripts/agent-runtime-drill.sh tests/core/*
 core/app-quadlets-collectors	tests/core/app-quadlets-collectors.bats units/quadlet/* units/systemd/* bootc/server/* scripts/app-images.sh scripts/storage-layout.sh tests/core/* units/systemd/*.service.d/*
 core/app-quadlets-collections	tests/core/app-quadlets-collections.bats units/quadlet/* units/systemd/* bootc/server/* scripts/app-images.sh scripts/storage-layout.sh tests/core/* units/systemd/*.service.d/*
 core/app-quadlets-egress	tests/core/app-quadlets-egress.bats units/quadlet/* units/systemd/* bootc/server/* scripts/app-images.sh scripts/storage-layout.sh tests/core/* units/systemd/*.service.d/*
 core/storage-layout	tests/core/storage-layout.bats scripts/storage-layout.sh scripts/init-zpool.sh units/systemd/smortress-zpool.service tests/core/*
-core/check	tests/core/check.bats scripts/legacy/* scripts/deploy-state.sh scripts/deploy-cli.sh bootc/lib/deploy/* bootc/server/rootfs/usr/share/smortress/secrets.manifest units/systemd/smortress-deploy* units/systemd/smortress-boot-gate.service docs/core/server-image.md docs/manual-steps.md tests/core/*
+core/check	tests/core/check.bats scripts/deploy-state.sh scripts/deploy-cli.sh bootc/lib/deploy/* bootc/server/rootfs/usr/share/smortress/secrets.manifest units/systemd/smortress-deploy* units/systemd/smortress-boot-gate.service docs/core/server-image.md docs/manual-steps.md tests/core/*
 core/operator-access	tests/core/operator-access.bats scripts/operator-access.sh docs/manual-steps.md tests/core/*
 core/apps-egress	tests/core/apps-egress.bats units/systemd/smortress-apps-deny.service units/systemd/smortress-apps-egress.service bootc/server/rootfs/etc/nftables/smortress-apps*.nft bootc/server/Containerfile tests/core/*
 core/apps-user	tests/core/apps-user.bats scripts/apps-user.sh units/systemd/smortress-apps-user.service units/systemd/smortress-apps-quota.service units/systemd/smortress-apps-egress.service bootc/server/rootfs/etc/sysusers.d/smortress-apps.conf bootc/server/rootfs/etc/tmpfiles.d/smortress.conf bootc/server/rootfs/usr/share/smortress/apps-policy.json bootc/server/rootfs/etc/nftables/smortress-apps.nft tests/core/*
@@ -131,7 +131,7 @@ secrets/decrypt	tests/secrets/decrypt.bats scripts/sops-decrypt.sh tests/secrets
 secrets/migration	tests/secrets/migration.bats scripts/smortress-secrets-seed.sh scripts/secrets-index.py tests/secrets/*
 secrets/policy	tests/secrets/policy.bats scripts/sops-policy.py tests/secrets/*
 secrets/rotate	tests/secrets/rotate.bats scripts/secret.sh secrets/index.json secrets/boot.json .sops.yaml scripts/sops-policy.py scripts/secrets-check.py tests/secrets/*
-lint	tests/lint.bats .github/* CODEOWNERS .yamllint.yaml scripts/* tests/* provision/* backrest/* .githooks/* bootc/lib/* hosts/*
+lint	tests/lint.bats .github/* CODEOWNERS .yamllint.yaml scripts/* tests/* backrest/* .githooks/* bootc/lib/* hosts/*
 docs	tests/docs.bats scripts/check-doc-refs.py scripts/doc-refs-baseline.txt docs/laptop/*
 tofu-fmt	tests/tofu-fmt.bats tofu/*
 actionlint	tests/actionlint.bats .github/*
@@ -140,9 +140,7 @@ tofu/check	tests/tofu/check.bats tests/tofu/* tofu/* scripts/check-tofu-provider
 tags	tests/tags.bats
 core/agent-recovery	tests/core/agent-recovery.bats scripts/restic-plane-common.sh scripts/smortress-restic-backup.sh scripts/smortress-restic-verify.sh scripts/smortress-restic-restore-drill.sh units/systemd/smortress-restic-* units/systemd/smortress-agent-*.service units/systemd/smortress-agent-*.service.d/* units/quadlet/agent-*.container scripts/storage-layout.sh tests/core/*
 core/smortress-restic-progress	tests/core/smortress-restic-progress.bats scripts/smortress-restic-progress.sh scripts/restic-plane-common.sh scripts/storage-layout.sh tests/core/*
-provision/check	tests/provision/check.bats provision/* tests/provision/*
-edge/check	tests/edge/check.bats scripts/verify-public-edge.sh scripts/verify-caa.sh tests/edge/*
-tailnet-names/check	tests/tailnet-names/check.bats scripts/verify-tailnet-names.sh tests/tailnet-names/*
+fleet/check	tests/fleet/check.bats scripts/verify-fleet.sh scripts/verify-caa.sh tests/fleet/*
 agent-egress/check	tests/agent-egress/check.bats apps/agent_egress/* tests/agent-egress/*
 brave/check	tests/brave/check.bats apps/brave_ingest/* libs/data_plane/collectors/* tests/brave/*
 tuta-calendar/check	tests/tuta-calendar/check.bats apps/tuta_calendar/* libs/data_plane/collectors/* images/tuta-calendar/* tests/tuta-calendar/*

@@ -4,9 +4,9 @@
 #
 # No credentials, no API calls, no state: it reads `tofu/*.tf` as text and
 # asserts the reviewed shape of the zone. The live half is
-# scripts/verify-public-edge.sh, which resolves the names and checks each answers
-# as its own application; the token-driven Access probe retired with the Access
-# objects (SDLC #833).
+# scripts/verify-fleet.sh, which resolves the names and checks each answers as its
+# own application; the token-driven Access probe retired with the Access objects
+# (SDLC #833).
 #
 #   bats tests/tofu/check.bats
 #

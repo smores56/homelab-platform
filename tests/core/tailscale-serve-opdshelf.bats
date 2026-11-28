@@ -21,7 +21,7 @@ setup() { ts_setup; }
 # this is an `--https` declaration to the Service and not a handler on the host.
 # It is a Service, though, so it must never land in `Web`: `host:443` already
 # fronts Immich, and a service declaration recorded as a host handler would
-# replace it. The 8443 host route stays declared above, as the rollback.
+# replace it. The per-port host route that was its rollback is gone (task #1030).
 
 @test "the OPDShelf Service endpoint is declared exactly once, over https/443" {
     core_run

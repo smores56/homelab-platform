@@ -312,8 +312,9 @@ that will issue to these records first, then move the certificate.
 the certificate `photos.sammohr.dev` serves, maps it to a CA domain (Google Trust
 Services to `pki.goog`, Let's Encrypt to `letsencrypt.org`, DigiCert to
 `digicert.com`, Sectigo to `sectigo.com`, ZeroSSL to `zerossl.com`) and requires
-that domain in an `issue` value. It runs daily in
-`.github/workflows/verify-public-edge.yml`, so a carve-out that stops renewal
+that domain in an `issue` value. It runs daily as one of the checks in
+`scripts/verify-fleet.sh` (`.github/workflows/verify-fleet.yml`), so a carve-out
+that stops renewal
 fails there before the certificate expires. An empty set is a notice rather than
 a failure: the check reports the served issuer and passes, and the two records
 above are asserted statically by `tests/tofu/check.bats`.
@@ -375,6 +376,6 @@ serves is the public probe, which resolves the names and checks each answers as
 its own application:
 
 ```sh
-scripts/verify-public-edge.sh     # all three names, over valid TLS, each as its application
+scripts/verify-fleet.sh           # all three names, over valid TLS, each as its application
 ssh root@smoresnet journalctl -u edge-boot-gate.service -b   # the box's own verdict on the boot
 ```
