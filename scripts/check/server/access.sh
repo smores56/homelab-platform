@@ -326,7 +326,7 @@ check "the seed refreshes the manifest the decrypt reads" \
 check "the boot decrypt still reads the /etc copy" \
   has 'SMORTRESS_SECRETS_MANIFEST:-/etc/smortress/secrets.manifest' scripts/sops-decrypt.sh
 
-# The two machine credentials are agent-only (docs/agent-identity.md): a bare
+# The two machine credentials are agent-only (docs/secrets.md): a bare
 # value, root-only, because the dispatcher hands the file's bytes to one general
 # job as GH_TOKEN. Absent is a valid state -- until the T5 dispatcher exists the
 # general agent has no GitHub identity -- and the ciphertext/manifest set check

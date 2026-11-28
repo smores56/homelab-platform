@@ -458,7 +458,7 @@ The general shell agents act on GitHub as a dedicated machine account, never as
 with no rulesets, Environments, secrets, collaborators or settings. The token is a
 classic PAT, because a fine-grained PAT cannot act on another user's repositories as
 a collaborator. Both machine credentials are the general agent's, delivered per job
-from ciphertext (`docs/agent-identity.md`).
+from ciphertext (`docs/secrets.md`).
 
 1. Create the account in a browser, with an address that is not the owner's and not
    a `+` alias; enable TOTP 2FA, store the recovery codes, add no SSH key, OAuth

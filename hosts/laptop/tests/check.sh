@@ -253,7 +253,7 @@ else
   bad "the image declares the Tailnet widget's xdg helpers"
 fi
 
-if grep -qF 'sudo tailscale up --operator=smores' "$repo/docs/laptop/switch.md" \
+if grep -qF 'sudo tailscale up --operator=smores' "$repo/docs/laptop/manual-steps.md" \
     && grep -qF 'sudo tailscale set --operator=smores' "$repo/docs/laptop/manual-steps.md"; then
   ok "the runbook grants operator on first join and on an existing host"
 else
