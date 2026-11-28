@@ -12,6 +12,7 @@ load ../helpers
 check=bootc/server/rootfs/etc/greenboot/check/required.d/10-smortress-health.sh
 drop_in=units/systemd/greenboot-healthcheck.service.d/10-timeout.conf
 counter_unit=units/systemd/smortress-boot-counter.service
+containerfile=bootc/server/Containerfile
 
 setup() {
     bin=$BATS_TEST_TMPDIR/bin
@@ -83,4 +84,15 @@ STUB
     # first boot of this image proved what happens when this unit stays silent.
     grep -qxF 'Environment=BOOT_COUNTER_SNIPPET=/usr/share/smortress/boot-counter.cfg' "$counter_unit" ||
         fail "the counter unit does not name this image's snippet"
+}
+
+# The snippet only moves a counter that is armed, and greenboot arms it when a
+# deployment is staged (boot_counter=3, boot_success=0 before the reboot). Its
+# unit is installed RequiredBy=ostree-finalize-staged.service, so the enablement
+# is that dependency link, and the image asserts the link at build time.
+@test "the image enables greenboot's set-counter, which arms the fallback" {
+    grep -qE '^[[:space:]]+greenboot-grub2-set-counter\.service[[:space:]]*\\$' "$containerfile" ||
+        fail "the Containerfile does not enable greenboot-grub2-set-counter.service: a staged deployment would carry no armed counter into its first boot"
+    grep -qF -- 'test -e /etc/systemd/system/ostree-finalize-staged.service.requires/greenboot-grub2-set-counter.service' "$containerfile" ||
+        fail "the build does not assert the set-counter dependency link"
 }

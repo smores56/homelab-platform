@@ -577,11 +577,10 @@ for unit in "${!unlisted_why[@]}"; do
     bad "the gate's unlisted reasons are consulted: $unit (never consulted: the loop drops this unit before the list/allow decision, so the reason is read by nothing)"
   fi
 done
-count_cfg=bootc/server/rootfs/usr/lib/bootupd/grub2-static/configs.d/10-smortress-count.cfg
-check "the boot counter snippet ships where bootupd reads it" test -s "$count_cfg"
-check "the snippet clears boot_success on every boot" has 'set boot_success=0' "$count_cfg"
-check "the snippet counts three attempts" has 'set boot_counter=3' "$count_cfg"
-check "the snippet selects the previous deployment at zero" has 'set default=1' "$count_cfg"
+# The counter itself is greenboot's snippet installed as /boot/grub2/custom.cfg
+# (smortress-boot-counter.service): its content is the package's, so the image
+# asserts what it must contain at build time (bootc/server/Containerfile) instead
+# of keeping a copy in this tree to assert against.
 check "a hung PID 1 reboots" \
   has 'RuntimeWatchdogSec=1min' bootc/server/rootfs/etc/systemd/system.conf.d/10-watchdog.conf
 # A panic must not reboot until a bootloader counter can fall back: otherwise a

@@ -94,7 +94,6 @@ while IFS= read -r file; do deploy_files+=("$file"); done < <(
   printf '%s\n' scripts/deploy-*.sh scripts/smortress-boot-gate.sh bootc/lib/deploy/*.py \
     bootc/lib/deploy/*.sh bootc/lib/deploy/fixtures/*.json \
     bootc/server/rootfs/usr/share/smortress/deploy-units.txt \
-    bootc/server/rootfs/usr/lib/bootupd/grub2-static/configs.d/10-smortress-count.cfg \
     units/systemd/smortress-deploy* units/systemd/smortress-boot-gate.service \
     secrets/boot.json
 )

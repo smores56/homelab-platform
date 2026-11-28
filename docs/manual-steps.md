@@ -1660,25 +1660,42 @@ Start the units again as "Validate the units" gives, then the dump timer.
 for the T6 gate.
 
 
-### The boot gate and its denials
+### The boot gate and its counter
 
-`bootc` has no boot counting here and `bootupctl update` never copies the static
-GRUB snippet, because every component is already current:
+`bootc` has no boot counting of its own and `bootupctl update` never copies the
+GRUB snippet greenboot ships in bootupd's directory, because every component is
+already current. The counter therefore comes from the hook `grub.cfg` does read:
+`smortress-boot-counter.service` installs greenboot's snippet as
+`/boot/grub2/custom.cfg`, which `41_custom.cfg` sources. Prove it on the host:
 
 ```sh
-sudo bootupctl status                        # No components are adoptable.
-sudo grep -c 'boot_counter' /boot/grub2/grub.cfg   # 0
+sudo bootupctl status                              # No components are adoptable.
+sudo grep -c 'boot_counter' /boot/grub2/custom.cfg # 1
+systemctl is-enabled greenboot-grub2-set-counter   # enabled
+journalctl -b | grep -c boot-counting-absent       # 0
+sudo grub2-editenv /boot/grub2/grubenv list        # boot_success=1, boot_counter=3, no default
 ```
 
-**The host therefore has no pre-userspace rollback.** Do not claim one, and do not
-enable `kernel.panic`: a panic that reboots without a counter loops the same image
-forever. What exists is the userspace gate — a deployment that boots but fails its
-host health check is denylisted and `bootc rollback --apply` reverts it — and the
-tenant's apps are not part of it, so a red gate always means the platform itself.
+The last two lines are the gate's own verdict: `boot-counting-absent` on a boot
+means `/boot/grub2/custom.cfg` was missing or did not read the counter, so
+`smortress-boot-counter.service` did not run — and a host in that state has no
+pre-userspace rollback, because the counter never armed it. `greenboot-grub2-set-counter`
+is what arms it when a deployment is staged; without it a deployment that never
+reaches userspace has spent counter it never had.
+
+With the counter in place the fallback works as designed: a deployment that never
+reaches userspace spends one of three attempts per boot and, at zero, GRUB selects
+the previous entry (`default=1`); a boot that reaches the gate is marked good
+(`boot_success=1`, `boot_counter=3`, no `default`) before anything is decided. Do
+not enable `kernel.panic`: a panic that reboots is only survivable while the
+counter is installed. What exists beside it is the userspace gate — a deployment
+that boots but fails its host health check is denylisted and `bootc rollback
+--apply` reverts it, and the tenant's apps are not part of it, so a red gate always
+means the platform itself.
 
 ```sh
 journalctl -u smortress-boot-gate.service --no-pager -n 20
-# "healthy after N attempt(s)" when a deployment was owed; "boot-counting-absent" otherwise
+# "healthy after N attempt(s)" when a deployment was owed; "boot-gate-green" otherwise
 ```
 
 `/usr/share/smortress/deploy-units.txt` is what "serving" means for this host. A

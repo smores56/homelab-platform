@@ -12,7 +12,7 @@
 platform=scripts/deploy-platform.sh
 gate=scripts/smortress-boot-gate.sh
 lib=scripts/deploy-state.sh
-snippet=bootc/server/rootfs/usr/lib/bootupd/grub2-static/configs.d/10-smortress-count.cfg
+containerfile=bootc/server/Containerfile
 
 commit=9f2c0d3b1a4e5f60718293a4b5c6d7e8f9012345
 digest_index=sha256:1111111111111111111111111111111111111111111111111111111111111111
@@ -236,9 +236,12 @@ bt_setup() {
     export DEPLOY_UNITS_FILE=$work/deploy-units.txt
     export APPS_PLAN=$work/plan.json
     export GRUB_ENV=$work/grubenv
-    # The gate only writes the flags when grub.cfg reads the counter; a fixture
-    # with the snippet's variable stands in for a host where boot counting was
-    # installed.
+    # The gate only writes the flags when the file GRUB actually sources reads
+    # the counter: /boot/grub2/custom.cfg, where smortress-boot-counter.service
+    # installs greenboot's snippet. The fixture stands in for a host where that
+    # install ran, and GRUB_CFG is the decoy a host with the snippet in bootupd's
+    # directory would have had -- a test proves the gate does not read it.
+    export GRUB_CUSTOM_CFG=$work/grub2/custom.cfg
     export GRUB_CFG=$work/grub.cfg
     export STUB_LOG=$log
     export FAKE_PING_LOG=$log/curl-urls
@@ -306,7 +309,9 @@ reset_case() { # keep the fakes' healthy answers, drop every record
     : >"$STUB_SYSTEMCTL_FAILED"
     printf '%s\n' "$ping_url" >"$DEPLOY_PING_SECRET"
     printf 'boot_success=0\nboot_counter=2\ndefault=0\n' >"$GRUB_ENV"
+    mkdir -p "$(dirname "$GRUB_CUSTOM_CFG")"
     printf 'set boot_counter=3\n' >"$GRUB_CFG"
+    printf 'set boot_counter=3\n' >"$GRUB_CUSTOM_CFG"
     jq -nc --argjson port "$app_port" \
         '{version:1,apps:{demo:{basePath:"/apps/demo",containerPort:8080,loopbackPort:$port}}}' \
         >"$APPS_PLAN"
