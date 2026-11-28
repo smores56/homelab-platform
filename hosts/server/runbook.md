@@ -545,6 +545,23 @@ sudo systemctl restart smortress-agent-config.service
 sudo systemctl restart agent-webui-personal.service agent-workspace-personal.service
 ```
 
+### 3.6 Change the SOPS policy
+
+The recipient list is canonical in `dotfiles` as `scripts/sops-policy.py`, and
+`scripts/check-sops-drift.sh` pins the commit this repository is compared against
+(`dotfiles_ref`), so CI fails when the vendored copy or `.sops.yaml` is not that
+revision's render. Change the policy in `dotfiles`, copy it here unchanged, then
+render and rekey:
+
+```sh
+python3 scripts/sops-policy.py render --profile platform >.sops.yaml
+scripts/secret.sh rekey --rotate
+scripts/secret.sh verify
+```
+
+Then set `dotfiles_ref` in `scripts/check-sops-drift.sh` to that dotfiles commit
+(`git log -1 --format=%H -- scripts/sops-policy.py`).
+
 ## 4. Deploy
 
 ### 4.1 Create the fleet check
