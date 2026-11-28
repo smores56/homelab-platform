@@ -7,9 +7,10 @@
 # `insecureSkipHostcheck`, which turns the check off for every caller instead of
 # teaching the GUI one name; since T2 the bypass is off and
 # `smortress-syncthing-hostcheck.service` is what keeps it off. Caddy answers on
-# 127.0.0.1:8385, rewrites Host to
-# 127.0.0.1:8384, and forwards, so the GUI keeps its check and `svc:sync` targets
-# the proxy (scripts/tailscale-serve.sh) rather than the GUI.
+# 127.0.0.1:8385, rewrites Host to 127.0.0.1:8384, and forwards, so the GUI keeps
+# its check and `svc:sync` targets the proxy (scripts/tailscale-serve.sh) rather
+# than the GUI. The site address is hostless with `bind 127.0.0.1`: Caddy matches
+# a site's host against the request's, and Serve forwards `sync.<tailnet>`.
 #
 # `syncthing.service` is the Quadlet-generated unit of
 # units/quadlet/syncthing.container -- `ContainerName=smortress-syncthing` names

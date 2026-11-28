@@ -345,16 +345,23 @@ contains() {
     contains '      smortress-selinux-caddy-proxy.service \' "$server_containerfile"
     contains 'scripts/syncthing-hostcheck.sh' "$server_containerfile"
 
-    # One listener, on loopback, rewriting the one header the GUI checks. A bind
-    # on 0.0.0.0 here would publish the GUI past the firewall.
+    # One listener, on loopback, rewriting the one header the GUI checks. The site
+    # address must be hostless: Caddy matches it against the request Host, and
+    # Serve forwards `sync.<tailnet>`, so a `127.0.0.1` address answers an empty
+    # 200 to every Serve request before the reverse_proxy runs. `bind` is what
+    # keeps the listener loopback-only; a bind on 0.0.0.0 would publish the GUI
+    # past the firewall.
     cfg=bootc/server/rootfs/usr/share/smortress/syncthing-gui.Caddyfile
     run test -s "$cfg"
     assert_success
     contains 'admin off' "$cfg"
     contains 'auto_https off' "$cfg"
-    contains 'http://127.0.0.1:8385 {' "$cfg"
+    contains 'http://:8385 {' "$cfg"
+    contains 'bind 127.0.0.1' "$cfg"
     contains 'reverse_proxy 127.0.0.1:8384 {' "$cfg"
     contains 'header_up Host 127.0.0.1:8384' "$cfg"
+    run grep -qxF 'http://127.0.0.1:8385 {' "$cfg"
+    assert_failure
 
     # The unit runs the package's account, restarts a dead proxy, passes the
     # shipped config, and grants no capability: 8385 is above 1024 and
