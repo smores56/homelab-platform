@@ -110,15 +110,15 @@ deploy/edge-boot-counter	tests/deploy/edge-boot-counter.bats scripts/boot-counte
 deploy/edge-health	tests/deploy/edge-health.bats lib/greenboot/required.d/* lib/greenboot/assertions.d/edge/* bootc/edge/Containerfile
 deploy/edge-drain	tests/deploy/edge-drain.bats bootc/edge/rootfs/usr/libexec/deploy-drain-edge bootc/edge/rootfs/usr/lib/systemd/system/smoresnet-deploy* bootc/edge/rootfs/usr/lib/tmpfiles.d/smoresnet-deploy.conf bootc/edge/Containerfile bootc/lib/deploy/* scripts/deploy-state.sh tests/deploy/edge-drain.bats .github/workflows/publish-edge-image.yml tests/deploy/*
 deploy/edge-bootstrap	tests/deploy/edge-bootstrap.bats scripts/edge-bootstrap.sh scripts/deploy-state.sh tests/deploy/*
-deploy/edge-triggers	tests/deploy/edge-triggers.bats bootc/edge/rootfs/usr/lib/systemd/system/smoresnet-deploy-poll.* bootc/edge/rootfs/usr/lib/systemd/system/smoresnet-deploy.path bootc/edge/Containerfile .github/workflows/publish-edge-image.yml scripts/deploy-poll.sh
+deploy/edge-triggers	tests/deploy/edge-triggers.bats bootc/edge/rootfs/usr/lib/systemd/system/smoresnet-deploy-poll.* bootc/edge/rootfs/usr/lib/systemd/system/smoresnet-deploy.path bootc/edge/Containerfile .github/workflows/publish-edge-image.yml .github/workflows/ci.yml scripts/deploy-poll.sh
 apps/check	tests/apps/check.bats scripts/apps-schema.py tests/apps/*
 apps/ingress	tests/apps/ingress.bats scripts/apps-ingress.sh bootc/server/Containerfile units/systemd/smortress-app-ingress@.service tests/apps/*
 apps/ingress-reconcile	tests/apps/ingress-reconcile.bats scripts/apps-ingress-reconcile.sh units/systemd/smortress-app-ingress-reconcile.service tests/apps/*
 apps/quota	tests/apps/quota.bats scripts/apps-quota.sh scripts/apps-schema.py tests/apps/*
 apps/render	tests/apps/render.bats scripts/apps-schema.py tests/apps/*
 image/ignition-boundary	tests/image/ignition-boundary.bats ignition/smortress.bu ignition/edge.bu ignition/edge.json scripts/render-ignition.sh scripts/init-data-luks.sh units/systemd/smortress-data-init.service units/systemd/smortress-zpool.service tests/image/*
-image/edge-image	tests/image/edge-image.bats bootc/edge/tests/check.sh bootc/edge/* scripts/check-edge-unit-paths.sh bootc/lib/* .github/workflows/publish-edge-image.yml .github/workflows/server-image-static.yml tests/image/*
-image/server-image	tests/image/server-image.bats scripts/check-server-image.sh scripts/render-ignition.sh scripts/check/server/* scripts/lib/* bootc/server/* bootc/edge/* bootc/lib/* lib/* ignition/* units/* images/* tests/fixtures/* tests/image/*
+image/edge-image	tests/image/edge-image.bats bootc/edge/tests/check.sh bootc/edge/* scripts/check-edge-unit-paths.sh bootc/lib/* .github/workflows/publish-edge-image.yml .github/workflows/ci.yml tests/image/*
+image/server-image	tests/image/server-image.bats scripts/check-server-image.sh scripts/render-ignition.sh scripts/check/server/* scripts/lib/* bootc/server/* bootc/edge/* bootc/lib/* lib/* ignition/* units/* images/* .github/workflows/publish-edge-image.yml tests/fixtures/* tests/image/*
 image/laptop-image	tests/image/laptop-image.bats hosts/laptop/* lib/* .github/workflows/publish-laptop-image.yml .github/workflows/pins-watch-laptop.yml tests/image/*
 secrets/bundles	tests/secrets/bundles.bats scripts/secrets-bundle.py scripts/secrets-index.py scripts/sops-decrypt.sh tests/secrets/*
 secrets/cloudflare-derive	tests/secrets/cloudflare-derive.bats scripts/cloudflare-derive.sh tests/secrets/*
@@ -131,8 +131,8 @@ docs	tests/docs.bats scripts/check-doc-refs.py scripts/doc-refs-baseline.txt hos
 tofu-fmt	tests/tofu-fmt.bats tofu/*
 actionlint	tests/actionlint.bats .github/*
 python/agent-proxy	tests/python/agent-proxy.bats apps/agent_proxy/* tests/python/*
-tofu/check	tests/tofu/check.bats tests/tofu/* tofu/* scripts/check-tofu-providers.py
-tags	tests/tags.bats
+tofu/check	tests/tofu/check.bats tests/tofu/* tofu/* scripts/check-tofu-providers.py .github/workflows/tofu-*.yml .github/workflows/ci.yml
+tags	tests/tags.bats .github/workflows/*.yml
 core/agent-recovery	tests/core/agent-recovery.bats scripts/restic-plane-common.sh scripts/smortress-restic-backup.sh scripts/smortress-restic-verify.sh scripts/smortress-restic-restore-drill.sh units/systemd/smortress-restic-* units/systemd/smortress-agent-*.service units/systemd/smortress-agent-*.service.d/* units/quadlet/agent-*.container scripts/storage-layout.sh tests/core/*
 core/smortress-restic-progress	tests/core/smortress-restic-progress.bats scripts/smortress-restic-progress.sh scripts/restic-plane-common.sh scripts/storage-layout.sh tests/core/*
 fleet/check	tests/fleet/check.bats scripts/verify-fleet.sh scripts/verify-caa.sh tests/fleet/*

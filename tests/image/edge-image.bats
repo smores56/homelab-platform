@@ -5,9 +5,9 @@
 # bootc/edge/tests/check.sh carries the edge's static invariants onto the image:
 # the Caddyfile's shape, the firewalld zones, the sshd policy, the units, plus the
 # Caddyfile's path, the absent secret, the base-tag doctrine and
-# `bootc container lint`. It runs in the `image` area, which is what
-# .github/workflows/server-image-static.yml already runs on a bootc/** pull
-# request; the checker asserts that wiring itself, and case 30 below reverts it.
+# `bootc container lint`. It runs in the `image` area, which is what the image
+# job of .github/workflows/ci.yml runs on every pull request; the checker asserts
+# that wiring itself, and the mutation below reverts it.
 #
 # A check that cannot fail for the reason it exists is worse than no check, so
 # every assertion has at least one mutation here: the fixture is a copy of the
@@ -31,7 +31,7 @@ fixture() {
     cp bootc/lib/pins.env "$dir/bootc/lib/"
     cp scripts/build-image.sh scripts/check-edge-unit-paths.sh "$dir/scripts/"
     cp .github/workflows/publish-edge-image.yml "$dir/.github/workflows/"
-    cp .github/workflows/server-image-static.yml "$dir/.github/workflows/"
+    cp .github/workflows/ci.yml "$dir/.github/workflows/"
 }
 
 @test "the edge checker passes on the tree as committed" {
@@ -126,7 +126,7 @@ a firewall unit is no longer enabled|every unit the edge needs is enabled|bootc/
 an auth key enters the image|no secret, key or operator file is in the image|bootc/edge/rootfs/etc/ssh/sshd_config.d/05-edge-hardening.conf|append|tskey-auth-k123CNTRL-0123456789abcdef
 the base becomes :latest|the base is a stream tag and the build records its digest|bootc/lib/pins.env|sed|s#^EDGE_TAG=stable#EDGE_TAG=latest#
 the base becomes a pinned digest|the base is a stream tag and the build records its digest|bootc/lib/pins.env|sed|s#^EDGE_TAG=stable#stable@sha256:0000000000000000000000000000000000000000000000000000000000000000#
-the PR workflow stops covering the edge tree|a pull_request workflow runs this checker on the edge tree|.github/workflows/server-image-static.yml|sed|\#^ *- "bootc/\*\*"$#d
+no pull_request workflow runs the image area|a pull_request workflow runs this checker on the edge tree|.github/workflows/ci.yml|sed|\#^  pull_request:$#d
 the poll timer is no longer enabled|the quarter-hour poll backstop ships and its timer is enabled|bootc/edge/Containerfile|sed|\#^[[:space:]]*smoresnet-deploy-poll\.timer#d
 the poll asks for a repository the edge does not run|the quarter-hour poll backstop ships and its timer is enabled|bootc/edge/rootfs/usr/lib/systemd/system/smoresnet-deploy-poll.service|sed|s#^Environment=DEPLOY_POLL_REPOS=homelab-platform$#Environment=DEPLOY_POLL_REPOS=homelab-platform homelab-apps#
 the poll waits for a sops unit the image does not ship|the quarter-hour poll backstop ships and its timer is enabled|bootc/edge/rootfs/usr/lib/systemd/system/smoresnet-deploy-poll.service|sed|s#^After#Requires=sops-decrypt.service\nAfter#

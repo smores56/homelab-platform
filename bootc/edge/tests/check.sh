@@ -330,21 +330,27 @@ workflow_filters() { sed -n '/^ *paths:/,/^ *[a-z-]*:$/p' "$1" | sed -n 's/^ *- 
 
 # The checker is only as good as the CI that runs it. The area that carries this
 # file is `image` (tests/image/, `# bats file_tags=image`), and the workflow that
-# runs that area on a pull_request has to trigger on the tree this file reads -- a
-# filter that misses bootc/edge keeps publishing an image nobody checked.
+# runs that area on a pull_request has to run it on the tree this file reads -- a
+# filter that misses bootc/edge keeps publishing an image nobody checked. A
+# workflow with no `paths:` filter runs on every pull request, so it covers the
+# tree by construction; that is ci.yml, which tests/tags.bats holds to "no path
+# filters on a pull request", because a filter that skips the job leaves the
+# required check Pending rather than failed.
 pull_request_runs_this_checker() {
-  local workflow filter path hit covered
+  local workflow filter filters path hit covered
   for workflow in "$repo"/.github/workflows/*.yml; do
     [[ -e $workflow ]] || continue
     grep -qE '^  pull_request:' "$workflow" || continue
     grep -qE -- "--filter-tags ['\"]?image['\"]?([[:space:]]|$)" "$workflow" || continue
+    filters=$(workflow_filters "$workflow")
+    [[ -n $filters ]] || return 0
     covered=1
     for path in bootc/edge/Containerfile bootc/edge/rootfs/usr/share/smoresnet/Caddyfile bootc/lib/pins.env; do
       hit=0
       while IFS= read -r filter; do
         # shellcheck disable=SC2254 # the filter is a glob by design
         case $path in $filter) hit=1 ;; esac
-      done < <(workflow_filters "$workflow")
+      done <<<"$filters"
       [[ $hit -eq 1 ]] || covered=0
     done
     [[ $covered -eq 1 ]] && return 0
