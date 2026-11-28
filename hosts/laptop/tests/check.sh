@@ -254,7 +254,7 @@ else
 fi
 
 if grep -qF 'sudo tailscale up --operator=smores' "$repo/docs/laptop/switch.md" \
-    && grep -qF 'sudo tailscale set --operator=smores' "$repo/docs/laptop/manual-steps.md"; then
+    && grep -qF 'sudo tailscale set --operator=smores' "$repo/hosts/laptop/runbook.md"; then
   ok "the runbook grants operator on first join and on an existing host"
 else
   bad "the runbook grants operator on first join and on an existing host"
@@ -488,22 +488,22 @@ else
   bad "no PC/SC or smartcard stack enters the image"
 fi
 
-if [[ -f "$repo/docs/laptop/manual-steps.md" ]] \
-    && grep -q 'systemd-cryptenroll --fido2-device=auto --fido2-with-client-pin=yes' "$repo/docs/laptop/manual-steps.md" \
-    && grep -q 'pamu2fcfg -n -u smores' "$repo/docs/laptop/manual-steps.md"; then
-  ok "manual-steps.md carries the token enrolment commands"
+if [[ -f "$repo/hosts/laptop/runbook.md" ]] \
+    && grep -q 'systemd-cryptenroll --fido2-device=auto --fido2-with-client-pin=yes' "$repo/hosts/laptop/runbook.md" \
+    && grep -q 'pamu2fcfg -n -u smores' "$repo/hosts/laptop/runbook.md"; then
+  ok "the laptop runbook carries the token enrolment commands"
 else
-  bad "manual-steps.md carries the token enrolment commands"
+  bad "the laptop runbook carries the token enrolment commands"
 fi
 
 # /etc is a three-way merge, so a mapping this host wrote by hand survives an
 # upgrade and sudo silently keeps using the old credentials -- either straight
 # through to the password, or into the FIDO2 PIN prompt the rotation exists to
 # avoid.
-if grep -q 'diff /usr/etc/u2f_mappings /etc/u2f_mappings' "$repo/docs/laptop/manual-steps.md"; then
-  ok "manual-steps.md says to reconcile the runtime mapping after an upgrade"
+if grep -q 'diff /usr/etc/u2f_mappings /etc/u2f_mappings' "$repo/hosts/laptop/runbook.md"; then
+  ok "the laptop runbook says to reconcile the runtime mapping after an upgrade"
 else
-  bad "manual-steps.md says to reconcile the runtime mapping after an upgrade"
+  bad "the laptop runbook says to reconcile the runtime mapping after an upgrade"
 fi
 
 # login is pinverification=1, so the lock screen's PIN prompt hands whatever is
@@ -512,10 +512,10 @@ fi
 # passage that meets a locked screen has to say so before it says how to fall
 # back, or an operator reads that prompt as an account-password prompt and
 # spends the keyslot's budget on it.
-if grep -q 'burns one of its attempts' "$repo/docs/laptop/manual-steps.md"; then
-  ok "manual-steps.md warns that a wrong lock-screen PIN spends a token attempt"
+if grep -q 'burns one of its attempts' "$repo/hosts/laptop/runbook.md"; then
+  ok "the laptop runbook warns that a wrong lock-screen PIN spends a token attempt"
 else
-  bad "manual-steps.md warns that a wrong lock-screen PIN spends a token attempt" \
+  bad "the laptop runbook warns that a wrong lock-screen PIN spends a token attempt" \
     "the lock screen's PIN prompt goes to the token; only a failed pam_u2f reaches the password"
 fi
 
@@ -719,7 +719,7 @@ if [[ $map_ok -eq 1 ]]; then
   ok "the shipped mapping is smores' per-key credentials, no +pin, group/other not writable"
 else
   bad "the shipped mapping is smores' per-key credentials, no +pin, group/other not writable" \
-    "$mappings is missing or malformed: plug in one 5C Nano at a time and run pamu2fcfg -u smores for the first and pamu2fcfg -n -u smores for each further key, then join them with ':' (docs/laptop/manual-steps.md section 2)"
+    "$mappings is missing or malformed: plug in one 5C Nano at a time and run pamu2fcfg -u smores for the first and pamu2fcfg -n -u smores for each further key, then join them with ':' (hosts/laptop/runbook.md, "The key for sudo")"
 fi
 
 if grep -q 'chmod 0440 /etc/sudoers.d/10-human-gate' Containerfile \
@@ -769,21 +769,21 @@ else
   bad "no PIN database, no crypt hash and no pam_userdb anywhere in the tree"
 fi
 
-if grep -q 'rootfs/etc/u2f_mappings' "$repo/docs/laptop/manual-steps.md" \
-    && grep -q 'pamu2fcfg -n -u smores' "$repo/docs/laptop/manual-steps.md" \
-    && grep -q 'bootc upgrade' "$repo/docs/laptop/manual-steps.md" \
-    && ! grep -qE 'gdbmtool|sudopin' "$repo/docs/laptop/manual-steps.md"; then
-  ok "manual-steps.md rotates the shipped mapping instead of building a PIN database"
+if grep -q 'rootfs/etc/u2f_mappings' "$repo/hosts/laptop/runbook.md" \
+    && grep -q 'pamu2fcfg -n -u smores' "$repo/hosts/laptop/runbook.md" \
+    && grep -q 'bootc upgrade' "$repo/hosts/laptop/runbook.md" \
+    && ! grep -qE 'gdbmtool|sudopin' "$repo/hosts/laptop/runbook.md"; then
+  ok "the laptop runbook rotates the shipped mapping instead of building a PIN database"
 else
-  bad "manual-steps.md rotates the shipped mapping instead of building a PIN database"
+  bad "the laptop runbook rotates the shipped mapping instead of building a PIN database"
 fi
 
-if grep -q 'sudo -k; sudo true' "$repo/docs/laptop/manual-steps.md" \
-    && grep -q 'faillock --user smores --reset' "$repo/docs/laptop/manual-steps.md" \
-    && grep -q 'unplugged' "$repo/docs/laptop/manual-steps.md"; then
-  ok "manual-steps.md proves the tap-or-password gate and its recovery"
+if grep -q 'sudo -k; sudo true' "$repo/hosts/laptop/runbook.md" \
+    && grep -q 'faillock --user smores --reset' "$repo/hosts/laptop/runbook.md" \
+    && grep -q 'unplugged' "$repo/hosts/laptop/runbook.md"; then
+  ok "the laptop runbook proves the tap-or-password gate and its recovery"
 else
-  bad "manual-steps.md proves the tap-or-password gate and its recovery"
+  bad "the laptop runbook proves the tap-or-password gate and its recovery"
 fi
 
 # --- shell ------------------------------------------------------------------

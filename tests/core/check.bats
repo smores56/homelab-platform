@@ -16,7 +16,7 @@
 load ../helpers
 
 cli=scripts/deploy-cli.sh
-runbook=docs/manual-steps.md
+runbook=hosts/server/runbook.md
 
 # ----------------------------------------------------------------- the scripts
 
@@ -252,10 +252,11 @@ runbook_names() { # <step>
 }
 
 # Every human step this feature needs, by the name the code or the console uses.
-for step in deploy-notify TS_OAUTH_CLIENT_ID TS_OAUTH_CLIENT_SECRET \
-    DEPLOY_WEBHOOK_SECRET tag:deploy bootupctl /boot/grub2/custom.cfg journal.jsonl \
-    greenboot-grub2-set-counter \
-    webhook-secret-next.yaml; do
+# The notify Environment and its `tag:deploy` client went with the receiver, so
+# what remains is the environment the two probe checks still read and the boot
+# counter's own names.
+for step in deploy-notify bootupctl /boot/grub2/custom.cfg journal.jsonl \
+    greenboot-grub2-set-counter; do
     register "the runbook names $step" runbook_names "$step"
 done
 
@@ -269,12 +270,14 @@ done
             printf '%s is read by the deploy path but is not in the decrypt manifest\n' "$secret" >&2
             seeded=1
         }
-        grep -qF -- "$secret" "$runbook" || {
-            printf '%s is read by the deploy path but the runbook never seeds it\n' "$secret" >&2
-            seeded=1
-        }
     done < <(grep -rhoE '(webhook-secret(-next)?|deploy-ping-url)\.yaml' \
         scripts bootc/server/rootfs/usr/libexec | sort -u)
+    # The webhook pair's operator step went with the receiver it authenticated;
+    # what is left to seed is the dead-man URL the heartbeat reads.
+    grep -qF -- deploy-ping-url.yaml "$runbook" || {
+        printf 'deploy-ping-url.yaml is read by the deploy path but the runbook never seeds it\n' >&2
+        seeded=1
+    }
     [[ $seeded -eq 0 ]]
 }
 

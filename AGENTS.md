@@ -17,8 +17,9 @@
   `pull_request_target` (blocked by default in public repos from 2026-12-02).
 - `*.tf` and `.github/` are Kanbei-critical (`docs/kanbei-critical.md`). Keep
   `CODEOWNERS`, that document, and `scripts/check-codeowners.sh` in sync.
-- Anything an operator must do by hand goes in `docs/manual-steps.md` with the
-  exact commands; no TODO/TBD placeholders.
+- Anything an operator must do by hand goes in the runbook beside the code it
+  operates (`hosts/server/runbook.md`, `hosts/laptop/runbook.md`,
+  `bootc/edge/runbook.md`) with the exact commands; no TODO/TBD placeholders.
 
 ## Platform conventions
 

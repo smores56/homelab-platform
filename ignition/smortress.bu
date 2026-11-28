@@ -66,7 +66,7 @@ storage:
   # removes the generated key slot (ignition internal/exec/stages/disks/luks.go),
   # so the only slot left is SSS Tang+TPM2 threshold 2. The offline recovery
   # passphrase does not exist yet: the operator adds it with `cryptsetup
-  # luksAddKey` after the install (docs/manual-steps.md section 37 step 8.1),
+  # luksAddKey` after the install (hosts/server/runbook.md, "Add the offline recovery passphrases"),
   # which is why a host that skips that step has no offline recovery.
   # The data partition (p5) is created here and stays unformatted: Ignition must
   # not carry a key for it. smortress-data-init.service generates the key file

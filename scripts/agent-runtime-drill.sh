@@ -7,7 +7,7 @@
 # Seven rows of the T6 adversarial cutover matrix need smortress itself: the live
 # mount namespaces, the root-only secrets, and a cold restore of an agent dataset
 # from a real destination. This runs three of them by hand. Every PASS line is
-# one observation on this host; docs/manual-steps.md section 40.18 maps the lines
+# one observation on this host; hosts/server/runbook.md, "Run the agent runtime drill" maps the lines
 # to the rows they close and shows what a bad result looks like.
 #
 #   mounts       no agent namespace contains the other deployment's state or a
@@ -615,7 +615,7 @@ expect_content() { # expect_content <unit> <root>
 
 # The mandatory half of a real restore: Restic carries no security.selinux and
 # the archive comes out root-owned, so the runbook chowns before anything starts
-# (docs/manual-steps.md section 40.6). The drill applies the same step and then
+# (hosts/server/runbook.md, "Open the mount's toolsets in a seeded config"). The drill applies the same step and then
 # proves uid 1000 could write what the gateway and the facade write.
 expect_ownership() { # expect_ownership <unit> <root>
   local root=$2 side=${1#agent-} out rc=0 foreign path missed=()

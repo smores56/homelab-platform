@@ -6,7 +6,7 @@
 # `apps/brave_ingest/seed.py`, and the browser reads it, encrypts nothing new and
 # needs no key material of its own. `--password-store=basic` is what makes the
 # seed decryptable at all: it is the fixed "peanuts" key, which is exactly why the
-# planted blob must be treated as a secret (`docs/manual-steps.md` section 40.17).
+# planted blob must be treated as a secret (hosts/server/runbook.md, "Collector sign-ins").
 #
 # The browser is a **release artifact**, not a distribution package. Debian
 # carries `brave-browser` only through Brave's own apt repository, which this base

@@ -55,7 +55,7 @@ jobs:
           for name in CLOUDFLARE_API_TOKEN AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY \
             TAILSCALE_OAUTH_CLIENT_ID TAILSCALE_OAUTH_CLIENT_SECRET; do
             if [[ -z ${!name:-} ]]; then
-              echo "::error::$name absent from the cloudflare-plan environment (docs/manual-steps.md steps 14 and 46)"
+              echo "::error::$name absent from the cloudflare-plan environment (hosts/server/runbook.md, "The plan-only credentials")"
               exit 1
             fi
           done

@@ -170,7 +170,7 @@ jobs:
           for name in CLOUDFLARE_API_TOKEN TAILSCALE_OAUTH_CLIENT_ID TAILSCALE_OAUTH_CLIENT_SECRET; do
             if [[ -z ${!name:-} ]]; then
               echo "::error::$name is absent from the cloudflare-plan environment, so nothing can be proved."
-              echo "::error::See docs/manual-steps.md, \"The plan-only credentials\"."
+              echo "::error::See hosts/server/runbook.md, \"The plan-only credentials\"."
               exit 1
             fi
           done
@@ -180,7 +180,7 @@ jobs:
           zone=$(curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
             'https://api.cloudflare.com/client/v4/zones?per_page=1' | jq -r '.result[0].id // empty')
           if [[ -z $zone ]]; then
-            echo "::error::the plan token lists no zone, so it is not the read-only token docs/manual-steps.md describes."
+            echo "::error::the plan token lists no zone, so it is not the read-only token hosts/server/runbook.md describes."
             exit 1
           fi
           code=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
@@ -203,7 +203,7 @@ jobs:
             --data-urlencode "scope=$read_scopes" | jq -r '.access_token // empty')
           if [[ -z $token ]]; then
             echo "::error::the plan client cannot mint a token for '$read_scopes'."
-            echo "::error::Mint it with exactly those scopes (docs/manual-steps.md, \"The plan-only credentials\")."
+            echo "::error::Mint it with exactly those scopes (hosts/server/runbook.md, \"The plan-only credentials\")."
             exit 1
           fi
           code=$(curl -s -o "$RUNNER_TEMP/acl-probe.json" -w '%{http_code}' -X POST \
@@ -261,7 +261,7 @@ jobs:
             if [[ -z ${!name:-} ]]; then
               echo "::error::$name is absent from the cloudflare-plan environment."
               echo "::error::A silent skip would let a PR merge without a plan; provision the credentials."
-              echo "::error::See docs/manual-steps.md, \"The plan-only credentials\"."
+              echo "::error::See hosts/server/runbook.md, \"The plan-only credentials\"."
               exit 1
             fi
           done

@@ -22,7 +22,7 @@
 #
 # The deploy's own units are deliberately absent (the listener, the path, the
 # drain, the poll and heartbeat timers): their secrets are seeded by hand after
-# the receiver first lands (docs/manual-steps.md), and a missing deploy secret
+# the receiver first lands (hosts/server/runbook.md), and a missing deploy secret
 # must page rather than roll the host back onto an image that cannot deploy.
 #
 # The web terminal is absent because it is not an image unit at all: it runs in

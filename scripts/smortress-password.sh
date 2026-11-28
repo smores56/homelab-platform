@@ -5,7 +5,7 @@
 # change left there. The hash arrives three ways and has to agree: Ignition sets
 # it at install (scripts/render-ignition.sh), this unit re-applies it at every
 # boot, and the operator changes it by minting a new ciphertext
-# (docs/manual-steps.md section 37). The ciphertext is
+# (hosts/server/runbook.md, "Rotate the smores account password"). The ciphertext is
 # secrets/boot.json (smores.password_hash), decrypted into /run by
 # sops-decrypt.service; `value` in the manifest is what makes the file the bare
 # hash.

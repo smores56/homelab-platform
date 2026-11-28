@@ -73,7 +73,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -z ${NAMES_PING_URL:-} ]]; then
-            echo "::warning::NAMES_PING_URL is unset in deploy-notify; no page is sent (docs/manual-steps.md)"
+            echo "::warning::NAMES_PING_URL is unset in deploy-notify; no page is sent (hosts/server/runbook.md)"
             exit 0
           fi
           # The check's period is what turns silence into a page, so a success is

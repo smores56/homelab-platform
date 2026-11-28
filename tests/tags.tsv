@@ -19,8 +19,8 @@ core/app-quadlets-collectors	tests/core/app-quadlets-collectors.bats units/quadl
 core/app-quadlets-collections	tests/core/app-quadlets-collections.bats units/quadlet/* units/systemd/* bootc/server/* scripts/app-images.sh scripts/storage-layout.sh tests/core/* units/systemd/*.service.d/*
 core/app-quadlets-egress	tests/core/app-quadlets-egress.bats units/quadlet/* units/systemd/* bootc/server/* scripts/app-images.sh scripts/storage-layout.sh tests/core/* units/systemd/*.service.d/*
 core/storage-layout	tests/core/storage-layout.bats scripts/storage-layout.sh scripts/init-zpool.sh units/systemd/smortress-zpool.service tests/core/*
-core/check	tests/core/check.bats scripts/legacy/* scripts/deploy-state.sh scripts/deploy-cli.sh bootc/lib/deploy/* bootc/server/rootfs/usr/share/smortress/secrets.manifest units/systemd/smortress-deploy* units/systemd/smortress-boot-gate.service docs/core/server-image.md docs/manual-steps.md tests/core/*
-core/operator-access	tests/core/operator-access.bats scripts/operator-access.sh docs/manual-steps.md tests/core/*
+core/check	tests/core/check.bats scripts/legacy/* scripts/deploy-state.sh scripts/deploy-cli.sh bootc/lib/deploy/* bootc/server/rootfs/usr/share/smortress/secrets.manifest units/systemd/smortress-deploy* units/systemd/smortress-boot-gate.service docs/core/server-image.md tests/core/*
+core/operator-access	tests/core/operator-access.bats scripts/operator-access.sh tests/core/*
 core/apps-egress	tests/core/apps-egress.bats units/systemd/smortress-apps-deny.service units/systemd/smortress-apps-egress.service bootc/server/rootfs/etc/nftables/smortress-apps*.nft bootc/server/Containerfile tests/core/*
 core/apps-user	tests/core/apps-user.bats scripts/apps-user.sh units/systemd/smortress-apps-user.service units/systemd/smortress-apps-quota.service units/systemd/smortress-apps-egress.service bootc/server/rootfs/etc/sysusers.d/smortress-apps.conf bootc/server/rootfs/etc/tmpfiles.d/smortress.conf bootc/server/rootfs/usr/share/smortress/apps-policy.json bootc/server/rootfs/etc/nftables/smortress-apps.nft tests/core/*
 core/restic-drill	tests/core/restic-drill.bats scripts/restic-plane-common.sh scripts/smortress-restic-restore-drill.sh tests/core/*
@@ -121,7 +121,7 @@ apps/ingress	tests/apps/ingress.bats scripts/apps-ingress.sh bootc/server/Contai
 apps/ingress-reconcile	tests/apps/ingress-reconcile.bats scripts/apps-ingress-reconcile.sh units/systemd/smortress-app-ingress-reconcile.service tests/apps/*
 apps/quota	tests/apps/quota.bats scripts/apps-quota.sh scripts/apps-schema.py tests/apps/*
 apps/render	tests/apps/render.bats scripts/apps-schema.py tests/apps/*
-image/ignition-boundary	tests/image/ignition-boundary.bats ignition/smortress.bu ignition/edge.bu ignition/edge.json scripts/render-ignition.sh scripts/init-data-luks.sh units/systemd/smortress-data-init.service units/systemd/smortress-zpool.service docs/manual-steps.md tests/image/*
+image/ignition-boundary	tests/image/ignition-boundary.bats ignition/smortress.bu ignition/edge.bu ignition/edge.json scripts/render-ignition.sh scripts/init-data-luks.sh units/systemd/smortress-data-init.service units/systemd/smortress-zpool.service tests/image/*
 image/edge-image	tests/image/edge-image.bats bootc/edge/tests/check.sh bootc/edge/* scripts/check-edge-unit-paths.sh bootc/lib/* .github/workflows/publish-edge-image.yml .github/workflows/server-image-static.yml tests/image/*
 image/server-image	tests/image/server-image.bats scripts/check-server-image.sh scripts/render-ignition.sh scripts/check/server/* scripts/lib/* bootc/server/* bootc/edge/* bootc/lib/* ignition/* units/* images/* tests/fixtures/* docs/core/server-image.md tests/image/*
 image/laptop-image	tests/image/laptop-image.bats hosts/laptop/* docs/laptop/* .github/workflows/publish-laptop-image.yml .github/workflows/pins-watch-laptop.yml tests/image/*

@@ -7,7 +7,7 @@
 # this unit starts, and `--password-store=basic` is what makes that blob
 # decryptable (the fixed "peanuts" key). The seed is resident on the volume for as
 # long as this container runs, which is why the volume is a quarantine path and a
-# copy of it is a copy of the chain's key (docs/manual-steps.md section 40.17).
+# copy of it is a copy of the chain's key (hosts/server/runbook.md, "Collector sign-ins").
 #
 # The ONLY egress is the allowlist proxy. `agent-brave.network` is `Internal=true`:
 # no default route, no NAT, and exactly two peers -- `agent-egress-proxy` at

@@ -21,7 +21,7 @@ The migration runbook is `docs/laptop/switch.md`.
 | `cosign.pub` | the public half of the signing key shared with the other hosts in this repository |
 | `scripts/refresh-pins.sh` | resolves the NymVPN release and prints the base tag's current digest; `--check` for the watcher, `--write` to move the NymVPN pin |
 | `scripts/build-image.sh` | local build; never pushes or signs |
-| `docs/laptop/manual-steps.md` | the steps only a hand at the keyboard can do: token enrolment for the disk keyslot, the lock screen and sudo, and rotating the FIDO2 mapping |
+| `runbook.md` | the steps only a hand at the keyboard can do: token enrolment for the disk keyslot, the lock screen and sudo, and rotating the FIDO2 mapping |
 | `tests/check.sh` | static checks over the files above; `tests/image/laptop-image.bats` runs it in the `image` CI area |
 
 ## Rules

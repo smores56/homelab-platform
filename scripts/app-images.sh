@@ -69,7 +69,7 @@ app_images=(
   # side of the sync is TutaBridge: a local TLS IMAP server in front of Tuta's API,
   # and the only process that holds the account session. Mirrored, signed by our
   # key and pinned like every other application image. `latest` is unusable here:
-  # Tuta raises the minimum client version it accepts (see manual-steps 40.15).
+  # Tuta raises the minimum client version it accepts (see hosts/server/runbook.md, "Collector sign-ins").
   'agent-tmail|docker.io/spartanz51/tutabridge:0.2.0-rc.2|sha256:044415d323d3c876c4275cc4cd0bdcbef303218bf5b1356b06aa31e0b6c92ba7'
   # The calendar's provider half: our own Tuta client (apps/tuta_calendar), built
   # and signed here because Tuta serves no CalDAV and no SDK of theirs ships. The

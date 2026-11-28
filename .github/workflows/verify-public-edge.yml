@@ -15,7 +15,7 @@
 #
 # The Healthchecks ping is `EDGE_PING_URL` from the `deploy-notify`
 # environment: a capability URL, so a secret, and the same shape the host's own
-# monitors and `verify-tailnet-names.yml` use (docs/manual-steps.md).
+# monitors and `verify-tailnet-names.yml` use (hosts/server/runbook.md, "Create the public edge check").
 name: verify-public-edge
 
 on:
@@ -63,7 +63,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -z ${EDGE_PING_URL:-} ]]; then
-            echo "::warning::EDGE_PING_URL is unset in deploy-notify; no page is sent (docs/manual-steps.md)"
+            echo "::warning::EDGE_PING_URL is unset in deploy-notify; no page is sent (hosts/server/runbook.md)"
             exit 0
           fi
           if [[ $PROBE_OUTCOME == success && $CAA_OUTCOME == success ]]; then

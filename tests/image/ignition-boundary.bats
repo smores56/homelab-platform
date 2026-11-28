@@ -182,12 +182,13 @@ done
 }
 
 # The operator steps are part of the promise: a host without them has no
-# offline recovery, and the document has to say so with the exact commands.
-@test "the manual steps add and verify both recovery passphrases" {
-    grep -qF 'luksAddKey --key-file /etc/luks/data /dev/disk/by-partlabel/luks-data' docs/manual-steps.md
-    grep -qF 'luksAddKey --key-file /run/root-clevis.key /dev/disk/by-partlabel/root' docs/manual-steps.md
-    grep -qF 'cryptsetup open --test-passphrase /dev/disk/by-partlabel/root' docs/manual-steps.md
-    grep -qF 'cryptsetup open --test-passphrase /dev/disk/by-partlabel/luks-data' docs/manual-steps.md
+# offline recovery, and the runbook has to say so with the exact commands.
+runbook=hosts/server/runbook.md
+@test "the server runbook adds and verifies both recovery passphrases" {
+    grep -qF 'luksAddKey --key-file /etc/luks/data /dev/disk/by-partlabel/luks-data' "$runbook"
+    grep -qF 'luksAddKey --key-file /run/root-clevis.key /dev/disk/by-partlabel/root' "$runbook"
+    grep -qF 'cryptsetup open --test-passphrase /dev/disk/by-partlabel/root' "$runbook"
+    grep -qF 'cryptsetup open --test-passphrase /dev/disk/by-partlabel/luks-data' "$runbook"
 }
 
 # The render itself. Synthetic values are the two strings the renderer used to

@@ -3,7 +3,7 @@
 # Offline checks for scripts/operator-access.sh.
 #
 # The host half — a real dataset owned 1000:1000 and the real operator account —
-# is section 40.6 of docs/manual-steps.md. This proves the half that does not
+# is hosts/server/runbook.md. This proves the half that does not
 # need root or a real dataset: the account is resolved instead of assumed, the
 # ACL specification carries the operator's name and numeric 1000 in both the
 # access and the default entries, --check writes nothing, a path that is not a

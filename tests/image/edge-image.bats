@@ -22,15 +22,14 @@ checker=bootc/edge/tests/check.sh
 # fixture <dir>: the tree the checker derives from its own location (repo,
 # Containerfile, pins, build script, both workflows) and nothing else. The
 # unit-path row shells out to scripts/check-edge-unit-paths.sh, which reads the
-# table, the bootstrap script and the manual steps the table's reasons name, so a
-# fixture without them fails that row for the wrong reason.
+# table, the bootstrap script and the runbook the table's reasons name; the runbook
+# arrives with the `cp -a bootc/edge/.` above.
 fixture() {
     local dir=$1
     mkdir -p "$dir/bootc/edge" "$dir/bootc/lib" "$dir/scripts" "$dir/docs" "$dir/.github/workflows"
     cp -a bootc/edge/. "$dir/bootc/edge/"
     cp bootc/lib/pins.env "$dir/bootc/lib/"
     cp scripts/build-image.sh scripts/check-edge-unit-paths.sh "$dir/scripts/"
-    cp docs/manual-steps.md "$dir/docs/"
     cp .github/workflows/publish-edge-image.yml "$dir/.github/workflows/"
     cp .github/workflows/server-image-static.yml "$dir/.github/workflows/"
 }

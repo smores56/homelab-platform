@@ -7,7 +7,7 @@
 # the account's access: `/data` holds the session, the GPG key that unseals it,
 # the bridge password and the TLS certificate. That volume lives under
 # `state/agent-local/quarantine`, is in the personal recovery group, and is never
-# in git. Losing it does not just force another `init` (manual-steps 40.15): the
+# in git. Losing it does not just force another `init` (hosts/server/runbook.md, "Collector sign-ins"): the
 # per-folder UID counters live in it too, and the bridge reports UIDVALIDITY 1
 # regardless, so a restore that kept the Maildir and lost the volume would look
 # like every message had been replaced.
