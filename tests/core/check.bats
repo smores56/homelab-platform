@@ -319,3 +319,24 @@ register "the drain starts systemd-machined, which the apps apply needs" deploy_
 for unit in units/systemd/smortress-deploy* units/systemd/smortress-boot-gate.service; do
     register "the image document names $(basename "$unit")" image_document_names "$unit"
 done
+
+# The poll is the only deploy trigger design #1010 leaves, and a host's /etc can
+# outlive the image with a disabled override on it (the drift #1014 exists to
+# clear): the build is where enablement has to be stated, so a fresh image boots
+# with a trigger whatever the last window left in /etc. The retry timer is the
+# backstop that a deferred queue entry waits on, so it ships enabled beside it.
+deploy_triggers_enabled_at_build() {
+    local timer
+    for timer in smortress-deploy-poll.timer smortress-deploy-retry.timer; do
+        grep -qE "^[[:space:]]+${timer//./\\.} \\\\$" bootc/server/Containerfile || return 1
+    done
+}
+register "the image enables the deploy poll and its retry backstop" deploy_triggers_enabled_at_build
+
+# Enablement in the enable list is not the same as enablement on the box: the build
+# reads the symlink systemctl wrote, which is what a boot follows.
+deploy_triggers_verified_at_build() {
+    grep -qF 'test -e /etc/systemd/system/timers.target.wants/smortress-deploy-poll.timer' \
+        bootc/server/Containerfile
+}
+register "the build fails when the poll timer is not enabled" deploy_triggers_verified_at_build

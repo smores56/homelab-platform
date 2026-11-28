@@ -31,7 +31,7 @@ the verified digest was staged, so the edge's role hook must not switch again.
 Exit 0 verified (one JSON object on stdout, byte-identical to the server's for the
 same document so the drain and the fixtures read one verdict), 3 rejected, 4
 infrastructure -- the shared vocabulary. Nothing here writes a file: the server's
-120 s cache protects an API budget that a twice-daily edge barely spends, and a
+120 s cache protects an API budget a quarter-hour poll spends steadily, and a
 verifier that writes nothing is one fewer writer under a lock it does not hold.
 
 Stdlib only, like the receiver: the image installs no distribution package, and

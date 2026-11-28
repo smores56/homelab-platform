@@ -5,7 +5,7 @@
 # nothing on the public interface can reach it, and the tailnet is what carries a
 # notify job's POST to it. Without a forward the port exists on the box and on no
 # other node, so `publish-edge-image.yml`'s notify job -- the only trigger that
-# does not wait for the 03:00 poll -- posts to a socket that answers nothing.
+# does not wait for the quarter-hour poll -- posts to a socket that answers nothing.
 #
 # `tailscale serve` keeps this configuration in the node's own state, so this unit
 # is idempotent and survives reboots without a file: re-running it re-asserts the

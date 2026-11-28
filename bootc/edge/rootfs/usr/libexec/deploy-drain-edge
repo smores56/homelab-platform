@@ -18,7 +18,7 @@
 #                        because the reboot is the deploy.
 #
 # The triggers (design #939, T11) are the server's two: a dispatch-only notify and
-# the daily 03:00 poll, each of which enqueues a request, and
+# the quarter-hour poll, each of which enqueues a request, and
 # smoresnet-deploy.path starts this drain when one lands. A hand-run
 # (`systemctl start smoresnet-deploy.service`) is still all a queue consumer needs
 # to be, and is what the operator uses while the listener is down.

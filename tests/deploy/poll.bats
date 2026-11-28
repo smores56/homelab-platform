@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 # bats file_tags=deploy
-# Offline checks for the hourly deploy poll (SDLC #798, T6).
+# Offline checks for the quarter-hour deploy poll (SDLC #798, T6; cadence per #1014).
 #
 # The poll is the backstop, not a decider: it resolves `main` for each repository
 # through the anonymous GitHub API, and it enqueues a request only when the tip
@@ -538,7 +538,7 @@ seed_full_queue() {
     assert_equal "$(jq -r '.repo' "$queue"/*.json | sort | tr '\n' ' ')" 'homelab-apps homelab-platform '
 }
 
-# --- the unit runs it hourly -------------------------------------------------
+# --- the unit runs it every fifteen minutes ----------------------------------
 
 @test "the poll timer ships" {
     assert [ -s "$timer" ]
@@ -548,11 +548,40 @@ seed_full_queue() {
     assert [ -s "$service" ]
 }
 
-# One window a day, in local time, and not persistent: a missed window must not
-# turn into a deploy on the way up.
-@test "the poll runs its daily window in local time and never on the way up" {
-    assert grep -qxF 'OnCalendar=*-*-* 03:00:00 America/New_York' "$timer"
+# The poll is the only trigger once the receiver retires (design #1010), so the
+# cadence is the whole of the delay between a merge and its deployment: any
+# interval but the fifteen minutes is either a stale host or a hot API budget.
+@test "the poll runs every fifteen minutes" {
+    assert grep -qxF 'OnCalendar=*-*-* *:0/15:00' "$timer"
+    assert grep -qxF 'AccuracySec=1min' "$timer"
+}
+
+@test "the description claims a cadence, not one window a day" {
+    refute grep -qiE '^Description=.*(daily|nightly|window)' "$timer"
+}
+
+# Not persistent: a missed tick must not turn into a deploy on the way up.
+@test "a missed tick is not owed at boot" {
     assert grep -qxF 'Persistent=false' "$timer"
+}
+
+@test "the timer starts the poll service and is enabled at boot" {
+    assert grep -qxF 'Unit=smortress-deploy-poll.service' "$timer"
+    assert grep -qxF 'WantedBy=timers.target' "$timer"
+}
+
+# The receiver, the listener, the forward and the heartbeat are the units #1018
+# deletes: a dependency on any of them would retire the poll with them, or wait
+# for a unit that no longer exists. The poll's own ordering (the decrypt it reads
+# the ping URL from, the boot gate that writes the state it reads) is the whole
+# list.
+@test "the poll depends on none of the receiver's units" {
+    refute grep -qE '^(Wants|Requires|BindsTo|PartOf|Upholds|Requisite|After|Before)=.*(deploy-receiver|deploy-listener|deploy-forward|deploy-heartbeat)' "$service"
+}
+
+@test "the poll's ordering is the decrypt, the network and the boot gate" {
+    assert_equal "$(grep -E '^After=' "$service" | sort | tr '\n' ' ')" \
+        'After=network-online.target After=smortress-boot-gate.service After=sops-decrypt.service After=systemd-tmpfiles-setup.service '
 }
 
 # The heartbeat suite asserts the same thing of its own service
@@ -566,6 +595,14 @@ seed_full_queue() {
     assert grep -qE '^TimeoutStartSec=' "$service"
 }
 
+# Enablement is the image's to state, and it has to be the enable list, not a
+# mention: the host's /etc carries a disabled override that only a window deploy
+# clears (#1014), so a name anywhere else in the file would prove nothing.
 @test "the image enables the poll timer" {
-    assert grep -qF 'smortress-deploy-poll.timer' bootc/server/Containerfile
+    assert grep -qE '^[[:space:]]+smortress-deploy-poll\.timer \\$' bootc/server/Containerfile
+}
+
+@test "the build fails if the poll timer is not enabled" {
+    assert grep -qF 'test -e /etc/systemd/system/timers.target.wants/smortress-deploy-poll.timer' \
+        bootc/server/Containerfile
 }

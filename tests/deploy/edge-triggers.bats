@@ -8,7 +8,7 @@
 # turns a queue entry into a drain. The edge gets the same three with edge names,
 # and what this suite asserts is the difference: no sops unit to wait for, the
 # dead-man URL from `/etc/smoresnet`, the one repository the edge receiver admits,
-# the same 03:00 local window with no catch-up at boot, and the edge's own state
+# the same quarter-hour cadence with no catch-up at boot, and the edge's own state
 # directory writable and nothing else.
 #
 # Nothing runs a real systemd here: the units are read, and the two cross-file
@@ -92,14 +92,17 @@ env_value() { sed -n "s/^Environment=$2=//p" "$1" | head -n1; }
     assert grep -qE '^TimeoutStartSec=[0-9]+$' "$service"
 }
 
-# --- the window is the operator's, and never a boot -------------------------
+# --- the cadence is the server's, and never a boot -------------------------
 
-@test "the window is 03:00 in the operator's time zone" {
-    assert_equal "$(value "$timer" OnCalendar)" '*-*-* 03:00:00 America/New_York'
+# The edge publishes only on a dispatch, so the poll is the whole of the trigger
+# for a release nobody dispatched: the cadence is the delay, and it is the server's
+# quarter hour (#1014), not a window of the edge's own.
+@test "the poll runs every fifteen minutes" {
+    assert_equal "$(value "$timer" OnCalendar)" '*-*-* *:0/15:00'
     assert grep -qxF 'AccuracySec=1min' "$timer"
 }
 
-@test "a missed window is not owed at boot" {
+@test "a missed tick is not owed at boot" {
     assert grep -qxF 'Persistent=false' "$timer"
 }
 
