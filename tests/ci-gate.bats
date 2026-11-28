@@ -159,6 +159,18 @@ gate() {
     assert_equal "$bad" ""
 }
 
+@test "every area gates itself on its own name" {
+    # `skipped` passes, so an `if:` that names another area -- or that is gone --
+    # would disable that area while the required check still reported green. The
+    # selector derives jobs from the `--filter-tags` lines, not from these, so a
+    # mismatch here is silent everywhere else.
+    bad=''
+    for area in $(scripts/ci-areas.sh --areas); do
+        grep -qF "contains(fromJSON(needs.changes.outputs.areas), '$area')" <<<"$(job_block "$area")" || bad="$bad $area"
+    done
+    assert_equal "$bad" ""
+}
+
 @test "the selector names only jobs ci.yml declares" {
     declared=$(
         awk '/^jobs:/ { injobs = 1; next }
