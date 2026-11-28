@@ -786,6 +786,106 @@ else
   bad "manual-steps.md proves the tap-or-password gate and its recovery"
 fi
 
+# --- updates (stage-only, reminder) -----------------------------------------
+
+# The vendor service stages *and* reboots: `bootc upgrade --apply` an hour after
+# boot and every 8h with jitter, mid-session, into the disk's FIDO2 prompt. This
+# image stage-only: the vendor ExecStart is replaced, `ostree-finalize-staged`
+# applies the staged deployment at a shutdown a person asked for, and a user unit
+# tells that person it is waiting. The live half -- `systemctl cat` on the host
+# showing one ExecStart, `rpm-ostree status` showing a staged deployment, the
+# notification in a fresh session -- is a publish and a reboot, and is written
+# down in docs/laptop/manual-steps.md.
+
+# exec_starts: the ExecStart= list systemd ends up with, replayed from the lines
+# it is given. A value appends to the list, a bare ExecStart= clears it, and a
+# drop-in's lines come after the unit's own -- so this is what `systemctl cat`
+# sets up, not a guess about what a drop-in does.
+exec_starts() {
+  local line
+  local -a list=()
+  while IFS= read -r line; do
+    case $line in
+      ExecStart=) list=() ;;
+      ExecStart=*) list+=("${line#ExecStart=}") ;;
+    esac
+  done
+  ((${#list[@]})) && printf '%s\n' "${list[@]}"
+}
+
+stage_dropin=rootfs/usr/lib/systemd/system/bootc-fetch-apply-updates.service.d/10-stage-only.conf
+if [[ $(directives "$stage_dropin" 2>/dev/null) == $'[Service]\nExecStart=\nExecStart=/usr/bin/bootc upgrade --quiet' ]]; then
+  ok "the stage-only drop-in clears ExecStart before it sets the staging one"
+else
+  bad "the stage-only drop-in clears ExecStart before it sets the staging one" \
+    "without the bare ExecStart= the drop-in appends: $(directives "$stage_dropin" 2>/dev/null | tr '\n' ' ')"
+fi
+
+# The line the vendor unit ships is the one being replaced, so it is the one the
+# merge replays. A bootc that renames or re-flags its unit fails the build below
+# rather than leaving this fixture polite about a unit nobody runs any more.
+vendor_exec='ExecStart=/usr/bin/bootc upgrade --apply --quiet'
+merged=$(printf '%s\n%s\n' "$vendor_exec" "$(directives "$stage_dropin" 2>/dev/null)" | exec_starts)
+if [[ $merged == '/usr/bin/bootc upgrade --quiet' ]]; then
+  ok "the merged unit has exactly one ExecStart, and it stages rather than applies"
+else
+  bad "the merged unit has exactly one ExecStart, and it stages rather than applies" \
+    "the ExecStart= list systemd would hold: ${merged:-<none>}"
+fi
+
+timer_dropin=rootfs/usr/lib/systemd/system/bootc-fetch-apply-updates.timer.d/10-schedule.conf
+if grep -qxF 'OnBootSec=' "$timer_dropin" 2>/dev/null \
+    && grep -qxF 'OnUnitInactiveSec=' "$timer_dropin" \
+    && [[ $(grep -c '^OnCalendar=' "$timer_dropin") -eq 1 ]] \
+    && grep -qx 'RandomizedDelaySec=0' "$timer_dropin" \
+    && [[ $(grep -rl 'OnCalendar=' rootfs 2>/dev/null | wc -l) -eq 1 ]] \
+    && grep -qE '^ +bootc-fetch-apply-updates\.timer[ ;]' Containerfile; then
+  ok "the laptop's update schedule is its own: the vendor boot+1h and 8h cycle is cleared"
+else
+  bad "the laptop's update schedule is its own: the vendor boot+1h and 8h cycle is cleared" \
+    "the schedule belongs in $timer_dropin alone, and the Containerfile enables the timer"
+fi
+
+reminder_unit=rootfs/usr/lib/systemd/user/bootc-update-reminder.service
+reminder_script=rootfs/usr/libexec/smorespro/bootc-update-reminder
+if grep -qx 'Type=oneshot' "$reminder_unit" 2>/dev/null \
+    && grep -qx 'ExecStart=/usr/libexec/smorespro/bootc-update-reminder' "$reminder_unit" \
+    && grep -qx 'WantedBy=default.target' "$reminder_unit" \
+    && [[ -x $reminder_script ]] \
+    && grep -qE '^ +systemctl --global enable bootc-update-reminder\.service;' Containerfile \
+    && grep -qE '^ +(.* )?libnotify[ ;]' Containerfile \
+    && grep -q 'test -x /usr/bin/notify-send' Containerfile; then
+  ok "the reminder is a user unit enabled globally, with the notifier it calls in the image"
+else
+  bad "the reminder is a user unit enabled globally, with the notifier it calls in the image" \
+    "a per-user preset cannot work: a bootc build has no logged-in user, and greetd's autologin session has no login shell for /etc/profile.d"
+fi
+
+# The marker is the prompt's interface, so it has to be derived on every run
+# rather than trusted: a file left behind by the session that staged the update
+# would have the prompt ask for a reboot that no longer applies.
+status_line=$(grep -n 'rpm-ostree status' "$reminder_script" 2>/dev/null | head -n1 | cut -d: -f1)
+# shellcheck disable=SC2016 # the literal "$marker" is what the script reads
+marker_read=$(grep -n '"$marker"' "$reminder_script" 2>/dev/null | head -n1 | cut -d: -f1)
+other_writers=$(grep -rlF 'bootc-update-pending' rootfs 2>/dev/null | grep -vx "$reminder_script")
+if [[ -n $status_line && -n $marker_read ]] && ((status_line < marker_read)) \
+    && grep -qF 'rpm-ostree status --json' "$reminder_script" \
+    && grep -q 'notify-send --app-name=bootc' "$reminder_script" \
+    && [[ -z $other_writers ]]; then
+  ok "the marker is read from rpm-ostree every session, and only the reminder writes it"
+else
+  bad "the marker is read from rpm-ostree every session, and only the reminder writes it" \
+    "status=${status_line:-none} marker=${marker_read:-none} other writers=${other_writers:-none}"
+fi
+
+# shellcheck disable=SC2088 # a literal ~ in prose is the path a prompt opens
+if grep -qF '~/.local/state/bootc-update-pending' "$repo/docs/laptop/manual-steps.md" \
+    && grep -qF '~/.local/state/bootc-update-pending' README.md; then
+  ok "the docs name the marker path the reminder writes"
+else
+  bad "the docs name the marker path the reminder writes"
+fi
+
 # --- shell ------------------------------------------------------------------
 
 if command -v shellcheck >/dev/null 2>&1 && shellcheck --version >/dev/null 2>&1; then

@@ -93,7 +93,7 @@ RUN set -eux; \
       fprintd fprintd-pam power-profiles-daemon thermald upower \
       libinput \
       xdg-user-dirs xdg-utils gvfs udisks2 plymouth plymouth-system-theme \
-      dolphin ImageMagick jq \
+      dolphin ImageMagick jq libnotify \
       git tailscale firewalld \
       syncthing; \
     printf '[brave-browser]\nname=Brave Browser\nenabled=1\ngpgcheck=1\ngpgkey=https://brave-browser-rpm-release.s3.brave.com/brave-core.asc\nbaseurl=https://brave-browser-rpm-release.s3.brave.com/$basearch\n' > /etc/yum.repos.d/brave-browser.repo; \
@@ -158,7 +158,11 @@ RUN set -eux; \
 # bootc images enable units at build time; the generator picks the rest up
 # from their [Install] sections.
 #
-# bootc updates are staged daily and applied on reboot. rpm-ostree's own
+# bootc updates are staged, never applied: rootfs/ ships two drop-ins, one that
+# pins the schedule in a single file and one that replaces the vendor `bootc
+# upgrade --apply` ExecStart, because a laptop that reboots itself mid-session
+# lands at the disk's FIDO2 prompt with nobody there to touch the key. The staged
+# deployment applies at the next shutdown a person asked for. rpm-ostree's own
 # automatic timer is masked so two update agents never race for the same
 # deployment.
 RUN set -eux; \
@@ -186,6 +190,29 @@ RUN set -eux; \
 # repository and no pin.
 RUN set -eux; \
     systemctl --global enable syncthing.service
+
+# The reminder is the other half of a stage-only laptop: nothing reboots it, so
+# the person at the keyboard has to be told a staged deployment is waiting. It is
+# a user unit enabled globally for the same reason syncthing is -- a bootc build
+# has no logged-in user to preset a unit for -- and a user unit at all because
+# greetd's autologin session is not a login shell, so /etc/profile.d never runs
+# for the only user this laptop has.
+#
+# The asserts are the parts the drop-ins cannot prove about themselves: that the
+# vendor unit being replaced is still the one shipped here, with the ExecStart the
+# check suite merges against, that this image can notify at all, and that the
+# reminder's symlink is in the image rather than made at some login.
+RUN set -eux; \
+    systemctl --global enable bootc-update-reminder.service; \
+    test -x /usr/bin/notify-send; \
+    test -x /usr/libexec/smorespro/bootc-update-reminder; \
+    test -e /etc/systemd/user/default.target.wants/bootc-update-reminder.service; \
+    grep -qxF 'ExecStart=/usr/bin/bootc upgrade --apply --quiet' \
+      /usr/lib/systemd/system/bootc-fetch-apply-updates.service; \
+    grep -qxF 'ExecStart=' \
+      /usr/lib/systemd/system/bootc-fetch-apply-updates.service.d/10-stage-only.conf; \
+    grep -qxF 'OnUnitInactiveSec=' \
+      /usr/lib/systemd/system/bootc-fetch-apply-updates.timer.d/10-schedule.conf
 
 # Fail the build if the base is not the fedora-bootc release tag or the shipped
 # policy no longer rejects by default. A digest here would pin a manifest quay
