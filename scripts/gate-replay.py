@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """Replay the gate's suite selection over recent history.
 
-Every commit is diffed against its first parent only, so a merge counts once,
-and the changed paths go through the same rules as tests/tags.sh: rows of
-tests/tags.tsv match shell `case` globs (where `*` crosses `/`), a path that
-matches `all` or that no row claims selects every suite, and every other row a
-path matches selects its suite in first-add order.
+Every commit is diffed against its first parent only, so a merge is measured by
+what it brought to its branch. The window is `git log` order, which includes the
+commits of merged branches, unless `--first-parent` narrows it to the chain a
+push to main actually advances. The changed paths go through the same rules as
+tests/tags.sh: rows of tests/tags.tsv match shell `case` globs (where `*`
+crosses `/`), a path that matches `all` or that no row claims selects every
+suite, and every other row a path matches selects its suite in first-add order.
 
 usage:
-  scripts/gate-replay.py --commits N [--table PATH] [--json]
+  scripts/gate-replay.py --commits N [--first-parent] [--table PATH] [--json]
 """
 from __future__ import annotations
 
@@ -89,13 +91,14 @@ def percentile(values: list[int], quantile: float) -> int:
     return sorted(values)[max(math.ceil(quantile * len(values)) - 1, 0)]
 
 
-def replay(commits: int, table: Path) -> dict:
+def replay(commits: int, table: Path, first_parent: bool) -> dict:
     rows = read_rows(table)
     every = suites_on_disk()
     head = git("rev-parse", "HEAD").strip()
     records: list[dict] = []
     touched: dict[str, list[str]] = {}
-    for line in git("log", "-n", str(commits), "--format=%H\t%s", "HEAD").splitlines():
+    window = ["--first-parent"] if first_parent else []
+    for line in git("log", *window, "-n", str(commits), "--format=%H\t%s", "HEAD").splitlines():
         sha, _, subject = line.partition("\t")
         paths = changed_paths(sha)
         # The tool measures the tree it runs in, so uncommitted work counts too.
@@ -126,6 +129,7 @@ def replay(commits: int, table: Path) -> dict:
     return {
         "table": str(table),
         "head": head,
+        "first_parent": first_parent,
         "commits": records,
         "summary": {
             "commits": len(records),
@@ -148,9 +152,14 @@ def main() -> int:
     parser.add_argument("--commits", type=int, default=60, help="how many commits to replay")
     parser.add_argument("--table", type=Path, default=TABLE, help="candidate tests/tags.tsv")
     parser.add_argument("--json", action="store_true", help="emit JSON instead of a text report")
+    parser.add_argument(
+        "--first-parent",
+        action="store_true",
+        help="replay only the first-parent chain, not the commits of merged branches",
+    )
     args = parser.parse_args()
 
-    report = replay(args.commits, args.table)
+    report = replay(args.commits, args.table, args.first_parent)
     if args.json:
         json.dump(report, sys.stdout, indent=2)
         print()
@@ -158,7 +167,8 @@ def main() -> int:
 
     total = report["summary"]
     print(f"table {args.table}")
-    print(f"head  {report['head'][:7]}  {total['commits']} commits  {total['suites']} suites")
+    chain = "first-parent" if report["first_parent"] else "git log"
+    print(f"head  {report['head'][:7]}  {chain}  {total['commits']} commits  {total['suites']} suites")
     print()
     for record in report["commits"]:
         print(f"{record['sha']}  {'all' if record['all'] else '   '}  {record['count']:4d}"
