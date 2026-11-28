@@ -1,9 +1,9 @@
 # Decommission evidence tools
 
-These scripts are the recorded evidence path for the T0/T6 gates in
-`docs/core/t0-gate.md` (#703) and the cold-restore matrix in
-`docs/core/restic-plane.md` (#709). They are not part of normal operation and
-must not be deleted while those checklists are open: `legacy-audit.sh` attaches
+These scripts are the recorded evidence path for the T0/T6 gates (#703) and the
+cold-restore matrix in `docs/core/restic-plane.md` (#709). They are not part of
+normal operation and must not be deleted while those checklists are open:
+`legacy-audit.sh` attaches
 the inventory to #703, `verify-legacy-backups.sh` proves both legacy
 repositories restore, and `retirement-gate.sh` runs the matrix.
 

@@ -5,7 +5,7 @@
 # The privileged half — freezing a real cluster, reading a real repository —
 # needs smortress and root. This checks the half that does not: argument
 # handling, the read-only default, the refusal to run unprivileged, and the
-# promises the gate document makes about what these scripts can do.
+# promises the scripts' own headers make about what they can do.
 #
 # The harnesses the shell suite chained inline — restic-plane, the progress
 # command, agent-recovery, the Quadlet suites and the agent shell dispatcher —
@@ -99,18 +99,6 @@ done
 @test "audit is read-only" {
     ! grep -nE 'systemctl (start|stop|restart)|cryptsetup|restic (backup|forget|prune)' \
         scripts/legacy/legacy-audit.sh >/dev/null
-}
-
-# The gate document must point at scripts that exist.
-@test "gate document references existing scripts" {
-    missing=0
-    while IFS= read -r ref; do
-        [[ -f $ref ]] || {
-            printf 'gate references a missing %s\n' "$ref" >&2
-            missing=1
-        }
-    done < <(grep -o 'scripts/core/[a-z-]*\.sh' docs/core/t0-gate.md | sort -u)
-    [[ $missing -eq 0 ]]
 }
 
 # ------------------------------------------------------------- the operator CLI

@@ -48,8 +48,8 @@ layout=$here/storage-layout
 readonly backends=(ssd hdd r2)
 # A restore writes tens of GiB. The default parent is a data disk, never /var/tmp:
 # the root filesystem holds the system, and a restore that fills it takes every
-# service with it (docs/core/pool-rebuild.md). The restore-drill helper picks the
-# same disks on its own; this mirrors it so the drill cannot re-point at root.
+# service with it. The restore-drill helper picks the same disks on its own; this
+# mirrors it so the drill cannot re-point at root.
 default_drill_root() {
   local candidate
   for candidate in /var/lib/restic/hdd /var/lib/restic/ssd; do

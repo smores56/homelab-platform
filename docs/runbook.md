@@ -121,5 +121,6 @@ bats --jobs "$(nproc)" $(git ls-files 'tests/*.bats' 'tests/*/*.bats') # every s
 bats tests/lint.bats                # action pins, secret boundary, CODEOWNERS, yamllint, shellcheck
 ```
 
-All of the above pass on `main`; see `docs/negative-tests.md` for the fork-PR
-boundary and `docs/manual-steps.md` for the owner-only steps.
+All of the above pass on `main`; the fork-PR runtime half needs a second GitHub
+identity and is checked by hand, and `docs/manual-steps.md` holds the owner-only
+steps.

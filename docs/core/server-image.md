@@ -601,10 +601,9 @@ encrypted storage volumes on the 980 — as:
 
 Ignition resizes `p4` with `resize: true`/`size_mib: 307200` and creates `p5`
 with `size_mib: 0`. Root is 300 GiB because it also carries the container images,
-the journal and any restore that does not name a data disk; the rebuild that
-takes an installed 100 GiB host to that layout, and why it cannot be done in
-place, is `docs/core/pool-rebuild.md`. The 970 stays a separate ext4 Restic
-repository disk; the
+the journal and any restore that does not name a data disk. An installed 100 GiB
+host cannot reach that layout in place: a ZFS vdev cannot shrink, so p5 has to be
+recreated. The 970 stays a separate ext4 Restic repository disk; the
 5 TB HDD keeps its existing LUKS and is opened by
 `smortress-cryptsetup-hdd.service` with a keyfile and `nofail` semantics. Its
 absence cannot block boot; T3 alerts through backup staleness.

@@ -141,8 +141,8 @@ done
 }
 
 # Root is 300 GiB and p5 takes the rest. A ZFS vdev cannot shrink, so an
-# installed host cannot reach this size without recreating the pool
-# (docs/core/pool-rebuild.md); the test pins the template so a reinstall does
+# installed host cannot reach this size without recreating the pool; the test
+# pins the template so a reinstall does
 # not quietly hand the space back to the data partition.
 @test "root is 300 GiB and the data partition takes the remainder" {
     grep -qE '^[[:space:]]*size_mib: 307200$' "$template"
