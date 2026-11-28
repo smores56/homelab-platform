@@ -252,15 +252,17 @@ runbook_names() { # <step>
 }
 
 # Every human step this feature needs, by the name the code or the console uses.
+# No tag name and no retired secret is asserted here: the runbook is being
+# rewritten per host (#1038), and the names this feature deleted belong to neither
+# version of it.
 for step in deploy-notify TS_OAUTH_CLIENT_ID TS_OAUTH_CLIENT_SECRET \
-    DEPLOY_WEBHOOK_SECRET tag:deploy bootupctl /boot/grub2/custom.cfg journal.jsonl \
-    greenboot-grub2-set-counter \
-    webhook-secret-next.yaml; do
+    bootupctl /boot/grub2/custom.cfg journal.jsonl \
+    greenboot-grub2-set-counter deploy-ping-url.yaml; do
     register "the runbook names $step" runbook_names "$step"
 done
 
 # The secrets the deploy programs read are the secrets the runbook seeds: the
-# names come from the readers, not from a list here, so a fourth file cannot ship
+# names come from the readers, not from a list here, so a second file cannot ship
 # without a step that fills it.
 @test "every secret the deploy path reads has a manifest line and a runbook step" {
     seeded=0
@@ -273,7 +275,7 @@ done
             printf '%s is read by the deploy path but the runbook never seeds it\n' "$secret" >&2
             seeded=1
         }
-    done < <(grep -rhoE '(webhook-secret(-next)?|deploy-ping-url)\.yaml' \
+    done < <(grep -rhoE '(deploy-ping-url)\.yaml' \
         scripts bootc/server/rootfs/usr/libexec | sort -u)
     [[ $seeded -eq 0 ]]
 }

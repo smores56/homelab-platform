@@ -94,12 +94,11 @@ COPY scripts/lib/ /usr/libexec/lib/
 COPY scripts/boot-counter-install.sh /usr/libexec/boot-counter
 COPY scripts/deploy-state.sh /usr/libexec/deploy-state
 # The deploy plane's programs, under the names the units run them by (design #939,
-# T8). The receiver is shared with the server and identical; the drain loop is the
-# one both roles source, and the heartbeat is shared because the dead-man question
-# ("is the listener answering and is its queue moving") is the same on both hosts.
+# T8). The drain loop is the one both roles source, and the heartbeat is shared
+# because the dead-man question ("is the queue moving") is the same on both hosts.
 # deploy-drain-edge, deploy-verify.py and edge-boot-gate are the edge rootfs's own
-# and arrive with the COPY above.
-COPY bootc/lib/deploy/deploy-receiver.py /usr/libexec/deploy-receiver.py
+# and arrive with the COPY above. There is no receiver: since #1010 nothing reaches
+# in, and the quarter-hour poll is the only trigger.
 COPY bootc/lib/deploy/drain.sh /usr/libexec/deploy/drain.sh
 COPY scripts/deploy-heartbeat.sh /usr/libexec/deploy-heartbeat
 # The poll backstop, under the name its timer runs it by (design #939, T11). It is
@@ -126,9 +125,7 @@ RUN set -eux; \
       greenboot-healthcheck.service \
       smoresnet-boot-counter.service \
       smoresnet-boot-rw.service \
-      smoresnet-deploy-listener.service \
       smoresnet-deploy.path \
-      smoresnet-deploy-forward.service \
       smoresnet-deploy-heartbeat.timer \
       smoresnet-deploy-poll.timer \
       smoresnet-firewall-zones.service \
@@ -227,11 +224,8 @@ RUN set -eux; \
     test ! -e /etc/smoresnet/tailscale-authkey || { echo "an auth key is in the image: it is the operator's, and never image content" >&2; exit 1; }; \
     test -x /usr/libexec/deploy-drain-edge || { echo "the edge drain is missing or not executable: smoresnet-deploy.service would fail 203/EXEC and the queue would never be consumed" >&2; exit 1; }; \
     test -r /usr/libexec/deploy/drain.sh || { echo "the shared drain loop is missing: the edge drain has nothing to run" >&2; exit 1; }; \
-    test -r /usr/libexec/deploy-receiver.py || { echo "the deploy receiver is missing: nothing would answer the tailnet on 8484" >&2; exit 1; }; \
     test -x /usr/libexec/deploy-heartbeat || { echo "the deploy heartbeat is missing or not executable: smoresnet-deploy-heartbeat.service would fail 203/EXEC and a wedged queue would never page" >&2; exit 1; }; \
-    ! grep -qE '^(Requires|Wants)=.*sops-decrypt' /usr/lib/systemd/system/smoresnet-deploy-listener.service || { echo "the edge listener depends on a sops unit this image does not ship: it would never start" >&2; exit 1; }; \
-    grep -qxF 'Environment=DEPLOY_SECRETS_DIR=/etc/smoresnet' /usr/lib/systemd/system/smoresnet-deploy-listener.service || { echo "the edge listener does not read its secret from /etc/smoresnet" >&2; exit 1; }; \
-    test ! -e /etc/smoresnet/webhook-secret.yaml || { echo "a webhook secret is in the image: it is the operator's, written by edge-bootstrap" >&2; exit 1; }; \
+    test ! -e /etc/smoresnet/webhook-secret.yaml || { echo "a webhook secret is in the image: no listener authenticates against one any more" >&2; exit 1; }; \
     test ! -e /etc/caddy/edge.env || { echo "the Caddy environment file is in the image: its upstreams are the operator's" >&2; exit 1; }; \
     test -x /usr/libexec/deploy-poll || { echo "the deploy poll is missing or not executable: smoresnet-deploy-poll.service would fail 203/EXEC and a release nobody dispatched would never land" >&2; exit 1; }; \
     test -f /usr/lib/systemd/system/smoresnet-deploy-poll.timer || { echo "the poll timer is missing: nothing would run the backstop" >&2; exit 1; }; \
@@ -248,7 +242,6 @@ RUN set -eux; \
     test -x /usr/libexec/smoresnet-firewall-prejoin || { echo "the pre-join firewall helper is missing: a host that cannot join the tailnet would have no way in at all" >&2; exit 1; }; \
     grep -qxF 'ExecStart=/usr/libexec/smoresnet-firewall-prejoin' /usr/lib/systemd/system/smoresnet-firewall-prejoin.service || { echo "the pre-join unit does not run the installed helper" >&2; exit 1; }; \
     test -e /etc/systemd/system/multi-user.target.wants/smoresnet-firewall-prejoin.service || { echo "the pre-join unit is not enabled: the public ssh window would never be decided" >&2; exit 1; }; \
-    grep -qxF 'ExecStart=/usr/bin/tailscale serve --bg --tcp=8484 tcp://127.0.0.1:8484' /usr/lib/systemd/system/smoresnet-deploy-forward.service || { echo "the deploy forward does not advertise the receiver: a notify job would post to a port only this host can reach" >&2; exit 1; }; \
     test -f /usr/lib/tmpfiles.d/smoresnet-deploy.conf || { echo "the deploy state fragment is missing: /var/lib/homelab/deploy would not exist and every deploy unit's ReadWritePaths would fail" >&2; exit 1; }; \
     grep -qxF 'd /var/lib/homelab/deploy/queue 0700 root root -' /usr/lib/tmpfiles.d/smoresnet-deploy.conf || { echo "the deploy state fragment does not create the queue: smoresnet-deploy.path would never fire and a request would sit undrained" >&2; exit 1; }; \
     test ! -e /etc/tmpfiles.d/smoresnet-deploy.conf || { echo "/etc/tmpfiles.d/smoresnet-deploy.conf shadows the deploy state fragment: bootc never replaces a host's /etc, so the deploy tree would stop being created" >&2; exit 1; }; \
@@ -272,4 +265,3 @@ RUN set -eux; \
     grep -qxF 'Persistent=false' /usr/lib/systemd/system/bootc-fetch-apply-updates.timer.d/10-schedule.conf || { echo "the update timer is persistent: a power cut would fire every missed window at once" >&2; exit 1; }; \
     grep -qxF 'OnUnitInactiveSec=' /usr/lib/systemd/system/bootc-fetch-apply-updates.timer.d/10-schedule.conf || { echo "the vendor 8h cycle is still in place: the host would upgrade besides its window" >&2; exit 1; }; \
     grep -qxF 'ReadWritePaths=/var/lib/caddy' /usr/lib/systemd/system/caddy.service.d/10-smoresnet.conf || { echo "the caddy unit no longer names its storage directory: the path would leave bootc/edge/unit-paths.tsv, and with it the check that something creates it" >&2; exit 1; }; \
-    test -e /etc/systemd/system/multi-user.target.wants/smoresnet-deploy-forward.service || { echo "the deploy forward is not enabled: dispatch-triggered deploys would never arrive" >&2; exit 1; }

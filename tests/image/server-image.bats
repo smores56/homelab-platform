@@ -173,22 +173,21 @@ contains() {
     fi
 }
 
-# 22 exists on the tailnet and nowhere else, and the deploy receiver's port is
-# declared with it so T11 does not have to widen a zone to make the notify path
-# work.
-@test "the edge tailscale zone binds tailscale0 and opens 22 and 8484 only" {
+# 22 exists on the tailnet and nowhere else. The deploy receiver's 8484 left the
+# zone with the receiver (#1018): nothing reaches in, so nothing but the operator's
+# shell may be open on the only route in.
+@test "the edge tailscale zone binds tailscale0 and opens 22 only" {
     zone=$edge_rootfs/usr/share/smoresnet/firewalld/zones/tailscale.xml
     run test -s "$zone"
     assert_success
     contains '<interface name="tailscale0"/>' "$zone"
     contains '<port port="22" protocol="tcp"/>' "$zone"
-    contains '<port port="8484" protocol="tcp"/>' "$zone"
     # Pinned whole rather than one port at a time, exactly as the server's zone is
     # (scripts/check/server/deploy.sh): a port added to this zone is a port open on
     # the only route in, and nothing else would notice.
     ports=$(grep -oE '<port port="[0-9]+" protocol="[a-z]+"/>' "$zone" | tr '\n' ' ')
-    [[ $ports == '<port port="22" protocol="tcp"/> <port port="8484" protocol="tcp"/> ' ]] ||
-        fail "the tailscale zone opens more than 22 and 8484: $ports"
+    [[ $ports == '<port port="22" protocol="tcp"/> ' ]] ||
+        fail "the tailscale zone opens more than 22: $ports"
 }
 
 # The zones unit runs before firewalld because the alternative is firewalld

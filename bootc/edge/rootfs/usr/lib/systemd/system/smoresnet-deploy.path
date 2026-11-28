@@ -1,14 +1,13 @@
 # A request in the queue is what starts the drain, exactly as on smortress: the
-# receiver enqueues one when a dispatch-notified POST verifies, the poll enqueues
-# one when `main` has moved, and `DirectoryNotEmpty` fires on the first file and on
-# every later one. Without this unit both triggers would fill a queue that nothing
-# consumes, and the drain would be back to a hand-run `systemctl start`.
+# quarter-hour poll enqueues one when `main` has moved, and `DirectoryNotEmpty`
+# fires on the first file and on every later one. Without this unit the poll would
+# fill a queue that nothing consumes, and the drain would be back to a hand-run
+# `systemctl start`.
 #
 # The drain is a oneshot that rescans before it exits, so a request landing while
 # it finishes is drained by the same run instead of waiting for the next event.
 # The directory is created by tmpfiles at boot; a missing queue simply never
-# triggers, which is why smoresnet-deploy-listener.service is the unit that reports
-# the queue unusable.
+# triggers, and the heartbeat's queue scan is what reports one unusable.
 [Unit]
 Description=Drain the edge's deploy queue when a request lands
 

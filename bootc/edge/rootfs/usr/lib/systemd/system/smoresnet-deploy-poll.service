@@ -20,12 +20,11 @@ Before=shutdown.target
 [Service]
 Type=oneshot
 ExecStart=/usr/libexec/deploy-poll
-# The role's allowlist, stated where the poll can be affected by it: the edge
-# receiver admits homelab-platform and nothing else (design #939 section 5). The
-# poll writes straight into the queue, so an apps request would take one of the 32
-# slots a platform deploy needs and be refused downstream -- the exact lockout the
-# receiver's own allowlist exists to prevent. It is not a second allowlist: the
-# receiver remains the enforcer, and this only stops the poll asking.
+# The role's allowlist, stated where it is enforced: this host runs
+# homelab-platform and nothing else (design #939 section 5). The poll writes
+# straight into the queue, so an apps request would take one of the 32 slots a
+# platform deploy needs and be refused downstream. Since #1018 the poll is the
+# only admission point there is -- nothing else reaches in to refuse anything.
 Environment=DEPLOY_POLL_REPOS=homelab-platform
 # The page on a denylisted tip or an exhausted anonymous budget is the operator's
 # capability URL, plaintext at rest on this box. Absent, the page journals

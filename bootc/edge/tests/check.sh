@@ -417,17 +417,6 @@ queue_starts_the_drain() {
   grep -qE '^[[:space:]]+smoresnet-deploy\.path \\$' "$containerfile"
 }
 
-# The event trigger is the workflow's. What the image can state about it is that it
-# is a dispatch and not a push: the edge is the host with the least rollback, so a
-# merge touching the image must not reboot it.
-notify_is_a_main_dispatch() {
-  grep -qE '^  notify:$' "$publish_workflow" || return 1
-  grep -qxF "    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'" \
-    "$publish_workflow" || return 1
-  grep -qxF '    environment: deploy-notify' "$publish_workflow" || return 1
-  grep -qxF '    permissions: {}' "$publish_workflow"
-}
-
 # --- run ----------------------------------------------------------------------
 
 check 'the Caddyfile validates at build and before every start' caddyfile_validated
@@ -461,7 +450,6 @@ check_build 'the base is a stream tag and the build records its digest' base_is_
 check_build 'a pull_request workflow runs this checker on the edge tree' pull_request_runs_this_checker
 check 'the quarter-hour poll backstop ships and its timer is enabled' poll_backstop_ships
 check 'the queue starts the drain when a request lands' queue_starts_the_drain
-check_build 'the edge is told to deploy by a main dispatch, never by a push' notify_is_a_main_dispatch
 check_build 'every path the units name is created before boot' unit_paths_are_created
 
 # The invariant the image cannot state, kept visible so the port is not mistaken

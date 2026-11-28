@@ -93,7 +93,7 @@ for unit in smortress-app-secrets.service smortress-tailscale-serve.service \
   check "image enables $unit" has "$unit" bootc/server/Containerfile
 done
 
-# Deploy receiver (#798). A platform deploy ends in a reboot, so the pieces that
+# Deploy plane (#798, #1010). A platform deploy ends in a reboot, so the pieces that
 # decide whether the new deployment stays are asserted here: the units the image
 # starts, the gate unit and its ordering, the counter that is the only rollback
 # before userspace, and the list of units the gate requires. A missing unit in
@@ -214,8 +214,7 @@ done
 # same holds for every shell helper: the install loop strips the `.sh` and the
 # unit runs the result, which is how smortress-boot-gate.sh shipped 100644 and
 # would have failed the boot gate with 203/EXEC on the first boot after a deploy.
-for program in bootc/lib/deploy/deploy-receiver.py \
-  bootc/server/rootfs/usr/libexec/deploy-verify.py scripts/*.sh; do
+for program in bootc/server/rootfs/usr/libexec/deploy-verify.py scripts/*.sh; do
   check "$program is committed executable" \
     test "$(git ls-files -s "$program" | cut -d' ' -f1)" = 100755
 done
@@ -238,20 +237,14 @@ check "the resolver searches /usr/libexec" has '/usr/libexec' scripts/deploy-sta
 # The units the image starts at boot. The drain is the exception and is asserted
 # as such: it is a queue-triggered oneshot with no [Install] section, so enabling
 # it would fail the build and starting it at boot would drain an empty queue.
-receiver_unit=units/systemd/smortress-deploy-listener.service
-check "the receiver unit exists" test -s "$receiver_unit"
-check "the receiver runs the installed program" \
-  has 'ExecStart=/usr/bin/python3 /usr/libexec/deploy-receiver.py' "$receiver_unit"
-check "the receiver refuses to start without the decrypt step" \
-  grep -qE '^Requires=sops-decrypt\.service' "$receiver_unit"
-for unit in smortress-deploy-listener.service smortress-deploy.path \
+for unit in smortress-deploy.path \
   smortress-boot-gate.service smortress-deploy-poll.timer \
   smortress-deploy-heartbeat.timer smortress-deploy-retry.timer; do
   check "image enables $unit" has "$unit" bootc/server/Containerfile
 done
 check "the queue path triggers the drain" \
   grep -qxF 'Unit=smortress-deploy.service' units/systemd/smortress-deploy.path
-check "the queue path watches the receiver's queue" \
+check "the queue path watches the deploy queue" \
   grep -qxF 'DirectoryNotEmpty=/var/lib/homelab/deploy/queue' units/systemd/smortress-deploy.path
 check "the drain is triggered by the queue, not enabled at boot" \
   lacks 'WantedBy=' units/systemd/smortress-deploy.service
@@ -296,14 +289,12 @@ check "the retry timer fires every five minutes" \
 check "the tmpfiles entry creates the queue" \
   has 'd /var/lib/homelab/deploy/queue 0700 root root -' bootc/server/rootfs/etc/tmpfiles.d/smortress.conf
 
-# The three secrets the deploy path reads are `value` scalars: the listener
-# compares the raw key, the heartbeat hands the bare URL to curl and sops-decrypt
-# writes the scalar alone, so a `yaml` entry would compare a document.
-for name in webhook-secret webhook-secret-next deploy-ping-url; do
-  check "$name is a manifest value" \
-    grep -qE "^${name//./\\.}\.yaml[[:space:]]+[^[:space:]]+[[:space:]]+[^[:space:]]+[[:space:]]+root[[:space:]]+root[[:space:]]+0400[[:space:]]+value$" \
-    bootc/server/rootfs/usr/share/smortress/secrets.manifest
-done
+# The one secret the deploy path reads is a `value` scalar: the heartbeat hands the
+# bare URL to curl and sops-decrypt writes the scalar alone, so a `yaml` entry
+# would hand it a document.
+check "deploy-ping-url is a manifest value" \
+  grep -qE '^deploy-ping-url\.yaml[[:space:]]+[^[:space:]]+[[:space:]]+[^[:space:]]+[[:space:]]+root[[:space:]]+root[[:space:]]+0400[[:space:]]+value$' \
+  bootc/server/rootfs/usr/share/smortress/secrets.manifest
 
 # The gate's list is only meaningful if every line is active on a healthy host:
 # a unit the image does not enable is inactive at every boot, and so is one that
@@ -540,7 +531,7 @@ while IFS= read -r unit; do
   # outside the suffix filter above; they stay in the case so the decision survives
   # a wider filter.
   case $unit in
-    smortress-deploy-listener.service | smortress-deploy.path | \
+    smortress-deploy.path | \
       smortress-deploy-poll.timer | smortress-deploy-heartbeat.timer | \
       smortress-deploy-retry.timer) continue ;;
   esac

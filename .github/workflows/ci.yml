@@ -39,7 +39,7 @@ jobs:
             xargs -0 bats --filter-tags 'core' --jobs "$(nproc)" --no-parallelize-within-files
 
   deploy:
-    name: deploy (receiver, state, gates, apps apply)
+    name: deploy (state, gates, apps apply)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

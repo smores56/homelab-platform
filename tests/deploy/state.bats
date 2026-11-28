@@ -286,25 +286,25 @@ seed_platform_state() {
 # --- journal -----------------------------------------------------------------
 @test "journal_append writes a record" {
     deploy_state_init
-    run journal_append 'queue-enqueued' "$(jq -nc --arg id 'x' '{id:$id}')"
+    run journal_append 'drain-start' "$(jq -nc --arg id 'x' '{id:$id}')"
     assert_success
 }
 
 @test "the journal carries the event" {
     deploy_state_init
-    journal_append 'queue-enqueued' "$(jq -nc --arg id 'x' '{id:$id}')"
-    assert_equal "$(jq -r .event <<<"$(tail -n 1 "$DEPLOY_STATE_DIR/journal.jsonl")")" queue-enqueued
+    journal_append 'drain-start' "$(jq -nc --arg id 'x' '{id:$id}')"
+    assert_equal "$(jq -r .event <<<"$(tail -n 1 "$DEPLOY_STATE_DIR/journal.jsonl")")" drain-start
 }
 
 @test "the journal carries the details" {
     deploy_state_init
-    journal_append 'queue-enqueued' "$(jq -nc --arg id 'x' '{id:$id}')"
+    journal_append 'drain-start' "$(jq -nc --arg id 'x' '{id:$id}')"
     assert_equal "$(jq -r .id <<<"$(tail -n 1 "$DEPLOY_STATE_DIR/journal.jsonl")")" x
 }
 
 @test "the journal carries a UTC timestamp" {
     deploy_state_init
-    journal_append 'queue-enqueued' "$(jq -nc --arg id 'x' '{id:$id}')"
+    journal_append 'drain-start' "$(jq -nc --arg id 'x' '{id:$id}')"
     run jq -e '.ts | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T")' "$DEPLOY_STATE_DIR/journal.jsonl"
     assert_success
 }

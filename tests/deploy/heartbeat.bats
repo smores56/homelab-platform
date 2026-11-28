@@ -2,16 +2,15 @@
 # bats file_tags=deploy
 # Offline checks for the deploy heartbeat (SDLC #798, T6).
 #
-# The heartbeat is the dead-man for the receiver itself. It pings the deploy check
-# green only when the listener answers /healthz inside five seconds *and* no queue
-# entry has been waiting for two hours, and it pings /fail with the reason
-# otherwise. A poll-driven ping could not see a wedged drain: the poll's own
-# request would sit in the queue and the poll would report nothing wrong. That is
-# why the two are separate programs and why this suite drives the health endpoint
-# and the queue independently.
+# The heartbeat is the dead-man for the deploy queue. It pings the deploy check
+# green only when no queue entry has been waiting for two hours, and it pings /fail
+# with the reason otherwise. A poll-driven ping could not see a wedged drain: the
+# poll's own request would sit in the queue and the poll would report nothing
+# wrong. That is why the two are separate programs. There is no listener to probe
+# any more (#1018), and #1019 replaces this program with a poll-side ping.
 #
-# The health endpoint is a fake `curl` and the queue is a throwaway directory; the
-# ping URL, the journal and the exit codes are real. No network, no root, no image.
+# `curl` is a fake and the queue is a throwaway directory; the ping URL, the
+# journal and the exit codes are real. No network, no root, no image.
 #
 #   bats tests/deploy/heartbeat.bats
 load ../helpers
@@ -22,11 +21,10 @@ timer=units/systemd/smortress-deploy-heartbeat.timer
 service=units/systemd/smortress-deploy-heartbeat.service
 ping_url=http://ping.test/deploy
 
-# The fake curl is the same for every test, so it is written once per file: the
-# health URL answers the status in $FAKE_HEALTH_STATUS (`network` is a connect
-# failure, exit 7, as the real curl reports it) and every Healthchecks ping is
-# recorded instead of sent. deploy_notify hands its URL over as a curl config on
-# stdin, never in argv, so a URL-less call reads the `url = "..."` line.
+# The fake curl is the same for every test, so it is written once per file: every
+# Healthchecks ping is recorded instead of sent. deploy_notify hands its URL over
+# as a curl config on stdin, never in argv, so a URL-less call reads the
+# `url = "..."` line.
 setup_file() {
     bin=$BATS_FILE_TMPDIR/bin
     mkdir -p "$bin"
@@ -34,14 +32,10 @@ setup_file() {
 #!/usr/bin/env bash
 set -uo pipefail
 printf '%s\n' "$*" >>"$FAKE_CURL_LOG"
-out=/dev/stdout
-fail=0
 url=
 while (($#)); do
   case $1 in
-    --output | -o) out=$2; shift 2 ;;
-    --fail | --fail-with-body) fail=1; shift ;;
-    --write-out | --config | -H | --header | --max-time | --retry) shift 2 ;;
+    --output | -o | --write-out | --config | -H | --header | --max-time | --retry) shift 2 ;;
     -*) shift ;;
     *) url=$1; shift ;;
   esac
@@ -49,15 +43,6 @@ done
 if [[ -z $url ]]; then
   url=$(sed -n 's/^url = "\(.*\)"$/\1/p' | head -n 1)
 fi
-case ${url:-} in
-  *healthz*)
-    status=$(cat "$FAKE_HEALTH_STATUS" 2>/dev/null) || status=200
-    [[ $status == network ]] && exit 7
-    [[ $out == /dev/stdout ]] || printf '{"status":"ok"}' >"$out"
-    if ((fail)) && ((status >= 400)); then exit 22; fi
-    exit 0
-    ;;
-esac
 printf '%s\n' "${url:-}" >>"$FAKE_PING_LOG"
 exit 0
 CURL
@@ -77,7 +62,6 @@ setup() {
     export PATH="$BATS_FILE_TMPDIR/bin:$PATH"
     export FAKE_CURL_LOG=$log
     export FAKE_PING_LOG=$pings
-    export FAKE_HEALTH_STATUS=$BATS_TEST_TMPDIR/health-status
     export DEPLOY_STATE_DIR=$state
     export DEPLOY_LOCK_FILE=$BATS_TEST_TMPDIR/deploy.lock
     export DEPLOY_PING_SECRET=$BATS_TEST_TMPDIR/deploy-ping-url.yaml
@@ -110,14 +94,14 @@ expect_failure() {
     return 1
 }
 
-# --- a healthy, idle receiver is reported green ------------------------------
+# --- a healthy, idle queue is reported green ---------------------------------
 
-@test "a healthy receiver exits 0" {
+@test "an idle host exits 0" {
     beat
     assert_equal "$rc" 0
 }
 
-@test "a healthy receiver pings the check itself, not /fail" {
+@test "an idle host pings the check itself, not /fail" {
     beat
     assert_equal "$(cat "$pings")" "$ping_url"
 }
@@ -125,16 +109,6 @@ expect_failure() {
 @test "the healthy beat is journaled" {
     beat
     assert_equal "$(journal_events heartbeat-ok)" 1
-}
-
-@test "the health probe is bounded to five seconds" {
-    beat
-    assert grep -qE -- '--max-time 5' "$log"
-}
-
-@test "the probe targets the listener's own /healthz" {
-    beat
-    assert grep -qE 'healthz' "$log"
 }
 
 @test "a queue entry younger than the limit is still healthy" {
@@ -188,40 +162,6 @@ expect_failure() {
     queue_seed 33333333-3333-4333-8333-333333333333 "$(($(date +%s) - 5400))"
     beat
     assert_equal "$(cat "$pings")" "$ping_url"
-}
-
-# --- a silent listener is paged ----------------------------------------------
-
-@test "a listener that does not answer fails the unit" {
-    printf 'network\n' >"$FAKE_HEALTH_STATUS"
-    beat
-    expect_failure
-}
-
-@test "a silent listener pings /fail" {
-    printf 'network\n' >"$FAKE_HEALTH_STATUS"
-    beat
-    assert grep -qx "$ping_url/fail" "$pings"
-}
-
-@test "a listener answering 503 fails the unit" {
-    printf '503\n' >"$FAKE_HEALTH_STATUS"
-    beat
-    expect_failure
-}
-
-@test "a non-200 health answer pings /fail" {
-    printf '503\n' >"$FAKE_HEALTH_STATUS"
-    beat
-    assert grep -qx "$ping_url/fail" "$pings"
-}
-
-# The dead-man must never report both: a green ping alongside a /fail makes the
-# check's state depend on the order Healthchecks received them.
-@test "an unhealthy beat sends no green ping" {
-    printf 'network\n' >"$FAKE_HEALTH_STATUS"
-    beat
-    assert_equal "$(grep -c 'ping.test/deploy$' "$pings" || true)" 0
 }
 
 # --- a host without the ping URL is not a broken deploy ----------------------

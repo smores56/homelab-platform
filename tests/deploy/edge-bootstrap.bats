@@ -3,7 +3,7 @@
 # Offline checks for the one operator step on a fresh edge (design #939, T10).
 #
 # The image is the whole host, so this script is what an image may not carry: the
-# operator's Caddy values, the four plaintext secrets, the kit's SSH host key, the
+# operator's Caddy values, the two plaintext secrets, the kit's SSH host key, the
 # tailnet node ID and the first deploy record. Every path it writes is redirected
 # into the test's own tree, `systemctl`, `caddy`, `bootc`, `tailscale`, `ostree`
 # and `id` are fakes on PATH, and the host key is a real key pair the test
@@ -18,8 +18,7 @@ other_commit=89abcdef0123456789abcdef0123456789abcdef
 digest=sha256:1111111111111111111111111111111111111111111111111111111111111111
 other_digest=sha256:2222222222222222222222222222222222222222222222222222222222222222
 node_id=nAbCdEf123CNTRL
-webhook_secret=4f3c2b1a00998877665544332211ffeeddccbbaa
-next_secret=00112233445566778899aabbccddeeff00112233
+authkey=tskey-auth-kTestKeyCNTRL-abcdefghijklmnop
 ping_url=https://hc.invalid/ping/edge
 
 # The fakes record what they were asked to do, and the `systemctl` one records
@@ -128,8 +127,7 @@ tailscale_doc() { # <backend-state> <node-id>
 
 standard_document() {
     cat <<EOF
-TS_AUTHKEY=tskey-auth-kTestKeyCNTRL-abcdefghijklmnop
-WEBHOOK_SECRET=$webhook_secret
+TS_AUTHKEY=$authkey
 DEPLOY_PING_URL=$ping_url
 EOF
 }
@@ -242,38 +240,29 @@ wrote_nothing() {
     run_ok "$(standard_document)" --host-key "$kit_key"
     # Every program the script ran was told an argument or a file, never a secret:
     # the fake logs its argv, and the secret is in none of them.
-    run grep -rqF -- "$webhook_secret" "$log"
+    run grep -rqF -- "$authkey" "$log"
     assert_failure
     run grep -rqF -- "$ping_url" "$log"
     assert_failure
 }
 
-@test "the three secrets are written 0600" {
+@test "both secrets are written 0600" {
     run_ok "$(standard_document)" --host-key "$kit_key"
     assert_equal "$(mode_of "$DEPLOY_SECRETS_DIR/tailscale-authkey")" 600
-    assert_equal "$(mode_of "$DEPLOY_SECRETS_DIR/webhook-secret.yaml")" 600
     assert_equal "$(mode_of "$DEPLOY_SECRETS_DIR/deploy-ping-url")" 600
     assert_equal "$(mode_of "$DEPLOY_SECRETS_DIR")" 700
 }
 
-# The receiver accepts both spellings of a secret, and `value:` is the one the
-# server's sops manifest and the receiver's tests use; the ping URL is bare
-# because deploy_notify takes the first non-empty line as the URL itself.
+# The auth key is bare because `tailscale up` reads the file as a credential; the
+# ping URL is bare because deploy_notify takes the first non-empty line as the URL
+# itself. Neither is a YAML document, and a webhook secret is no key this step
+# knows any more (#1018).
 @test "each secret is written in the shape its reader parses" {
     run_ok "$(standard_document)" --host-key "$kit_key"
     # shellcheck disable=SC2016 # the pattern is the file's literal content
-    assert_equal "$(cat "$DEPLOY_SECRETS_DIR/tailscale-authkey")" \
-        tskey-auth-kTestKeyCNTRL-abcdefghijklmnop
-    assert_equal "$(cat "$DEPLOY_SECRETS_DIR/webhook-secret.yaml")" "value: $webhook_secret"
+    assert_equal "$(cat "$DEPLOY_SECRETS_DIR/tailscale-authkey")" "$authkey"
     assert_equal "$(cat "$DEPLOY_SECRETS_DIR/deploy-ping-url")" "$ping_url"
-}
-
-@test "the rotation secret is written only when the document carries one" {
-    run_ok "$(standard_document)" --host-key "$kit_key"
-    assert [ ! -e "$DEPLOY_SECRETS_DIR/webhook-secret-next.yaml" ]
-    run_ok "$(standard_document)$(printf '\nWEBHOOK_SECRET_NEXT=%s' "$next_secret")" \
-        --host-key "$kit_key"
-    assert_equal "$(cat "$DEPLOY_SECRETS_DIR/webhook-secret-next.yaml")" "value: $next_secret"
+    assert [ ! -e "$DEPLOY_SECRETS_DIR/webhook-secret.yaml" ]
 }
 
 @test "a secret already written is left alone by a re-run" {
@@ -286,48 +275,56 @@ wrote_nothing() {
 # step already wrote.
 @test "a different secret is refused without --force" {
     run_ok "$(standard_document)" --host-key "$kit_key"
-    bootstrap "$(standard_document | sed 's/^WEBHOOK_SECRET=.*/WEBHOOK_SECRET=deadbeef/')" \
+    bootstrap "$(standard_document | sed 's|^DEPLOY_PING_URL=.*|DEPLOY_PING_URL=https://hc.invalid/ping/other|')" \
         --host-key "$kit_key"
     assert_not_equal "$rc" 0
     assert_contains "$out" "--force rotates a secret"
-    assert_equal "$(cat "$DEPLOY_SECRETS_DIR/webhook-secret.yaml")" "value: $webhook_secret"
+    assert_equal "$(cat "$DEPLOY_SECRETS_DIR/deploy-ping-url")" "$ping_url"
 }
 
 @test "--force rotates a secret this step already wrote" {
     run_ok "$(standard_document)" --host-key "$kit_key"
-    run_ok "$(standard_document | sed 's/^WEBHOOK_SECRET=.*/WEBHOOK_SECRET=deadbeef/')" \
+    run_ok "$(standard_document | sed 's|^DEPLOY_PING_URL=.*|DEPLOY_PING_URL=https://hc.invalid/ping/other|')" \
         --force --host-key "$kit_key"
-    assert_equal "$(cat "$DEPLOY_SECRETS_DIR/webhook-secret.yaml")" "value: deadbeef"
+    assert_equal "$(cat "$DEPLOY_SECRETS_DIR/deploy-ping-url")" https://hc.invalid/ping/other
 }
 
 @test "a secret the document omits is refused when there is no file to keep" {
-    bootstrap "$(printf 'TS_AUTHKEY=tskey-auth-kTestKeyCNTRL-abcdefghijklmnop\nDEPLOY_PING_URL=https://hc.invalid/ping/edge\n')" \
-        --host-key "$kit_key"
+    bootstrap "$(printf 'TS_AUTHKEY=%s\n' "$authkey")" --host-key "$kit_key"
     assert_not_equal "$rc" 0
-    assert_contains "$out" "stdin is missing WEBHOOK_SECRET"
+    assert_contains "$out" "stdin is missing DEPLOY_PING_URL"
+    wrote_nothing
+}
+
+# A retired key is not a key this step keeps: WEBHOOK_SECRET left with the
+# receiver (#1018), and an operator re-running an old document must be told.
+@test "the retired webhook keys are refused by name" {
+    bootstrap "$(standard_document)$(printf '\nWEBHOOK_SECRET=deadbeef\n')" --host-key "$kit_key"
+    assert_not_equal "$rc" 0
+    assert_contains "$out" "'WEBHOOK_SECRET' is not one of"
     wrote_nothing
 }
 
 # An empty value is a paste that lost its value, and it is refused rather than
 # read as "keep what is there": omitting the line is how a re-run keeps it.
 @test "a blank secret is refused and no value is echoed" {
-    bootstrap "$(standard_document | sed 's/^WEBHOOK_SECRET=.*/WEBHOOK_SECRET=/')" \
+    bootstrap "$(standard_document | sed 's|^DEPLOY_PING_URL=.*|DEPLOY_PING_URL=|')" \
         --host-key "$kit_key"
     assert_not_equal "$rc" 0
-    assert_contains "$out" "WEBHOOK_SECRET is blank"
+    assert_contains "$out" "DEPLOY_PING_URL is blank"
     wrote_nothing
-    bootstrap "$(printf '%s\n' "$webhook_secret")" --host-key "$kit_key"
+    bootstrap "$(printf '%s\n' "$authkey")" --host-key "$kit_key"
     assert_not_equal "$rc" 0
     assert_contains "$out" "a stdin line is not KEY=value"
-    [[ $out != *"$webhook_secret"* ]] || fail "the refused line was echoed"
+    [[ $out != *"$authkey"* ]] || fail "the refused line was echoed"
 }
 
 @test "an unknown or repeated stdin key is refused" {
-    bootstrap "$(printf 'TS_AUTHKEY=tskey-auth-kTestKeyCNTRL-abcdefghijklmnop\nWHATEVER=1\n')" \
+    bootstrap "$(printf 'TS_AUTHKEY=%s\nWHATEVER=1\n' "$authkey")" \
         --host-key "$kit_key"
     assert_not_equal "$rc" 0
     assert_contains "$out" "'WHATEVER' is not one of"
-    bootstrap "$(printf 'TS_AUTHKEY=tskey-auth-kTestKeyCNTRL-abcdefghijklmnop\nTS_AUTHKEY=tskey-auth-x-y\n')" \
+    bootstrap "$(printf 'TS_AUTHKEY=%s\nTS_AUTHKEY=tskey-auth-x-y\n' "$authkey")" \
         --host-key "$kit_key"
     assert_not_equal "$rc" 0
     assert_contains "$out" "TS_AUTHKEY appears twice"
