@@ -50,12 +50,19 @@ FENCE = re.compile(r"^\s*```")
 
 
 def tracked() -> list[str]:
-    return subprocess.run(
+    """Every tracked file but the baseline itself.
+
+    The baseline records stale targets verbatim, so scanning it would report
+    each accepted reference as a new one.
+    """
+    files = subprocess.run(
         ["git", "-C", str(ROOT), "ls-files"],
         capture_output=True,
         text=True,
         check=True,
     ).stdout.splitlines()
+    baseline = str(BASELINE.relative_to(ROOT))
+    return [name for name in files if name != baseline]
 
 
 def slug(heading: str) -> str:

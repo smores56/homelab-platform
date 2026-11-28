@@ -80,7 +80,7 @@ fi
 # The signing key is the repository's single one, shared by every artifact, and
 # the publish workflow proves the Environment's private half matches it.
 if [[ ! -s $repo/lib/containers/cosign.pub ]]; then
-  echo "build-image: lib/containers/cosign.pub is missing. Run docs/manual-steps.md section 37." >&2
+  echo "build-image: lib/containers/cosign.pub is missing. Run hosts/server/runbook.md, "Sign and publish the image"." >&2
   exit 1
 fi
 if ! grep -q 'BEGIN PUBLIC KEY' "$repo/lib/containers/cosign.pub"; then

@@ -21,7 +21,7 @@
 # operator file. Nothing here reads a private key and nothing here reads a
 # recovery passphrase: no secret enters Ignition or the installer media (design
 # #701), and the operator adds both LUKS passphrases after the install
-# (docs/manual-steps.md section 37 step 8.1). The smortress render still carries
+# (hosts/server/runbook.md, "Add the offline recovery passphrases"). The smortress render still carries
 # the account hash, so it is written mode 0600 and removed by FCOS after first
 # boot; the edge render carries no secret, and 0644 is what lets it be committed.
 set -euo pipefail
@@ -116,7 +116,7 @@ fixture_hash="\$6\$synthetic\$aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 # The hash comes from ciphertext, not from the operator tree: sops resolves its
 # identity itself (SOPS_AGE_KEY_FILE, SOPS_AGE_KEY_CMD or the default key file),
 # so this script never handles a key. The key name matches what the mint command
-# in docs/manual-steps.md section 37 writes; the manifest's `value` format is
+# in hosts/server/runbook.md writes; the manifest's `value` format is
 # what hands the bare hash to the boot unit.
 read_password_hash() {
   "$sops_bin" --decrypt --extract '["smores"]["password_hash"]' "$hash_ciphertext" 2>"$tmp/sops.err"
@@ -179,7 +179,7 @@ else
       echo "render-ignition: warning: --check validates the template with a fixture hash; the install render needs the ciphertext and an age identity" >&2
     else
       sed 's/^/  /' "$tmp/sops.err" >&2 || true
-      die "cannot read the smores password hash from ${hash_ciphertext#"$repo"/}; mint it with sops (docs/manual-steps.md section 37) and re-run with SOPS_AGE_KEY_FILE pointing at the admin identity"
+      die "cannot read the smores password hash from ${hash_ciphertext#"$repo"/}; mint it with sops (hosts/server/runbook.md) and re-run with SOPS_AGE_KEY_FILE pointing at the admin identity"
     fi
   fi
   tang_url='http://10.0.0.193:7654'
@@ -290,7 +290,7 @@ if $no_account; then
   chmod 0644 "$output"
   echo "wrote $output" >&2
   printf 'sha512 %s: sha512-%s\n' "$output" "$(sha512sum -- "$output" | cut -d' ' -f1)" >&2
-  echo "next: pass that value as --ignition-hash on the install line in docs/manual-steps.md, \"Public edge VPS\"" >&2
+  echo "next: pass that value as --ignition-hash on the install line in bootc/edge/runbook.md, \"Install the edge from the live ISO\"" >&2
   exit 0
 fi
 

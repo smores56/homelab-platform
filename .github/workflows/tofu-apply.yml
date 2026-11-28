@@ -21,7 +21,7 @@ name: tofu-apply
 #     applies.
 #
 # The same environment also holds the Tailscale OAuth client the tailnet policy
-# needs (`policy_file` scope, docs/manual-steps.md section 45). It is required on
+# needs (`policy_file` scope, hosts/server/runbook.md, "The plan-only credentials"). It is required on
 # every run: the provider is configured even while `tailnet` is empty.
 on:
   push:
@@ -86,7 +86,7 @@ jobs:
             TAILSCALE_OAUTH_CLIENT_ID TAILSCALE_OAUTH_CLIENT_SECRET; do
             if [[ -z ${!name:-} ]]; then
               echo "::error::$name absent; the zone, the state backend or the tailnet policy is unreachable"
-              echo "::error::the Tailscale pair is minted per docs/manual-steps.md section 45"
+              echo "::error::the Tailscale pair is minted per hosts/server/runbook.md, "The plan-only credentials""
               exit 1
             fi
           done

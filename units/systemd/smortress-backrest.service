@@ -11,7 +11,7 @@
 # pinned to run at all, and would add nothing the host does not have.
 #
 # Not in deploy-units.txt on purpose: the credential comes from an operator file
-# (/etc/backrest/env, docs/manual-steps.md), so a missing or malformed one is a
+# (/etc/backrest/env, hosts/server/runbook.md), so a missing or malformed one is a
 # reader that cannot start, never a reason to roll back an image that deployed
 # cleanly. The watchdog and the public probe are what page for it.
 Description=Backrest recovery reader behind its read-only guard

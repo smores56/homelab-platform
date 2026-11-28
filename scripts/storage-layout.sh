@@ -141,7 +141,7 @@ declare -A unit_datasets=(
 units=(files photos books music wallpapers git apps repo-archive agent-local agent-general)
 
 #: Datasets deliberately in no unit. state/agent-model holds one 4.7 GiB GGUF
-#: blob that docs/manual-steps.md section 40.8 re-downloads and verifies by
+#: blob that hosts/server/runbook.md, "Fetch the pinned model" re-downloads and verifies by
 #: checksum: backing it up would put a reconstructable artefact in every Restic
 #: snapshot and in R2, for no restore value at all. A restore that needs it runs
 #: the fetch; the gateway cannot start without it, which is loud and correct.

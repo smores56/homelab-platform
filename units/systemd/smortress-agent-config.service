@@ -13,7 +13,7 @@
 # The same `cp -n` is why rotating a facade token is not only a `sops` edit: the
 # seeded config.yaml holds the old token where the template has
 # `__FACADE_TOKEN__`, and nothing rewrites it afterwards, so the rotation deletes
-# that file and lets this unit seed it again (docs/manual-steps.md section 40.11).
+# that file and lets this unit seed it again (hosts/server/runbook.md, "Validate the units and check the listeners").
 #
 # The key is rewritten at every boot, for two reasons. The runtime has no `_FILE`
 # variant and reads API_SERVER_KEY from $HERMES_HOME/.env, and podman's `type=env`

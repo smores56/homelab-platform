@@ -11,7 +11,7 @@
 # e8dd046) rebuilds the signed message with sig.flags but never reads the
 # user-presence bit, so a credential minted with `-O no-touch-required` looks
 # identical here. The only proof of the property is the cover-the-sensor drill
-# in docs/manual-steps.md section 44, which fails exactly when the credential
+# in docs/core/server-image.md, which fails exactly when the credential
 # signs without a tap. An empty file is allowed and expected until the owner
 # enrolls the keys: pam_rssh finds no matching key, returns PAM_AUTH_ERR, and the
 # password is the way in until the public halves are committed.
@@ -38,7 +38,7 @@ check "the sudo key file is installed 0600" has 'chmod 0600 /etc/ssh/sudo_author
 # no local SELinux policy ships: sudo runs unconfined on this base (sudo_exec_t,
 # process stays unconfined_t), so `sudo_t` does not resolve and an unconfined
 # domain already holds the permission the agent socket needs. A module here would
-# be dead code that fails to link; the AVC drill in manual-steps section 44 is
+# be dead code that fails to link; the AVC drill in docs/core/server-image.md is
 # the tripwire if a future base confines sudo.
 # The permission to grant then is connectto, not connect: an AF_UNIX stream
 # connect is checked as CONNECTTO on the peer socket's label, and `connect` only
@@ -99,7 +99,7 @@ check "signature attachments enabled for our repo" has 'use-sigstore-attachments
 if [[ -f lib/containers/cosign.pub ]]; then
   check "operator public key is PEM" has 'BEGIN PUBLIC KEY' lib/containers/cosign.pub
 else
-  printf 'warn %s\n' "lib/containers/cosign.pub is not provisioned yet (docs/manual-steps.md section 37)"
+  printf 'warn %s\n' "lib/containers/cosign.pub is not provisioned yet (hosts/server/runbook.md, "Sign and publish the image")"
 fi
 if grep -rIl --exclude-dir=.git --exclude=check-server-image.sh --exclude-dir=check \
     -e '-----BEGIN [A-Z ]*PRIVATE KEY-----' -e 'AGE-SECRET-KEY-1[A-Z0-9]{10,}' \

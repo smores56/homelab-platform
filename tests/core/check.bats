@@ -16,7 +16,7 @@
 load ../helpers
 
 cli=scripts/deploy-cli.sh
-runbook=docs/manual-steps.md
+runbook=hosts/server/runbook.md
 
 # ------------------------------------------------------------- the operator CLI
 
@@ -169,11 +169,10 @@ runbook_names() { # <step>
 }
 
 # Every human step this feature needs, by the name the code or the console uses.
-# No tag name and no retired secret is asserted here: the runbook is being
-# rewritten per host (#1038), and the names this feature deleted belong to neither
-# version of it.
-for step in deploy-notify TS_OAUTH_CLIENT_ID TS_OAUTH_CLIENT_SECRET \
-    bootupctl /boot/grub2/custom.cfg journal.jsonl \
+# The notify Environment and its `tag:deploy` client went with the receiver, and
+# the boot counter's arming moved to the gate in greenboot 0.16, so this is what
+# the runbook still has to name.
+for step in deploy-notify bootupctl /boot/grub2/custom.cfg journal.jsonl \
     greenboot-set-rollback-trigger deploy-ping-url.yaml; do
     register "the runbook names $step" runbook_names "$step"
 done
@@ -194,6 +193,12 @@ done
         }
     done < <(grep -rhoE '(deploy-ping-url)\.yaml' \
         scripts bootc/server/rootfs/usr/libexec | sort -u)
+    # The webhook pair's operator step went with the receiver it authenticated;
+    # what is left to seed is the dead-man URL the poll reads.
+    grep -qF -- deploy-ping-url.yaml "$runbook" || {
+        printf 'deploy-ping-url.yaml is read by the deploy path but the runbook never seeds it\n' >&2
+        seeded=1
+    }
     [[ $seeded -eq 0 ]]
 }
 

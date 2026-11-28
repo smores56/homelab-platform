@@ -8,7 +8,7 @@ domain     = "sammohr.dev"
 # The identity Tailscale itself asserts: a GitHub-linked login, not an identity
 # provider's address. Tailscale accepts an unknown member in a group without
 # error and then admits nobody, which is how the first apply locked the tailnet
-# out (manual-steps section 46).
+# out (docs/core/server-image.md, "Access: the tailnet policy, sshd, and sudo").
 tailscale_login = "smores56@github"
 
 # The public edge VPS (#725). Setting it creates the grey-cloud A records, which

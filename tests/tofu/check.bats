@@ -260,14 +260,10 @@ fi
     ! grep -rqE 'state rm cloudflare_zero_trust_access' docs/
 }
 
-@test "manual steps still account for the Kanbei route" {
-    grep -qF 'kanbei.sammohr.dev' docs/manual-steps.md
-}
-
 # The connector caches live on operator machines, outside every check here, so
-# the manual step is the only thing that removes them.
-@test "manual steps remove the stale cloudflared connector caches" {
-    grep -qF '/.cloudflared' docs/manual-steps.md
+# the operator step is the only thing that removes them.
+@test "the server runbook removes the stale cloudflared connector caches" {
+    grep -qF '/.cloudflared' hosts/server/runbook.md
 }
 
 # --- retired hostnames -------------------------------------------------------
@@ -516,8 +512,8 @@ done
 
 # The identifiers live in tofu/terraform.tfvars, so an apply needs no TF_VAR_
 # exports.
-@test "manual steps do not export cluster_hosts" {
-    ! grep -qF 'TF_VAR_cluster_hosts' docs/manual-steps.md
+@test "the server runbook does not export cluster_hosts" {
+    ! grep -qF 'TF_VAR_cluster_hosts' hosts/server/runbook.md
 }
 
 # --- preserved objects -------------------------------------------------------
@@ -1137,7 +1133,7 @@ service_block() { extract "tailscale_service.$1"; }
 
 # The core apps that followed the catalogue off the per-port scheme carry the same
 # shape: one gated Service per application, on the same 443. The Syncthing GUI is
-# among them now that its host check is off (docs/manual-steps.md).
+# among them now that its host check is off (hosts/server/runbook.md).
 service_exists() { [ -n "$(service_block "$1")" ]; }
 service_is() { grep -qF "name  = \"svc:$1\"" <<<"$(service_block "$1")"; }
 service_advertises() { grep -qF 'ports = ["tcp:443"]' <<<"$(service_block "$1")"; }

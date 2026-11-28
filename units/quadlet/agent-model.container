@@ -10,7 +10,7 @@
 # other is how the gateway stops admitting the model.
 #
 # The model file is fetched by hand into the state/agent-model dataset
-# (docs/manual-steps.md section 40.7) and mounted read-only: it is a 4.7 GiB
+# (hosts/server/runbook.md, "Fetch the pinned model") and mounted read-only: it is a 4.7 GiB
 # artefact that is re-downloadable, so it is deliberately in no backup unit.
 #
 # GPU access is two directives, both needed: `AddDevice=nvidia.com/gpu=all`

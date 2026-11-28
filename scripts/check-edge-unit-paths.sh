@@ -24,7 +24,7 @@
 #   tmpfiles   a fragment under etc/tmpfiles.d or usr/lib/tmpfiles.d creates it
 #   bootstrap  scripts/edge-bootstrap.sh creates it with install -d / mkdir -p
 #   operator   a person makes it before the box is useful, and the row's reason
-#              names the step in docs/manual-steps.md
+#              names the step in bootc/edge/runbook.md
 #   system     the OS owns it, so nothing has to create it
 #
 #   scripts/check-edge-unit-paths.sh
@@ -43,7 +43,7 @@ rootfs=$repo/bootc/edge/rootfs
 units=$rootfs/usr/lib/systemd/system
 tsv=$repo/bootc/edge/unit-paths.tsv
 bootstrap=$repo/scripts/edge-bootstrap.sh
-steps=$repo/docs/manual-steps.md
+steps=$repo/bootc/edge/runbook.md
 # A unit may name a path with systemd's `-` prefix, meaning "ignore it if it is
 # missing". The prefix is not part of the path, so it is stripped here and the
 # row's reason says the path is optional instead.
@@ -200,11 +200,11 @@ claim_denied() {
       printf 'scripts/edge-bootstrap.sh installs no directory there'
       ;;
     operator)
-      if [[ $reason =~ docs/manual-steps\.md#([a-z0-9-]+) ]]; then
+      if [[ $reason =~ runbook\.md#([a-z0-9-]+) ]]; then
         doc_anchor_exists "${BASH_REMATCH[1]}" && return 0
-        printf 'docs/manual-steps.md has no heading for #%s' "${BASH_REMATCH[1]}"
+        printf 'bootc/edge/runbook.md has no heading for #%s' "${BASH_REMATCH[1]}"
       else
-        printf 'an operator row names its step as docs/manual-steps.md#<anchor>'
+        printf 'an operator row names its step as bootc/edge/runbook.md#<anchor>'
       fi
       ;;
     system) return 0 ;;

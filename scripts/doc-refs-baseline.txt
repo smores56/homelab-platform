@@ -1,4 +1,32 @@
 # Accepted stale references. Shrink-only: remove a line when fixed.
-# docs/manual-steps.md is being replaced by per-host runbooks (task #1038), so its
-# remaining mention of the two probes this task merged (task #1030) is fixed there.
-docs/manual-steps.md	scripts/verify-public-edge.sh
+
+#
+# Transient, pending the task that deletes or rewrites the page: the operator
+# steps now live in the runbooks beside the code, and each page below is either
+# deleted by #1043 (the six plane pages), rewritten by #1040 (secrets, runbook)
+# or removed with provision/smortress by the install-path task. Whoever lands
+# that deletion drops its lines here in the same commit.
+docs/cloudflare.md	docs/manual-steps.md
+docs/cloudflare.md	docs/manual-steps.md#environments-and-their-branch-policies
+docs/cloudflare.md	docs/manual-steps.md#kanbei-behind-access
+docs/cloudflare.md	docs/manual-steps.md#remove-the-stale-cloudflared-caches
+docs/core/applications.md	docs/manual-steps.md
+docs/core/applications.md	docs/manual-steps.md#applications-and-agents
+docs/core/applications.md	docs/manual-steps.md#collector-sign-ins
+docs/core/applications.md	docs/manual-steps.md#fetch-the-pinned-model
+docs/core/applications.md	docs/manual-steps.md#validate-the-units-and-check-the-listeners
+docs/core/backrest.md	docs/manual-steps.md#hosted-backrest
+docs/core/public-edge.md	docs/manual-steps.md
+docs/core/public-edge.md	docs/manual-steps.md#bootstrap-the-fresh-edge
+docs/core/public-edge.md	docs/manual-steps.md#public-edge-vps
+docs/core/restic-plane.md	docs/manual-steps.md
+docs/core/restic-plane.md	docs/manual-steps.md#bringing-the-plane-up
+docs/core/restic-plane.md	docs/manual-steps.md#fetch-the-pinned-model
+docs/core/server-image.md	docs/manual-steps.md
+docs/core/server-image.md	docs/manual-steps.md#install-a-host-from-the-image
+docs/core/server-image.md	docs/manual-steps.md#rotate-the-smores-account-password
+docs/core/server-image.md	docs/manual-steps.md#the-boot-gate-and-its-counter
+docs/raw-replicas.md	docs/manual-steps.md#collector-sign-ins
+docs/runbook.md	docs/manual-steps.md
+docs/secrets.md	docs/manual-steps.md
+provision/smortress/README.md	docs/manual-steps.md

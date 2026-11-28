@@ -9,7 +9,8 @@
 # manual and never part of CI: CI must not carry the token.
 #
 # The token is `~/.config/smores56-agent/token` (classic `repo` PAT, mode 0600),
-# documented in docs/manual-steps.md section 48. The probe never prints it and
+# documented in hosts/server/runbook.md,
+# "The machine user and its scoped token". The probe never prints it and
 # never lets the owner's credential helper authenticate as `smores56`.
 #
 # usage: scripts/agent-tenant-pr-probe.sh [--merge]
@@ -36,7 +37,7 @@ case ${1:-} in
   *) usage >&2; exit 2 ;;
 esac
 
-[[ -r $token_file ]] || die "token not readable: $token_file (docs/manual-steps.md 48.2)"
+[[ -r $token_file ]] || die "token not readable: $token_file (hosts/server/runbook.md, "The machine user and its scoped token")"
 [[ $(stat -c %a "$token_file") == 600 ]] || die "token mode is not 0600: $token_file"
 token=$(<"$token_file")
 [[ -n $token ]] || die "token file is empty: $token_file"

@@ -17,7 +17,7 @@ After=zfs-ready@state-agent-local.service sops-decrypt.service smortress-app-sec
 Wants=network-online.target
 # The bridge generates its certificate when an operator signs in, and podman
 # refuses a bind mount whose source does not exist. Until then the service is
-# skipped rather than reported as broken (docs/manual-steps.md 40.15).
+# skipped rather than reported as broken (hosts/server/runbook.md, "Collector sign-ins").
 ConditionPathExists=/var/lib/agent/local/quarantine/tmail/config/tutabridge/cert.pem
 # A refusal (a changed UIDVALIDITY, a vanished folder, an unpublishable replica)
 # is not something a restart fixes: three attempts in five minutes turn it into

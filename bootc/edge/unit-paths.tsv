@@ -14,14 +14,14 @@
 #              no row uses it today: every state directory the units write comes
 #              from tmpfiles, because a unit cannot wait for a hand step
 #   operator   the operator makes it before the box is useful (the reason names
-#              the step in docs/manual-steps.md)
+#              the step in bootc/edge/runbook.md)
 #   system     the OS owns it, so nothing has to create it
 #
 # A unit may prefix a path with `-`, systemd's ignore-if-missing marker. The
 # checker strips it and the row's reason says the path is optional.
 /boot	system	the boot partition is mounted before any unit runs; `bootc switch` writes the boot entry there
-/etc/caddy/edge.env	operator	the ACME address and the two Service upstreams the Caddyfile substitutes, written on the box at docs/manual-steps.md#bootstrap-the-fresh-edge
-/etc/smoresnet/tailscale-authkey	operator	the preauthorized tag:vps key the join unit reads as a credential, entered on stdin at docs/manual-steps.md#bootstrap-the-fresh-edge
+/etc/caddy/edge.env	operator	the ACME address and the two Service upstreams the Caddyfile substitutes, written on the box at bootc/edge/runbook.md#bootstrap-the-fresh-edge
+/etc/smoresnet/tailscale-authkey	operator	the preauthorized tag:vps key the join unit reads as a credential, entered on stdin at bootc/edge/runbook.md#bootstrap-the-fresh-edge
 /sysroot	system	the ostree root is always mounted; `bootc rollback --apply` remounts it writable
 /tmp	system	tmpfs the OS mounts; bootc's SELinux install_t probe writes a scratch file there
 /var/lib/caddy	tmpfiles	Caddy's ACME account key and certificates live here and nothing else creates it, so every order would fail `mkdir /var/lib/caddy: permission denied`

@@ -17,7 +17,7 @@
 #     and this host is BIOS/GRUB, not the smortress FCOS partition scheme.
 #   - networking: the provider hands out a static address that dracut needs
 #     before root exists, so ip=/nameserver=/net.ifnames=0 arrive as kernel
-#     arguments on the install line (docs/manual-steps.md, "Public edge VPS").
+#     arguments on the install line (bootc/edge/runbook.md, "Install the edge from the live ISO").
 #
 # Derived from ucore/examples/ucore-autorebase.butane at
 # 75ec7d8d10bc8af6fe23a284ea108bacd50f3173, exactly as the smortress template is:

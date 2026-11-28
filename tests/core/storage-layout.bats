@@ -3,7 +3,7 @@
 # Offline checks for the storage table (SDLC #701, data plane).
 #
 # The host half — real devices, a real pool, real mounts — is the install in
-# docs/manual-steps.md. This proves the half that does not need root: the table
+# hosts/server/runbook.md. This proves the half that does not need root: the table
 # is the single source of truth, every mountpoint is in the two allowed roots,
 # every raw dataset belongs to exactly one restore unit, readiness maps an
 # instance back to its dataset, and --print-plan has no side effects.
