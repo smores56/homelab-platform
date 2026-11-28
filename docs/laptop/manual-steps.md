@@ -334,3 +334,44 @@ Check it without the GUI:
 systemctl --user status syncthing
 ls -ld /var/srv/files /var/srv/files/todos
 ```
+
+## 6. Reboot for a staged update
+
+Nothing reboots this laptop for you. The image follows
+`ghcr.io/smores56/smorespro-image:latest` and stages what the tag names; the
+reboot is the update, and it is yours to ask for. The vendor unit would instead
+run `bootc upgrade --apply` an hour after boot and every 8h with jitter, which is
+a laptop that reboots mid-session and stalls at the disk's FIDO2 prompt.
+
+A staged update is announced at the start of every session and written down at
+
+```
+~/.local/state/bootc-update-pending
+```
+
+which holds `version=<staged version>` and `command=sudo systemctl reboot`. The
+reminder derives it from `rpm-ostree status` on each session start and removes it
+when nothing is staged, so a prompt that reads it never asks for a reboot that
+would do nothing.
+
+Check what is waiting, then reboot and check what came back:
+
+```sh
+systemctl cat bootc-fetch-apply-updates.service   # one ExecStart, and no --apply
+rpm-ostree status                                 # a deployment marked "Staged: yes"
+sudo systemctl reboot
+rpm-ostree status                                 # that version is now booted
+```
+
+"The update landed" and "the laptop did not reboot itself" are two different
+facts, and the second is what this image exists for. After a publish, leave the
+laptop up across the window -- a day, or resume it after a missed one -- and
+check that the deployment staged while the session kept running:
+
+```sh
+rpm-ostree status   # "Staged: yes", and the booted deployment unchanged
+uptime -s           # the session that started before the window
+```
+
+`sudo bootc rollback` reverts a deployment that booted badly; it does not revert
+`/var`.

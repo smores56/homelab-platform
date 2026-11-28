@@ -1,0 +1,24 @@
+[Unit]
+Description=Tell the person at the keyboard that a bootc update is staged
+# The image stage-only (bootc-fetch-apply-updates.service.d/10-stage-only.conf
+# in the same tree), so an update never lands on its own: it sits staged until
+# someone reboots. This unit is what tells them, once per session.
+#
+# A user unit, not /etc/profile.d: greetd's initial_session autologin is not a
+# login shell, so no profile script runs for the only user this laptop has. The
+# unit is enabled globally at build time for the same reason syncthing.service
+# is -- a bootc build has no logged-in user to preset it for.
+#
+# default.target, not graphical-session.target: greetd's autologin opens a PAM
+# session, so the user manager exists from the start of the session, and the
+# script waits for the notification daemon instead of ordering after a target
+# niri need not activate. The marker it writes is the interface a prompt reads.
+Wants=dbus.socket
+After=dbus.socket
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/smorespro/bootc-update-reminder
+
+[Install]
+WantedBy=default.target

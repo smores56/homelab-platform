@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# The laptop never reboots itself: the image's 10-stage-only drop-in replaces the
+# vendor `bootc upgrade --apply`, so an update is staged and then waits for a
+# person. This is what tells them, at the start of every session.
+#
+# Run from bootc-update-reminder.service, a user unit enabled globally at build
+# time. Not /etc/profile.d: greetd's autologin gives a session that is not a login
+# shell, so no profile script runs for the one user this laptop has.
+#
+# The marker file is the interface to the prompt. It is derived from rpm-ostree on
+# every run and removed when nothing is staged, so a prompt that reads it never
+# asks for a reboot that no longer applies.
+set -uo pipefail
+
+state_dir=${XDG_STATE_HOME:-${HOME:?HOME is unset}/.local/state}
+marker=$state_dir/bootc-update-pending
+
+# `staged` is the deployment ostree-finalize-staged applies at the next shutdown.
+# A download that never staged does not exist in this design -- --download-only
+# would be discarded by the very reboot that applies it -- so this is the whole
+# test, and rpm-ostree is asked rather than a file that some other run wrote.
+staged=$(rpm-ostree status --json 2>/dev/null |
+  jq -r '.deployments[] | select(.staged == true) | .version' 2>/dev/null |
+  head -n 1)
+
+if [[ -z $staged ]]; then
+  rm -f -- "$marker"
+  exit 0
+fi
+
+mkdir -p -- "$state_dir"
+# Written before the notification: if the session has no daemon to show it, the
+# prompt still reads the truth. The rename keeps a half-written file out of a
+# prompt that reads it whenever it redraws.
+printf 'version=%s\ncommand=sudo systemctl reboot\n' "$staged" >"$marker.new"
+mv -f -- "$marker.new" "$marker"
+
+# Noctalia owns org.freedesktop.Notifications and starts from niri's
+# spawn-at-startup, so this unit can run before anything owns the name. Wait for
+# it, bounded: a session with no daemon has to end in a journal line, never in a
+# unit that waits forever.
+attempt=0
+while ((attempt < 60)); do
+  if notify-send --app-name=bootc \
+    "A system update ($staged) is staged" \
+    "It applies at the next reboot. Reboot when you are ready: sudo systemctl reboot" \
+    2>/dev/null; then
+    exit 0
+  fi
+  attempt=$((attempt + 1))
+  sleep 1
+done
+
+printf 'no notification daemon answered for %ds: the staged update is in %s\n' \
+  "$attempt" "$marker" >&2
+exit 1

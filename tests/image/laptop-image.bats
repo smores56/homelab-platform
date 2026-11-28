@@ -55,3 +55,56 @@ contains() {
     contains 'lib/containers/cosign.pub' "$workflow"
     contains '- "lib/**"' "$workflow"
 }
+
+# The reminder's decision is rpm-ostree's own staged deployment, and its two
+# outputs are a notification and a marker the prompt reads, so the suite runs the
+# shipped script against a stub `rpm-ostree` and a stub `notify-send` instead of
+# grepping it: a script that trusted a marker someone else wrote, or that told the
+# session about a download that never staged, would pass a grep and lie to the
+# person deciding when to reboot.
+reminder=hosts/laptop/rootfs/usr/libexec/smorespro/bootc-update-reminder
+marker_rel=.local/state/bootc-update-pending
+
+# reminder_run <rpm-ostree status --json>: a private HOME, a stub PATH and a log
+# of every stub call. `stubs`, `home` and `calls` stay visible to the test.
+reminder_run() {
+    stubs=$BATS_TEST_TMPDIR/stubs
+    home=$BATS_TEST_TMPDIR/home
+    calls=$BATS_TEST_TMPDIR/calls
+    mkdir -p "$stubs" "$home"
+    : >"$calls"
+    cat >"$stubs/rpm-ostree" <<'EOS'
+#!/bin/sh
+printf 'rpm-ostree %s\n' "$*" >>"$STUB_CALLS"
+printf '%s\n' "$STUB_STATUS_JSON"
+EOS
+    cat >"$stubs/notify-send" <<'EOS'
+#!/bin/sh
+printf 'notify-send %s\n' "$*" >>"$STUB_CALLS"
+EOS
+    chmod +x "$stubs/rpm-ostree" "$stubs/notify-send"
+    run env -u XDG_STATE_HOME HOME="$home" STUB_CALLS="$calls" \
+        STUB_STATUS_JSON="$1" PATH="$stubs:$PATH" bash "$reminder"
+}
+
+@test "the reminder announces the still-staged update a reboot would apply" {
+    reminder_run '{"deployments":[{"booted":true,"staged":false,"version":"45.1.4"},{"booted":false,"staged":true,"version":"45.2.0"}]}'
+    assert_success
+    assert_equal "$(cat "$home/$marker_rel")" \
+        "$(printf 'version=45.2.0\ncommand=sudo systemctl reboot')"
+    assert_equal "$(grep -c '^notify-send ' "$calls")" 1
+    assert_contains "$(cat "$calls")" '45.2.0'
+    # The staged deployment is read from rpm-ostree, never inferred.
+    assert_contains "$(cat "$calls")" 'rpm-ostree status --json'
+}
+
+@test "the reminder clears the marker when no deployment is staged" {
+    mkdir -p "$BATS_TEST_TMPDIR/home/$(dirname "$marker_rel")"
+    printf 'version=45.0\ncommand=sudo systemctl reboot\n' >"$BATS_TEST_TMPDIR/home/$marker_rel"
+    reminder_run '{"deployments":[{"booted":true,"staged":false,"version":"45.1.4"},{"booted":false,"staged":false,"version":"45.1.3"}]}'
+    assert_success
+    [ -e "$BATS_TEST_TMPDIR/home/$marker_rel" ] \
+        && fail "a stale marker survived: $(cat "$BATS_TEST_TMPDIR/home/$marker_rel")"
+    ! grep -q '^notify-send ' "$calls" || fail "the session was told about an update that is not staged"
+    return 0
+}

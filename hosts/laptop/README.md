@@ -16,10 +16,10 @@ The design and the task graph live in the private ledger: `sdlc show 732`.
 | --- | --- |
 | `pins.env` | every external reference: the `FEDORA_VERSION` knob the base tag follows, and the NymVPN pin a refresh edits |
 | `Containerfile` | the derived image: one explicit package set, config copy, unit enables, `bootc container lint` |
-| `rootfs/` | files copied into `/`: greetd autologin, portal override, the NymVPN unit and its polkit action, the Tailscale operator unit, the `login` and `sudo` PAM stacks, and the FIDO2 mapping the `sudo` stack reads |
+| `rootfs/` | files copied into `/`: greetd autologin, portal override, the NymVPN unit and its polkit action, the Tailscale operator unit, the `login` and `sudo` PAM stacks, the FIDO2 mapping the `sudo` stack reads, the two bootc update drop-ins, and the session-start reminder |
 | `scripts/build-image.sh` | local build; never pushes or signs. The build context is the repository root: the signature policy, its host registry table, the public key and the sudoers gate are in `lib/` |
 | `scripts/refresh-pins.sh` | resolves the NymVPN release and prints the base tag's current digest; `--check` for the watcher, `--write` to move the NymVPN pin |
-| `docs/laptop/manual-steps.md` | the steps only a hand at the keyboard can do: token enrolment for the disk keyslot, the lock screen and sudo, and rotating the FIDO2 mapping |
+| `docs/laptop/manual-steps.md` | the steps only a hand at the keyboard can do: token enrolment for the disk keyslot, the lock screen and sudo, rotating the FIDO2 mapping, and the reboot that applies a staged update |
 | `tests/check.sh` | static checks over the files above; `tests/image/laptop-image.bats` runs it in the `image` CI area |
 
 ## Rules
@@ -68,6 +68,50 @@ scripts/refresh-pins.sh --write  # move that pin
 
 then commit the `pins.env` change. The scheduled watcher opens an issue
 when `--check` sees a newer release; it has nothing to say about the base.
+
+## Updates
+
+The laptop never reboots itself. The image follows
+`ghcr.io/smores56/smorespro-image:latest` and stages whatever that tag names:
+`bootc-fetch-apply-updates.timer` runs `bootc upgrade --quiet` once a day (its
+`rootfs/usr/lib/systemd/system/bootc-fetch-apply-updates.timer.d/10-schedule.conf`
+clears the vendor boot+1h and 8h cycle, so the schedule lives in that one file),
+and `ostree-finalize-staged` applies the staged deployment at the next shutdown a
+person asked for.
+
+The vendor unit is `bootc upgrade --apply`, which stages and then reboots -- an
+hour after boot, and again every 8h with jitter, mid-session. Replacing it is
+`rootfs/usr/lib/systemd/system/bootc-fetch-apply-updates.service.d/10-stage-only.conf`;
+its bare `ExecStart=` line is the load-bearing one, because a drop-in otherwise
+appends, and `systemctl cat` would show two ExecStarts with the vendor one still
+rebooting. `--download-only` is not the alternative it looks like: a download is
+discarded by the reboot that would have applied it.
+
+A staged deployment waits for a person, so the session has to say so.
+`bootc-update-reminder.service` is a user unit enabled globally at build time --
+greetd's autologin session is not a login shell, so `/etc/profile.d` would never
+run for the only user this laptop has -- and at the start of every session it
+reads `rpm-ostree status`, shows a `notify-send` reminder, and writes the marker
+the prompt reads:
+
+| Marker | Content |
+| --- | --- |
+| `~/.local/state/bootc-update-pending` | `version=<staged version>` and `command=sudo systemctl reboot` |
+
+Nothing else writes that file, and the reminder removes it as soon as
+`rpm-ostree status` shows no staged deployment, so the prompt can never ask for a
+reboot that would do nothing.
+
+Only a publish and a reboot prove the live half (SDLC #1020):
+
+```sh
+systemctl cat bootc-fetch-apply-updates.service   # one ExecStart, and it omits --apply
+rpm-ostree status                                 # a staged deployment, booted one unchanged
+uptime -s                                         # the session that staged it survived
+cat ~/.local/state/bootc-update-pending           # what the fresh session was told
+```
+
+`docs/laptop/manual-steps.md` walks the same thing with a hand at the keyboard.
 
 ## Package sources
 
