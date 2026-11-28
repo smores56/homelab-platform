@@ -9,8 +9,6 @@ host that is running: the image, its Quadlets, its backups and its edge.
 | `runbook.md` | The GitHub settings an operator applies by hand: branch protection and repository settings. |
 | `cloudflare.md` | The zone's DNS, the public names behind the edge VPS, the retired gate and tunnels, and the OpenTofu state. |
 | `secrets.md` | Where a secret lives, which identity reads it, and what is not a secret. |
-| `broker.md` | The broker's trust boundary, request contract, and logical-host enrollment. |
-| `webhook.md` | The webhook receiver's trust boundary and request contract. |
 | `raw-replicas.md` | The raw-replica shape the collectors publish, source by source. |
 | `agent-identity.md` | The two machine credentials a general agent job receives. |
 | `kanbei-critical.md` | Which paths are Kanbei-critical, and why their review is Code Owners'. |

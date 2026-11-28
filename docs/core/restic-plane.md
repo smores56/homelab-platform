@@ -254,10 +254,8 @@ and file counters: `current_files` is dropped and only `status`/`summary`
 records are kept, because restic's error and verbose records name the file that
 failed or was being read, and this tree is world-readable. A result record is
 the journal line verbatim, so it names the unit's staging paths and its
-repository URL — the same data the public recovery-group manifest already
-carries (`deploy/data-plane/config/recovery-groups.json`). The restic password
-and the R2 key pair never leave the root-only state tree and the decrypted
-secrets.
+repository URL; neither is a credential. The restic password and the R2 key pair
+never leave the root-only state tree and the decrypted secrets.
 
 ## Retention
 

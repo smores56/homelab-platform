@@ -59,8 +59,9 @@ provider SDK. The same code runs in the local and external planes.
   "copy did not land".
 - **One prune budget per host and path.** `restic forget --group-by host,paths` keeps
   a repository that holds several paths or hosts from sharing one 14/8/12 window.
-- **The public manifest is offsite only.** `scripts/render-recovery-groups.py` is the only
-  producer, and it refuses a group without an `r2` tier; the page can only open that copy.
+- **Nothing here publishes group metadata.** The recovery-group manifest, the inventory it
+  was rendered from and its renderer all went with the k3s tree; a group's repository URL
+  is what the host's own restic units carry and nothing exposes it offsite.
 - **The restic binary is environment-pinned.** Builders take an explicit binary;
   the runner resolves `DATA_PLANE_RESTIC` (default `restic`) so the role can pin
   `/usr/local/bin/restic` without changing argv construction.

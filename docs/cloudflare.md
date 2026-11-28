@@ -57,9 +57,9 @@ them misbehaves — go to the box (`journalctl -u edge-boot-gate.service` and
 - `agent-hooks.sammohr.dev` (the webhook receiver) and `ntfy.sammohr.dev` (the
   notification bus) have **no record** since the cluster tunnel went. Both are
   inactive until their endpoints are redeployed as something the zone can point
-  at: the receivers, their manifests and the tunnel route went with the k3s
-  tree (`docs/webhook.md`, `docs/broker.md`). The broker's `notify` enrollment
-  still names `ntfy.sammohr.dev` and is marked inactive rather than deleted.
+  at: the receivers, the broker and its `notify` enrollment (marked inactive
+  rather than deleted while it lived), their manifests and the tunnel route all
+  went with the k3s tree.
 
 A name with no record is not a default deny: Cloudflare answers NXDOMAIN, and
 anyone who wants the name back has to add a record here. That is the whole of
@@ -327,8 +327,8 @@ route, no Access application. Their runtime went with the cluster or
 `nix-config`, so there is nothing left to delete in Zero Trust;
 `docs/manual-steps.md#kanbei-behind-access` records what Kanbei's route was.
 
-`memory.sammohr.dev` went the same way: the MCP wrapper is reached in-cluster
-(`docs/broker.md`), so the name has no record either.
+`memory.sammohr.dev` went the same way: the MCP wrapper was reached in-cluster,
+so the name has no record either.
 
 ## The reader's gate is gone, on purpose
 

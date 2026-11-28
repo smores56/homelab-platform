@@ -133,8 +133,6 @@ lint	tests/lint.bats .github/* CODEOWNERS .yamllint.yaml scripts/* tests/* provi
 docs	tests/docs.bats scripts/check-doc-refs.py scripts/doc-refs-baseline.txt
 tofu-fmt	tests/tofu-fmt.bats tofu/*
 actionlint	tests/actionlint.bats .github/*
-python/broker	tests/python/broker.bats apps/broker/* tests/python/*
-python/webhook	tests/python/webhook.bats apps/webhook/* tests/python/*
 python/agent-proxy	tests/python/agent-proxy.bats apps/agent_proxy/* tests/python/*
 tofu/check	tests/tofu/check.bats tests/tofu/* tofu/* scripts/check-tofu-providers.py
 tags	tests/tags.bats
