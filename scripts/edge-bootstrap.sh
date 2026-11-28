@@ -17,7 +17,7 @@
 #   DEPLOY_PING_URL=https://...   the dead-man capability URL
 #
 # There is no webhook secret: since #1018 the box answers no inbound deploy, so
-# the only credential it holds is the one the heartbeat pages through.
+# the only credential it holds is the one the poll pages through.
 #
 # A key the document omits leaves the file it belongs to alone, so a re-run with
 # an empty stdin converges everything else and touches no secret. A value for a

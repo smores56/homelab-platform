@@ -8,7 +8,7 @@
 # deadline pair that has to clear the switch's own pull -- T6's review found the
 # shared 300 s default under a 600 s switch, which kills a slow pull after bootc
 # has already staged the entry. The queue is a throwaway directory, the verifier
-# and `systemctl` are fakes, and the heartbeat and the units are the real files.
+# and `systemctl` are fakes, and the units are the real files.
 # No root, no reboot, no network.
 #
 #   bats tests/deploy/edge-drain.bats
@@ -17,12 +17,9 @@ load ../helpers
 drain=bootc/edge/rootfs/usr/libexec/deploy-drain-edge
 state_lib=scripts/deploy-state.sh
 drain_lib=bootc/lib/deploy/drain.sh
-heartbeat=scripts/deploy-heartbeat.sh
 fixtures=bootc/lib/deploy/fixtures
 unit_dir=bootc/edge/rootfs/usr/lib/systemd/system
 drain_unit=$unit_dir/smoresnet-deploy.service
-heartbeat_unit=$unit_dir/smoresnet-deploy-heartbeat.service
-heartbeat_timer=$unit_dir/smoresnet-deploy-heartbeat.timer
 containerfile=bootc/edge/Containerfile
 
 commit=0123456789abcdef0123456789abcdef01234567
@@ -51,8 +48,8 @@ setup_file() {
 printf '%s\n' "$*" >>"$FAKE_LOG/systemctl-calls"
 exit "${STUB_SYSTEMCTL_EXIT:-0}"
 STUB
-    # One curl for the heartbeat's page, whose URL arrives as a curl config on
-    # stdin and never reaches argv.
+    # One curl for the drain's page, whose URL arrives as a curl config on stdin
+    # and never reaches argv.
     cat >"$bin/curl" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$FAKE_LOG/curl-calls"
@@ -156,12 +153,6 @@ contains() {
     grep -qF -- "$1" "$2" || fail "missing '$1' in $2"
 }
 
-# unit_env: one Environment= line out of a unit, which is how this suite drives the
-# edge's own knobs instead of a copy of them.
-unit_env() { # <unit> <VAR>
-    sed -n "s/^Environment=$2=//p" "$1" | head -n 1
-}
-
 # --- the queue is consumed and popped ---------------------------------------
 
 @test "the edge consumes and pops a verified entry" {
@@ -247,7 +238,7 @@ unit_env() { # <unit> <VAR>
 
 # The bug T6's review found, as a refusal: a deadline under the switch kills a
 # slow pull after bootc has written the entry, and the host then retries a
-# deployment that was staged until the heartbeat pages.
+# deployment that was staged until the poll's dead-man pages.
 @test "a deadline at or below the switch timeout is refused" {
     queue_seed 11111111-1111-4111-8111-111111111111 "$commit"
     export DEPLOY_SWITCH_TIMEOUT=900 DEPLOY_VERIFY_DEADLINE=900
@@ -257,63 +248,26 @@ unit_env() { # <unit> <VAR>
     assert_equal "$(queued)" 1
 }
 
-# --- the heartbeat pages a wedged queue ------------------------------------
+# --- the dead-man is the poll's, on this host too ---------------------------
 
-# beat: one run of the shared dead-man under the edge unit's own limits, which is
-# what makes this the edge's heartbeat rather than the server's. The unit's ping
-# path is /etc/smoresnet's operator file, so the test's own is substituted for it.
-edge_beat() {
-    rc=0
-    env DEPLOY_QUEUE_MAX_AGE="$(unit_env "$heartbeat_unit" DEPLOY_QUEUE_MAX_AGE)" \
-        DEPLOY_PING_SECRET=$DEPLOY_PING_SECRET DEPLOY_STATE_DIR=$state \
-        bash "$heartbeat" >"$work/stdout" 2>"$work/stderr" || rc=$?
-}
-
-@test "the edge heartbeat pages through the operator's file under /etc/smoresnet" {
-    assert_equal "$(unit_env "$heartbeat_unit" DEPLOY_PING_SECRET)" \
-        /etc/smoresnet/deploy-ping-url
-    refute grep -qE 'deploy-listener|deploy-receiver' "$heartbeat_unit"
-    contains 'OnCalendar=*-*-* *:0/5:00' "$heartbeat_timer"
-}
-
-@test "the edge heartbeat's queue limit is above the verifier's deadline" {
-    limit=$(unit_env "$heartbeat_unit" DEPLOY_QUEUE_MAX_AGE)
-    [[ $limit =~ ^[0-9]+$ ]] || fail "no DEPLOY_QUEUE_MAX_AGE in $heartbeat_unit"
-    # The edge's slowest honest wait: the drain's own verification deadline plus
-    # one reboot. Two hours (the server's limit) would let a wedged edge queue sit
-    # through 24 missed beats on the host with the least rollback.
-    ((limit > 1200))
-    ((limit < 7200))
-}
-
-@test "a fresh queue entry keeps the edge check green" {
-    queue_seed 33333333-3333-4333-8333-333333333333 "$commit"
-    edge_beat
-    assert_equal "$rc" 0
-    assert grep -qx "$ping_url" "$log/pings"
-}
-
-@test "a wedged queue pings /fail" {
-    queue_seed 44444444-4444-4444-8444-444444444444 "$commit"
-    jq -c --argjson at "$(($(date +%s) - 2000))" '.queued_at = $at' \
-        "$state/queue/44444444-4444-4444-8444-444444444444.json" |
-        atomic_write "$state/queue/44444444-4444-4444-8444-444444444444.json"
-    edge_beat
-    assert_equal "$rc" 1
-    assert grep -qx "$ping_url/fail" "$log/pings"
+# The edge ran the shared heartbeat on a five-minute timer until #1019. The poll
+# runs the same liveness verdict every fifteen minutes on both hosts, and one check
+# with two reporters would flap: the heartbeat's program and its units are gone,
+# and the poll's unit is where the edge's ping URL now lives.
+@test "the edge keeps no heartbeat to race the poll" {
+    refute ls "$unit_dir"/smoresnet-deploy-heartbeat.* 2>/dev/null
+    refute grep -q 'smoresnet-deploy-heartbeat' "$containerfile"
 }
 
 # --- the image installs what the units run ---------------------------------
 
 @test "the edge image installs and enables the deploy plane's units" {
-    contains 'smoresnet-deploy-heartbeat.timer' "$containerfile"
     contains 'smoresnet-deploy-poll.timer' "$containerfile"
     contains 'COPY bootc/lib/deploy/drain.sh /usr/libexec/deploy/drain.sh' "$containerfile"
-    contains 'COPY scripts/deploy-heartbeat.sh /usr/libexec/deploy-heartbeat' "$containerfile"
 }
 
 @test "every program the edge deploy units run is in the image tree" {
-    for unit in "$drain_unit" "$heartbeat_unit"; do
+    for unit in "$drain_unit" "$unit_dir/smoresnet-deploy-poll.service"; do
         program=$(sed -n 's/^ExecStart=//p' "$unit" | awk '{ print $NF }')
         [[ -n $program ]] || fail "$unit has no ExecStart"
         # Either the rootfs ships it (executable in git) or the Containerfile

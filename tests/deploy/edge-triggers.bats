@@ -53,7 +53,15 @@ env_value() { sed -n "s/^Environment=$2=//p" "$1" | head -n1; }
 
 @test "the Containerfile installs the program at that path, executable" {
     assert grep -qxF 'COPY scripts/deploy-poll.sh /usr/libexec/deploy-poll' "$containerfile"
-    assert grep -qF 'chmod 0755 /usr/libexec/deploy-heartbeat /usr/libexec/deploy-poll' "$containerfile"
+    assert grep -qF 'chmod 0755 /usr/libexec/deploy-poll' "$containerfile"
+}
+
+# The poll is the edge's dead-man since #1019: the five-minute heartbeat and its
+# program are gone, so the check has one reporter and a wedge is paged by the tick
+# that sees it rather than by a second program on a second cadence.
+@test "the poll is the edge's only deploy dead-man" {
+    refute ls "$units"/smoresnet-deploy-heartbeat.* 2>/dev/null
+    assert grep -qE '^[[:space:]]+smoresnet-deploy-poll\.timer \\$' "$containerfile"
 }
 
 @test "the image enables the timer" {

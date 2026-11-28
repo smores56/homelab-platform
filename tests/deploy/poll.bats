@@ -1,6 +1,7 @@
 #!/usr/bin/env bats
 # bats file_tags=deploy
-# Offline checks for the quarter-hour deploy poll (SDLC #798, T6; cadence per #1014).
+# Offline checks for the quarter-hour deploy poll (SDLC #798, T6; cadence per #1014;
+# the deploy dead-man per #1019).
 #
 # The poll is the backstop, not a decider: it resolves `main` for each repository
 # through the anonymous GitHub API, and it enqueues a request only when the tip
@@ -9,6 +10,11 @@
 # what the poll must not do as much as what it must: no deploy of its own, no
 # enqueue for a denylisted tip, no second entry for a tip already queued, no
 # inference of a bootstrap.
+#
+# It is also the deploy plane's dead-man: one start ping per run, one verdict, and
+# the verdict is green only when nothing is queued behind an apply that is not
+# happening and no deploy is held. The Healthchecks check is a fake URL here; the
+# live half is an operator watching the real check's period and grace.
 #
 # The API is a fixture directory behind a fake `curl`, the state and the queue are
 # throwaway paths, and the journal, the queue entries and the command line are
@@ -344,10 +350,10 @@ cache_clear_deploy_state() {
     assert_equal "$(entry_count)" 0
 }
 
-@test "an unreachable API does not page: it is not the commit's fault" {
+@test "an unreachable API does not page: the deploy path has not moved either way" {
     printf 'network\n' >"$FAKE_API_STATUS"
     poll_once
-    assert_equal "$(cat "$pings" 2>/dev/null)" ''
+    refute grep -qx "$ping_url/fail" "$pings"
 }
 
 @test "the failure is journaled" {
@@ -484,6 +490,147 @@ PY
     assert_equal "$(grep -c 'homelab-apps/git/ref' "$log" || true)" 1
 }
 
+# --- the poll is the deploy dead-man (#1019) --------------------------------
+
+# queue_seed <id> <queued_at>: an entry the drain has not taken, in the shape the
+# poll and the drain both read.
+queue_seed() { # <id> <queued_at>
+    jq -cn --arg id "$1" --argjson at "$2" \
+        '{schema: 1, id: $id, repo: "homelab-apps", commit: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          queued_at: $at, source: "event"}' >"$queue/$1.json"
+}
+
+# hold_lock: the deploy lock held the way a drain in the middle of an apply holds
+# it -- a separate process, because the poll has to see a lock its own parent is
+# not carrying, with its stdio on /dev/null so bats is not left reading a pipe.
+hold_lock() {
+    bash -c 'exec 9>"$1" || exit 1; flock -x 9 || exit 1; exec sleep 60' _ \
+        "$DEPLOY_LOCK_FILE" >/dev/null 2>&1 &
+    lock_pid=$!
+    for _ in $(seq 1 200); do
+        flock -n "$DEPLOY_LOCK_FILE" true 2>/dev/null || return 0
+        sleep 0.05
+    done
+    return 1
+}
+
+teardown() {
+    if [[ -n ${lock_pid:-} ]]; then kill "$lock_pid" 2>/dev/null || true; fi
+    return 0
+}
+
+# verdict: one run, then its verdict and the reason it carried, from the journal:
+# the endpoint is only half of what a page says.
+verdict() {
+    poll_once
+    jq -r 'select(.event == "poll-liveness") | "\(.verdict)|\(.reason)"' \
+        "$state/journal.jsonl" 2>/dev/null | tail -n 1
+}
+
+@test "a run marks the check started before it decides anything" {
+    poll_once
+    assert_equal "$(head -n 1 "$pings")" "$ping_url/start"
+}
+
+@test "a healthy run ends the check green" {
+    poll_once
+    assert_equal "$(tail -n 1 "$pings")" "$ping_url"
+}
+
+@test "one run is one start and one verdict" {
+    poll_once
+    assert_equal "$(grep -cx "$ping_url/start" "$pings" || true)" 1
+    assert_equal "$(grep -cx "$ping_url" "$pings" || true)" 1
+    assert_equal "$(wc -l <"$pings")" 2
+}
+
+@test "no ping goes anywhere but the deploy check" {
+    poll_once
+    assert_equal "$(grep -vc "^$ping_url" "$pings" || true)" 0
+}
+
+@test "the verdict is journaled" {
+    assert_equal "$(verdict)" 'green|'
+}
+
+@test "a queue entry a drain could still be working on is green" {
+    queue_seed 11111111-1111-4111-8111-111111111111 "$(($(date +%s) - 60))"
+    assert_equal "$(verdict)" 'green|'
+}
+
+@test "queued work nothing is applying pages red" {
+    queue_seed 22222222-2222-4222-8222-222222222222 "$(($(date +%s) - 1900))"
+    poll_once
+    assert_equal "$rc" 1
+    assert grep -qx "$ping_url/fail" "$pings"
+}
+
+@test "the page names the entry, the wait and the limit" {
+    queue_seed 22222222-2222-4222-8222-222222222222 "$(($(date +%s) - 1900))"
+    body=$(verdict)
+    [[ $body == red\|* ]] || fail "expected a red verdict, got: $body"
+    [[ $body == *22222222-2222-4222-8222-222222222222* ]] || fail "the page does not name the entry: $body"
+    [[ $body == *limit* ]] || fail "the page does not name the limit: $body"
+}
+
+# The wedge the heartbeat existed for, at the speed the design asks for: a request
+# nothing is applying has to be old enough to page within the tick after the limit,
+# so the limit is the poll interval itself and not a heartbeat-sized window.
+@test "a wedge pages within one interval: the limit is one timer period" {
+    limit=$(grep -oE '^liveness_max_age=\$\{DEPLOY_LIVENESS_MAX_AGE:-[0-9]+' "$poll" |
+        grep -oE '[0-9]+$')
+    [[ $limit =~ ^[0-9]+$ ]] || fail "no DEPLOY_LIVENESS_MAX_AGE default in $poll"
+    minute=$(sed -nE 's|^OnCalendar=\*-\*-\* \*:0/([0-9]+):00$|\1|p' "$timer")
+    [[ $minute =~ ^[0-9]+$ ]] || fail "no cadence in $timer"
+    ((limit <= 60 * minute))
+}
+
+# A drain inside an honest deploy holds the lock for hours: the snapshot gate plus
+# an apps apply. An entry it has in hand is not stuck, and a limit low enough to
+# call it stuck would page every healthy platform deploy.
+@test "an apply in flight keeps a long entry green" {
+    queue_seed 33333333-3333-4333-8333-333333333333 "$(($(date +%s) - 7200))"
+    hold_lock
+    assert_equal "$(verdict)" 'green|'
+}
+
+@test "the in-flight run is journaled as applying" {
+    queue_seed 33333333-3333-4333-8333-333333333333 "$(($(date +%s) - 7200))"
+    hold_lock
+    verdict >/dev/null
+    assert_equal "$(jq -r 'select(.event == "poll-liveness") | .applyRunning' \
+        "$state/journal.jsonl" | tail -n 1)" true
+}
+
+# A hold is the deploy path stopped on a person by design: it pages until the
+# operator releases it, on `deploy`'s own check and not on a second one.
+@test "an unreleased hold pages red and names the reason" {
+    jq -cn '{schema: 1, digest: "sha256:aa", commit: "cccc", reason: "snapshot-not-fresh",
+             missingUnits: ["music"], heldAt: "2026-11-20T00:00:00Z", released: false}' \
+        >"$state/held.json"
+    body=$(verdict)
+    [[ $body == red\|* ]] || fail "an unreleased hold did not go red: $body"
+    [[ $body == *snapshot-not-fresh* ]] || fail "the page does not name the hold reason: $body"
+}
+
+@test "a released hold does not keep the check red" {
+    jq -cn '{schema: 1, digest: "sha256:aa", commit: "cccc", reason: "snapshot-not-fresh",
+             heldAt: "2026-11-20T00:00:00Z", released: true, releasedBy: "alice"}' \
+        >"$state/held.json"
+    assert_equal "$(verdict)" 'green|'
+}
+
+# --- a host without the ping URL is not a broken deploy ---------------------
+
+# The decrypt step writes the URL; a host mid-bootstrap has none, and the poll must
+# journal the skip rather than page or fail.
+@test "a missing ping URL is a journaled skip, not a failure" {
+    rm -f "$DEPLOY_PING_SECRET"
+    poll_once
+    assert_equal "$rc" 0
+    assert_equal "$(journal_events notify-skipped)" 2
+}
+
 # --- the poll decides nothing ------------------------------------------------
 
 @test "the poll never writes the deployed state" {
@@ -571,8 +718,8 @@ seed_full_queue() {
 }
 
 # The receiver, the listener, the forward and the heartbeat are the units #1018
-# deletes: a dependency on any of them would retire the poll with them, or wait
-# for a unit that no longer exists. The poll's own ordering (the decrypt it reads
+# and #1019 delete: a dependency on any of them would retire the poll with them,
+# or wait for a unit that no longer exists. The poll's own ordering (the decrypt it reads
 # the ping URL from, the boot gate that writes the state it reads) is the whole
 # list.
 @test "the poll depends on none of the receiver's units" {
@@ -584,9 +731,8 @@ seed_full_queue() {
         'After=network-online.target After=smortress-boot-gate.service After=sops-decrypt.service After=systemd-tmpfiles-setup.service '
 }
 
-# The heartbeat suite asserts the same thing of its own service
-# (tests/deploy/heartbeat.bats): the label is shared, the unit is not, so each
-# suite keeps the check for the unit it runs.
+# The poll is the deploy plane's only unit of its own since #1019: the drain is
+# queue-triggered and the heartbeat is gone, so this is the whole of it.
 @test "the service runs the installed script" {
     assert grep -qE '^ExecStart=/usr/libexec/deploy-poll$' "$service"
 }

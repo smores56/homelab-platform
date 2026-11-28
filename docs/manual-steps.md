@@ -888,9 +888,14 @@ One sitting, in this order — step 1 can block everything after it.
 `smortress-apps-health.timer` asks the three serving questions every five minutes
 and answers a Healthchecks check of its own, `apps`: a five-minute period with a
 five-minute grace, because the probe answers every five minutes and one late tick
-should not page. It is not the `deploy` check: that one is the heartbeat's
-dead-man and has to stay silent to mean anything (`docs/core/server-image.md`,
-"The tenant prober").
+should not page. It is not the `deploy` check: that one is the poll's dead-man and
+is answered once a quarter hour, so it pages on silence as well as on `/fail`
+(`docs/core/server-image.md`, "The tenant prober").
+
+The `deploy` check itself wants a **`15 minute` period and a `15 minute` grace**
+now that the poll answers it: the poll runs every fifteen minutes, and a check
+whose period is longer than that would let a poll that stopped running look
+healthy for the difference.
 
 The ping URL lives on the host rather than in an Environment, because the prober
 reads it there: `/run/smortress/secrets/healthchecks.yaml` under `apps-ping-url`,

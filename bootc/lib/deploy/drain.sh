@@ -45,8 +45,8 @@ rescan_pause=${DEPLOY_DRAIN_RESCAN_PAUSE:-1}
 
 # How long a deferred entry waits before it is tried again. Five minutes is the
 # period of the retry timer, so a deferred entry is retried by the timer when no
-# event arrives, and the heartbeat pages long before a queue of deferrals goes
-# unnoticed.
+# event arrives, and the poll's dead-man pages long before a queue of deferrals
+# goes unnoticed.
 retry_delay=${DEPLOY_RETRY_DELAY:-300}
 defer_cap=${DEPLOY_DRAIN_DEFER_CAP:-60}
 

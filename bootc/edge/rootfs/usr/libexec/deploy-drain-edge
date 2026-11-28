@@ -76,7 +76,7 @@ reboot_timeout=${DEPLOY_REBOOT_TIMEOUT:-60}
 # found the shared default of 300 s under a 600 s switch: a slow pull would have
 # been killed mid-stage, after bootc had already written the boot entry and before
 # the verifier could answer, so the entry would have been retried until the
-# heartbeat paged for a deployment that was staged. Both are whole seconds and the
+# poll's dead-man paged for a deployment that was staged. Both are whole seconds and the
 # deadline is derived from the switch, so the relationship cannot drift; the
 # assertion below is what holds it if either is overridden.
 edge_switch_timeout=${DEPLOY_SWITCH_TIMEOUT:-600}

@@ -1,7 +1,7 @@
 [Unit]
-Description=Poll GitHub for a newer main and enqueue a deploy
-# The denylisted-tip page reads the decrypted ping URL, so the decrypt step has to
-# be finished, not merely started.
+Description=Poll GitHub for a newer main, enqueue a deploy, and answer the deploy check
+# Every run reads the decrypted ping URL -- the start ping before it polls and the
+# verdict after -- so the decrypt step has to be finished, not merely started.
 Requires=sops-decrypt.service
 After=sops-decrypt.service
 After=network-online.target
@@ -24,9 +24,11 @@ ExecStart=/usr/libexec/deploy-poll
 TimeoutStartSec=600
 UMask=0077
 User=root
-# The poll writes one queue entry and its own cache under the state tree, and
-# nothing else: it takes no deploy lock, records no deployment and removes no
-# entry, so the drain remains the only writer of the queue's *decision*.
+# The poll writes one queue entry, its own cache and its journal lines under the
+# state tree, and nothing else: it records no deployment and removes no entry, so
+# the drain remains the only writer of the queue's *decision*. It reads the deploy
+# lock to tell an apply in flight from a queue nothing is working on, and never
+# takes it: a shared probe on a read-only fd answers without writing a byte.
 ProtectSystem=strict
 ReadWritePaths=/var/lib/homelab/deploy
 ProtectHome=yes

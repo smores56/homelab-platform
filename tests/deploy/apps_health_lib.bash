@@ -12,7 +12,7 @@
 # also proves the run wrote no deploy record, requested no reboot and never
 # touched the deploy dead-man -- a prober that could roll the host back would be
 # the boot gate's coupling again, with a different clock, and one that pinged the
-# deploy check would fight the heartbeat that keeps it green.
+# deploy check would fight the poll that keeps it green.
 #
 # `systemctl`, `tailscale` and `curl` are fakes on PATH and the state is a
 # throwaway directory; the journal and the command lines are real. The ingress

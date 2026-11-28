@@ -45,12 +45,12 @@ rollback path. Operator-only actions are in `docs/manual-steps.md#install-a-host
 | `/usr/libexec/agent-config-seed` | `scripts/agent-config-seed.sh`: the seeding itself, so the token is read from a file into a variable instead of being spliced into an `ExecStart` line. |
 | `/usr/lib/systemd/system/smortress-nvidia-cdi.service` | Generates `/etc/cdi/nvidia.yaml` at boot so `AddDevice=nvidia.com/gpu=all` resolves for the model container; ordered before it. |
 | `/usr/libexec/deploy-verify.py` | The host's own verification: tip of `main`, descendancy from the deployed commit, tag `sha-<commit[:12]>` → digests, `org.opencontainers.image.revision` label, denylist. Anonymous GitHub and registry calls, cached 120 s, 30 s each. This file is the server role only: the questions themselves are pure functions in `/usr/libexec/deploy/decisions.py` (`bootc/lib/deploy/`), which both bootc images install, and `bootc/lib/deploy/fixtures/` pins the answers the edge has to match. Still rootfs, because the build's `smortress-src` loop installs `*.sh` only. |
-| `/usr/libexec/{deploy-state,deploy-drain,deploy-platform,deploy-apps,deploy-poll,deploy-heartbeat}` | `scripts/deploy-*.sh`: the state library, the queue drain (single writer of `state.json`), the platform snapshot gate and stage, the apps apply and revert, the quarter-hour deploy poll and the five-minute dead-man. The apps apply sources its phases from `/usr/libexec/deploy/apps/` (`scripts/deploy/apps/*.sh`). |
+| `/usr/libexec/{deploy-state,deploy-drain,deploy-platform,deploy-apps,deploy-poll}` | `scripts/deploy-*.sh`: the state library, the queue drain (single writer of `state.json`), the platform snapshot gate and stage, the apps apply and revert, and the quarter-hour deploy poll, which is also the deploy dead-man. The apps apply sources its phases from `/usr/libexec/deploy/apps/` (`scripts/deploy/apps/*.sh`). |
 | `/usr/libexec/smortress-boot-gate` | `scripts/smortress-boot-gate.sh`: reconciles an interrupted apps apply, then keeps or rolls back the deployment this host just booted. |
 | `/usr/libexec/smortress-deploy` | `scripts/deploy-cli.sh`, staged under the name the runbook uses: `status`, `release --force`, `unblock`, `bootstrap`. |
 | `/usr/libexec/smortress-apps-health` | `scripts/smortress-apps-health.sh`: the tenant's prober. For every app in `plan.json`, the Quadlet's unit active in the tenant's manager, the plan's loopback port accepting a connect, and the app's base path declared by Serve. Journals `apps-health-failed` with the reason, the app and the unit, and pings the tenant's own Healthchecks check: green on a healthy tick or an apply in flight, `/fail` with the reason on a broken one. Reboots, stages, rolls back and reverts nothing, and never touches the deploy check. |
 | `/usr/lib/systemd/system/smortress-deploy.path`, `/usr/lib/systemd/system/smortress-deploy.service` | The queue trigger (`DirectoryNotEmpty=/var/lib/homelab/deploy/queue`) and the one drain of it, `TimeoutStartSec=12600`. |
-| `/usr/lib/systemd/system/smortress-deploy-poll.timer`, `/usr/lib/systemd/system/smortress-deploy-poll.service`, `/usr/lib/systemd/system/smortress-deploy-heartbeat.timer`, `/usr/lib/systemd/system/smortress-deploy-heartbeat.service`, `/usr/lib/systemd/system/smortress-deploy-retry.timer`, `/usr/lib/systemd/system/smortress-boot-gate.service` | The quarter-hour deploy poll (the only trigger, design #1010), the dead-man beat for the `deploy` Healthchecks check, the five-minute retry of a deferred queue entry, and the gate that runs `Before=boot-complete.target`. |
+| `/usr/lib/systemd/system/smortress-deploy-poll.timer`, `/usr/lib/systemd/system/smortress-deploy-poll.service`, `/usr/lib/systemd/system/smortress-deploy-retry.timer`, `/usr/lib/systemd/system/smortress-boot-gate.service` | The quarter-hour deploy poll (the only trigger and the deploy dead-man, design #1010), the five-minute retry of a deferred queue entry, and the gate that runs `Before=boot-complete.target`. |
 | `/usr/lib/systemd/system/smortress-apps-health.timer`, `/usr/lib/systemd/system/smortress-apps-health.service` | The five-minute probe of the tenant's apps, `OnBootSec=5min` then `OnUnitActiveSec=5min` with `Persistent=false`: a host that was off owes no probe for the window nothing was running. Ordered after `smortress-tailscale-serve.service`, because a base path is checked against the routes that unit declares. |
 | `/usr/share/smortress/deploy-units.txt` | The units the boot gate requires: what "serving" means for this host. The deploy units are deliberately absent — a queue that is not draining must page, not roll the host back — and so is every unit that reads the tenant's plan (`smortress-tailscale-serve`, `smortress-apps-quota`), because one that exits 1 on an app definition would denylist the platform digest for an app's fault. |
 | `/boot/grub2/custom.cfg` | greenboot's three-attempt boot counter, installed by `smortress-boot-counter.service` from `/usr/share/smortress/boot-counter.cfg`. `grub.cfg` ends with `41_custom.cfg`, which sources this file, so it is how counting works without bootupd (`docs/manual-steps.md#the-boot-gate-and-its-counter`). The gate reads this file to decide whether the counter is armed. |
@@ -361,7 +361,8 @@ commit deploy" for every entry, fail-closed and journaled with the reason:
 
 API calls are anonymous and cached for 120 s; each is bounded at 30 s; a
 rate-limited answer is an infrastructure failure — the entry stays queued and
-the journal says so, and the dead-man pages once it has waited half an hour.
+the journal says so, and the poll's dead-man pages once one has waited half an
+hour.
 A rejected commit is popped and never retried, because the next trigger would
 fail it identically.
 
@@ -464,9 +465,9 @@ five-minute grace (`docs/manual-steps.md`, "Create the tenant apps check"): a
 healthy tick, a plan with no apps and an apply in flight all ping it green, and a
 failure pings `/fail` with `not serving: <reason>` as the body, so the page names
 the app instead of only reporting silence. It is deliberately a different check
-from `deploy`: one check answered by the heartbeat and by the prober would turn
-one crash-looping app into a down/recover pair every five minutes, and `deploy`'s
-dead-man needs silence as a signal. The URL is read from
+from `deploy`: one check answered by the poll and by the prober would turn one
+crash-looping app into a down/recover pair every quarter hour, and a dead-man
+reads one reporter. The URL is read from
 `/run/smortress/secrets/healthchecks.yaml` (key `apps-ping-url`, staged in
 `secrets/boot.json`'s `healthchecks`), so the prober pages on its own; the one
 silent mode is that key being absent, which leaves it journaling without pinging.
@@ -524,11 +525,18 @@ between a merge and its deployment, and one run is one cached API call per
 repository. `Persistent=false` on purpose — a host that was off is not owed every
 missed tick on the way up.
 
-`smortress-deploy-heartbeat.timer` (every 5 minutes) pings the `deploy` check
-green only when no queue entry has waited more than 2 hours; anything else pings
-`/fail` with the reason. It is separate from the poll on purpose: a poll-driven
-ping stays green while the drain is wedged behind a stalled pull with the lock
-held. Task #1019 replaces it with a poll-side ping.
+The poll is also the dead-man for the deploy plane, which is what #1019
+retired `smortress-deploy-heartbeat.timer` for. Each run pings the check's
+`/start` and exactly one verdict: green only when no queued request has waited
+a poll interval with no drain applying it and no hold is unreleased, and `/fail`
+with the reason otherwise. A request nothing is working on therefore pages at
+the next tick — the wedge is seen by the run that could have drained
+it, not hours later — and the check's own period is the poll interval, so a poll
+that stopped running altogether pages on silence. The one case it cannot see is
+a drain hung with the lock in hand, which the drain unit's own
+`TimeoutStartSec` bounds; a limit low enough to call that stuck would page every
+healthy deploy, because the snapshot gate and an apps apply legitimately hold
+the lock for hours.
 
 ### What a hand-run switch still gives up
 
