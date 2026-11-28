@@ -1047,7 +1047,10 @@ systemctl status zfs-ready@raw-wallpapers.service   # an empty listing means not
 Syncthing refuses a Host header it does not expect and Serve forwards the client's
 Host unchanged, so `https://sync.<tailnet>.ts.net/` reaches the GUI through a
 loopback proxy: `smortress-syncthing-gui-proxy.service` answers on
-`127.0.0.1:8385`, rewrites Host to `127.0.0.1:8384` and forwards. The GUI's own
+`127.0.0.1:8385`, rewrites Host to `127.0.0.1:8384` and forwards. The listener is
+loopback-only (`bind 127.0.0.1`) but the site address is hostless, because Caddy
+matches a site's host against the request's and Serve forwards `sync.<tailnet>`.
+The GUI's own
 check stays on, and `smortress-syncthing-hostcheck.service` writes it back on at
 every boot, because the setting is host state in `config.xml` on
 `state/syncthing-config` and a restored config would otherwise bring the bypass

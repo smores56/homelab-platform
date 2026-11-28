@@ -29,7 +29,13 @@
 	auto_https off
 }
 
-http://127.0.0.1:8385 {
+http://:8385 {
+	# Hostless on purpose. Caddy matches a site's host against the request's Host,
+	# and Serve forwards the client's `sync.<tailnet>` unchanged: an address of
+	# 127.0.0.1 matches only a loopback Host and answers Serve an empty 200 before
+	# the rewrite below can run. `bind` is what keeps the listener loopback-only.
+	bind 127.0.0.1
+
 	# Host, and not only X-Forwarded-Host: the GUI reads the request's Host when it
 	# decides the check, so the value has to be the one its config trusts.
 	reverse_proxy 127.0.0.1:8384 {
