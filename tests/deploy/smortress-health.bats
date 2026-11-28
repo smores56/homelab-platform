@@ -86,13 +86,15 @@ STUB
         fail "the counter unit does not name this image's snippet"
 }
 
-# The snippet only moves a counter that is armed, and greenboot arms it when a
-# deployment is staged (boot_counter=3, boot_success=0 before the reboot). Its
-# unit is installed RequiredBy=ostree-finalize-staged.service, so the enablement
-# is that dependency link, and the image asserts the link at build time.
-@test "the image enables greenboot's set-counter, which arms the fallback" {
-    grep -qE '^[[:space:]]+greenboot-grub2-set-counter\.service[[:space:]]*\\$' "$containerfile" ||
-        fail "the Containerfile does not enable greenboot-grub2-set-counter.service: a staged deployment would carry no armed counter into its first boot"
-    grep -qF -- 'test -e /etc/systemd/system/ostree-finalize-staged.service.requires/greenboot-grub2-set-counter.service' "$containerfile" ||
-        fail "the build does not assert the set-counter dependency link"
+# greenboot 0.16 (Rust) renamed its staged-deployment unit to
+# greenboot-set-rollback-trigger.service, and the unit still hangs off
+# ostree-finalize-staged.service as a RequiredBy= link. Since 0.16 it records the
+# staged deployment id rather than arming boot_counter, so the counter is armed by
+# the gate at rest; what the link still buys is greenboot making a bootloader
+# fallback permanent. The enablement is that link, and the image asserts it.
+@test "the image enables greenboot's rollback trigger, which records the staged deployment" {
+    grep -qE '^[[:space:]]+greenboot-set-rollback-trigger\.service[[:space:]]*\\$' "$containerfile" ||
+        fail "the Containerfile does not enable greenboot-set-rollback-trigger.service: a deployment the bootloader dropped would boot again instead of being made permanent"
+    grep -qF -- 'test -e /etc/systemd/system/ostree-finalize-staged.service.requires/greenboot-set-rollback-trigger.service' "$containerfile" ||
+        fail "the build does not assert the rollback trigger dependency link"
 }

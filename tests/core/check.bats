@@ -257,7 +257,7 @@ runbook_names() { # <step>
 # version of it.
 for step in deploy-notify TS_OAUTH_CLIENT_ID TS_OAUTH_CLIENT_SECRET \
     bootupctl /boot/grub2/custom.cfg journal.jsonl \
-    greenboot-grub2-set-counter deploy-ping-url.yaml; do
+    greenboot-set-rollback-trigger deploy-ping-url.yaml; do
     register "the runbook names $step" runbook_names "$step"
 done
 

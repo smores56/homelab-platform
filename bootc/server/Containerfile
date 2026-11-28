@@ -265,10 +265,18 @@ RUN set -eux; \
 # bootc images enable units with systemctl at build time. rpm-ostree and zincati
 # automatic updates are masked: a deployment change lands in a maintenance
 # window through bootc, and stateful Podman images are never auto-updated.
+#
+# greenboot 0.16 (the Rust rewrite, first shipped in Fedora 45's uCore stream)
+# renamed greenboot-grub2-set-counter.service to
+# greenboot-set-rollback-trigger.service, and the new unit records the staged
+# deployment id instead of arming boot_counter. Nothing in greenboot arms the
+# counter any more, so smortress-boot-gate is the only thing that does: it runs
+# After=multi-user.target -- after the healthcheck has cleared the counter on a
+# green boot -- and leaves boot_success=1 boot_counter=3 at rest.
 RUN set -eux; \
     systemctl enable \
       greenboot-healthcheck.service \
-      greenboot-grub2-set-counter.service \
+      greenboot-set-rollback-trigger.service \
       smortress-boot-counter.service \
       smortress-boot-rw.service \
       zfs.target \
@@ -386,7 +394,7 @@ RUN set -eux; \
     test -e /etc/systemd/system/multi-user.target.wants/smortress-boot-counter.service || { echo "the boot counter installer is not enabled: nothing would put the counter where grub.cfg reads it" >&2; exit 1; }; \
     test -e /etc/systemd/system/multi-user.target.wants/smortress-boot-rw.service || { echo "/boot is left read-only: greenboot cannot write grubenv and the counter never arms" >&2; exit 1; }; \
     test -e /etc/systemd/system/multi-user.target.wants/greenboot-healthcheck.service || { echo "greenboot's healthcheck is not enabled: a deployment that boots but is broken would never be rolled back" >&2; exit 1; }; \
-    test -e /etc/systemd/system/ostree-finalize-staged.service.requires/greenboot-grub2-set-counter.service || { echo "greenboot's set-counter is not enabled: nothing arms boot_counter when a deployment is staged, so a boot that never reaches userspace has no counter to fall back with" >&2; exit 1; }; \
+    test -e /etc/systemd/system/ostree-finalize-staged.service.requires/greenboot-set-rollback-trigger.service || { echo "greenboot's rollback trigger is not enabled: nothing records the staged deployment when it is finalized, so a deployment the bootloader dropped would not be made permanent" >&2; exit 1; }; \
     test -x /etc/greenboot/check/required.d/10-smortress-health.sh || { echo "this host's greenboot check is missing or not executable: greenboot would mark every boot good" >&2; exit 1; }; \
     grep -qxF 'TimeoutStartSec=600' /usr/lib/systemd/system/greenboot-healthcheck.service.d/10-timeout.conf || { echo "greenboot's healthcheck keeps systemd's 90s default: this host's units wait on the pool and the check would be killed mid-wait" >&2; exit 1; }; \
     test -s /etc/ssh/authorized_keys.d/smores || { echo "the shipped ssh key file is missing or empty: it is the only key sshd reads (design #767)" >&2; exit 1; }; \
