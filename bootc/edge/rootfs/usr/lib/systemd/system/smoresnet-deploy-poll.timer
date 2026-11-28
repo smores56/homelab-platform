@@ -1,17 +1,16 @@
 [Unit]
-Description=Daily 03:00 window that deploys whatever has been published to the edge
+Description=Quarter-hour poll that deploys whatever has been published to the edge
 
 [Timer]
-# The server's window, in the operator's local time rather than the host's UTC: a
-# bad publish that lands mid-day reaches the public box once, unattended, at a
-# time its owner chose. The edge does not deploy on push, so this is also the only
-# trigger a release nobody dispatched ever gets.
-OnCalendar=*-*-* 03:00:00 America/New_York
+# The server's cadence, not a window of its own: the edge does not deploy on push,
+# so this is the only trigger a release nobody dispatched ever gets, and fifteen
+# minutes is the whole of the delay between a merge and the public box.
+OnCalendar=*-*-* *:0/15:00
 AccuracySec=1min
-# Not persistent: a host that was off at 03:00 is not owed a deploy on the way up.
-# On this box that matters twice over: it has no snapshot and no boot counting, so
-# a missed window firing at boot would be a reboot with the least rollback of any
-# host in the fleet.
+# Not persistent: a host that was off is not owed a deploy on the way up. On this
+# box that matters twice over: it has no snapshot and no boot counting, so every
+# missed tick firing at boot would be a reboot with the least rollback of any host
+# in the fleet.
 Persistent=false
 Unit=smoresnet-deploy-poll.service
 

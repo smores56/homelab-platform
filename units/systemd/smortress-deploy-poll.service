@@ -7,9 +7,9 @@ After=sops-decrypt.service
 After=network-online.target
 Wants=network-online.target
 After=systemd-tmpfiles-setup.service
-# A boot's catch-up run (Persistent=true) would otherwise poll against a state.json
-# the boot gate has not written yet, and enqueue a request for the deployment the
-# host is already running. After= only: a failed gate must not stop the poll.
+# The first tick after a boot can land before the boot gate has written state.json,
+# and a poll against it would enqueue a request for the deployment the host is
+# already running. After= only: a failed gate must not stop the poll.
 After=smortress-boot-gate.service
 # A wedged poll must not hold the shutdown path.
 Conflicts=shutdown.target

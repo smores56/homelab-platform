@@ -263,7 +263,7 @@ identity. The listener (`smoresnet-deploy-listener.service`) binds loopback and
 admits nothing but `homelab-platform`, and `smoresnet-deploy-forward.service`
 advertises that socket on the tailnet with `tailscale serve` — without the
 forward, the notify job's POST reaches a port that exists on this host and
-nowhere else, and only the 03:00 poll would ever enqueue anything. The listener
+nowhere else, and only the quarter-hour poll would ever enqueue anything. The listener
 reads one plaintext secret;
 the drain (`smoresnet-deploy.service`, `deploy-drain-edge`) runs the shared
 `bootc/lib/deploy/drain.sh` loop with a no-op where the server's snapshot gate
@@ -273,8 +273,8 @@ five-minute timer) pings the deploy check green only while `/healthz` answers an
 no queue entry is older than 1800 s. The triggers are the server's two, and
 neither deploys on a push: `publish-edge-image.yml`'s notify job posts a signed
 body to the receiver only on a `main` dispatch, and `smoresnet-deploy-poll.timer`
-asks GitHub for the tip at 03:00 local as the backstop for a release nobody
-dispatched. Both only enqueue; `smoresnet-deploy.path` starts the drain on the
+asks GitHub for the tip every fifteen minutes as the backstop for a release
+nobody dispatched. Both only enqueue; `smoresnet-deploy.path` starts the drain on the
 first file in the queue, so a hand-run (`systemctl start
 smoresnet-deploy.service`) is the same path an operator can take while the
 listener is down.

@@ -1,15 +1,17 @@
 [Unit]
-Description=Daily 03:00 window that deploys whatever has been published
+Description=Quarter-hour poll that deploys whatever has been published
 
 [Timer]
-# One window a day, in the operator's local time rather than the host's UTC: the
-# host takes whatever image is newest when the window opens, so a bad publish
-# that lands mid-day is deployed once, unattended, at a time its owner chose.
-OnCalendar=*-*-* 03:00:00 America/New_York
+# Every fifteen minutes, and not a window: the poll is the only trigger left once
+# the receiver retires (design #1010), so the interval is the whole of the delay
+# between a merge and the deployment it becomes. One run is one anonymous API call
+# per repository, cached for 120 s, which is what keeps the cadence inside the
+# budget.
+OnCalendar=*-*-* *:0/15:00
 AccuracySec=1min
-# Not persistent: a host that was off at 03:00 is not owed a deploy on the way
-# up. Firing a missed window at boot is a reboot nobody scheduled, which is the
-# behaviour this timer replaced.
+# Not persistent: a host that was off is not owed a deploy on the way up. Firing
+# every missed tick at boot is a reboot nobody scheduled, which is the behaviour
+# this timer replaced.
 Persistent=false
 Unit=smortress-deploy-poll.service
 

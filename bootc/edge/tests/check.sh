@@ -379,7 +379,7 @@ queue_path=$root/usr/lib/systemd/system/smoresnet-deploy.path
 
 # The backstop is the server's program under the edge's own limits: no SOPS unit to
 # wait for, the ping URL from /etc/smoresnet, the one repository this box deploys,
-# and the operator's 03:00 local window. One row, because half of these is a poll
+# and the server's quarter-hour cadence. One row, because half of these is a poll
 # that never runs -- or one that asks for a deploy the receiver will refuse.
 poll_backstop_ships() {
   # The program arrives from scripts/ through the Containerfile, like the server's,
@@ -398,7 +398,7 @@ poll_backstop_ships() {
   grep -qxF 'ReadWritePaths=/var/lib/homelab/deploy' "$poll_service" || return 1
   grep -qxF 'Environment=DEPLOY_POLL_REPOS=homelab-platform' "$poll_service" || return 1
   grep -qxF 'Environment=DEPLOY_PING_SECRET=/etc/smoresnet/deploy-ping-url' "$poll_service" || return 1
-  grep -qxF 'OnCalendar=*-*-* 03:00:00 America/New_York' "$poll_timer" || return 1
+  grep -qxF 'OnCalendar=*-*-* *:0/15:00' "$poll_timer" || return 1
   grep -qxF 'Persistent=false' "$poll_timer" || return 1
   grep -qxF 'WantedBy=timers.target' "$poll_timer" || return 1
   $doctrine || return 0
@@ -459,7 +459,7 @@ check 'every unit the edge needs is enabled' units_enabled
 check_build 'no secret, key or operator file is in the image' no_secret_in_the_image
 check_build 'the base is a stream tag and the build records its digest' base_is_a_stream_tag
 check_build 'a pull_request workflow runs this checker on the edge tree' pull_request_runs_this_checker
-check 'the 03:00 poll backstop ships and its timer is enabled' poll_backstop_ships
+check 'the quarter-hour poll backstop ships and its timer is enabled' poll_backstop_ships
 check 'the queue starts the drain when a request lands' queue_starts_the_drain
 check_build 'the edge is told to deploy by a main dispatch, never by a push' notify_is_a_main_dispatch
 check_build 'every path the units name is created before boot' unit_paths_are_created

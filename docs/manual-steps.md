@@ -961,14 +961,14 @@ sudo /usr/libexec/smortress-deploy release --force
 
 Fix the repository, or take the break-glass flag, which records the operator, the
 digest and the missing units and changes nothing else: the next request for that
-commit — the daily 03:00 window while it is still the tip, or a dispatch — reaches
+commit — the quarter-hour poll while it is still the tip, or a dispatch — reaches
 the gate, sees the release, stages and reboots. A release covers one digest only.
 
 ### A denylisted commit or digest
 
 A failed gate, a rollback and a rejected apps definition all denylist what they
-refused, and a denial is final: the listener refuses the commit and the hourly poll
-pages and stops enqueuing it.
+refused, and a denial is final: the listener refuses the commit and the
+quarter-hour poll pages and stops enqueuing it.
 
 ```sh
 sudo /usr/libexec/smortress-deploy status | jq '.denylist'
@@ -2121,8 +2121,8 @@ drain records `pending.json` and reboots. The boot gate judges the boot; a
 deployment that does not come up is denylisted and the next boot is the previous
 commit.
 
-`smoresnet-deploy-poll.timer` runs the same path at 03:00 local for a release
-nobody dispatched — a merge that published and was forgotten. Both triggers only
+`smoresnet-deploy-poll.timer` runs the same path every fifteen minutes for a
+release nobody dispatched — a merge that published and was forgotten. Both triggers only
 enqueue; the drain is the only thing that decides.
 
 What to read afterwards, on the box:

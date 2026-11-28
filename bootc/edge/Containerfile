@@ -240,7 +240,7 @@ RUN set -eux; \
     ! grep -qE '^(Requires|Wants)=.*sops-decrypt' /usr/lib/systemd/system/smoresnet-deploy-poll.service || { echo "the edge poll depends on a sops unit this image does not ship: the backstop would never run" >&2; exit 1; }; \
     grep -qxF 'ReadWritePaths=/var/lib/homelab/deploy' /usr/lib/systemd/system/smoresnet-deploy-poll.service || { echo "the poll cannot write the queue it is meant to fill" >&2; exit 1; }; \
     grep -qxF 'Environment=DEPLOY_POLL_REPOS=homelab-platform' /usr/lib/systemd/system/smoresnet-deploy-poll.service || { echo "the poll polls a repository this box does not deploy: an apps request would take one of the 32 queue slots" >&2; exit 1; }; \
-    grep -qxF 'OnCalendar=*-*-* 03:00:00 America/New_York' /usr/lib/systemd/system/smoresnet-deploy-poll.timer || { echo "the poll window is not the operator's 03:00 local" >&2; exit 1; }; \
+    grep -qxF 'OnCalendar=*-*-* *:0/15:00' /usr/lib/systemd/system/smoresnet-deploy-poll.timer || { echo "the poll cadence is not the server's quarter hour" >&2; exit 1; }; \
     test -e /etc/systemd/system/timers.target.wants/smoresnet-deploy-poll.timer || { echo "the poll timer is not enabled: the backstop would never fire" >&2; exit 1; }; \
     grep -qxF 'DirectoryNotEmpty=/var/lib/homelab/deploy/queue' /usr/lib/systemd/system/smoresnet-deploy.path || { echo "the queue does not start the drain: a trigger would enqueue a request nothing consumes" >&2; exit 1; }; \
     grep -qxF 'Unit=smoresnet-deploy.service' /usr/lib/systemd/system/smoresnet-deploy.path || { echo "the path unit does not start the edge drain" >&2; exit 1; }; \

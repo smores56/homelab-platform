@@ -525,12 +525,13 @@ pre-reboot snapshot the gate requires.
 
 ### The two backstops
 
-`smortress-deploy-poll.timer` runs once a day at 03:00 America/New_York and
-enqueues a request when the newest published image differs from the recorded one.
-It is the only path through the receiver that deploys an image nobody asked for: a
-manual dispatch covers everything else, and the window exists so an unattended
-reboot happens at an hour its owner chose. `Persistent=false` on purpose — a host
-that was off at 03:00 is not owed a deploy on the way up.
+`smortress-deploy-poll.timer` runs every fifteen minutes and enqueues a request
+when the newest published image differs from the recorded one. It is the only
+path that deploys an image nobody asked for — the poll is the trigger, not a
+window around one (design #1010) — so the interval is the whole of the delay
+between a merge and its deployment, and one run is one cached API call per
+repository. `Persistent=false` on purpose — a host that was off is not owed every
+missed tick on the way up.
 
 `smortress-deploy-heartbeat.timer` (every 5 minutes) pings the `deploy` check
 green only when `GET /healthz` answers `200` within 5 s *and* no queue entry has
