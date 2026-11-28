@@ -23,7 +23,7 @@ Description=Collect Brave history when the profile's History changes
 PathModified=/var/lib/agent/local/quarantine/brave-profile/Default/History
 PathModified=/var/lib/agent/local/quarantine/brave-profile/Default/History-wal
 PathModified=/var/lib/agent/local/quarantine/brave-profile/Default/History-journal
-Unit=smortress-agent-collect-brave.service
+Unit=smortress-agent-collect@brave.service
 
 [Install]
 WantedBy=paths.target

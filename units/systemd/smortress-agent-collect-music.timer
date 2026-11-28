@@ -8,7 +8,7 @@ Description=Hourly, publish the music library into the personal replica
 OnCalendar=*-*-* *:50:00
 AccuracySec=1m
 Persistent=true
-Unit=smortress-agent-collect-music.service
+Unit=smortress-agent-collect@music.service
 
 [Install]
 WantedBy=timers.target

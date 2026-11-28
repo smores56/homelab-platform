@@ -176,13 +176,20 @@ source scripts/app-images.sh
 # A table entry is used either as a Quadlet's Image= or as an argument of a
 # hand-written unit that runs podman itself (the collectors), and both must name
 # the signed mirror at the pinned digest rather than a tag.
+#
+# A hand-written unit names its image one of two ways: on its own continuation
+# line of a `podman run`, or -- for the collectors, since SDLC #1021 -- once, in
+# the template's `Environment=AGENT_COLLECT_IMAGE=...`, which every stage of every
+# fragment then names as a variable. Both are anchored matches: a comment that
+# mentions the reference is not a run, and a variable is not a digest nobody
+# defined.
 for name in $(app_image_names); do
   ref=$(app_image_ref "$name")
-  # A hand-written unit names the image on its own continuation line, so the
-  # match is anchored: a comment that mentions the reference is not a run.
   pattern="^[[:space:]]+$(printf '%s' "$ref" | sed 's/\\./\\\\./g')[[:space:]]+\\\\$"
+  defined="^Environment=AGENT_([A-Z_]+_)?IMAGE=$(printf '%s' "$ref" | sed 's/\\./\\\\./g')\$"
   if grep -qF -- "Image=$ref" units/quadlet/*.container ||
-     grep -qE "$pattern" units/systemd/*.service; then
+     grep -qE "$pattern" units/systemd/*.service units/systemd/*.service.d/*.conf ||
+     grep -qE "$defined" units/systemd/*.service; then
     ok "$name runs the signed mirror at its pinned digest"
   else
     bad "$name runs the signed mirror at its pinned digest"
@@ -259,7 +266,8 @@ done
 check "the proxy unit mounts no host copy of its program" \
   lacks 'Volume=/usr/libexec/agent-proxy' units/quadlet/agent-proxy.container
 for unit in units/systemd/smortress-agent-brave-seed.service \
-  units/systemd/smortress-agent-collect-brave.service; do
+  units/systemd/smortress-agent-collect@.service \
+  units/systemd/smortress-agent-collect@brave.service.d/10-collect.conf; do
   check "$unit mounts no host copy of the tree" lacks '--volume /usr/lib/data-plane' "$unit"
 done
 # The programs' own list has to be complete in the image that does carry them: a

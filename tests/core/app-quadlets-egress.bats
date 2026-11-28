@@ -109,7 +109,7 @@ unset _secret
 #     proxy or the resolver has to fail this section too.
 readonly brave=units/quadlet/agent-brave.container
 readonly brave_seed=units/systemd/smortress-agent-brave-seed.service
-readonly brave_collect=units/systemd/smortress-agent-collect-brave.service
+readonly brave_frag=units/systemd/smortress-agent-collect@brave.service.d/10-collect.conf
 readonly brave_path=units/systemd/smortress-agent-collect-brave.path
 readonly brave_timer=units/systemd/smortress-agent-collect-brave.timer
 
@@ -237,53 +237,68 @@ unset _flag
   grep -qF 'smortress-agent-brave-seed.service' bootc/server/Containerfile
 }
 
-@test "units/systemd/smortress-agent-collect-brave.service exists" {
-  [[ -f $brave_collect ]]
+# Since SDLC #1021 the browsing pass is `smortress-agent-collect@brave.service`:
+# the snapshot is the fragment's `ExecStartPre=`, the collection is the template's
+# one stage, and the view is the fragment's `ExecStart=` -- which systemd runs
+# after the template's line, so the order is a property of the unit kinds rather
+# than of a line number inside one file.
+@test "units/systemd/smortress-agent-collect@brave.service.d/10-collect.conf exists" {
+  [[ -f $brave_frag ]]
 }
 
-@test "units/systemd/smortress-agent-collect-brave.service is snapshot then collect then view" {
-  assert_equal "$(grep -cE '^ExecStart=' "$brave_collect")" 3
+@test "the browsing instance is snapshot then collect then view" {
+  assert_equal "$(grep -cE '^ExecStartPre=' "$brave_frag")" 1
+  assert_equal "$(grep -cE '^ExecStart=' "$brave_frag")" 1
+  assert_equal "$(grep -cE '^ExecStart(Pre)?=' units/systemd/smortress-agent-collect@.service)" 1
 }
 
-@test "the snapshot stage runs before the collector stage" {
-  local snapshot_line collect_line
-  snapshot_line=$(grep -nF 'apps.brave_ingest.snapshot' "$brave_collect" | cut -d: -f1)
-  collect_line=$(grep -nF 'data_plane.collectors.raw' "$brave_collect" | cut -d: -f1)
-  if [[ -z $snapshot_line || -z $collect_line || $snapshot_line -ge $collect_line ]]; then
-    printf 'snapshot=%s collect=%s\n' "$snapshot_line" "$collect_line" >&2
-    return 1
-  fi
+@test "the snapshot is the stage that runs first" {
+  grep -qxF 'ExecStartPre=/usr/bin/podman run --rm --replace --name smortress-agent-brave-snapshot \' \
+    "$brave_frag" &&
+    grep -qF -- '-m apps.brave_ingest.snapshot --database /profile/Default/History' "$brave_frag"
 }
 
 @test "only the snapshot writes the quarantine copy" {
-  grep -qE -- '/var/lib/agent/local/quarantine/brave-profile:/profile:ro' "$brave_collect" &&
-    grep -qE -- '/var/lib/agent/local/quarantine/brave:/quarantine:z' "$brave_collect"
+  grep -qE -- '/var/lib/agent/local/quarantine/brave-profile:/profile:ro' "$brave_frag" &&
+    grep -qE -- '/var/lib/agent/local/quarantine/brave:/quarantine:z' "$brave_frag"
 }
 
 @test "the collector reads the copy read-only" {
-  grep -qE -- '/var/lib/agent/local/quarantine/brave:/quarantine:ro' "$brave_collect"
+  grep -qE -- 'AGENT_COLLECT_SOURCE=--volume /var/lib/agent/local/quarantine/brave:/quarantine:ro' \
+    "$brave_frag"
 }
 
 @test "the view is published beside the snapshot, not into it" {
-  grep -qE -- '/var/lib/agent/local/sources/brave:/out:z' "$brave_collect" &&
+  grep -qE -- '/var/lib/agent/local/sources/brave:/out:z' "$brave_frag" &&
     grep -qF -- '-m data_plane.collectors.raw.publish_brave --history /quarantine/History --out /out' \
-      "$brave_collect"
+      "$brave_frag"
 }
 
 @test "the collector names the device and profile the replica is keyed by" {
-  grep -qF -- 'brave --database /quarantine/History --device smortress --profile default' \
-    "$brave_collect"
+  grep -qF -- 'AGENT_COLLECT_ARGS=brave --database /quarantine/History --device smortress --profile default' \
+    "$brave_frag"
 }
 
 @test "no stage has a network" {
-  assert_equal "$(grep -cE -- '--network none' "$brave_collect")" 3
+  # The fragment inherits the template's `--network ${AGENT_COLLECT_NETWORK}`, whose
+  # default is `none`, and overrides nothing: both stages it writes name `none`.
+  grep -qxF 'Environment=AGENT_COLLECT_NETWORK=none' units/systemd/smortress-agent-collect@.service
+  assert_equal "$(grep -cE -- '^[[:space:]]*--network ' "$brave_frag")" 2
+  assert_equal "$(grep -cE -- '^[[:space:]]*--network none' "$brave_frag")" 2
+}
+
+@test "the browsing fragment overrides no network of its own" {
+  # Both stages the fragment writes name `none` and the collection stage takes the
+  # template's default, so a fragment that set the variable would be the third place
+  # the browsing pass could grow an address.
+  ! grep -q '^Environment="\?AGENT_COLLECT_NETWORK=' "$brave_frag"
 }
 
 @test "the collection pass holds no Podman secret" {
-  ! grep -qE -- '--secret ' "$brave_collect"
+  ! grep -qE -- '--secret' units/systemd/smortress-agent-collect@.service "$brave_frag"
 }
 
-for _image in $(grep -oE 'ghcr\.io/smores56/homelab-platform/[a-z-]+@sha256:[0-9a-f]{64}' "$brave_collect"); do
+for _image in $(grep -oE 'ghcr\.io/smores56/homelab-platform/[a-z-]+@sha256:[0-9a-f]{64}' "$brave_frag"); do
   registered "the collection pass runs a pinned image from the table" image_is_pinned_in_the_table "$_image"
 done
 unset _image
@@ -298,7 +313,7 @@ unset _unit
 }
 
 @test "the watcher runs the collection pass" {
-  assert_equal "$(sed -n 's/^Unit=//p' "$brave_path")" "$(basename "$brave_collect")"
+  assert_equal "$(sed -n 's/^Unit=//p' "$brave_path")" 'smortress-agent-collect@brave.service'
 }
 
 @test "the watcher follows the profile's History" {
@@ -312,7 +327,7 @@ unset _unit
 }
 
 @test "the reconcile timer runs the collection pass" {
-  assert_equal "$(sed -n 's/^Unit=//p' "$brave_timer")" "$(basename "$brave_collect")"
+  assert_equal "$(sed -n 's/^Unit=//p' "$brave_timer")" 'smortress-agent-collect@brave.service'
 }
 
 @test "the reconcile timer closes a missed pass on the next boot" {

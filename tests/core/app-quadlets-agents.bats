@@ -401,10 +401,11 @@ unset _q _line _path _seen
 # environment is a podman argument rather than Quadlet's Environment=. The rule
 # above covered only the Quadlet, so both collectors shipped a PYTHONPATH one
 # directory too high and could not import data_plane at all — the image puts the
-# package under /usr/lib/data-plane/libs.
+# package under /usr/lib/data-plane/libs. Since SDLC #1021 the collectors' half of
+# this is one definition in their template, which every stage then names.
 @test "the collector units name the package root in PYTHONPATH" {
   local u
-  for u in units/systemd/smortress-agent-collect-finance.service \
+  for u in units/systemd/smortress-agent-collect@.service \
     units/systemd/smortress-agent-mail-stream.service; do
     if ! grep -qF -- '--env PYTHONPATH=/usr/lib/data-plane/libs:/usr/lib/data-plane' "$u"; then
       printf '%s\n' "$(grep -F -- '--env PYTHONPATH=' "$u" || true)" >&2

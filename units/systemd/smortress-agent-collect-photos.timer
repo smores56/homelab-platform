@@ -8,7 +8,7 @@ Description=Hourly, publish the photo library into the personal replica
 OnCalendar=*-*-* *:35:00
 AccuracySec=1m
 Persistent=true
-Unit=smortress-agent-collect-photos.service
+Unit=smortress-agent-collect@photos.service
 
 [Install]
 WantedBy=timers.target

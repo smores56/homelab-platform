@@ -8,7 +8,7 @@ Description=Every two hours, dump and collect the Tuta calendar
 OnCalendar=*-*-* 00/2:40:00
 AccuracySec=1m
 Persistent=true
-Unit=smortress-agent-collect-calendar.service
+Unit=smortress-agent-collect@calendar.service
 
 [Install]
 WantedBy=timers.target
