@@ -287,7 +287,7 @@ load ../helpers
 @test "no script, unit, image file, test or doc names /var/tank" {
     # shellcheck source=/dev/null
     source scripts/storage-layout.sh
-    leftover=$(grep -rl --exclude=storage-migration.md -- '/var/tank\|tank/' \
+    leftover=$(grep -rl -- '/var/tank\|tank/' \
         scripts units image docs 2>/dev/null || true)
     leftover+=$(grep -rl --exclude=storage-layout.bats -- '/var/tank\|tank/' \
         tests/core tests/apps tests/backrest 2>/dev/null || true)

@@ -1569,7 +1569,7 @@ sudo systemctl status agent-local.service --no-pager
 
 ### T0: freeze, rescue, verify, and publish the kit
 
-The gate and its evidence live in `docs/core/t0-gate.md`; the kit contract is
+The gate's baseline and evidence are on #703; the kit contract is
 `docs/core/recovery-kit.md`. Nothing in T1–T6 may repartition or wipe a disk until
 every step below is done and its evidence is posted on #703.
 

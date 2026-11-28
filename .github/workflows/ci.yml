@@ -213,8 +213,8 @@ jobs:
         run: |
           echo "This job is triggered by pull_request from fork and branch PRs."
           echo "It holds no environment and no repository secret; a fork PR run"
-          echo "reaches only a read-only GITHUB_TOKEN. docs/negative-tests.md"
-          echo "records the runtime half as a manual step."
+          echo "reaches only a read-only GITHUB_TOKEN. The runtime half needs a"
+          echo "second GitHub identity and is a manual step."
           test -z "${CLOUDFLARE_API_TOKEN:-}"
       - name: no pull_request workflow references a secret
         run: scripts/check-pr-secret-boundary.sh

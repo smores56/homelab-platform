@@ -49,8 +49,8 @@ storage:
   # p4 is 300 GiB, not the 100 GiB it was installed with. Root also carries the
   # container images, the journal and every restore that fails to name a data
   # disk, and 100 GiB was filled by drill scratch three times. Growing it means
-  # recreating p5, because a ZFS vdev cannot shrink: the procedure and its
-  # rollback are docs/core/pool-rebuild.md. p5 keeps the remainder of the disk.
+  # recreating p5, because a ZFS vdev cannot shrink. p5 keeps the remainder of
+  # the disk.
   disks:
     - device: '@DISK_BY_ID@'
       partitions:

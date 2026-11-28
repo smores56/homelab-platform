@@ -12,9 +12,8 @@
 # The target defaults to a data disk, not /var/tmp: the root filesystem carries
 # the system and the container images, and the `photos` unit alone restores
 # 116 GiB, so a drill there can only end in ENOSPC against a disk other services
-# need (docs/core/pool-rebuild.md). The snapshot's restore size is compared with
-# the target filesystem before anything is written, and a target without room is
-# refused.
+# need. The snapshot's restore size is compared with the target filesystem
+# before anything is written, and a target without room is refused.
 #
 # Env: RESTIC_DRILL_METHOD (restore|dump, default restore), RESTIC_DRILL_ROOT,
 # RESTIC_DEADLINE_DRILL.

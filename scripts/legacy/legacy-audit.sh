@@ -4,8 +4,7 @@
 # The replacement core keeps data and nothing else, so before anything is
 # destroyed this has to be provable: which trees exist, who owns them, how big
 # they are, which secrets exist, and which ones a later task may call
-# disposable. Markdown on stdout, meant to be pasted into `docs/core/t0-gate.md`
-# and the #703 issue:
+# disposable. Markdown on stdout, meant to be pasted into the #703 issue:
 #
 #   sudo scripts/core/legacy-audit.sh --out /var/tmp/t0-audit.md
 #
@@ -143,8 +142,8 @@ report() {
   code findmnt -rn -o TARGET,SOURCE,FSTYPE,OPTIONS / /boot "$DATA_ROOT" "$BACKUP_ROOT"
 
   section "Data trees ($DATA_ROOT)"
-  printf 'Every row is a candidate recovery group; `t0-gate.md` records the\n'
-  printf 'disposition of each one.\n\n'
+  printf 'Every row is a candidate recovery group; the #703 inventory\n'
+  printf 'records the disposition of each one.\n\n'
   tree_table "$DATA_ROOT"
 
   section "Backup disk ($BACKUP_ROOT)"

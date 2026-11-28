@@ -18,8 +18,8 @@
 # default in public repositories on 2026-12-02 (GitHub changelog), so nothing
 # may be built on it.
 #
-# The runtime half of the test needs a second GitHub identity;
-# docs/negative-tests.md records it as manual.
+# The runtime half of the test needs a second GitHub identity and is a manual
+# step, not part of this script.
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
