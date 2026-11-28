@@ -13,7 +13,8 @@ changes by pull request from a fork, so no PR workflow can read a secret.
 
 | Path | Contents |
 | --- | --- |
-| `bootc/server/` | The server image: Containerfile, rootfs, pins and the cosign public key (`docs/core/server-image.md`) |
+| `bootc/server/` | The server image: Containerfile, rootfs and pins (`docs/core/server-image.md`) |
+| `lib/` | The artifacts every host shares, once: the containers policy with its per-host registry table, the cosign public key, `registries.d`, the sudoers gate and the greenboot required check with per-host assertions (`scripts/check-lib-drift.sh`) |
 | `units/systemd/` | systemd units baked into the image: gates, backup timers, mounts (Quadlets are below) |
 | `units/quadlet/` | Podman Quadlet workloads: the agents, Immich, OPDShelf, Syncthing and their networks |
 | `ignition/` | First-boot Ignition for the bootc deployment |

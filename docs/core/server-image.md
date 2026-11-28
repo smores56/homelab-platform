@@ -123,7 +123,7 @@ CI is `.github/workflows/publish-server-image.yml`: a push to `main` touching
 `bootc/server/`, `units/`, `secrets/` or `scripts/`, or a manual dispatch. The job:
 
 1. verifies that `secrets.COSIGN_PRIVATE_KEY` corresponds to the committed
-   `bootc/server/cosign.pub` before building anything;
+   `lib/containers/cosign.pub` before building anything;
 2. resolves the base digest — `skopeo inspect --format '{{.Digest}}'
    docker://ghcr.io/ublue-os/ucore:stable-nvidia` — fails the job if that fails,
    exports it as `BASE_DIGEST` and prints the reference in the run summary;
@@ -149,11 +149,16 @@ Signing key handling: the private key is an environment secret on the
 `server-image` environment and a file in the offline recovery kit. It is never
 committed, never in an image layer, and never in a rendered Ignition file.
 Rotating it means re-signing the running digest before replacing
-`bootc/server/cosign.pub`, otherwise `bootc` rejects the next switch.
+`lib/containers/cosign.pub`, otherwise `bootc` rejects the next switch.
 
 ## Signature enforcement
 
-The image inherits uCore's default-reject policy and adds our repository:
+The image inherits uCore's default-reject policy and adds our repository. The
+policy is not a file in the host tree: `lib/containers/policy.json` is the half
+every host shares (default reject, and the transports that never reach a
+registry) and `lib/containers/policy.d/smortress.json` is this host's table, so
+the image, the Ignition render and the publish job all render one document
+through `lib/containers/render-policy.sh` (SDLC #1024):
 
 ```json
 "ghcr.io/smores56/homelab-platform": [
@@ -768,8 +773,8 @@ HOME=/tmp/podman-home scripts/build-image.sh
 Successfully tagged ghcr.io/smores56/homelab-platform/server:sha-0c53b3f4c5a9
 ```
 
-The build used the operator public key committed at `bootc/server/cosign.pub`; with that
-file absent, `build-image.sh` fails closed, which is what a fresh clone does
+The build used the operator public key committed at `lib/containers/cosign.pub`; with
+that file absent, `build-image.sh` fails closed, which is what a fresh clone does
 until section 37 step 1 installs the key. The built image was inspected
 with `podman run`: policy, registries.d, sops/age/restic versions, enabled and
 masked units, ciphertext mode and the `drop` default zone all matched this
@@ -877,9 +882,10 @@ image carries `bootc/server/rootfs/etc/pam.d/sudo` (`pam_faillock` preauth,
 `libpam_rssh.so` against `/etc/ssh/sudo_authorized_keys`, `pam_unix` as the
 fallback), `bootc/server/rootfs/etc/ssh/sudo_authorized_keys`, the `sudo-build` stage that
 compiles `pam_rssh` at the pin in `bootc/lib/pins.env`, and
-`bootc/server/rootfs/etc/sudoers.d/10-human-gate` (`timestamp_timeout=30`,
-`timestamp_type=tty`, `log_subcmds`, and `Defaults env_keep += "SSH_AUTH_SOCK"` —
-without the last one every escalation falls back to the password). There is no
+`lib/sudoers/10-human-gate` (`timestamp_timeout=30`, `timestamp_type=tty`,
+`log_subcmds`, installed as `/etc/sudoers.d/10-human-gate`) and
+`lib/sudoers/11-agent-socket` (`Defaults env_keep += "SSH_AUTH_SOCK"`, without
+which every escalation falls back to the password). There is no
 host-local secret; the retired TOTP usersfile under `/var/lib/homelab/sudo` can be
 deleted.
 

@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Build the derived bootc image locally. Never pushes and never signs.
 #
+# The build context is the repository root, not this host tree: the signature
+# policy, its registry table, the public key and the sudoers gate live in lib/.
+#
 # The base is the fedora-bootc release tag from pins.env, which moves: the
 # build resolves it to a digest, fails closed when the registry will not answer,
 # and records that digest in the image's org.opencontainers.image.base.digest
@@ -9,6 +12,7 @@
 set -euo pipefail
 
 host=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+repo=$(cd -- "$host/../.." && pwd)
 # shellcheck source=../pins.env disable=SC1091
 source "$host/pins.env"
 
@@ -40,16 +44,19 @@ for pin in NYM_VERSION NYM_SHA256_AMD64 NYM_SHA256_ARM64; do
     exit 1
   fi
 done
-if [[ ! -s $host/cosign.pub ]]; then
-  echo "build-image: cosign.pub is missing; it is committed at hosts/laptop/cosign.pub" >&2
+# The key, the policy and the sudoers gate are the repository's, in lib/: the
+# build context is the repository root for that reason, and those files are the
+# ones the image copies.
+if [[ ! -s $repo/lib/containers/cosign.pub ]]; then
+  echo "build-image: lib/containers/cosign.pub is missing" >&2
   exit 1
 fi
-if ! grep -q 'BEGIN PUBLIC KEY' "$host/cosign.pub"; then
-  echo "build-image: cosign.pub is not a PEM public key" >&2
+if ! grep -q 'BEGIN PUBLIC KEY' "$repo/lib/containers/cosign.pub"; then
+  echo "build-image: lib/containers/cosign.pub is not a PEM public key" >&2
   exit 1
 fi
 
-revision=$(git -C "$host" rev-parse HEAD)
+revision=$(git -C "$repo" rev-parse HEAD)
 tag="localhost/smorespro-image:sha-${revision:0:12}"
 
 "$engine" build \
@@ -62,6 +69,6 @@ tag="localhost/smorespro-image:sha-${revision:0:12}"
   -f "$host/Containerfile" \
   -t "$tag" \
   -t "localhost/smorespro-image:latest" \
-  "$host"
+  "$repo"
 
 echo "built $tag from $BASE_IMAGE@$base_digest"

@@ -109,7 +109,7 @@ contains() {
     contains 'environment: server-image' "$edge_workflow"
     contains 'cosign sign --key env://COSIGN_PRIVATE_KEY --yes "$image@$digest"' "$edge_workflow"
     contains ':${digest/:/-}.sig' "$edge_workflow"
-    contains 'cosign verify --key bootc/server/cosign.pub' "$edge_workflow"
+    contains 'cosign verify --key lib/containers/cosign.pub' "$edge_workflow"
 }
 
 # The Caddyfile is image content and the unit is told so. The rule it encodes is

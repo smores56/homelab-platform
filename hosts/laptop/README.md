@@ -16,10 +16,9 @@ The design and the task graph live in the private ledger: `sdlc show 732`.
 | --- | --- |
 | `pins.env` | every external reference: the `FEDORA_VERSION` knob the base tag follows, and the NymVPN pin a refresh edits |
 | `Containerfile` | the derived image: one explicit package set, config copy, unit enables, `bootc container lint` |
-| `rootfs/` | files copied into `/`: greetd autologin, portal override, signature policy, the NymVPN unit and its polkit action, the Tailscale operator unit, the `login` and `sudo` PAM stacks, and the FIDO2 mapping the `sudo` stack reads |
-| `cosign.pub` | the public half of the signing key shared with the other hosts in this repository |
+| `rootfs/` | files copied into `/`: greetd autologin, portal override, the NymVPN unit and its polkit action, the Tailscale operator unit, the `login` and `sudo` PAM stacks, and the FIDO2 mapping the `sudo` stack reads |
+| `scripts/build-image.sh` | local build; never pushes or signs. The build context is the repository root: the signature policy, its host registry table, the public key and the sudoers gate are in `lib/` |
 | `scripts/refresh-pins.sh` | resolves the NymVPN release and prints the base tag's current digest; `--check` for the watcher, `--write` to move the NymVPN pin |
-| `scripts/build-image.sh` | local build; never pushes or signs |
 | `docs/laptop/manual-steps.md` | the steps only a hand at the keyboard can do: token enrolment for the disk keyslot, the lock screen and sudo, and rotating the FIDO2 mapping |
 | `tests/check.sh` | static checks over the files above; `tests/image/laptop-image.bats` runs it in the `image` CI area |
 

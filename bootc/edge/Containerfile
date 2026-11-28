@@ -78,6 +78,17 @@ RUN set -eux; \
 # everything this Containerfile reads.
 COPY bootc/edge/rootfs/ /
 
+# greenboot's required check is one program shared with the server
+# (lib/greenboot/required.d) with this host's assertions beside it
+# (lib/greenboot/assertions.d/edge). greenboot runs every executable in
+# required.d, so only the check is executable there: the assertion file lives
+# outside the directory it would otherwise be run from. The edge installs no
+# timeout drop-in, which is why its budget stays inside systemd's 90 s default.
+COPY lib/greenboot/required.d/10-health.sh \
+     /etc/greenboot/check/required.d/10-health.sh
+COPY lib/greenboot/assertions.d/edge/10-health.sh \
+     /etc/greenboot/assertions.d/10-health.sh
+
 # The shared deploy decision (design #939, T2) that the edge verifier and the
 # listener call, at the path both resolve it from: the program's own directory
 # first, then this one. A COPY of the single file, like the server's image, keeps
@@ -111,6 +122,8 @@ RUN set -eux; \
     chmod 0755 /usr/libexec/edge-boot-gate /usr/libexec/deploy-drain-edge; \
     chmod 0755 /usr/libexec/deploy-poll; \
     chmod 0755 /usr/libexec/boot-counter; \
+    chmod 0755 /etc/greenboot/check/required.d/10-health.sh; \
+    chmod 0644 /etc/greenboot/assertions.d/10-health.sh; \
     chmod 0644 /usr/share/smoresnet/Caddyfile /usr/share/smoresnet/firewalld/zones/public.xml /usr/share/smoresnet/firewalld/zones/tailscale.xml; \
     chmod 0644 /usr/share/smoresnet/deploy-units.txt; \
     chmod 0644 /etc/ssh/sshd_config.d/05-edge-hardening.conf; \
@@ -254,7 +267,8 @@ RUN set -eux; \
     test -e /etc/systemd/system/multi-user.target.wants/smoresnet-boot-counter.service || { echo "the boot counter installer is not enabled: nothing would put the counter where grub.cfg reads it" >&2; exit 1; }; \
     test -e /etc/systemd/system/multi-user.target.wants/smoresnet-boot-rw.service || { echo "/boot is left read-only: greenboot cannot write grubenv and the counter never arms" >&2; exit 1; }; \
     test -e /etc/systemd/system/multi-user.target.wants/greenboot-healthcheck.service || { echo "greenboot's healthcheck is not enabled: a deployment that boots but is broken would never be rolled back" >&2; exit 1; }; \
-    test -x /etc/greenboot/check/required.d/10-edge-health.sh || { echo "the edge's greenboot check is missing or not executable: greenboot would mark every boot good and never roll back a sick deployment" >&2; exit 1; }; \
+    test -x /etc/greenboot/check/required.d/10-health.sh || { echo "the edge's greenboot check is missing or not executable: greenboot would mark every boot good and never roll back a sick deployment" >&2; exit 1; }; \
+    test -r /etc/greenboot/assertions.d/10-health.sh || { echo "the edge's greenboot assertions are missing: the shared check would refuse to run and every boot would read as a failed deployment" >&2; exit 1; }; \
     test -e /etc/systemd/system/timers.target.wants/bootc-fetch-apply-updates.timer || { echo "the bootc update timer is not enabled: this host would never upgrade itself" >&2; exit 1; }; \
     test -L /etc/systemd/system/rpm-ostreed-automatic.timer || { echo "rpm-ostree's own updater is not masked: it stages images outside the 04:00 window and would be a second answer to which image runs" >&2; exit 1; }; \
     grep -qxF 'OnCalendar=*-*-* 04:00:00 America/New_York' /usr/lib/systemd/system/bootc-fetch-apply-updates.timer.d/10-schedule.conf || { echo "the edge's update window is not its own 04:00 local" >&2; exit 1; }; \

@@ -1,7 +1,7 @@
 # Builds, pushes, signs and verifies the smortress derived bootc image.
 #
 # The signing key is an environment secret; the public half is committed at
-# bootc/server/cosign.pub and baked into the image and its Ignition policy. This
+# lib/containers/cosign.pub and baked into the image and its Ignition policy. This
 # workflow is push/workflow_dispatch only: a pull_request run never sees it.
 name: publish-server-image
 
@@ -18,6 +18,10 @@ on:
       - "units/**"
       - "secrets/**"
       - "scripts/**"
+      # The signature policy, its per-host registry table, the public key and the
+      # shared sudoers and greenboot files ship in this image, and the build
+      # renders the policy from them (SDLC #1024).
+      - "lib/**"
       # The recovery reader's guard and config renderer ship in this image
       # (SDLC #953), so a change to either has to rebuild it.
       - "backrest/**"
@@ -62,9 +66,9 @@ jobs:
           COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
         run: |
           set -euo pipefail
-          test -s bootc/server/cosign.pub
+          test -s lib/containers/cosign.pub
           cosign public-key --key env://COSIGN_PRIVATE_KEY >"$RUNNER_TEMP/cosign.pub"
-          diff -u bootc/server/cosign.pub "$RUNNER_TEMP/cosign.pub"
+          diff -u lib/containers/cosign.pub "$RUNNER_TEMP/cosign.pub"
       - name: permit the base pull for the builder
         # The runtime policy is the one that matters and is baked into the image.
         # The builder has no uCore public key and the base is a uCore stream tag,
@@ -125,7 +129,7 @@ jobs:
           cosign sign --key env://COSIGN_PRIVATE_KEY --yes "$image@$digest"
           # The lookaside tag is <repo>:<sha256-hex>.sig, not repo:tag:<hex>.sig.
           skopeo inspect --raw "docker://${IMAGE_REPO}:${digest/:/-}.sig" >/dev/null
-          cosign verify --key bootc/server/cosign.pub "$image@$digest"
+          cosign verify --key lib/containers/cosign.pub "$image@$digest"
           # `latest` is the operator's manual handle for `bootc switch` and
           # `bootc upgrade`; the host's poll stays digest-only. It moves only
           # after the digest is signed and verified, and only from main, so a

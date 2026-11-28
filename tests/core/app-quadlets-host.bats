@@ -16,9 +16,11 @@ setup_file() { aq_setup_file; }
 setup() { aq_setup; }
 
 # 8. The trust boundary itself: no upstream application registry may creep into
-#    the policy just to make a pull succeed.
+#    the policy just to make a pull succeed. The policy is one contract plus this
+#    host's registry table (lib/containers, SDLC #1024), and the table is where a
+#    registry would be added: the contract carries no docker map at all.
 policy_does_not_trust_upstream() { # registry
-  ! grep -q "\"$1\"" bootc/server/rootfs/etc/containers/policy.json
+  ! grep -q "\"$1\"" lib/containers/policy.d/smortress.json
 }
 
 _registries=' '

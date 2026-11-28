@@ -135,44 +135,65 @@ else
   bad "publish-laptop-image.yml resolves the base digest and passes it"
 fi
 
-# --- signing ----------------------------------------------------------------
-
-if grep -q 'BEGIN PUBLIC KEY' cosign.pub 2>/dev/null; then
-  ok "cosign.pub is a PEM public key"
+# The build context is the repository root (SDLC #1024): the Containerfile's
+# COPY sources are lib/containers and lib/sudoers, which are outside this tree, so
+# a host-tree context builds nothing. podman reports the missing src as a file it
+# cannot find long before any image is wrong, and the publish workflow is the only
+# place the context is chosen.
+build_context=$(sed -n '/podman build/,/^$/ {/^$/!p;}' "$publish_workflow" | tail -n 1 | tr -d '[:space:]')
+if [[ $build_context == '.' ]]; then
+  ok "publish-laptop-image.yml builds from the repository root"
 else
-  bad "cosign.pub is a PEM public key"
+  bad "publish-laptop-image.yml builds from the repository root" \
+    "the build context is '${build_context}', and the Containerfile copies lib/, which is not under hosts/laptop"
 fi
 
-if [[ -f rootfs/etc/containers/policy.json ]]; then
-  if jq -e '.default[0].type == "reject"' rootfs/etc/containers/policy.json >/dev/null 2>&1; then
+# --- signing ----------------------------------------------------------------
+
+# The key, the policy and the sudoers gate are the ones lib/ holds for every
+# host: this tree carries no copy, so what is asserted is the file the image
+# copies and, for the policy, the document the renderer produces from the shared
+# contract and this host's registry table (SDLC #1024).
+if grep -q 'BEGIN PUBLIC KEY' "$repo/lib/containers/cosign.pub" 2>/dev/null; then
+  ok "cosign.pub is a PEM public key"
+else
+  bad "cosign.pub is a PEM public key" "$repo/lib/containers/cosign.pub is missing or not PEM"
+fi
+policy=$(mktemp)
+"$repo/lib/containers/render-policy.sh" smorespro >"$policy" 2>/dev/null
+
+if [[ -s $policy ]]; then
+  if jq -e '.default[0].type == "reject"' "$policy" >/dev/null 2>&1; then
     ok "policy.json rejects by default"
   else
     bad "policy.json rejects by default"
   fi
   if jq -e '.transports.docker["ghcr.io/smores56/smorespro-image"][0].signedIdentity.type == "matchRepository"' \
-      rootfs/etc/containers/policy.json >/dev/null 2>&1; then
+      "$policy" >/dev/null 2>&1; then
     ok "policy.json scopes the signing key to this repository"
   else
     bad "policy.json scopes the signing key to this repository"
   fi
   if jq -e '.transports | to_entries | all(.value | type == "object")' \
-      rootfs/etc/containers/policy.json >/dev/null 2>&1; then
+      "$policy" >/dev/null 2>&1; then
     ok "policy.json transport values are objects"
   else
     bad "policy.json transport values are objects" "each transport maps a repository name to requirements"
   fi
   if jq -e '.transports.docker["ghcr.io/smores56/smorespro-image"][0].keyPath == "/etc/pki/containers/smorespro.pub"' \
-      rootfs/etc/containers/policy.json >/dev/null 2>&1; then
+      "$policy" >/dev/null 2>&1; then
     ok "policy.json points at the shipped public key"
   else
     bad "policy.json points at the shipped public key"
   fi
 else
-  bad "rootfs/etc/containers/policy.json exists"
+  bad "lib/containers renders this host's policy.json" \
+    "$repo/lib/containers/render-policy.sh smorespro produced nothing"
 fi
+rm -f "$policy"
 
 if grep -q 'use-sigstore-attachments: true' \
-    rootfs/etc/containers/registries.d/ghcr.io-smorespro-image.yaml 2>/dev/null; then
+    "$repo/lib/containers/registries.d/ghcr.io-smorespro-image.yaml" 2>/dev/null; then
   ok "registries.d enables sigstore attachments for the image repository"
 else
   bad "registries.d enables sigstore attachments for the image repository"
@@ -678,7 +699,7 @@ Defaults timestamp_type=tty
 Defaults log_subcmds
 EOT
 )
-if [[ $(directives rootfs/etc/sudoers.d/10-human-gate 2>/dev/null) == "$expected" ]]; then
+if [[ $(directives "$repo/lib/sudoers/10-human-gate" 2>/dev/null) == "$expected" ]]; then
   ok "the shipped sudoers drop-in is the design's directives"
 else
   bad "the shipped sudoers drop-in is the design's directives"
@@ -739,7 +760,7 @@ else
 fi
 
 if grep -q 'chmod 0440 /etc/sudoers.d/10-human-gate /etc/sudoers.d/20-sops-env' Containerfile \
-    && grep -q '^Defaults env_delete += ' rootfs/etc/sudoers.d/20-sops-env; then
+    && grep -q '^Defaults env_delete += ' "$repo/lib/sudoers/20-sops-env"; then
   ok "the sops env drop-in is installed and drops every identity source"
 else
   bad "the sops env drop-in is installed and drops every identity source"

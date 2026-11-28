@@ -1,0 +1,12 @@
+# The server's escalation factor is pam_rssh, which resolves the forwarded agent
+# socket from the process environment; sudo drops SSH_AUTH_SOCK before the PAM
+# stack runs unless it is kept. Without this line the module logs "SSH agent
+# socket address not configured" and every escalation silently falls back to the
+# password (verified on smortress 2026-11-20). It is the only variable kept here;
+# a sudoed command inherits it too, which is what lets a root command drive the
+# agent if it ever needs to.
+#
+# Only images whose sudo stack is pam_rssh install this file. The laptop's touch
+# factor is pam_u2f over HID, so keeping the variable there would hand a root
+# command an agent it has no use for.
+Defaults env_keep += "SSH_AUTH_SOCK"

@@ -70,7 +70,7 @@ check "the build resolves a base digest" has 'BASE_DIGEST' scripts/build-image.s
 check "the publish workflow resolves a base digest" \
   has 'BASE_DIGEST' .github/workflows/publish-server-image.yml
 check "nothing rewrites a base pin" lacks 'sed -i' scripts/refresh-pins.sh
-check "Containerfile installs the public key" has 'bootc/server/cosign.pub /etc/pki/containers/smortress.pub' bootc/server/Containerfile
+check "Containerfile installs the public key" has 'lib/containers/cosign.pub /etc/pki/containers/smortress.pub' bootc/server/Containerfile
 check "Containerfile masks Podman auto-update" has 'podman-auto-update.timer' bootc/server/Containerfile
 check "Containerfile enables the bootc update timer" has 'systemctl enable bootc-fetch-apply-updates.timer' bootc/server/Containerfile
 check "Containerfile no longer masks bootc auto-update" lacks "      bootc-fetch-apply-updates.timer \\" bootc/server/Containerfile
@@ -299,10 +299,10 @@ check "the password row jumps to authsucc too" \
 # The password fallback is the break-glass everywhere now, so there is no console
 # row to match against.
 check "no console break-glass row remains" lacks 'pam_succeed_if' "$pam_sudo"
-# pam_rssh reads SSH_AUTH_SOCK with getenv(), and sudo drops it before the PAM
-# stack runs: without the keep the module logs "SSH agent socket address not
-# configured" and every escalation falls back to the password (verified on the
-# host 2026-11-20). It is the only variable kept, and it is deliberate.
+# The sudoers gate is two files in lib/sudoers: the shared one every host ships
+# and the server's agent-socket keep. Neither host carries a copy, so what this
+# holds is that the image installs the lib files and that the module the factor
+# needs is still the only variable kept.
 # The base ships %sudo ALL=(ALL) NOPASSWD: ALL. NOPASSWD skips
 # pam_authenticate, so the touch, the password and the tally all stop applying;
 # the build deletes the file and the guard above refuses a regression.
@@ -311,9 +311,9 @@ check "the build deletes the base's NOPASSWD grant" \
 check "the NOPASSWD guard still inspects the finished tree" \
   has "grep -rhvE '^[[:space:]]*#' /etc/sudoers /etc/sudoers.d" bootc/server/Containerfile
 check "the agent socket is kept for pam_rssh" \
-  has 'Defaults env_keep += "SSH_AUTH_SOCK"' bootc/server/rootfs/etc/sudoers.d/10-human-gate
+  has 'Defaults env_keep += "SSH_AUTH_SOCK"' lib/sudoers/11-agent-socket
 check "no other variable is kept across the sudo boundary" \
-  test "$(grep -c '^Defaults env_keep' bootc/server/rootfs/etc/sudoers.d/10-human-gate)" = 1
+  test "$(cat lib/sudoers/10-human-gate lib/sudoers/11-agent-socket | grep -c '^Defaults env_keep')" = 1
 check "the PIN database is gone from the stack" lacks 'pam_userdb' "$pam_sudo"
 check "the account phase is still declared" grep -qE '^account[[:space:]]+include[[:space:]]+system-auth$' "$pam_sudo"
 check "the password phase is still declared" grep -qE '^password[[:space:]]+include[[:space:]]+system-auth$' "$pam_sudo"
@@ -322,23 +322,27 @@ check "the session phase is still declared" grep -qE '^session[[:space:]]+includ
 # account whose password the fallback takes.
 check "the only login account is smores" grep -qE '^[[:space:]]*- name: smores$' ignition/smortress.bu
 
-sudoers_dropin=bootc/server/rootfs/etc/sudoers.d/10-human-gate
+# sudo reads the directory in file-name order, so the pair is compared in the
+# order the image installs it: the gate, then the keep.
 expected_sudoers='Defaults timestamp_timeout=30
 Defaults timestamp_type=tty
 Defaults log_subcmds
 Defaults env_keep += "SSH_AUTH_SOCK"'
-actual_sudoers=$(grep -E '^Defaults[[:space:]]' "$sudoers_dropin")
+actual_sudoers=$(grep -hE '^Defaults[[:space:]]' lib/sudoers/10-human-gate lib/sudoers/11-agent-socket)
 if [[ $actual_sudoers == "$expected_sudoers" ]]; then
   ok "the sudoers gate is the reviewed four defaults in order"
 else
   bad "the sudoers gate is the reviewed four defaults in order"
   printf '     got: %s\n' "$(printf '%s' "$actual_sudoers" | tr '\n' ';')" >&2
 fi
-check "the sudoers drop-in is installed 0440" has 'chmod 0440 /etc/sudoers.d/10-human-gate' bootc/server/Containerfile
+check "the image installs the pair from lib" \
+  has 'COPY lib/sudoers/10-human-gate lib/sudoers/11-agent-socket lib/sudoers/20-sops-env' bootc/server/Containerfile
+check "the sudoers drop-in is installed 0440" \
+  has 'chmod 0440 /etc/sudoers.d/10-human-gate /etc/sudoers.d/11-agent-socket /etc/sudoers.d/20-sops-env' bootc/server/Containerfile
 check "the sudoers drop-in is parsed at build time" has 'visudo -cf /etc/sudoers.d/10-human-gate' bootc/server/Containerfile
-check "the sops env drop-in is installed 0440" has 'chmod 0440 /etc/sudoers.d/10-human-gate /etc/sudoers.d/20-sops-env' bootc/server/Containerfile
+check "the agent-socket keep is parsed at build time" has 'visudo -cf /etc/sudoers.d/11-agent-socket' bootc/server/Containerfile
 check "the sops env drop-in is parsed at build time" has 'visudo -cf /etc/sudoers.d/20-sops-env' bootc/server/Containerfile
-check "the sops env drop-in drops every identity source" grep -q '^Defaults env_delete += ' bootc/server/rootfs/etc/sudoers.d/20-sops-env
+check "the sops env drop-in drops every identity source" grep -q '^Defaults env_delete += ' lib/sudoers/20-sops-env
 # Nothing proves the base ships no NOPASSWD grant unless the build asserts it, so
 # the Containerfile carries the grep and this check refuses a build that lost it.
 # A NOPASSWD line would bypass pam_authenticate: no touch, no password, no tally.

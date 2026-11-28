@@ -50,5 +50,8 @@ contains() {
     contains './hosts/laptop/tests/check.sh' "$workflow"
     contains '-f hosts/laptop/Containerfile' "$workflow"
     contains '. hosts/laptop/pins.env' "$workflow"
-    contains 'hosts/laptop/cosign.pub' "$workflow"
+    # The build context is the repository root: the key, the policy and the
+    # sudoers gate live in lib/ (SDLC #1024).
+    contains 'lib/containers/cosign.pub' "$workflow"
+    contains '- "lib/**"' "$workflow"
 }

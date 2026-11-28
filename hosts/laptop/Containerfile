@@ -1,7 +1,9 @@
 # Derived bootc image for smorespro: Fedora's minimal bootc base plus a niri
 # session. Built by scripts/build-image.sh and published by
-# .github/workflows/publish-laptop-image.yml, with this host tree as the build
-# context.
+# .github/workflows/publish-laptop-image.yml, with the repository root as the
+# build context: the signature policy, the public key and the sudoers gate this
+# image shares with the other hosts live in lib/, which no host tree contains.
+# This host's own tree is hosts/laptop/.
 #
 # The base is the moving fedora-bootc release tag, resolved to a digest at build
 # time. Everything added here is a distribution package from that base's Fedora
@@ -129,11 +131,30 @@ RUN set -eux; \
     install -m 0755 /tmp/nym/nym-vpnd /tmp/nym/nym-vpnc /tmp/nym/nym-socks5-proxy /usr/bin/; \
     rm -rf /tmp/nym /tmp/nym.tar.gz
 
-# Configuration: greetd autologin, the niri portal override, the signature
-# policy, the public half of the signing key, the login and sudo PAM stacks with
-# the FIDO2 mapping both read, and the NymVPN daemon's unit and polkit action.
-COPY rootfs/ /
-COPY cosign.pub /etc/pki/containers/smorespro.pub
+# Configuration: greetd autologin, the niri portal override, the login and sudo
+# PAM stacks with the FIDO2 mapping both read, and the NymVPN daemon's unit and
+# polkit action.
+COPY hosts/laptop/rootfs/ /
+
+# The containers signature policy is one contract with one per-host table, and
+# this image is where the two meet: lib/containers/policy.json is the half no
+# host may vary and policy.d/smorespro.json is this host's registry trust. It is
+# rendered here so the image ships the document and never a second copy of it;
+# the same renderer is what the Ignition render and the publish job call.
+COPY lib/containers/policy.json lib/containers/render-policy.sh /tmp/containers/
+COPY lib/containers/policy.d/smorespro.json /tmp/containers/policy.d/
+COPY lib/containers/registries.d/ghcr.io-smorespro-image.yaml \
+     /etc/containers/registries.d/ghcr.io-smorespro-image.yaml
+COPY lib/containers/cosign.pub /etc/pki/containers/smorespro.pub
+RUN set -eux; \
+    mkdir -p /etc/containers; \
+    /tmp/containers/render-policy.sh smorespro >/etc/containers/policy.json; \
+    chmod 0644 /etc/containers/policy.json; \
+    rm -rf /tmp/containers
+
+# The sudoers gate is the pair every host shares; this image's touch factor is
+# pam_u2f over HID, so it installs no agent-socket keep beside it.
+COPY lib/sudoers/10-human-gate lib/sudoers/20-sops-env /etc/sudoers.d/
 
 # The escalation stack in /etc/pam.d/sudo is a touch on a key listed in the
 # shipped /etc/u2f_mappings, with the account password behind it. git stores

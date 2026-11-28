@@ -33,7 +33,7 @@ lsblk -dno MODEL,SIZE,TRAN "$disk"
 lsblk -bno SIZE "$disk"
 lsblk -rno MOUNTPOINTS "$disk" | grep -c .
 grep -qE '@sha256:[0-9a-f]{64}$' ignition/operator/derived-image && echo digest-pinned
-cosign verify --key bootc/server/cosign.pub "$(cat ignition/operator/derived-image)" >/dev/null \
+cosign verify --key lib/containers/cosign.pub "$(cat ignition/operator/derived-image)" >/dev/null \
   && echo signature-verified                        # P5: the image is signed
 ip -o link show | awk '$2 != "lo:" {print $2, $9}'  # P6: from the live media
 ip -4 route get 10.0.0.193                          # wired UP, route, 200
@@ -57,7 +57,7 @@ the public key is committed, and the same commands are in
 install -d -m 0700 "$HOME/.config/smortress"
 export COSIGN_PASSWORD="$(openssl rand -base64 32)"
 cosign generate-key-pair --output-key-prefix "$HOME/.config/smortress/cosign"
-install -m 0644 "$HOME/.config/smortress/cosign.pub" bootc/server/cosign.pub
+install -m 0644 "$HOME/.config/smortress/cosign.pub" lib/containers/cosign.pub
 gh api -X PUT "repos/smores56/homelab-platform/environments/server-image" \
   --input - <<<'{}' >/dev/null
 gh secret set COSIGN_PRIVATE_KEY --env server-image <"$HOME/.config/smortress/cosign.key"
@@ -1895,7 +1895,7 @@ and both clients type.
 Four residual risks are known and accepted, and none of them is a defect to
 report. **The sudo ticket is shared**: `timestamp_type=tty` keys it to the pane's
 pty, every client of a pane shares that pty, and the ticket lasts 30 minutes
-(`bootc/server/rootfs/etc/sudoers.d/10-human-gate`), so a token holder can run `sudo -n`
+(`lib/sudoers/10-human-gate`), so a token holder can run `sudo -n`
 in a pane where the owner escalated inside the window. **A browser-created pane
 has password sudo only**: the hardware touch needs the key's device, and a browser
 has no agent to forward. **The token is the boundary**: no expiry, no rate limit,

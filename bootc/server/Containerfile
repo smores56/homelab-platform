@@ -106,8 +106,10 @@ RUN set -eux; \
     install -m 0644 /usr/lib/bootupd/grub2-static/configs.d/08_greenboot.cfg /usr/share/smortress/boot-counter.cfg; \
     rm -f /usr/lib/bootupd/grub2-static/configs.d/08_greenboot.cfg
 
-# Runtime helpers, units and ciphertext. The public cosign key is the only
-# signature-related material in the image; the policy references it by path.
+# Runtime helpers, units and ciphertext. The rootfs holds no signature material
+# and no sudoers drop-in any more: the policy, the key, registries.d and the gate
+# are the repository's, in lib/, and are installed below with the image path this
+# host gives them (SDLC #1024).
 COPY bootc/server/rootfs/ /
 # The build-stage artifact: the PAM module the sudo stack loads.
 COPY --from=sudo-build /src/pam_rssh/target/release/libpam_rssh.so /usr/lib64/security/libpam_rssh.so
@@ -172,7 +174,38 @@ COPY units/quadlet/immich.network units/quadlet/immich-postgres.container \
      /usr/share/containers/systemd/
 COPY secrets/boot.json secrets/apps.json secrets/agents.json /etc/smortress/secrets/
 COPY secrets/index.json /usr/share/smortress/secrets.index.json
-COPY bootc/server/cosign.pub /etc/pki/containers/smortress.pub
+COPY lib/containers/cosign.pub /etc/pki/containers/smortress.pub
+
+# The containers signature policy is one contract with one per-host table, and
+# this image is where the two meet: lib/containers/policy.json is the half no
+# host may vary and policy.d/smortress.json is this host's registry trust. It is
+# rendered here so the image ships the document and never a second copy of it;
+# the same renderer is what the Ignition render and the publish job call.
+COPY lib/containers/policy.json lib/containers/render-policy.sh /tmp/containers/
+COPY lib/containers/policy.d/smortress.json /tmp/containers/policy.d/
+COPY lib/containers/registries.d/ghcr.io-smortress.yaml \
+     /etc/containers/registries.d/ghcr.io-smortress.yaml
+RUN set -eux; \
+    mkdir -p /etc/containers; \
+    /tmp/containers/render-policy.sh smortress >/etc/containers/policy.json; \
+    chmod 0644 /etc/containers/policy.json; \
+    rm -rf /tmp/containers
+
+# The sudoers gate is shared and its factor is not: 10-human-gate is the pair
+# every host ships, 20-sops-env drops the identity sources at the sudo boundary,
+# and 11-agent-socket is the keep pam_rssh needs, which only this image's stack
+# has. Neither host carries a copy of the first two.
+COPY lib/sudoers/10-human-gate lib/sudoers/11-agent-socket lib/sudoers/20-sops-env \
+     /etc/sudoers.d/
+
+# greenboot's required check is one program (lib/greenboot/required.d) with this
+# host's assertions beside it (lib/greenboot/assertions.d/server). greenboot runs
+# every executable in required.d, so only the check is executable there: the
+# assertion file lives outside the directory it would otherwise be run from.
+COPY lib/greenboot/required.d/10-health.sh \
+     /etc/greenboot/check/required.d/10-health.sh
+COPY lib/greenboot/assertions.d/server/10-health.sh \
+     /etc/greenboot/assertions.d/10-health.sh
 
 # The hosted-model proxy is a python program, not a shell helper, so it keeps its
 # name and needs its own mode: the smortress-src loop below only strips `.sh`.
@@ -216,9 +249,12 @@ RUN set -eux; \
     chmod 0600 /etc/smortress/secrets/*.json; \
     chmod 0644 /etc/pam.d/sudo; \
     chmod 0600 /etc/ssh/sudo_authorized_keys; \
-    chmod 0440 /etc/sudoers.d/10-human-gate /etc/sudoers.d/20-sops-env; \
+    chmod 0440 /etc/sudoers.d/10-human-gate /etc/sudoers.d/11-agent-socket /etc/sudoers.d/20-sops-env; \
     visudo -cf /etc/sudoers.d/10-human-gate; \
+    visudo -cf /etc/sudoers.d/11-agent-socket; \
     visudo -cf /etc/sudoers.d/20-sops-env; \
+    chmod 0755 /etc/greenboot/check/required.d/10-health.sh; \
+    chmod 0644 /etc/greenboot/assertions.d/10-health.sh; \
     rm -f /etc/sudoers.d/coreos-sudo-group
 
 # The tailnet is the only route in and the key shipped in this image is the only
@@ -393,8 +429,10 @@ RUN set -eux; \
     test -e /etc/systemd/system/multi-user.target.wants/smortress-boot-counter.service || { echo "the boot counter installer is not enabled: nothing would put the counter where grub.cfg reads it" >&2; exit 1; }; \
     test -e /etc/systemd/system/multi-user.target.wants/smortress-boot-rw.service || { echo "/boot is left read-only: greenboot cannot write grubenv and the counter never arms" >&2; exit 1; }; \
     test -e /etc/systemd/system/multi-user.target.wants/greenboot-healthcheck.service || { echo "greenboot's healthcheck is not enabled: a deployment that boots but is broken would never be rolled back" >&2; exit 1; }; \
+
     test -e /etc/systemd/system/ostree-finalize-staged.service.requires/greenboot-set-rollback-trigger.service || { echo "greenboot's rollback trigger is not enabled: nothing records the staged deployment when it is finalized, so a deployment the bootloader dropped would not be made permanent" >&2; exit 1; }; \
-    test -x /etc/greenboot/check/required.d/10-smortress-health.sh || { echo "this host's greenboot check is missing or not executable: greenboot would mark every boot good" >&2; exit 1; }; \
+    test -x /etc/greenboot/check/required.d/10-health.sh || { echo "this host's greenboot check is missing or not executable: greenboot would mark every boot good" >&2; exit 1; }; \
+    test -r /etc/greenboot/assertions.d/10-health.sh || { echo "this host's greenboot assertions are missing: the shared check would refuse to run and every boot would read as a failed deployment" >&2; exit 1; }; \
     grep -qxF 'TimeoutStartSec=600' /usr/lib/systemd/system/greenboot-healthcheck.service.d/10-timeout.conf || { echo "greenboot's healthcheck keeps systemd's 90s default: this host's units wait on the pool and the check would be killed mid-wait" >&2; exit 1; }; \
     test -s /etc/ssh/authorized_keys.d/smores || { echo "the shipped ssh key file is missing or empty: it is the only key sshd reads (design #767)" >&2; exit 1; }; \
     ! grep -q 'sk-ssh-ed25519' /etc/ssh/authorized_keys.d/smores || { echo "the shipped key file carries a FIDO handle; the image ships a plain ed25519 key (design #767)" >&2; exit 1; }; \
