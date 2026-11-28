@@ -20,6 +20,18 @@ concurrency:
 # through tests/tags.bats' drift check, so a suite cannot land in no job. Job
 # setup is only what that area needs to start — a runtime, a pinned tool, or a
 # package the tests shell out to.
+#
+# This workflow is the pull request's gate and nothing in it is filtered by
+# path: a path filter does not skip a required check, it leaves the check
+# Pending, and the pull request then waits on a report that never comes. So
+# every job here reports on every pull request, a docs-only diff included, and
+# the area job decides inside itself what to run. The required checks are these
+# nine jobs, one per area — core, deploy, apps, edge, image, lint, tenants,
+# fork-pr-secret-boundary and drift — plus tofu-plan-pr.yml's single `plan` job,
+# which also runs on every pull request and returns success on a diff that
+# touches no `tofu/`. tests/tags.bats fails when a workflow a pull request
+# triggers grows a `paths:` filter, and a job that gates itself with an `if:` on
+# the diff would leave the same hole.
 jobs:
   core:
     name: core (gate scripts, Restic plane, Quadlets, Serve)

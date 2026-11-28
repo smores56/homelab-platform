@@ -14,7 +14,7 @@
 # of tracked, public files and that no credential is in it at all.
 #
 # The render half needs butane; without it the template half still runs and the
-# render half skips (server-image-static.yml always has the pinned butane).
+# render half skips (the image job of ci.yml always has the pinned butane).
 #
 #   bats tests/image/ignition-boundary.bats
 # shellcheck disable=SC2016  # the renderer's source text is matched literally

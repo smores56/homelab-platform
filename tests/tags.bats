@@ -104,6 +104,30 @@ tests/core/storage-layout.bats"
     assert_output ""
 }
 
+@test "a lib/-only change selects every suite that compares the lib" {
+    # lib/ is the one copy of what each host shares, so a change under it has to
+    # run the drift comparison and each image suite that holds its host's copy to
+    # it. A row that lost lib/ would leave the comparison green and unrun.
+    repo=$BATS_TEST_TMPDIR/lib
+    mkdir -p "$repo/tests"
+    cp "$tags_sh" "$repo/tests/tags.sh"
+    cp "$tags_file" "$repo/tests/tags.tsv"
+    git -C "$repo" init -q
+    git -C "$repo" add tests
+    git -C "$repo" -c user.name=t -c user.email=t@t commit -qm base
+    mkdir -p "$repo/lib/containers/policy.d" "$repo/lib/greenboot/required.d"
+    : >"$repo/lib/containers/policy.d/10-registries.conf"
+    : >"$repo/lib/greenboot/required.d/10-health.sh"
+    run sh -c "cd '$repo' && sh tests/tags.sh --changed --base HEAD"
+    assert_success
+    assert_output --partial "tests/image/lib-drift.bats"
+    assert_output --partial "tests/image/server-image.bats"
+    assert_output --partial "tests/image/laptop-image.bats"
+    # The greenboot required check is data per host: both health suites hold it.
+    assert_output --partial "tests/deploy/smortress-health.bats"
+    assert_output --partial "tests/deploy/edge-health.bats"
+}
+
 @test "--changed reads the diff against the base" {
     repo=$BATS_TEST_TMPDIR/repo
     mkdir -p "$repo/tests"
@@ -124,6 +148,12 @@ tests/core/storage-layout.bats"
 # and selects nothing, which is how three suites silently left CI once.
 # A suite whose tag no job claims would run nowhere; a claimed tag with no suite
 # means a job that can only ever fail on "Found no tests".
+#
+# The other half is the gate itself: a job a pull request triggers has to run on
+# every pull request. A `paths:` filter does not skip a required check, it leaves
+# it Pending -- so the pull request waits on a report that never comes, and the
+# only way past it is a bypass. The area job decides inside itself what to run
+# instead, and the suites below still say which of them a change selects.
 
 local_only='actionlint'
 
@@ -134,6 +164,22 @@ area_tags() {  # the tags the workflow's filter expressions name
 
 suite_tags() {  # the area each suite declares
     grep -hE '^# bats file_tags=' tests/*.bats tests/*/*.bats | sed -E 's/.*file_tags=//'
+}
+
+@test "no workflow a pull request triggers filters the paths it runs on" {
+    # Read per trigger, not per file, so a `push:` filter staying where it
+    # belongs (publish-*, tofu-apply) is not mistaken for the gate: only the
+    # pull_request trigger is the one a required check reports through.
+    filtered=$(
+        for workflow in .github/workflows/*.yml; do
+            awk -v file="${workflow##*/}" '
+                /^[A-Za-z_]/ { triggers = ($1 == "on:") }
+                triggers && /^  [a-z_]+:/ { trigger = $1 }
+                triggers && /^    paths(-ignore)?:/ && trigger ~ /^pull_request/ { print file ": " trigger }
+            ' "$workflow"
+        done
+    )
+    assert_equal "$filtered" ""
 }
 
 @test "every suite declares its area exactly once" {

@@ -12,6 +12,10 @@
 # Workflows and repo automation: run with the deploy token in the environment.
 .github/ @smores56
 
+# The shared lib: what every host installs and runs as root. Design #1011 keeps
+# lib/ owner-gated.
+lib/ @smores56
+
 # Host images: a diff here ships in the OS on the box, or in the PAM stack
 # that gates escalation on it. Design #1011 keeps hosts/ owner-gated.
 hosts/ @smores56
