@@ -119,7 +119,7 @@ apps/render	tests/apps/render.bats scripts/apps-schema.py tests/apps/*
 image/ignition-boundary	tests/image/ignition-boundary.bats ignition/smortress.bu ignition/edge.bu ignition/edge.json scripts/render-ignition.sh scripts/init-data-luks.sh units/systemd/smortress-data-init.service units/systemd/smortress-zpool.service tests/image/*
 image/edge-image	tests/image/edge-image.bats bootc/edge/tests/check.sh bootc/edge/* scripts/check-edge-unit-paths.sh bootc/lib/* .github/workflows/publish-edge-image.yml .github/workflows/server-image-static.yml tests/image/*
 image/server-image	tests/image/server-image.bats scripts/check-server-image.sh scripts/render-ignition.sh scripts/check/server/* scripts/lib/* bootc/server/* bootc/edge/* bootc/lib/* lib/* ignition/* units/* images/* tests/fixtures/* docs/core/server-image.md tests/image/*
-image/laptop-image	tests/image/laptop-image.bats hosts/laptop/* lib/* docs/laptop/* .github/workflows/publish-laptop-image.yml .github/workflows/pins-watch-laptop.yml tests/image/*
+image/laptop-image	tests/image/laptop-image.bats hosts/laptop/* lib/* .github/workflows/publish-laptop-image.yml .github/workflows/pins-watch-laptop.yml tests/image/*
 secrets/bundles	tests/secrets/bundles.bats scripts/secrets-bundle.py scripts/secrets-index.py scripts/sops-decrypt.sh tests/secrets/*
 secrets/cloudflare-derive	tests/secrets/cloudflare-derive.bats scripts/cloudflare-derive.sh tests/secrets/*
 secrets/decrypt	tests/secrets/decrypt.bats scripts/sops-decrypt.sh tests/secrets/*
@@ -127,7 +127,7 @@ secrets/migration	tests/secrets/migration.bats scripts/smortress-secrets-seed.sh
 secrets/policy	tests/secrets/policy.bats scripts/sops-policy.py tests/secrets/*
 secrets/rotate	tests/secrets/rotate.bats scripts/secret.sh secrets/index.json secrets/boot.json .sops.yaml scripts/sops-policy.py scripts/secrets-check.py tests/secrets/*
 lint	tests/lint.bats .github/* CODEOWNERS .yamllint.yaml scripts/* tests/* backrest/* .githooks/* bootc/lib/* hosts/*
-docs	tests/docs.bats scripts/check-doc-refs.py scripts/doc-refs-baseline.txt docs/laptop/*
+docs	tests/docs.bats scripts/check-doc-refs.py scripts/doc-refs-baseline.txt hosts/*/runbook.md bootc/*/runbook.md
 tofu-fmt	tests/tofu-fmt.bats tofu/*
 actionlint	tests/actionlint.bats .github/*
 python/agent-proxy	tests/python/agent-proxy.bats apps/agent_proxy/* tests/python/*
