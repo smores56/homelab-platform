@@ -816,7 +816,7 @@ fi
 # tells that person it is waiting. The live half -- `systemctl cat` on the host
 # showing one ExecStart, `rpm-ostree status` showing a staged deployment, the
 # notification in a fresh session -- is a publish and a reboot, and is written
-# down in docs/laptop/manual-steps.md.
+# down in runbook.md.
 
 # exec_starts: the ExecStart= list systemd ends up with, replayed from the lines
 # it is given. A value appends to the list, a bare ExecStart= clears it, and a
@@ -900,7 +900,7 @@ else
 fi
 
 # shellcheck disable=SC2088 # a literal ~ in prose is the path a prompt opens
-if grep -qF '~/.local/state/bootc-update-pending' "$repo/docs/laptop/manual-steps.md" \
+if grep -qF '~/.local/state/bootc-update-pending' "$repo/hosts/laptop/runbook.md" \
     && grep -qF '~/.local/state/bootc-update-pending' README.md; then
   ok "the docs name the marker path the reminder writes"
 else

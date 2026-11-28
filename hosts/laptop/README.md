@@ -111,7 +111,7 @@ uptime -s                                         # the session that staged it s
 cat ~/.local/state/bootc-update-pending           # what the fresh session was told
 ```
 
-`docs/laptop/manual-steps.md` walks the same thing with a hand at the keyboard.
+`runbook.md` walks the same thing with a hand at the keyboard.
 
 ## Package sources
 

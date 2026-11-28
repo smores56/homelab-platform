@@ -54,7 +54,7 @@ systemd-tmpfiles --cat-config | grep -E '/var/lib/(caddy|homelab/deploy|smoresne
 
 `scripts/edge-bootstrap.sh` runs on the box as root, refuses a bad value before it
 writes anything, and is idempotent. Have the values at hand before it: the
-preauthorized `tag:vps` auth key, the webhook secret, the deploy ping URL, the
+preauthorized `tag:vps` auth key, the deploy ping URL, the
 `SMORTRESS_FQDN` and the ACME address, plus Caddy's data directory from the
 recovery kit. The edge keeps the host key sshd made on the box, so a reinstall
 presents a new one.
@@ -95,7 +95,7 @@ not the one committed in `tofu/terraform.tfvars`, update `edge_ipv4` and apply
 **before** the probe, or the probe measures the old box:
 
 ```sh
-scripts/verify-public-edge.sh
+scripts/verify-fleet.sh
 ```
 
 ## Release and deploy the edge

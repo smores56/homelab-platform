@@ -15,7 +15,7 @@
 #
 # The Healthchecks ping is `FLEET_PING_URL` from the `deploy-notify` environment: a
 # capability URL, so a secret, and the same shape the host's own monitors use
-# (docs/manual-steps.md). It replaces the `EDGE_PING_URL` and `NAMES_PING_URL` the
+# (hosts/server/runbook.md). It replaces the `EDGE_PING_URL` and `NAMES_PING_URL` the
 # two daily runs each had, which is the one operator step this change carries: the
 # merged check has one period and one page.
 name: verify-fleet
@@ -74,7 +74,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -z ${FLEET_PING_URL:-} ]]; then
-            echo "::warning::FLEET_PING_URL is unset in deploy-notify; no page is sent (docs/manual-steps.md)"
+            echo "::warning::FLEET_PING_URL is unset in deploy-notify; no page is sent (hosts/server/runbook.md)"
             exit 0
           fi
           # The check's period is what turns silence into a page, so a success is a

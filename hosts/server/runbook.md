@@ -29,7 +29,7 @@ lsblk -dno MODEL,SIZE,TRAN "$disk"
 lsblk -bno SIZE "$disk"
 lsblk -rno MOUNTPOINTS "$disk" | grep -c .
 grep -qE '@sha256:[0-9a-f]{64}$' ignition/operator/derived-image && echo digest-pinned
-cosign verify --key bootc/server/cosign.pub "$(cat ignition/operator/derived-image)" >/dev/null \
+cosign verify --key lib/containers/cosign.pub "$(cat ignition/operator/derived-image)" >/dev/null \
   && echo signature-verified                        # P5: the image is signed
 ip -o link show | awk '$2 != "lo:" {print $2, $9}'  # P6: from the live media
 ip -4 route get 10.0.0.193                          # wired UP, route, 200
@@ -53,7 +53,7 @@ the public key is committed.
 install -d -m 0700 "$HOME/.config/smortress"
 export COSIGN_PASSWORD="$(openssl rand -base64 32)"
 cosign generate-key-pair --output-key-prefix "$HOME/.config/smortress/cosign"
-install -m 0644 "$HOME/.config/smortress/cosign.pub" bootc/server/cosign.pub
+install -m 0644 "$HOME/.config/smortress/cosign.pub" lib/containers/cosign.pub
 gh api -X PUT "repos/smores56/homelab-platform/environments/server-image" \
   --input - <<<'{}' >/dev/null
 gh secret set COSIGN_PRIVATE_KEY --env server-image <"$HOME/.config/smortress/cosign.key"
@@ -547,67 +547,44 @@ sudo systemctl restart agent-webui-personal.service agent-workspace-personal.ser
 
 ## 4. Deploy
 
-### 4.1 Create the tailnet names check
+### 4.1 Create the fleet check
 
-Both probe checks read their ping URLs from the `deploy-notify` Environment; give
-it the `main`-only branch policy 2.3 gives `server-image`. Create the check in the
-project with a `1 day` period and a `6 hour` grace, then copy its ping URL into the
-environment:
-
-```sh
-OWNER=$(cat ~/.config/smores56-agent/owner-token)
-printf '%s' '<ping url>' | GH_TOKEN="$OWNER" \
-  gh secret set NAMES_PING_URL --env deploy-notify --repo smores56/homelab-platform
-```
-
-Run it once so the check has an answer, and read the job's own output: it prints
-one `ok`/`FAIL` line per probe.
-
-```sh
-GH_TOKEN="$OWNER" gh workflow run verify-tailnet-names.yml --repo smores56/homelab-platform
-GH_TOKEN="$OWNER" gh run watch --repo smores56/homelab-platform
-```
-
-The probe needs a tailnet node and nothing else, so the same script is the
-operator's tool during an outage:
-
-```sh
-scripts/verify-tailnet-names.sh
-TAILNET_NAMES_MIN_DAYS=100000 scripts/verify-tailnet-names.sh   # the expiry leg, red
-```
-
-### 4.2 Create the public edge check
-
-Create the check in the project with a `1 day` period and a `6 hour` grace, then
-copy its ping URL into the environment:
+One check covers the public edge and the tailnet names: `scripts/verify-fleet.sh`
+iterates both classes and prints one verdict, and
+`.github/workflows/verify-fleet.yml` runs it daily. It reads its ping URL from the
+`deploy-notify` Environment; give that environment the `main`-only branch policy
+2.3 gives `server-image`. Create the check in the project with a `1 day` period
+and a `6 hour` grace, then copy its ping URL in:
 
 ```sh
 OWNER=$(cat ~/.config/smores56-agent/owner-token)
 printf '%s' '<ping url>' | GH_TOKEN="$OWNER" \
-  gh secret set EDGE_PING_URL --env deploy-notify --repo smores56/homelab-platform
+  gh secret set FLEET_PING_URL --env deploy-notify --repo smores56/homelab-platform
 ```
 
 Run it once so the check has an answer, and read the job's own output: it prints
-one `ok`/`FAIL`/`note` line per probe.
+one `ok`/`FAIL`/`note` line per probe, then one verdict.
 
 ```sh
-GH_TOKEN="$OWNER" gh workflow run verify-public-edge.yml --repo smores56/homelab-platform
+GH_TOKEN="$OWNER" gh workflow run verify-fleet.yml --repo smores56/homelab-platform
 GH_TOKEN="$OWNER" gh run watch --repo smores56/homelab-platform
 ```
 
-The probe needs only DNS and TLS, so the same scripts are the operator's tool
-during an outage; run them from any host with `curl`, `openssl` and `dig`:
+The script needs a tailnet node for the names class and DNS plus TLS for the edge
+class, so it is also the operator's tool during an outage; `--dry-run` prints the
+plan without contacting anything:
 
 ```sh
-scripts/verify-public-edge.sh
-scripts/verify-caa.sh
-EDGE_CERT_MIN_DAYS=100000 scripts/verify-public-edge.sh   # the expiry leg, red
-CAA_ZONE=example.com scripts/verify-caa.sh                # a zone with no CAA, a notice
+scripts/verify-fleet.sh --dry-run                     # the nine entries and the CAA row
+scripts/verify-fleet.sh                               # one verdict
+FLEET_CERT_MIN_DAYS=100000 scripts/verify-fleet.sh     # every certificate leg, red
+CAA_ZONE=example.com scripts/verify-caa.sh            # a zone with no CAA, a notice
 ```
 
-`verify-caa.sh` prints a `note` and exits 0 until the zone's `CAA` records exist.
+`verify-caa.sh` prints a `note` and exits 0 until the zone's `CAA` records exist;
+its exit status folds into the fleet verdict.
 
-#### 4.2.1 T5: the owner's first run
+### 4.2 T5: the owner's first run
 
 One sitting, in this order — step 1 can block everything after it.
 
@@ -638,13 +615,13 @@ One sitting, in this order — step 1 can block everything after it.
    `acme-staging-v02`.
 4. **Kanbei's Universal SSL re-validation**: SSL/TLS → Edge Certificates must show
    `kanbei.sammohr.dev` (and the zone's wildcard) active, not pending or expired.
-5. **Create the Healthchecks check and `EDGE_PING_URL`**: `1 day` period, `6 hour`
+5. **Create the Healthchecks check and `FLEET_PING_URL`**: `1 day` period, `6 hour`
    grace, then the `gh secret set` above.
-6. **One green dispatch**: `gh workflow run verify-public-edge.yml`, then read the
+6. **One green dispatch**: `gh workflow run verify-fleet.yml`, then read the
    `ok`/`note` lines.
 7. **One deliberate failure**: from a scratch branch, point one probe in
-   `scripts/verify-public-edge.sh` at a host that cannot answer, run
-   `gh workflow run verify-public-edge.yml --ref <branch>`, and watch the run go
+   `scripts/verify-fleet.sh` at a host that cannot answer, run
+   `gh workflow run verify-fleet.yml --ref <branch>`, and watch the run go
    red and the page arrive. Delete the branch.
 
 ### 4.3 Create the tenant apps check
@@ -1172,7 +1149,7 @@ The counter comes from the hook `grub.cfg` does read:
 ```sh
 sudo bootupctl status                              # No components are adoptable.
 sudo grep -c 'boot_counter' /boot/grub2/custom.cfg # 1
-systemctl is-enabled greenboot-grub2-set-counter   # enabled
+systemctl is-enabled greenboot-set-rollback-trigger  # enabled
 journalctl -b | grep -c boot-counting-absent       # 0
 sudo grub2-editenv /boot/grub2/grubenv list        # boot_success=1, boot_counter=3, no default
 ```
@@ -1252,7 +1229,7 @@ Service is down on smortress:
 
 ```sh
 curl -sS -o /dev/null -w '%{http_code}\n' https://recovery.sammohr.dev/   # 200, Backrest's login form
-scripts/verify-public-edge.sh                                            # all three names green
+scripts/verify-fleet.sh                                            # all three names green
 ```
 
 ## 7. Tailnet and access

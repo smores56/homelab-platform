@@ -27,6 +27,4 @@ docs/core/server-image.md	docs/manual-steps.md#install-a-host-from-the-image
 docs/core/server-image.md	docs/manual-steps.md#rotate-the-smores-account-password
 docs/core/server-image.md	docs/manual-steps.md#the-boot-gate-and-its-counter
 docs/raw-replicas.md	docs/manual-steps.md#collector-sign-ins
-docs/runbook.md	docs/manual-steps.md
 docs/secrets.md	docs/manual-steps.md
-provision/smortress/README.md	docs/manual-steps.md
