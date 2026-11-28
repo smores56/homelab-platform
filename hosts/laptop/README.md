@@ -9,7 +9,6 @@ merged it into `homelab-platform`; the merge commit carries that repository's
 history, so `git log --follow` on any file here reaches it.
 
 The design and the task graph live in the private ledger: `sdlc show 732`.
-The migration runbook is `docs/laptop/switch.md`.
 
 ## Contract
 
