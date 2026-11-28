@@ -100,7 +100,7 @@ tests/core/storage-layout.bats"
 }
 
 @test "a documentation change selects nothing" {
-    run sh "$tags_sh" docs/core/applications.md
+    run sh "$tags_sh" docs/core/apps-tenant.md
     assert_output ""
 }
 

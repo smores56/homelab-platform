@@ -4,7 +4,7 @@
 #   smortress-restic-restore-drill <ssd|hdd|r2> <unit> [--snapshot <id>]
 #                                   [--target <dir>] [--list]
 #
-# This is the by-hand path from docs/core/restic-plane.md: it selects a
+# This is the by-hand path from hosts/server/runbook.md: it selects a
 # `verified` snapshot (never an untagged or incomplete one), restores it into a
 # fresh directory and verifies the written data. It never restores over a live
 # dataset and never touches retention.
@@ -163,7 +163,7 @@ say "$backend/$unit: restoring $snapshot into $target"
 # `dump` piped through tar was the original path and is kept behind
 # RESTIC_DRILL_METHOD=dump, but it is the wrong default: dump walks the tree one
 # node at a time, emits hardlinked content as separate files (a 36 GiB agent
-# tree arrives as 444 GiB, docs/core/restic-plane.md), and over S3 a single
+# tree arrives as 444 GiB, hosts/server/runbook.md), and over S3 a single
 # stalled read hangs the whole drill until the deadline. restore loads packs in
 # parallel and preserves hardlinks.
 method=${RESTIC_DRILL_METHOD:-restore}

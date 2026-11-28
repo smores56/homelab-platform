@@ -292,7 +292,7 @@ fi
 # Two unpinned records (design #842 T4): the policy names the CA and the account
 # is deliberately absent, because the edge's Caddy account is disposable and a
 # pin expires with it. The proxied names' CA set is Cloudflare's and is not this
-# repository's to declare (docs/cloudflare.md, "CAA").
+# repository's to declare (bootc/edge/runbook.md, "The zone, when it changes").
 @test "exactly two CAA records (issue and issuewild)" {
     eq "$(count '^[[:space:]]*type[[:space:]]*=[[:space:]]*"CAA"')" 2
 }
@@ -597,13 +597,13 @@ residual() {
     grep -qiE 'observed abuse' <<<"$(residual)"
 }
 
-@test "cloudflare.md no longer claims two rate-limit rules" {
-    ! grep -qF 'two `http_ratelimit` rules' docs/cloudflare.md
-}
-
 # --- recovery access model in the docs --------------------------------------
 # The same contract in prose: the deployed model is password-only, and the
 # control that replaced the gate is write denial, not the gate.
+
+@test "the edge runbook states the zone has one rate-limit rule" {
+    grep -qF 'allows exactly one `http_ratelimit` rule' bootc/edge/runbook.md
+}
 
 @test "backrest.md states the reader has no Access gate" {
     grep -qiE 'no (Cloudflare )?Access gate|has no Access gate' docs/core/backrest.md
@@ -613,16 +613,17 @@ residual() {
     grep -qiE 'write RPCs? (are |is )?denied' docs/core/backrest.md
 }
 
-@test "cloudflare.md lists recovery in the public surface, password-only" {
-    grep -qE '^[[:space:]]*\| `recovery\.sammohr\.dev` \|.*password' docs/cloudflare.md
+@test "the edge runbook states recovery is served password-only" {
+    grep -qF '`recovery.sammohr.dev` is password-only and has no Access gate' \
+        bootc/edge/runbook.md
 }
 
 @test "no doc calls the reader Access-protected" {
     ! { grep -rniE 'access-protected' docs/ | grep -qi backrest; }
 }
 
-@test "cloudflare.md states prevent_destroy is read from configuration" {
-    grep -qF '`prevent_destroy` is read from' docs/cloudflare.md
+@test "the edge runbook states prevent_destroy is read from configuration" {
+    grep -qF '`prevent_destroy` is read from' bootc/edge/runbook.md
 }
 
 # --- state backend -----------------------------------------------------------

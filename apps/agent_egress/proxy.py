@@ -3,9 +3,8 @@
 A listener is started with `--source <label>` and enforces that label's grants
 only. There is no per-client address to check here, so identity is the network's
 job and the allowlist is the second gate: nftables decides which container may
-reach the listener's port at all (`docs/core/applications.md`, "Collector
-egress"), and this process decides which hostnames and ports that container may
-reach once it is there.
+reach the listener's port at all, and this process decides which hostnames and
+ports that container may reach once it is there.
 
 The rules are the microVM plane's, unchanged:
 

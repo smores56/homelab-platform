@@ -310,7 +310,7 @@ same way, without waiting for a rejection: `smortress-deploy block commit <sha>`
    The prober reboots nothing, stages nothing and rolls back nothing, and it
    stands down while `apply.json` says an apply is in flight. It journals
    `apps-health-failed` with the app and the reason and pings the tenant's own
-   Healthchecks check (`docs/core/server-image.md`, "The tenant prober").
+   Healthchecks check (`hosts/server/runbook.md`).
 7. **Commit, then Serve.** `state.json` records the commit and the unit and
    secret content hashes, `apply.json`, `render.prev` and `work/prev-secrets/`
    are removed, and `smortress-tailscale-serve.service` is restarted. It is a
@@ -328,4 +328,4 @@ the tenant may be half of two revisions, and the tenant prober stands down while
 the record exists — or by the drain before it acts on the queue. An apps deploy
 reboots nothing, so it has no boot gate and no boot counting; the platform half of
 the receiver, and the pre-userspace counter that covers it, are in
-`docs/core/server-image.md`.
+`hosts/server/runbook.md`.

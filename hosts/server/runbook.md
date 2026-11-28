@@ -38,7 +38,8 @@ curl -sS -m5 -o /dev/null -w '%{http_code}\n' http://10.0.0.193:7654/adv
 
 P4 expects a `/dev/disk/by-id/nvme-…` path, a MODEL containing `980`, `931.5G`,
 `nvme`, `1000204886016` bytes and `0` mounts. P6 expects a wired link `UP`, a
-route and an answer of `200`.
+route and an answer of `200`. **A smaller disk cannot be grown into this layout
+in place**: a ZFS vdev cannot shrink, so `p5` is recreated, not resized.
 
 Have the kit at hand: both 980 LUKS passphrases, the cosign key and password, the
 admin age identity and the smortress SSH host key (`docs/core/recovery-kit.md`).
@@ -68,6 +69,9 @@ read -r digest   # the sha256:... value from the run summary
 printf '%s\n' "ghcr.io/smores56/homelab-platform/server@${digest}" \
   >ignition/operator/derived-image
 ```
+
+**Replacing `lib/containers/cosign.pub` without re-signing the running digest
+first makes `bootc` reject the next switch.**
 
 ### 1.3 Stage the operator values
 
@@ -243,6 +247,10 @@ LAN host that is not on Tailscale, `ssh smores@<lan-ip>` and every application p
 must fail. Then update the kit, run its drill with only kit material, and repeat
 the media write through this point on a scratch disk before the production wipe.
 
+**The `05-` sshd drop-in sorting before uCore's `90-` is a lockout guard**: sshd
+keeps the earlier value for a re-read directive, so the tailnet route has to work
+first or the host answers only from the console.
+
 ### 1.10 Failure paths
 
 Stop and read the state; do not continue and do not improvise a workaround.
@@ -318,6 +326,11 @@ the update:
 sudo bootc switch --enforce-container-sigpolicy ghcr.io/smores56/homelab-platform/server:latest
 sudo systemctl reboot
 ```
+
+**A hand switch by tag bypasses the deploy's descendancy check** and can stage a
+build nobody verified: take the digest from the deploy journal. **`bootc rollback`
+reverts the deployment only** — `/var`, the ZFS datasets and a database migration
+are not restored.
 
 ## 2. GitHub: identity, environments, and tokens
 
@@ -494,7 +507,10 @@ scripts/secret.sh verify                       # policy, index and bundles agree
 python3 scripts/secrets-check.py --shadow      # manifest matches the index
 ```
 
-Only a secret whose *manifest line* changes needs the image and a reboot.
+Only a secret whose *manifest line* changes needs the image and a reboot. A hand
+edit of `/etc/smortress/secrets.manifest` is neither needed nor kept: bootc merges
+`/etc` once per deployment, so the image's `/usr/share` copy is the author and the
+seed rewrites the read copy on every boot.
 
 ### 3.3 Rotate the smores account password
 
@@ -544,6 +560,12 @@ scripts/secret.sh stage agent-local-api-key.yaml      # all four are in agents.j
 sudo systemctl restart smortress-agent-config.service
 sudo systemctl restart agent-webui-personal.service agent-workspace-personal.service
 ```
+
+
+**Both gateway keys sit inside a restorable dataset**, so they are in the Restic
+snapshots and in R2; both are self-issued and revocable, and the provider key is in
+no dataset at all.
+
 
 ### 3.6 Change the SOPS policy
 
@@ -679,6 +701,9 @@ sudo journalctl -u smortress-deploy.service \
   -u smortress-boot-gate.service -u smortress-apps-health.service --no-pager -n 50
 ```
 
+Run those scripts only from the operator checkout (`/var/home/smores/homelab-platform`):
+`/srv/git/…` is the agent workspace, and the two can be at different commits.
+
 ### 4.5 A held deploy
 
 A platform deploy whose snapshot gate cannot make one restore unit fresh holds
@@ -724,6 +749,11 @@ sudo /usr/libexec/smortress-deploy bootstrap homelab-apps <40-hex>
 sudo bootc status --booted --json | jq -r '.status.booted.image.imageDigest'
 sudo /usr/libexec/smortress-deploy reconcile --commit <40-hex>
 ```
+
+After a rollback `status` can name a staged digest the host never booted; **do not
+hand-edit `state.json`**, because the next stage and gate overwrite it. A recorded
+commit that is not an ancestor of `main` needs the console/restore path, not a
+state edit.
 
 ### 4.8 Deploy the apps tenant
 
@@ -819,6 +849,10 @@ A green run prints every mirrored reference. **Make each GHCR package public and
 confirm the unauthenticated inspect answers before the platform image that names
 it is deployed**: a private package is a failed pull on the first boot.
 
+**Immich stays on v3.0.3 until the cutover restore has passed**: its database was
+written by that version, and a major bump is its own window, never a step inside a
+data migration.
+
 ### 5.2 Deploy the image that ships the Quadlets
 
 Both planes are image changes, so switch the host and reboot (1.12), then read the
@@ -840,6 +874,11 @@ backup:
 ```sh
 sudo systemctl start smortress-restic-backup@r2.service smortress-restic-verify.service
 ```
+
+The Immich dump runs at 21:00 UTC so a same-day dump lands inside the 00:00 R2 run
+with three hours of margin. **A failed dump leaves the previous one in place**, so
+a red dump unit means R2 carries a stale database; the dump is root-only and is in
+no other copy.
 
 ### 5.3 Navidrome's first boot and the one-time path cleanup
 
@@ -892,6 +931,9 @@ sudo bash -c '
 `restic forget` takes an exclusive lock, so wait until a running backup finishes;
 `forget --dry-run --no-lock` previews the same set while one holds the repository.
 
+**There is no routine `unlock`**: an exit 11 is a retried failure, and a stale lock
+goes by hand only after the holder is confirmed gone, never from a timer.
+
 ### 5.4 Verify the applications and the closed LAN
 
 ```sh
@@ -909,6 +951,10 @@ have.
 curl --max-time 3 http://10.0.0.125:22000
 ssh -o ConnectTimeout=3 smores@10.0.0.125
 ```
+
+The e-readers accept **EPUB only and absolute hrefs**: a PDF, CBZ or CBR in the
+catalog is dropped without a message, so a book that is present in the tree can
+still be invisible to the reader.
 
 ### 5.5 Validate the units and check the listeners
 
@@ -967,6 +1013,10 @@ sudo podman exec smortress-agent-local python3 -c \
   'import socket; print(socket.create_connection(("smortress-agent-model", 8080), 3))'
 ```
 
+**`agent-local.network` cannot be `Internal=true`**: netavark forwards no published
+port on an internal network and firewalld never trusts one, so the container
+listens, the unit is green, and the host cannot connect.
+
 ### 5.6 Check the agent Serve routes
 
 `/apps/agent-local` and `/apps/agent-general` on 443 are core paths. **There is no
@@ -985,7 +1035,33 @@ curl -fsS -o /dev/null -w '%{http_code}\n' \
 
 Each collector needs one credential this repository cannot invent, entered in the
 application's own UI: the SimpleFIN access URL, the TutaBridge session and its
-local IMAP password, the Tuta calendar session, and the Brave Sync seed.
+local IMAP password, the Tuta calendar session, and the Brave Sync seed. **The
+SimpleFIN access URL embeds the account credentials**: never paste it into a shell
+that logs.
+
+**Every collector is personal-only**: the general deployment holds no personal
+source, and no collector may run there. `uidvalidity changed` or `folders
+disappeared` is a refusal and not a deletion — the collector exits non-zero and a
+human reconciles it.
+
+**A fresh `tmail init` regenerates the bridge password**, and the value travels
+three hops: `stage` rewrites the ciphertext, `sops-decrypt` re-renders `/run`, and
+`smortress-app-secrets` copies it into the Podman secret. Until that last restart
+the old password stays in the secret: LOGIN fails, and the restarts park the unit
+in `start-limit-hit`.
+
+**The bridge volume and the mail replica restore from one snapshot or neither**:
+the bridge always reports `UIDVALIDITY 1`, so a replica restored without its
+session volume gives every message a new UID.
+
+A `grep accessToken` hit in the calendar store's `session.gpg` means the seal is
+not encrypted, so treat the store as compromised. `HTTP 474`, `412` and `401` from
+the exporter are its own refusals: raise `CLIENT_VERSION`, re-dump, or sign in
+again.
+
+**The Brave Sync seed is the chain's key inside a restorable dataset**: a profile
+restored to another host makes that host a chain member, and a leaked copy is
+revoked on the chain, not by rotating a password.
 
 ### 5.8 Verify the browser UIs
 
@@ -1161,6 +1237,13 @@ sudo chcon -R -t container_file_t "$drill"
 `chown` and `chcon` are what make it a tree the application can write and Podman
 may mount. Start the units again as 5.5 gives, then the dump timer.
 
+**Never restore over a live dataset** while an application is writing it, and
+never start a restored Syncthing with its folders live: pause every peer first and
+only then designate a primary, or the cluster syncs into a tree whose identity was
+just restored. A physically restored Immich cluster carries the password that was
+current when the snapshot was taken, so set it from the decrypted secret or rotate
+the ciphertext, or the server cannot log in.
+
 ### 6.2 The boot gate and its counter
 
 The counter comes from the hook `grub.cfg` does read:
@@ -1177,7 +1260,9 @@ sudo grub2-editenv /boot/grub2/grubenv list        # boot_success=1, boot_counte
 
 **Do not enable `kernel.panic`**: a panic that reboots is only survivable while the
 counter is installed. `/usr/share/smortress/deploy-units.txt` is what "serving"
-means for this host.
+means for this host. A boot that never reaches userspace spends one of the three
+attempts; **a host whose counter was never installed has neither rollback** and is
+a console recovery from the pre-reboot snapshot.
 
 ```sh
 journalctl -u smortress-boot-gate.service --no-pager -n 20
@@ -1301,6 +1386,22 @@ From a tailnet device, the login page, the token login and attaching to `main` a
 the rest of the proof. **The sudo ticket is shared** through the pane's pty for 30
 minutes and **the token has no expiry, rate limit or lockout**: treat the token as
 the whole boundary.
+
+### 7.2 Sudo: one touch on the forwarded agent
+
+`ssh -A smortress` forwards the client's agent, which holds the touch-required
+`sk-ssh-ed25519` credential; `/etc/pam.d/sudo` asks the client for one tap, and the
+account password sits behind it. **`Defaults env_keep += "SSH_AUTH_SOCK"`
+(`lib/sudoers/11-agent-socket`) is what lets `pam_rssh` find the agent at all**:
+sudo drops the variable before the PAM stack runs, and without the keep every
+escalation silently falls back to the password.
+
+**A credential minted with `-O no-touch-required` signs exactly like one without
+it** — the public half records no touch policy and `pam_rssh` never reads the
+user-presence bit — so covering the sensor is the only proof the tap is required,
+and `IdentitiesOnly=yes` is what keeps the login credential from passing the
+refusal line for the wrong reason. An empty `sudo_authorized_keys` in the image is
+`PAM_AUTH_ERR`, so the password is the way in until the lines land.
 
 ## 8. Decommission evidence
 

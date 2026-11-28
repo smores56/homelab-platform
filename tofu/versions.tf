@@ -4,9 +4,9 @@
 # Moved here from nix-config's `tofu/` (SDLC #581). The resource addresses are
 # the ones the operator's state already holds, so the move is a state-directory
 # copy, not a re-import; renaming an address would need `tofu state rm` plus
-# `import` (docs/cloudflare.md).
+# `import`.
 #
-# Provider v5 names only; docs/cloudflare.md carries the v4 mapping:
+# Provider v5 names only:
 #   cloudflare_dns_record                    (was cloudflare_record)
 #   cloudflare_zero_trust_access_application (was cloudflare_access_application)
 #   cloudflare_zero_trust_access_policy      (was cloudflare_access_policy)

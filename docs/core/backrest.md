@@ -145,7 +145,7 @@ The surviving residual is the VPS: it has no per-IP request budget in front of
 `photos` or `opds` beyond Caddy's own limits, so one IP in one colo can burst
 past 1000 requests per 10 s against the box and each media app's own login is
 the only thing behind that burst. The bandwidth is already paid for — the ctrl
-panel's transfer allowance in `docs/core/public-edge.md` carries that traffic
+panel's transfer allowance in `bootc/edge/runbook.md` carries that traffic
 whichever layer meters it, and the displaced rule never gated access, only rate.
 `opds` had no other request-rate control before, and has none now.
 

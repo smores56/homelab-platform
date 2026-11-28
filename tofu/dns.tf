@@ -53,7 +53,8 @@ resource "cloudflare_dns_record" "edge" {
 # Cloudflare's to order. With Universal SSL the zone's answer also carries the
 # CA set Cloudflare appends to any zone with a CAA record, and CAA admits
 # issuance if *any* matching set permits it, so the served issuer is admitted by
-# the union (docs/cloudflare.md, "CAA"). `scripts/verify-caa.sh` asserts that
+# the union (bootc/edge/runbook.md, "The zone, when it changes").
+# `scripts/verify-caa.sh` asserts that
 # union against the certificate actually served.
 resource "cloudflare_dns_record" "caa_issue" {
   zone_id = data.cloudflare_zone.this.zone_id

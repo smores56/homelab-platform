@@ -499,7 +499,7 @@ main() {
   local resolved=0
   repo=$(repo_for "$backend" 2>/dev/null) && resolved=1
   if ((resolved == 0)) || ! load_backend_env "$backend"; then
-    warn "$backend: repository or credentials are not configured (see docs/core/restic-plane.md)"
+    warn "$backend: repository or credentials are not configured (see hosts/server/runbook.md)"
     repo=${repo:-unconfigured}
     for unit in "${units[@]}"; do
       state=$(state_file_for "$backend" "$unit")

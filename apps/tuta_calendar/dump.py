@@ -34,7 +34,7 @@ reconciled against their series, and alarms and attendees are not read at all --
 an event carries no attendee list because none was decrypted, not because it has
 none. Deletion is not represented either: Tuta's list read never says an event
 was deleted, so the collector carries an absent event forward with a reason
-instead of tombstoning it (``docs/raw-replicas.md``).
+instead of tombstoning it (``libs/data_plane/collectors/raw/calendar.py``).
 
 Timestamps are UTC and second-precision (``2026-03-01T09:00:00Z``); an all-day
 event is date-only (``2026-03-01``), which is exactly how the collector decides

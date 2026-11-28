@@ -20,8 +20,8 @@ drain already gives a failure to verify.
 
 The signature verdict is bootc's and no one else's. `bootc switch
 --enforce-container-sigpolicy` is the only thing in the system that answers it
-(docs/core/server-image.md, "Signature enforcement"; deploy-platform.sh is the
-server's use of the same call), so the switch runs here, names the digest this
+(hosts/server/runbook.md; deploy-platform.sh is the server's use of the same
+call), so the switch runs here, names the digest this
 verification just resolved -- never the tag, which could move between the label
 read and the switch -- and its exit code is the answer. That is the one place
 this verifier is not read-only: a switch stages a boot entry and never applies

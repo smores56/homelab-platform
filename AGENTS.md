@@ -24,7 +24,7 @@
 ## Platform conventions
 
 - One immutable uCore bootc host, configured by this repository alone: `bootc/server/`
-  builds it, `units/` and `bootc/server/rootfs/` are what boots (`docs/core/server-image.md`).
+  builds it, `units/` and `bootc/server/rootfs/` are what boots (`hosts/server/runbook.md`).
   There is no configuration-management layer beside the image.
 - Podman Quadlets are the only container control plane. A deployment change is
   an image change plus a maintenance-window reboot; stateful Quadlets never
@@ -32,11 +32,10 @@
 - Data lives on ZFS recovery datasets under `/var/srv` and `/var/lib`, each with
   a readiness unit that proves the mount. Backup is the host Restic plane —
   three repositories, one job per restore unit per destination
-  (`docs/core/restic-plane.md`).
+  (`hosts/server/runbook.md`).
 - Reachability is Tailscale Serve on the tailnet; nothing binds a public port.
-  Cloudflare OpenTofu (`tofu/`) owns the public edge and Access
-  (`docs/cloudflare.md`), and the VPS runs this repository's own signed image,
-  `bootc/edge/` (`docs/core/public-edge.md`).
+  Cloudflare OpenTofu (`tofu/`) owns the zone, and the VPS runs this
+  repository's own signed image, `bootc/edge/` (`bootc/edge/runbook.md`).
 - `apps/` holds the source and unit tests of what ships. Two deploy paths exist
   and never overlap: `scripts/deploy-platform.sh` for the platform plane, and
   `scripts/deploy-apps.sh` for the unprivileged `homelab-apps` tenant

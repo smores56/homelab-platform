@@ -2,7 +2,7 @@
 
 This directory is the whole Cloudflare account's edge config: DNS records and the
 tailnet policy. The Access applications and the host and cluster tunnels are
-retired (SDLC #833). `docs/cloudflare.md` explains the shape; this file only
+retired (SDLC #833). `bootc/edge/runbook.md` explains the shape; this file only
 says how a change travels. SSH is deliberately absent: it is tailnet-only
 (design #767), so no record, no tunnel ingress, no Access application and no
 service token names it.
