@@ -322,8 +322,8 @@ sudo zpool export smortress   # before reinstalling over a host that still boots
 
 ### Move a running host to a newer build
 
-The reference is a digest, so `bootc upgrade` re-checks that exact digest and never
-moves on its own:
+A host switched to a digest has no tag to follow, so `bootc upgrade` re-checks that
+exact digest and never moves on its own:
 
 ```sh
 sudo bootc switch --enforce-container-sigpolicy \
