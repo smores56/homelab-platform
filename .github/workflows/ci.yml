@@ -2,6 +2,10 @@ name: ci
 
 on:
   pull_request:
+    # The default three events, spelled out: the pre-merge plan's own tests read
+    # this list (tests/tofu/check.bats), and a label event would let a Write
+    # collaborator re-run a refused plan by labelling their own PR.
+    types: [opened, synchronize, reopened]
   push:
     branches: [main]
   workflow_dispatch:
@@ -16,25 +20,83 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# One job per area: each runs the tests whose `# bats file_tags=` names it,
-# through tests/tags.bats' drift check, so a suite cannot land in no job. Job
-# setup is only what that area needs to start — a runtime, a pinned tool, or a
-# package the tests shell out to.
+# One required check: `PR gate`. Everything else here is one job per area, and
+# the gate's verdict is the required check's.
 #
-# This workflow is the pull request's gate and nothing in it is filtered by
-# path: a path filter does not skip a required check, it leaves the check
-# Pending, and the pull request then waits on a report that never comes. So
-# every job here reports on every pull request, a docs-only diff included, and
-# the area job decides inside itself what to run. The required checks are these
-# nine jobs, one per area — core, deploy, apps, edge, image, lint, tenants,
-# fork-pr-secret-boundary and drift — plus tofu-plan-pr.yml's single `plan` job,
-# which also runs on every pull request and returns success on a diff that
-# touches no `tofu/`. tests/tags.bats fails when a workflow a pull request
-# triggers grows a `paths:` filter, and a job that gates itself with an `if:` on
-# the diff would leave the same hole.
+# `changes` reads the diff once, through scripts/ci-areas.sh, and every area job
+# gates itself on that answer with a job-level `if:` -- never a `paths:` filter.
+# A path filter does not skip a required check, it leaves it Pending, so the pull
+# request waits on a report that never comes; a job whose `if:` is false reports
+# `skipped` instead, and the gate reads that as a pass. tests/tags.bats fails
+# when a pull request workflow grows a `paths:` filter.
+#
+# `gate` then reads `needs` (scripts/ci-gate.py): skipped is a pass, failure and
+# cancelled fail, and a job missing from `needs` fails -- so deleting an area job
+# cannot quietly narrow the gate while the required check still turns green.
+# tests/ci-gate.bats holds the decision offline and holds the gate's `needs` to
+# `scripts/ci-areas.sh --jobs`.
+#
+# The plan is a job here too, through tofu-plan-pr.yml's `workflow_call`: it was
+# a separately required check, which meant a docs-only pull request waited on a
+# plan that had nothing to plan. It holds only the read-only credentials, from
+# its own `cloudflare-plan` environment. The nine areas run their work directly,
+# not through a `_check-<area>.yml` each: the gate needs them as sibling jobs
+# either way, and a `workflow_call` file that only one caller ever uses moves the
+# content out of the file a reader looks in without buying a second caller.
+#
+# Code that decides any of this is Kanbei-critical (docs/kanbei-critical.md):
+# on a pull_request a same-repo branch runs the head's workflow file, so a diff
+# that edits the workflows, scripts/ci-areas.sh or scripts/ci-gate.py fails the
+# gate unless the actor is the owner.
 jobs:
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      # `|| '[]'` so a failed selection is an empty list for the area jobs, not
+      # an expression error: they skip, and the gate is the one that reports.
+      areas: ${{ steps.select.outputs.areas || '[]' }}
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          # The diff is against the base commit, which a shallow clone lacks.
+          fetch-depth: 0
+          persist-credentials: false
+      - name: select the areas this diff needs
+        id: select
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BEFORE: ${{ github.event.before }}
+          ACTOR: ${{ github.actor }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          case "$EVENT" in
+            pull_request) base=$BASE_SHA ;;
+            push) base=$BEFORE ;;
+            *) base='' ;;
+          esac
+          if [[ -z $base || $base =~ ^0+$ ]]; then
+            # Nothing to compare against (a dispatch, a fresh branch): run every
+            # area rather than guess which one this is.
+            areas=$(scripts/ci-areas.sh --areas)
+          else
+            # --guard refuses a diff that edits the gate itself unless the actor
+            # is the owner; it exits non-zero, this job fails, every area skips
+            # and the gate reports that failure.
+            areas=$(scripts/ci-areas.sh --changed --guard --base "$base")
+          fi
+          printf 'areas: %s\n' "$(printf '%s\n' "$areas" | paste -sd, -)"
+          {
+            echo "areas=$(printf '%s\n' "$areas" | jq -R -s -c 'split("\n") | map(select(length > 0))')"
+          } >>"$GITHUB_OUTPUT"
+
   core:
     name: core (gate scripts, Restic plane, Quadlets, Serve)
+    needs: changes
+    if: contains(fromJSON(needs.changes.outputs.areas), 'core')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -52,6 +114,8 @@ jobs:
 
   deploy:
     name: deploy (state, gates, apps apply)
+    needs: changes
+    if: contains(fromJSON(needs.changes.outputs.areas), 'deploy')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -69,6 +133,8 @@ jobs:
 
   apps:
     name: apps and data plane (python)
+    needs: changes
+    if: contains(fromJSON(needs.changes.outputs.areas), 'apps')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -90,6 +156,8 @@ jobs:
 
   edge:
     name: edge, tailnet and egress contracts
+    needs: changes
+    if: contains(fromJSON(needs.changes.outputs.areas), 'edge')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -117,6 +185,8 @@ jobs:
 
   image:
     name: image, ignition, tofu and workflows
+    needs: changes
+    if: contains(fromJSON(needs.changes.outputs.areas), 'image')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -158,6 +228,8 @@ jobs:
 
   lint:
     name: lint, docs and secrets
+    needs: changes
+    if: contains(fromJSON(needs.changes.outputs.areas), 'lint')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -179,6 +251,8 @@ jobs:
 
   tenants:
     name: tenants (backrest, tuta-calendar)
+    needs: changes
+    if: contains(fromJSON(needs.changes.outputs.areas), 'tenants')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -212,9 +286,10 @@ jobs:
 
   fork-pr-secret-boundary:
     name: fork-pr-secret-boundary
+    needs: changes
+    if: github.event_name == 'pull_request' && contains(fromJSON(needs.changes.outputs.areas), 'fork-pr-secret-boundary')
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
@@ -231,6 +306,8 @@ jobs:
 
   drift:
     name: drift (sops policy, shared lib)
+    needs: changes
+    if: contains(fromJSON(needs.changes.outputs.areas), 'drift')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -246,3 +323,53 @@ jobs:
         run: |
           scripts/check-sops-drift.sh
           scripts/check-lib-drift.sh
+
+  plan:
+    name: tofu plan
+    needs: changes
+    if: github.event_name == 'pull_request' && contains(fromJSON(needs.changes.outputs.areas), 'plan')
+    # The plan itself, unchanged: tofu-plan-pr.yml is a `workflow_call`
+    # definition now. It holds only the read-only credentials, from its own
+    # `cloudflare-plan` environment, and refuses a PR that changes CI, so the
+    # branch file that runs here can reach no credential that writes.
+    uses: ./.github/workflows/tofu-plan-pr.yml
+    # The sticky plan comment needs to write; the workflow itself asks for the
+    # same pair, and a called workflow cannot hold more than its caller grants.
+    permissions:
+      contents: read
+      pull-requests: write
+
+  gate:
+    name: PR gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # The required check. always() so a failed dependency is still reported by
+    # this job: a skipped required check leaves the pull request waiting.
+    if: always()
+    needs:
+      - changes
+      - core
+      - deploy
+      - apps
+      - edge
+      - image
+      - lint
+      - tenants
+      - fork-pr-secret-boundary
+      - drift
+      - plan
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      # The rule is a program, not an expression: tests/ci-gate.bats drives it
+      # offline with skipped, failed, cancelled and missing-key fixtures.
+      - name: decide
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          # One argument per job: an empty list is an argparse error, which fails
+          # the gate rather than passing a check that proved nothing.
+          mapfile -t jobs < <(scripts/ci-areas.sh --jobs)
+          scripts/ci-gate.py --expected "${jobs[@]}" --require-success changes <<<"$NEEDS"

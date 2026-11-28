@@ -18,10 +18,10 @@ policy whose tests fail. The resource is gated on `tailnet` in
 client, with the `policy_file` scope. Both providers take their credentials from
 the environment; nothing here holds one.
 
-1. Branch, change `tofu/`, open a PR. `tofu plan` is a required check: it plans
-   against the live state with read-only credentials and comments the plan on
-   the PR. Read the plan, not only the diff — a renamed `for_each` key is a
-   replacement.
+1. Branch, change `tofu/`, open a PR. `tofu plan` is a job of the `PR gate`
+   check: it plans against the live state with read-only credentials and
+   comments the plan on the PR. Read the plan, not only the diff — a renamed
+   `for_each` key is a replacement.
 2. Merge. `tofu-apply.yml` plans again and applies the saved plan. A plan that
    replaces or destroys anything stops instead, and waits for an owner dispatch.
 3. Outside changes (dashboard edits) show up as a weekly `tofu-drift` issue.

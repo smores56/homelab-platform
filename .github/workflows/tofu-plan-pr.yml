@@ -46,17 +46,19 @@ name: tofu-plan-pr
 #
 # scripts/check-pr-secret-boundary.sh asserts these guards statically, and
 # tests/tofu/check.bats asserts the credential split.
+#
+# The plan is `ci.yml`'s `plan` job, and `ci.yml` holds the pull request trigger:
+# `PR gate` is the one required check, so the plan's verdict has to reach it
+# through `needs` rather than sit beside it as a second required check (a
+# docs-only pull request used to wait on a plan with nothing to plan).
+# scripts/check-pr-secret-boundary.sh follows a caller into this file, so the
+# secret rule still polices it even though nothing here says `pull_request`.
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
+  workflow_call:
 
 permissions:
   contents: read
   pull-requests: write
-
-concurrency:
-  group: tofu-plan-pr-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
 
 jobs:
   plan:
