@@ -1,0 +1,171 @@
+# Builds, pushes, signs and verifies the laptop bootc image (hosts/laptop),
+# the artifact the smorespro-image repository published until it was merged in.
+#
+# The signing key is the homelab-platform keypair, so this job takes the same
+# environment the platform's other publishes do: `server-image` is the only
+# environment in this repository that holds COSIGN_PRIVATE_KEY, and the laptop
+# image is signed with that key by design (the shipped policy scopes it to this
+# image's repository). A publish therefore runs on push to main and on
+# workflow_dispatch only; a pull request never sees the key.
+name: publish-laptop-image
+
+on:
+  push:
+    branches: [main]
+    # Everything the Containerfile COPYs, plus the pins it reads. The workflow
+    # itself is here because a build-argument change is a build change.
+    paths:
+      - "hosts/laptop/**"
+      - ".github/workflows/publish-laptop-image.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-laptop-image
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: build, push, sign, verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    if: github.ref == 'refs/heads/main'
+    environment: server-image
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+
+      - name: install podman, skopeo, jq, shellcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends podman skopeo jq shellcheck
+
+      - name: static checks
+        run: |
+          set -euo pipefail
+          ./hosts/laptop/tests/check.sh
+
+      - name: install pinned cosign
+        run: |
+          set -euo pipefail
+          . hosts/laptop/pins.env
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -fsSLo "$RUNNER_TEMP/bin/cosign" \
+            "https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/cosign-linux-amd64"
+          echo "${COSIGN_SHA256}  $RUNNER_TEMP/bin/cosign" | sha256sum -c -
+          chmod 0755 "$RUNNER_TEMP/bin/cosign"
+          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
+
+      - name: the environment key matches the committed public key
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -s hosts/laptop/cosign.pub
+          cosign public-key --key env://COSIGN_PRIVATE_KEY >"$RUNNER_TEMP/cosign.pub"
+          diff -u hosts/laptop/cosign.pub "$RUNNER_TEMP/cosign.pub"
+
+      - name: build
+        run: |
+          set -euo pipefail
+          . hosts/laptop/pins.env
+          # The base is a moving release tag; the build resolves it and records
+          # the digest in the image's org.opencontainers.image.base.digest label.
+          case "$BASE_IMAGE" in
+            *@sha256:*)
+              echo "BASE_IMAGE is digest-pinned; the release tag is what the build resolves" >&2; exit 1 ;;
+            quay.io/fedora/fedora-bootc:latest)
+              echo "BASE_IMAGE is :latest; the release tag is what the build resolves" >&2; exit 1 ;;
+            quay.io/fedora/fedora-bootc:*) ;;
+            *) echo "BASE_IMAGE is not a quay.io/fedora/fedora-bootc release tag" >&2; exit 1 ;;
+          esac
+          if ! base_digest=$(skopeo inspect --format '{{.Digest}}' "docker://$BASE_IMAGE"); then
+            echo "cannot resolve $BASE_IMAGE to a digest" >&2; exit 1
+          fi
+          if [[ ! $base_digest =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "registry returned no usable digest for $BASE_IMAGE: $base_digest" >&2; exit 1
+          fi
+          echo "BASE_DIGEST=$base_digest" >>"$GITHUB_ENV"
+          for pin in NYM_VERSION NYM_SHA256_AMD64 NYM_SHA256_ARM64; do
+            [[ -n ${!pin:-} ]] || { echo "$pin is missing from hosts/laptop/pins.env" >&2; exit 1; }
+          done
+          tag="sha-$(git rev-parse --short=12 HEAD)"
+          echo "TAG=$tag" >>"$GITHUB_ENV"
+          # The context is the host tree, so the Containerfile's COPY paths stay
+          # relative to hosts/laptop and nothing from the rest of the repository
+          # can enter the image.
+          podman build \
+            --build-arg "BASE_IMAGE=$BASE_IMAGE" \
+            --build-arg "BASE_DIGEST=$base_digest" \
+            --build-arg "NYM_VERSION=$NYM_VERSION" \
+            --build-arg "NYM_SHA256_AMD64=$NYM_SHA256_AMD64" \
+            --build-arg "NYM_SHA256_ARM64=$NYM_SHA256_ARM64" \
+            --label "org.opencontainers.image.revision=$(git rev-parse HEAD)" \
+            -f hosts/laptop/Containerfile \
+            -t "${IMAGE_REPO}:${tag}" \
+            -t "${IMAGE_REPO}:latest" \
+            hosts/laptop
+
+      - name: push the digest tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          . hosts/laptop/pins.env
+          mkdir -p "$RUNNER_TEMP/docker"
+          authfile="$RUNNER_TEMP/docker/config.json"
+          echo "DOCKER_CONFIG=$RUNNER_TEMP/docker" >>"$GITHUB_ENV"
+          echo "REGISTRY_AUTH_FILE=$authfile" >>"$GITHUB_ENV"
+          echo "$GITHUB_TOKEN" \
+            | podman login ghcr.io -u "${{ github.actor }}" --password-stdin --authfile "$authfile"
+          podman push "${IMAGE_REPO}:${TAG}" --authfile "$authfile" --digestfile "$RUNNER_TEMP/digest"
+          echo "IMAGE_DIGEST=$(cat "$RUNNER_TEMP/digest")" >>"$GITHUB_ENV"
+
+      # --new-bundle-format=false keeps the signature in the .sig lookaside tag
+      # that containers/image reads; the OCI 1.1 referrer bundle cosign writes by
+      # default is not understood by bootc's signature verification yet.
+      - name: sign the digest
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          . hosts/laptop/pins.env
+          cosign sign -y --new-bundle-format=false --use-signing-config=false \
+            --key env://COSIGN_PRIVATE_KEY "${IMAGE_REPO}@${IMAGE_DIGEST}"
+
+      # The mutable tag moves only after the signature verifies, so latest never
+      # points at an unsigned image.
+      - name: verify, then move latest
+        run: |
+          set -euo pipefail
+          . hosts/laptop/pins.env
+          # `cosign verify` alone reads the referrer bundle and would pass while
+          # the host rejects the image; prove the lookaside tag containers/image
+          # actually reads, then verify the signature.
+          skopeo inspect --raw "docker://${IMAGE_REPO}:${IMAGE_DIGEST/:/-}.sig" >/dev/null
+          cosign verify --key hosts/laptop/cosign.pub "${IMAGE_REPO}@${IMAGE_DIGEST}"
+          podman push "${IMAGE_REPO}:latest" --authfile "$REGISTRY_AUTH_FILE"
+          latest=$(skopeo inspect --format '{{.Digest}}' "docker://${IMAGE_REPO}:latest")
+          if [[ $latest != "$IMAGE_DIGEST" ]]; then
+            echo "latest resolves to $latest, expected $IMAGE_DIGEST" >&2
+            exit 1
+          fi
+
+      - name: summary
+        run: |
+          set -euo pipefail
+          . hosts/laptop/pins.env
+          {
+            echo "### published"
+            echo
+            echo '- image: `'"${IMAGE_REPO}"'`'
+            echo '- digest: `'"${IMAGE_DIGEST}"'`'
+            echo '- tag: `'"${TAG}"'`'
+            echo '- base: `'"${BASE_IMAGE}@${BASE_DIGEST}"'`'
+          } >>"$GITHUB_STEP_SUMMARY"

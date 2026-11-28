@@ -1,0 +1,60 @@
+# The NymVPN daemon; `nym-vpnc` drives it over /var/run/nym-vpn.sock.
+#
+# Nym ships no Fedora package, so this unit is ours: upstream's own has no
+# hardening, no state or log directories, and puts StartLimit* under [Service],
+# where systemd ignores it.
+#
+# The daemon logs to a file, not the journal: `run-as-service` turns stdout
+# logging off, so journalctl shows only systemd's own start and stop lines and
+# the real log is /var/log/nym-vpnd/nym-vpnd.log.
+[Unit]
+Description=NymVPN daemon
+# The daemon discovers its DNS backend at runtime and prefers systemd-resolved;
+# this release has no env override, so resolved has to be there for it to pick
+# that path instead of rewriting /etc/resolv.conf.
+After=NetworkManager.service systemd-resolved.service network-online.target
+Wants=network-online.target systemd-resolved.service
+# Unbounded on purpose: a dropped Wi-Fi link must not leave the unit failed for
+# the rest of the session, and this laptop's VPN is expected to keep retrying.
+StartLimitIntervalSec=0
+
+[Service]
+ExecStart=/usr/bin/nym-vpnd run-as-service
+# A SIGKILLed daemon leaves its nftables kill-switch table dropping traffic, so
+# it is cleared on the way in and on the way out. That also means a stopped or
+# crashing daemon lets traffic flow unfiltered instead of blackholing the
+# laptop: the kill switch protects the tunnel, not the host. The `-` prefix is
+# what makes a missing table a no-op; systemd does not shell.
+ExecStartPre=-/usr/bin/nft delete table inet nym
+ExecStopPost=-/usr/bin/nft delete table inet nym
+Restart=always
+RestartSec=2
+# Upstream's own unit sets this: a panic must not drop tunnel keys and account
+# state into /var/lib/systemd/coredump.
+LimitCORE=0
+# Modes for the config and log files only. The control socket is chmod 0666 by
+# the daemon itself and is authorized by SO_PEERCRED, not by file mode.
+UMask=0077
+# No `nym-vpn` group is created on purpose: membership is a passwordless path
+# to a root daemon. The CLI runs as root through sudo, which the daemon
+# authorizes outright, and the baked polkit action is tightened to auth_admin,
+# so the only supported caller is root.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+# /run/nym-vpn.sock is hardcoded and sits directly in /run, so RuntimeDirectory
+# cannot cover it and /run has to stay writable. The daemon is root regardless:
+# this sandbox is depth, not a boundary.
+ReadWritePaths=/run
+StateDirectory=nym-vpnd
+StateDirectoryMode=0700
+LogsDirectory=nym-vpnd
+LogsDirectoryMode=0700
+# Upstream defaults the config to /etc/nym; keep it in the state directory so
+# nothing writes /etc on a bootc host, where updates are three-way merged.
+Environment=NYM_VPND_CONFIG_DIR=/var/lib/nym-vpnd/config
+Environment=NYM_VPND_LOG_DIR=/var/log/nym-vpnd
+
+[Install]
+WantedBy=multi-user.target

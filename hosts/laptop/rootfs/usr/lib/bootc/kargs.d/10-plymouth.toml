@@ -1,0 +1,5 @@
+# The graphical passphrase prompt needs rhgb in the kernel command line at
+# initramfs build time; quiet keeps the console from scribbling over it. These
+# are the defaults Fedora's desktops use, and the same pair the pre-bootc
+# install already carried.
+kargs = ["rhgb", "quiet"]

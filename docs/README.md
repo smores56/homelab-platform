@@ -19,3 +19,5 @@ host that is running: the image, its Quadlets, its backups and its edge.
 | `core/applications.md` | The application and agent Quadlets: images, storage, secrets, access and restore paths. |
 | `core/apps-tenant.md` | The unprivileged `homelab-apps` tenant: plan, bounds, boot order, apply. |
 | `core/backrest.md` | The hosted Backrest reader: the read-only boundary, readiness and its gate matrix. |
+| `laptop/switch.md` | The migration of the laptop onto the `smorespro-image` bootc image, and the way back. |
+| `laptop/manual-steps.md` | The laptop's operator runbook: FIDO2 enrolment for the disk keyslot, the lock screen and sudo, and rotating the mapping. |

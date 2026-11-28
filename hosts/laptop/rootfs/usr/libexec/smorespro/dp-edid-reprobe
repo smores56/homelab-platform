@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# Re-probe DisplayPort connectors whose EDID did not read at boot.
+#
+# The USB-C dock brings this laptop's DP link up before the monitor answers over
+# AUX, so xe builds a fallback mode list whose preferred mode is 640x480, and
+# niri takes that mode at its first enumeration. Re-plugging the hub re-probed
+# the connector and the real EDID appeared, so the recovery is the probe, not
+# the re-plug.
+#
+# Writing "detect" to a connector's status refreshes its EDID and mode list in
+# the kernel only: drm_sysfs' status_store re-fills the modes, and the hotplug
+# event fires on a status change, not on this write. So this has to land before
+# the compositor enumerates; greetd is ordered after this unit for that reason.
+# A session already on 640x480 needs a restart, not another probe.
+#
+# Only a connector that reports "connected" is touched, and only while its EDID
+# is missing or has no header. A probe that never works exits non-zero, leaving
+# a failed unit in the journal instead of a session on 640x480 with no trace.
+set -uo pipefail
+
+# The first eight bytes of every EDID block. Read as hex because bash drops NUL
+# bytes from command substitution.
+readonly edid_header=00ffffffffffff00
+readonly log_prefix=dp-edid-reprobe
+# Up to ten seconds: a quarter-second between passes for the first two, then
+# one a second. A monitor that needs a few seconds is covered, and a missing one
+# neither floods the AUX link with probes nor delays the session for long.
+readonly fast_for=2
+readonly window=10
+
+edid_reads() {
+  local header
+  header=$(head -c 8 "$1" 2>/dev/null | od -An -tx1 | tr -d ' \n')
+  [[ $header == "$edid_header" ]]
+}
+
+started=$SECONDS
+seen=0
+# Connectors that were caught without an EDID stay pending until their own
+# EDID reads, so a probe that drops the connector to "disconnected" cannot be
+# mistaken for a clean pass.
+declare -A waiting=()
+
+while ((SECONDS - started < window)); do
+  # The top-level connectors only: an MST child (card0-DP-1-1) is not something
+  # this laptop's direct alt-mode link produces, and probing one mid-topology is
+  # at best a no-op.
+  for connector in /sys/class/drm/card*-DP-[0-9]; do
+    [[ -e $connector/status && -e $connector/edid ]] || continue
+    seen=1
+    if edid_reads "$connector/edid"; then
+      unset 'waiting[$connector]'
+      continue
+    fi
+    # A connector that never reported "connected" is simply undocked. One that
+    # did stays pending even if a probe drops it, so that cannot read as clean.
+    if [[ $(<"$connector/status") == connected || -n ${waiting[$connector]:-} ]]; then
+      waiting[$connector]=1
+      echo detect >"$connector/status" ||
+        printf '%s: cannot write detect to %s\n' "$log_prefix" "${connector##*/}" >&2
+    fi
+  done
+
+  # An undocked boot exposes the connectors but has nothing waiting; a boot
+  # started before xe bound has none at all, and there success would be a lie.
+  if ((seen && ${#waiting[@]} == 0)); then
+    exit 0
+  fi
+
+  if ((SECONDS - started < fast_for)); then sleep 0.25; else sleep 1; fi
+done
+
+if ((${#waiting[@]} == 0)); then
+  printf '%s: no DisplayPort connector appeared in %ss\n' "$log_prefix" "$window" >&2
+  exit 0
+fi
+
+for connector in "${!waiting[@]}"; do
+  printf '%s: %s still has no EDID after %ss (status %s)\n' \
+    "$log_prefix" "${connector##*/}" "$window" \
+    "$(cat "$connector/status" 2>/dev/null)"
+done
+printf '%s: niri will take the fallback mode; restart greetd to retry\n' "$log_prefix" >&2
+exit 1

@@ -24,6 +24,7 @@ changes by pull request from a fork, so no PR workflow can read a secret.
 | `images/` | Container image sources: agent egress, agent mail, agent runtime, agent WebUI, brave, tuta-calendar |
 | `tofu/` | Cloudflare OpenTofu (provider v5): the zone's DNS, the CAA pin (`docs/cloudflare.md`), tailnet policy |
 | `bootc/edge/` | The edge image: Caddyfile, firewalld zones, sshd drop-in and deploy units (`docs/core/public-edge.md`) |
+| `hosts/laptop/` | The laptop image: Containerfile, rootfs, pins, its checker and runbook; merged in with `smorespro-image`'s history (`hosts/laptop/README.md`) |
 | `provision/smortress/` | Autoinstall user-data for the bootc host |
 | `secrets/` | SOPS+age ciphertext, decrypted at boot or by the operator; CI references none |
 | `tests/core/` | Offline checks for the core gate, the Restic plane, the apps tenant and the Serve routes |
@@ -61,6 +62,7 @@ is `workflow_dispatch` only and applies a reviewed plan (SDLC #622).
 
 ## Ownership
 
-Every path is owned by `@smores56`. `*.tf` and `.github/` are Kanbei-critical:
-a change there can publish a name in the zone or expose the Cloudflare token.
+Every path is owned by `@smores56`. `*.tf`, `.github/` and `hosts/` are
+Kanbei-critical: a change there can publish a name in the zone, expose the
+Cloudflare token, or ship in the OS on a host.
 See `CODEOWNERS` and `docs/kanbei-critical.md`.

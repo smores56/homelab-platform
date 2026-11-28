@@ -1,0 +1,269 @@
+# Derived bootc image for smorespro: Fedora's minimal bootc base plus a niri
+# session. Built by scripts/build-image.sh and published by
+# .github/workflows/publish-laptop-image.yml, with this host tree as the build
+# context.
+#
+# The base is the moving fedora-bootc release tag, resolved to a digest at build
+# time. Everything added here is a distribution package from that base's Fedora
+# repositories, the configuration under rootfs/, or one of two documented
+# exceptions: Brave Origin from Brave's RPM repository, and NymVPN's release
+# tarball (no RPM exists). No signing key, secret or per-machine state enters
+# the image.
+
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+ARG BASE_IMAGE
+# The tag moves, so the digest the builder resolved from it is passed in and
+# labelled below: the label is how a built image still declares its base.
+ARG BASE_DIGEST
+# NymVPN's tarball is per architecture, and `uname -m` inside the build already
+# says x86_64 or aarch64, which is what the asset names use. The hashes come
+# from pins.env; a wrong one fails the build.
+ARG NYM_VERSION
+ARG NYM_SHA256_AMD64
+ARG NYM_SHA256_ARM64
+
+LABEL org.opencontainers.image.title="smorespro image" \
+      org.opencontainers.image.description="Fedora bootc base with a niri session for the smorespro laptop" \
+      org.opencontainers.image.source="https://github.com/smores56/homelab-platform" \
+      org.opencontainers.image.base.name="${BASE_IMAGE}" \
+      org.opencontainers.image.base.digest="${BASE_DIGEST}" \
+      org.opencontainers.image.vendor="smores56"
+
+# The desktop stack is explicit because the base is minimal: it ships
+# systemd, NetworkManager, polkit, fwupd and firmware splits, but no graphics,
+# audio, portals or fonts.
+#
+# iwlwifi-mld-firmware is not optional: this laptop's CNVi radio is MLD-only,
+# and fedora-bootc ships no iwlwifi firmware package at all.
+#
+# glibc-langpack-en is not optional: the base ships /etc/locale.conf with
+# LANG=en_US.UTF-8 and no langpacks, so every bash prints a setlocale warning.
+#
+# systemd-resolved is not optional either: nym-vpnd discovers its DNS backend at
+# runtime and prefers systemd-resolved, but falls back to rewriting
+# /etc/resolv.conf, which the daemon's ProtectSystem=strict then refuses. It is
+# already in the base; listing and enabling it here keeps a future base
+# refresh from silently taking the backend away.
+#
+# pam-u2f serves two stacks with different authfiles: /etc/pam.d/login calls it
+# with pinverification=1 and no authfile= (pam_u2f's per-user default, which this
+# image ships none of), and /etc/pam.d/sudo calls it with the shipped
+# /etc/u2f_mappings, pinverification=0 and userpresence=1 ahead of pam_unix (the
+# escalation gate opens on a touch, the account password is the fallback behind
+# it, and neither ever asks for the PIN).
+# pamu2fcfg is the separate package that produced the shipped
+# /etc/u2f_mappings. Both are Fedora packages; nothing is compiled here.
+#
+# FIDO2 here is HID only. libfido2 (which pam-u2f requires and
+# systemd-cryptenroll dlopens) talks to /dev/hidraw; nothing in the unlock or
+# disk path needs a smartcard, so pcsc-lite, opensc and pcscd stay out.
+#
+# pipewire-pulseaudio is the PulseAudio-protocol front end to the same PipeWire
+# daemon. Chromium and every other libpulse client fall back to pipewire-alsa
+# without it: playback still works, but there is no PulseAudio protocol behind
+# it (stream restore, pactl, clients that require the PA interface), and the
+# fallback is a log line rather than an error. The package's scriptlet presets
+# pipewire-pulse.socket for every user, so nothing goes in rootfs/.
+#
+# libva-intel-media-driver is iHD, and mesa ships no VA-API driver for Xe.
+# Without it vaInitialize fails and Chromium loses the platform decoder
+# entirely: an HEVC stream shows a black frame instead of an error (AV1 still
+# software-decodes). libva itself only arrives transitively, so the build
+# asserts it too.
+#
+# Brave Origin is not in Fedora: it ships only from Brave's own RPM repository
+# (the official vendor package), so the RUN writes that repo before installing
+# it, then disables it so nothing else in the image silently trusts it. The
+# baseurl keeps a literal $basearch, which dnf5 expands per arch.
+RUN set -eux; \
+    dnf5 -y --setopt=install_weak_deps=False install \
+      niri noctalia kitty xwayland-satellite greetd \
+      xdg-desktop-portal xdg-desktop-portal-gtk xdg-desktop-portal-gnome \
+      pipewire wireplumber pipewire-alsa pipewire-pulseaudio pipewire-utils alsa-ucm rtkit \
+      mesa-dri-drivers mesa-vulkan-drivers mesa-libEGL mesa-libgbm libglvnd-egl \
+      libva-intel-media-driver \
+      default-fonts-core-sans glibc-langpack-en dconf gsettings-desktop-schemas \
+      gnome-keyring libsecret flatpak \
+      NetworkManager-wifi NetworkManager-bluetooth wpa_supplicant bluez \
+      iwlwifi-mld-firmware \
+      systemd-resolved nftables \
+      pam-u2f pamu2fcfg \
+      fprintd fprintd-pam power-profiles-daemon thermald upower \
+      libinput \
+      xdg-user-dirs xdg-utils gvfs udisks2 plymouth plymouth-system-theme \
+      dolphin ImageMagick jq \
+      git tailscale firewalld \
+      syncthing; \
+    printf '[brave-browser]\nname=Brave Browser\nenabled=1\ngpgcheck=1\ngpgkey=https://brave-browser-rpm-release.s3.brave.com/brave-core.asc\nbaseurl=https://brave-browser-rpm-release.s3.brave.com/$basearch\n' > /etc/yum.repos.d/brave-browser.repo; \
+    dnf5 -y --setopt=install_weak_deps=False install brave-origin; \
+    sed -i 's/^enabled=1$/enabled=0/' /etc/yum.repos.d/brave-browser.repo; \
+    dnf5 clean all; \
+    printf '[Daemon]\nTheme=bgrt\n' > /etc/plymouth/plymouthd.conf; \
+    for kdir in /usr/lib/modules/*/; do \
+      kver=$(basename "${kdir%/}"); \
+      dracut --force --no-hostonly --no-hostonly-cmdline --force-add plymouth \
+        "/usr/lib/modules/$kver/initramfs.img" "$kver"; \
+    done; \
+    rm -rf /var/cache/dnf /var/cache/libdnf5 /var/cache/libX11 /var/cache/swcatalog \
+      /var/lib/dnf /var/cache/ldconfig /var/log/dnf5.log /var/log/dnf5.log.*; \
+    rm -rf /run/dnf /run/selinux-policy /run/tuned
+
+# NymVPN has no Fedora package, so the daemon, the CLI and the SOCKS5 proxy the
+# daemon spawns are vendored from the pinned release tarball. The download stays before the rootfs COPY so editing
+# configuration never re-downloads 50 MB, and `install` is what sets the mode:
+# the tarball ships its binaries 0644.
+RUN set -eux; \
+    case "$(uname -m)" in \
+      x86_64) arch=x86_64; nym_sha="${NYM_SHA256_AMD64}" ;; \
+      aarch64) arch=aarch64; nym_sha="${NYM_SHA256_ARM64}" ;; \
+      *) echo "no NymVPN tarball for $(uname -m)" >&2; exit 1 ;; \
+    esac; \
+    curl -fsS --location --proto '=https' --retry 3 --connect-timeout 10 --max-time 300 \
+      -o /tmp/nym.tar.gz \
+      "https://github.com/nymtech/nym-vpn-client/releases/download/nym-vpn-v${NYM_VERSION}/nym-vpn-core-v${NYM_VERSION}_linux_${arch}.tar.gz"; \
+    printf '%s  %s\n' "$nym_sha" /tmp/nym.tar.gz | sha256sum -c -; \
+    mkdir -p /tmp/nym; \
+    tar -xzf /tmp/nym.tar.gz -C /tmp/nym --strip-components=1; \
+    install -m 0755 /tmp/nym/nym-vpnd /tmp/nym/nym-vpnc /tmp/nym/nym-socks5-proxy /usr/bin/; \
+    rm -rf /tmp/nym /tmp/nym.tar.gz
+
+# Configuration: greetd autologin, the niri portal override, the signature
+# policy, the public half of the signing key, the login and sudo PAM stacks with
+# the FIDO2 mapping both read, and the NymVPN daemon's unit and polkit action.
+COPY rootfs/ /
+COPY cosign.pub /etc/pki/containers/smorespro.pub
+
+# The escalation stack in /etc/pam.d/sudo is a touch on a key listed in the
+# shipped /etc/u2f_mappings, with the account password behind it. git stores
+# only 0644 and 0755 and sudo refuses a drop-in that is not root-owned 0440, so
+# the mode is set here; visudo then proves the shipped stack parses instead of
+# leaving it to the first sudo after a boot.
+RUN set -eux; \
+    chown root:root /etc/sudoers.d/10-human-gate /etc/sudoers.d/20-sops-env; \
+    chmod 0440 /etc/sudoers.d/10-human-gate /etc/sudoers.d/20-sops-env; \
+    visudo -c
+
+# A passwordless rule skips pam_authenticate entirely, so the escalation stack's
+# pam_u2f row would never run and sudo would open with no prompt to show it; the
+# pattern below is the one no line this image ships may grant.
+RUN set -eux; \
+    test -d /etc/sudoers.d; \
+    if grep -rqE '^[^#]*NOPASSWD' /etc/sudoers /etc/sudoers.d; then \
+      echo "a sudoers rule grants passwordless escalation, which skips the touch stack" >&2; \
+      exit 1; \
+    fi
+
+# bootc images enable units at build time; the generator picks the rest up
+# from their [Install] sections.
+#
+# bootc updates are staged daily and applied on reboot. rpm-ostree's own
+# automatic timer is masked so two update agents never race for the same
+# deployment.
+RUN set -eux; \
+    systemctl enable \
+      greetd.service \
+      dp-edid-reprobe.service \
+      firewalld.service \
+      power-profiles-daemon.service \
+      thermald.service \
+      plymouth-start.service \
+      plymouth-quit.service \
+      plymouth-quit-wait.service \
+      tailscaled.service \
+      tailscale-operator.service \
+      systemd-resolved.service \
+      nym-vpnd.service \
+      bootc-fetch-apply-updates.timer; \
+    systemctl mask rpm-ostreed-automatic.timer; \
+    systemctl set-default graphical.target
+
+# Syncthing is a user service, so it is enabled globally rather than through the
+# system-unit list: a bootc build has no logged-in user to preset it for, and a
+# host without the symlink would never start it at login. The package is Fedora's
+# (2.1.7, the version the smortress container runs), so it needs no third-party
+# repository and no pin.
+RUN set -eux; \
+    systemctl --global enable syncthing.service
+
+# Fail the build if the base is not the fedora-bootc release tag or the shipped
+# policy no longer rejects by default. A digest here would pin a manifest quay
+# collects within hours, and :latest would track an unscheduled release.
+RUN set -eux; \
+    case "${BASE_IMAGE}" in \
+      *@sha256:*) \
+        echo "BASE_IMAGE is digest-pinned; the release tag is what the build resolves" >&2; exit 1 ;; \
+      quay.io/fedora/fedora-bootc:latest) \
+        echo "BASE_IMAGE is :latest; the release tag is what the build resolves" >&2; exit 1 ;; \
+      quay.io/fedora/fedora-bootc:*) ;; \
+      *) echo "BASE_IMAGE is not a quay.io/fedora/fedora-bootc release tag" >&2; exit 1 ;; \
+    esac; \
+    jq -e '.default[0].type == "reject"' /etc/containers/policy.json >/dev/null; \
+    jq -e '.transports.docker["ghcr.io/smores56/smorespro-image"][0].keyPath == "/etc/pki/containers/smorespro.pub"' /etc/containers/policy.json >/dev/null; \
+    test -s /etc/pki/containers/smorespro.pub
+
+# The unlock path and the escalation gate are both pam_u2f, and the lock screen
+# also dlopens libfido2 through systemd-cryptenroll, so a base refresh that
+# dropped pam_u2f.so or libfido2 would fail at the lock screen rather than at
+# boot. A missing pam_u2f.so would not fail sudo at all: pam_unix is the
+# fallback row and reaches authsucc on its own, so escalation would quietly stop
+# offering the tap while the password kept working. Fail the build instead.
+#
+# The other two modules the sudo stack names are Fedora's own, and they fail the
+# other way: pam_faillock.so and pam_unix.so are `required` rows, so a base that
+# dropped either locks every non-root account out of sudo rather than degrading
+# to one factor. Assert all three by path.
+RUN set -eux; \
+    test -f /usr/lib64/security/pam_u2f.so; \
+    test -f /usr/lib64/security/pam_faillock.so; \
+    test -f /usr/lib64/security/pam_unix.so; \
+    command -v pamu2fcfg systemd-cryptenroll cryptsetup >/dev/null
+
+# The escalation gate's other half is the shipped /etc/u2f_mappings. Every
+# pam_u2f failure falls through the sudo stack's default=ignore to the password,
+# so a mapping that is unreadable, unparsable or wrongly owned would make sudo
+# password-only with no other signal at the prompt; pam_u2f logs a warning about
+# a bad mode and nothing else. Prove the file is one it will parse as root:
+# present, non-empty, root-owned 0644, at least one credential line, and no
+# +pin. pamu2fcfg -N writes +pin, which makes pam_u2f demand the FIDO2 PIN even
+# where the stack says pinverification=0; that PIN is the disk keyslot's, and
+# keeping its budget out of sudo's reach is what the stack exists to do.
+RUN set -eux; \
+    test -s /etc/u2f_mappings; \
+    test "$(stat -c %U:%G /etc/u2f_mappings)" = root:root; \
+    test "$(stat -c %a /etc/u2f_mappings)" = 644; \
+    grep -qE '^[^#:]+:[^:]*,.*' /etc/u2f_mappings; \
+    ! grep -qF '+pin' /etc/u2f_mappings
+
+# Audio: the package is the whole fix, but pipewire-pulse does nothing without
+# the socket its install scriptlet presets globally, and a preset that stopped
+# enabling it would leave the session on the ALSA fallback with no failure
+# anywhere in the build.
+RUN set -eux; \
+    test -x /usr/bin/pipewire-pulse; \
+    test -f /usr/lib/systemd/user/pipewire-pulse.socket; \
+    test -L /etc/systemd/user/sockets.target.wants/pipewire-pulse.socket
+
+# VA-API: the iHD driver and the libva the clients dlopen it through. Both are
+# silent when missing: Chromium logs one warning and drops hardware decode.
+RUN set -eux; \
+    test -f /usr/lib64/dri/iHD_drv_video.so; \
+    test -f /usr/lib64/libva.so.2
+
+# The exact package set this image shipped, so a running host can be compared
+# with its image. Neither the base's packages nor these are version-locked, so
+# this file is the record of what a given build contained. NymVPN's binaries
+# come from a tarball, so `rpm -qa` cannot see them: vendor-manifest records the
+# release, the architecture and the hash the running binary was built from.
+RUN set -eux; \
+    case "$(uname -m)" in \
+      x86_64) nym_sha="${NYM_SHA256_AMD64}" ;; \
+      aarch64) nym_sha="${NYM_SHA256_ARM64}" ;; \
+      *) echo "no NymVPN tarball for $(uname -m)" >&2; exit 1 ;; \
+    esac; \
+    mkdir -p /usr/share/smorespro; \
+    rpm -qa --qf '%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}\n' | sort > /usr/share/smorespro/package-manifest; \
+    printf 'nym-vpn-core %s %s %s\n' "${NYM_VERSION}" "$(uname -m)" "$nym_sha" > /usr/share/smorespro/vendor-manifest
+
+RUN bootc container lint
