@@ -1671,7 +1671,7 @@ already current. The counter therefore comes from the hook `grub.cfg` does read:
 ```sh
 sudo bootupctl status                              # No components are adoptable.
 sudo grep -c 'boot_counter' /boot/grub2/custom.cfg # 1
-systemctl is-enabled greenboot-grub2-set-counter   # enabled
+systemctl is-enabled greenboot-set-rollback-trigger # enabled
 journalctl -b | grep -c boot-counting-absent       # 0
 sudo grub2-editenv /boot/grub2/grubenv list        # boot_success=1, boot_counter=3, no default
 ```
@@ -1679,9 +1679,10 @@ sudo grub2-editenv /boot/grub2/grubenv list        # boot_success=1, boot_counte
 The last two lines are the gate's own verdict: `boot-counting-absent` on a boot
 means `/boot/grub2/custom.cfg` was missing or did not read the counter, so
 `smortress-boot-counter.service` did not run — and a host in that state has no
-pre-userspace rollback, because the counter never armed it. `greenboot-grub2-set-counter`
-is what arms it when a deployment is staged; without it a deployment that never
-reaches userspace has spent counter it never had.
+pre-userspace rollback, because the counter never armed it. The gate's
+`boot_success=1 boot_counter=3` above is what arms it, not greenboot: since 0.16
+`greenboot-set-rollback-trigger` only records the staged deployment id, so a host
+whose gate never runs has gone a boot with counter it never had.
 
 With the counter in place the fallback works as designed: a deployment that never
 reaches userspace spends one of three attempts per boot and, at zero, GRUB selects

@@ -510,9 +510,11 @@ image installs greenboot's GRUB snippet as `/boot/grub2/custom.cfg`
 ends with `41_custom.cfg`, which sources that file, so the counter runs before any
 userspace without bootupd. On every boot it sets `boot_success=0` and decrements
 `boot_counter` from 3, and at zero it selects the previous deployment
-(`default=1`). `greenboot-grub2-set-counter.service` arms the counter when a
-deployment is staged, and the gate resets it (`boot_success=1`, `boot_counter=3`,
-no `default`) on every boot it reaches, so only a boot that never gets to
+(`default=1`). `greenboot-set-rollback-trigger.service` is greenboot's
+staged-deployment hook, installed `RequiredBy=ostree-finalize-staged.service`;
+since greenboot 0.16 it records the staged deployment id instead of arming the
+counter, so the gate is what keeps it armed (`boot_success=1`, `boot_counter=3`,
+no `default`) on every boot it reaches, and only a boot that never gets to
 userspace spends an attempt.
 
 The gate's predicate is that file: it journals `boot-counting-absent` only when
@@ -747,7 +749,7 @@ These require the physical host and are not claimed as proven by this task:
 - The deploy path end to end on the host (#798 T8): a CI notify arriving over
   `tag:deploy` into `127.0.0.1:8484`, `smortress-boot-counter.service` installing
   greenboot's snippet as `/boot/grub2/custom.cfg` with
-  `systemctl is-enabled greenboot-grub2-set-counter` reporting `enabled`, and
+  `systemctl is-enabled greenboot-set-rollback-trigger` reporting `enabled`, and
   `default=1` being honoured, the SP5100 watchdog arming at
   `RuntimeWatchdogSec=1min`, the gate's sandbox permitting `bootc rollback --apply`
   and `systemctl reboot`, the tenant probes (`systemctl --user --machine=apps@.host`)
