@@ -119,8 +119,9 @@ cannot be changed by the agent alone.
 
 ## Things that follow from this model
 
-- No broker logical host is named `github-*`; a test asserts that, so a
-  reintroduced App enrollment fails first.
+- No `github-*` logical host can come back by accident: the broker and its
+  enrolled config went with the k3s tree, so the shell path above is the only
+  GitHub write left to reintroduce one into.
 - Rotating the dev token is one revocation, one ciphertext edit and a restart of
   the decrypt unit; there is no file on the host to forget and no installation to
   uninstall.

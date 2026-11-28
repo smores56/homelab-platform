@@ -217,7 +217,7 @@ SDLC #710. Property under test: the machine user can push an app-only branch,
 open a pull request, and let auto-merge land it, while a direct push to `main`
 is refused and no human approval is involved. The credential is the classic
 `repo` PAT from `docs/manual-steps.md#the-machine-user-and-its-scoped-token`; the broker is a separate
-identity (`docs/broker.md`).
+identity.
 
 ### What runs automatically
 

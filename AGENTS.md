@@ -36,9 +36,8 @@
   Cloudflare OpenTofu (`tofu/`) owns the public edge and Access
   (`docs/cloudflare.md`), and the VPS runs this repository's own signed image,
   `bootc/edge/` (`docs/core/public-edge.md`).
-- `apps/` holds the source and unit tests of what ships; `deploy/` holds trees
-  an operator applies rather than the image. Two deploy paths exist and never
-  overlap: `scripts/deploy-platform.sh` for the platform plane, and
+- `apps/` holds the source and unit tests of what ships. Two deploy paths exist
+  and never overlap: `scripts/deploy-platform.sh` for the platform plane, and
   `scripts/deploy-apps.sh` for the unprivileged `homelab-apps` tenant
   (`docs/core/apps-tenant.md`).
 

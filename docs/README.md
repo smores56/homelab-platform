@@ -10,8 +10,6 @@ host that is running: the image, its Quadlets, its backups and its edge.
 | `negative-tests.md` | The adversarial properties proven against the live platform, and how each was measured. |
 | `cloudflare.md` | The zone's DNS, the public names behind the edge VPS, the retired gate and tunnels, and the OpenTofu state. |
 | `secrets.md` | Where a secret lives, which identity reads it, and what is not a secret. |
-| `broker.md` | The broker's trust boundary, request contract, and logical-host enrollment. |
-| `webhook.md` | The webhook receiver's trust boundary and request contract. |
 | `raw-replicas.md` | The raw-replica shape the collectors publish, source by source. |
 | `agent-identity.md` | The two machine credentials a general agent job receives. |
 | `agent-jobs.md` | The agent shell dispatcher, its runners and its two probes. |

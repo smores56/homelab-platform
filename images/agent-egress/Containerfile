@@ -9,8 +9,8 @@
 # The base is pinned by digest, not tagged. A tag would move under the next
 # build, and the digest this repository signs, pins in scripts/app-images.sh and
 # points a Quadlet at would then name different bytes than the ones that were
-# reviewed. This is the same python:3.13-slim digest apps/broker/Dockerfile and
-# apps/webhook/Dockerfile build from; bump it deliberately, in one change.
+# reviewed. This is the shared python:3.13-slim digest; bump it deliberately,
+# in one change, everywhere it is pinned.
 FROM python:3.13-slim@sha256:e48f59cdba69a3cbd9ed2cf0f348d90d45a8d350d98134cf1070bc106ee9ed90
 
 # The proxy tunnels TLS and the resolver only answers A/AAAA from the host's own

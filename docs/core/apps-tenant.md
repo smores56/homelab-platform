@@ -84,7 +84,7 @@ token identity, the Write role, the ruleset and the direct-push refusal, and
 
 The App is gone as a credential too: the `github-apps` enrollment, its
 `contents: write` scope and the minting code were retired on 2026-11-22
-(`docs/broker.md`, `docs/agent-identity.md`). Every GitHub write in the tenant
+(`docs/agent-identity.md`). Every GitHub write in the tenant
 path is the machine user's PAT through the shell, measured above.
 
 ## Bounds
