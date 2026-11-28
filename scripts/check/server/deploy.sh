@@ -249,7 +249,7 @@ check "the seed unit runs the installed script" \
   has 'ExecStart=/usr/libexec/agent-config-seed' units/systemd/smortress-agent-config.service
 
 # The collectors and the hosted proxy live in the agent-runtime image
-# (images/agent-runtime/Containerfile, publish-agent-runtime.yml),
+# (images/agent-runtime/Containerfile, publish-images.yml),
 # not here: this image must carry no copy of them, which is what keeps an agent-code
 # change off the OS rebuild path. The units import them from the image and mount
 # nothing from the host, so there is no second copy to drift.

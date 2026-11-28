@@ -2,9 +2,24 @@
 # the Containerfile and the pin directory; everything else is the same contract
 # every image pipeline must satisfy.
 #
-# A caller gets the signing environment, the pinned cosign, the anonymous
-# policy-checked pull, and the pin row. It must keep its own concurrency group
-# so two publishes of the same image cannot overlap.
+# It lives here rather than beside the other shared host artifacts in `lib/`,
+# where the design would put it: GitHub resolves `uses:` only for a reusable
+# workflow inside this repository's `.github/workflows/`, so a copy under `lib/`
+# could not be called at all.
+#
+# Nothing a caller supplies is ever interpolated into a `run:` block (design
+# #1011). Each input arrives as the environment variable that step's `env:` names
+# and is used quoted, so a value is data to the shell rather than text spliced
+# into the script before bash parses it. The one value that becomes a registry
+# path -- the name -- is validated by `scripts/check-publish-inputs.sh` in a job
+# of its own, which the publishing job `needs:`: no runner that installs cosign,
+# holds the signing key or logs in to the registry exists until the input is
+# proven safe, so a name carrying a command substitution fails with nothing of
+# the caller's anywhere near a shell.
+#
+# The concurrency group is here, not in the caller. Two publishes of the same
+# image must not overlap, and a caller that forgot its group would silently allow
+# exactly that. Keyed on the name, a matrix run and a dispatch serialise per image.
 name: _publish-image
 
 on:
@@ -33,11 +48,35 @@ permissions:
   packages: write
 
 jobs:
+  validate:
+    name: validate the inputs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    # Read-only, and no `environment`: this job cannot reach the signing key, so
+    # a rejected input never touches a runner that holds one.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      - name: reject an input that is unsafe as a path, a tag or a shell word
+        env:
+          NAME: ${{ inputs.name }}
+          DOCKERFILE: ${{ inputs.dockerfile }}
+          CONTEXT: ${{ inputs.context }}
+          PIN_PREFIX: ${{ inputs.pin_prefix }}
+        run: scripts/check-publish-inputs.sh
+
   publish:
     name: build, sign, verify
+    needs: validate
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     environment: server-image
+    concurrency:
+      group: publish-${{ inputs.name }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
@@ -69,16 +108,20 @@ jobs:
         id: build
         env:
           GH_TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+          NAME: ${{ inputs.name }}
+          DOCKERFILE: ${{ inputs.dockerfile }}
+          CONTEXT: ${{ inputs.context }}
         run: |
           set -euo pipefail
-          image="ghcr.io/smores56/homelab-platform/${{ inputs.name }}"
+          image="ghcr.io/smores56/homelab-platform/$NAME"
           tag="sha-${GITHUB_SHA::12}"
-          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
           docker build \
             --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
             --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
-            -f "${{ inputs.dockerfile }}" \
-            -t "$image:$tag" "${{ inputs.context }}"
+            -f "$DOCKERFILE" \
+            -t "$image:$tag" "$CONTEXT"
           docker push "$image:$tag"
           digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$image:$tag" | cut -d@ -f2)
           [[ $digest =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "no digest in RepoDigests"; exit 1; }
@@ -88,12 +131,17 @@ jobs:
         env:
           COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
           COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+          NAME: ${{ inputs.name }}
+          DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           set -euo pipefail
-          ref="ghcr.io/smores56/homelab-platform/${{ inputs.name }}@${{ steps.build.outputs.digest }}"
+          ref="ghcr.io/smores56/homelab-platform/$NAME@$DIGEST"
           cosign sign --key env://COSIGN_PRIVATE_KEY --yes "$ref"
           cosign verify --key lib/containers/cosign.pub "$ref"
       - name: prove a policy-checked, anonymous pull
+        env:
+          NAME: ${{ inputs.name }}
+          DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           set -euo pipefail
           # The entry under test is the host's own, with the key it names: the
@@ -120,24 +168,29 @@ jobs:
           printf '{}' >"$RUNNER_TEMP/empty-auth.json"
           skopeo copy --retry-times 2 --authfile "$RUNNER_TEMP/empty-auth.json" \
             --policy "$RUNNER_TEMP/policy.one.json" \
-            "docker://ghcr.io/smores56/homelab-platform/${{ inputs.name }}@${{ steps.build.outputs.digest }}" \
+            "docker://ghcr.io/smores56/homelab-platform/$NAME@$DIGEST" \
             "dir:$RUNNER_TEMP/pull"
           rm -rf "$RUNNER_TEMP/pull"
-          echo "policy-checked anonymous pull ok: ${{ inputs.name }}"
+          echo "policy-checked anonymous pull ok: $NAME"
       - name: summary
+        env:
+          NAME: ${{ inputs.name }}
+          PIN_PREFIX: ${{ inputs.pin_prefix }}
+          TAG: ${{ steps.build.outputs.tag }}
+          DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           set -euo pipefail
           {
-            echo "### ${{ inputs.name }} image"
+            echo "### $NAME image"
             echo
-            echo "\`ghcr.io/smores56/homelab-platform/${{ inputs.name }}:${{ steps.build.outputs.tag }}\`"
+            echo "\`ghcr.io/smores56/homelab-platform/$NAME:$TAG\`"
             echo
-            echo "\`ghcr.io/smores56/homelab-platform/${{ inputs.name }}@${{ steps.build.outputs.digest }}\`"
+            echo "\`ghcr.io/smores56/homelab-platform/$NAME@$DIGEST\`"
             echo
             echo "Pin it by adding this row to \`scripts/app-images.sh\`:"
             echo
             echo '```'
-            echo "  '${{ inputs.name }}|built:${{ inputs.pin_prefix }}|${{ steps.build.outputs.digest }}'"
+            echo "  '$NAME|built:$PIN_PREFIX|$DIGEST'"
             echo '```'
           } >>"$GITHUB_STEP_SUMMARY"
-          echo "pin: ${{ inputs.name }}|built:${{ inputs.pin_prefix }}|${{ steps.build.outputs.digest }}"
+          echo "pin: $NAME|built:$PIN_PREFIX|$DIGEST"

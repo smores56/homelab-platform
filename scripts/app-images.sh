@@ -16,7 +16,7 @@
 # An `upstream reference` is either an upstream image reference, which
 # `mirror-app-images.sh` copies by digest, or `built:<Containerfile>`, which
 # names an image this repository builds and signs itself
-# (.github/workflows/publish-agent-webui.yml). A built row has no upstream
+# (.github/workflows/publish-images.yml). A built row has no upstream
 # digest to preserve because the bytes are ours; the digest is the last build's,
 # and the row is written from the digest that run printed.
 #
@@ -57,7 +57,7 @@ app_images=(
   'agent-runtime|built:images/agent-runtime/Containerfile|sha256:dd5dc3547ed57bd7b797ddb2afa4b7536f336257a358be3c801bb5da5d37c5c7'
   # Built by this repository (SDLC #775), not mirrored: upstream's entrypoint
   # installs its Python dependencies from PyPI at container start, which a sealed
-  # deployment can never do. The digest is the publish-agent-webui run for the
+  # deployment can never do. The digest is the publish-images run for the
   # Containerfile at that path; a rebuild prints a new row.
   'agent-webui|built:images/agent-webui/Containerfile|sha256:fb50509ef43bcdbe4dc5bda35d725a839ba851a3455a74bb5135d706cf622220'
   # The personal browser workspace. Mirrored, not built: upstream ships a Node
@@ -73,7 +73,7 @@ app_images=(
   'agent-tmail|docker.io/spartanz51/tutabridge:0.2.0-rc.2|sha256:044415d323d3c876c4275cc4cd0bdcbef303218bf5b1356b06aa31e0b6c92ba7'
   # The calendar's provider half: our own Tuta client (apps/tuta_calendar), built
   # and signed here because Tuta serves no CalDAV and no SDK of theirs ships. The
-  # digest is the publish-tuta-calendar run for the Containerfile at that path.
+  # digest is the publish-images run for the Containerfile at that path.
   'tuta-calendar|built:images/tuta-calendar/Containerfile|sha256:c2eb3babf933250fefc9ead2cf993e5dd7c4b009e1ed00138315d46c44822111'
   # The collector egress gate (apps/agent_egress): an allowlist proxy and its DNS
   # responder, the only two peers a browsing collector may reach. Built here
@@ -82,7 +82,7 @@ app_images=(
   # The browsing collector's provider half: a real Brave from Brave's own release
   # `.deb`, which is the only way to get a browser that speaks the Sync protocol.
   # Built and signed here because the artifact is pinned by version and hash in the
-  # Containerfile rather than mirrored. The digest is the publish-brave run for
+  # Containerfile rather than mirrored. The digest is the publish-images run for
   # that Containerfile; a rebuild prints a new row, and the Quadlet's `Image=` is
   # the other half and moves with it.
   'brave|built:images/brave/Containerfile|sha256:9b505ba383925597812ffb1d52876b3b5f8f00b2bf999418936521cbb13d707e'

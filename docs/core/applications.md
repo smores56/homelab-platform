@@ -44,7 +44,7 @@ legacy `.sig` lookaside tag — that tag, not the OCI 1.1 referrer bundle, is wh
 
 A row whose reference is `built:<Containerfile>` is an image this repository
 builds and signs itself; there is no upstream digest to preserve because the
-bytes are ours. `.github/workflows/publish-agent-webui.yml` builds it, signs it
+bytes are ours. `.github/workflows/publish-images.yml` builds it, signs it
 and proves a policy-checked anonymous pull, then prints the row to commit with
 the digest that run produced.
 

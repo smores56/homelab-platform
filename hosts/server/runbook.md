@@ -789,8 +789,12 @@ skopeo inspect --no-tags --format '{{.Digest}}' \
   docker://ghcr.io/smores56/homelab-platform/immich-server@sha256:c716dc20f957aafd89fa9d284a2ec63e25c9e2d8d8e87c6197d540a3dce237db
 ```
 
+The images this repository builds itself are one workflow over a matrix
+(`publish-images.yml`), so a dispatch publishes all six and each row prints the
+pin row for `scripts/app-images.sh`:
+
 ```sh
-gh workflow run publish-agent-webui.yml --repo smores56/homelab-platform
+gh workflow run publish-images.yml --repo smores56/homelab-platform
 gh run watch --repo smores56/homelab-platform
 ```
 

@@ -181,7 +181,7 @@ Fidelity limits: the SDK supplies no tombstone, and expansion would be lossy.
 
 Tuta's SDK is not something this host can run, so the entities come from
 `python3 -m apps.tuta_calendar` (`apps/tuta_calendar/`, image
-`images/tuta-calendar/`, published by `.github/workflows/publish-tuta-calendar.yml`).
+`images/tuta-calendar/`, published by `.github/workflows/publish-images.yml`).
 It reads the provider's own JSON API -- there is no CalDAV and no supported
 alternative -- and it does exactly two things:
 

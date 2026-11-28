@@ -1,0 +1,77 @@
+# Publishes every application image this repository builds itself: one matrix
+# caller over `_publish-image.yml` (design #1011).
+#
+# The six workflows this replaces differed in nothing but their inputs. A matrix
+# row is those inputs; the contract -- the signing environment, the pinned cosign,
+# the key match, the signature policy, the anonymous pull and the pin row -- is
+# `_publish-image.yml`'s, unchanged for every row.
+#
+# What one caller costs is trigger precision. `on.push.paths` is a property of the
+# workflow, not of a row, so the filter below is the union of the six trees and a
+# change to one image's Containerfile republishes all six. That is the trade the
+# design accepted for one pipeline instead of six; per-image precision would be
+# six workflows again. The paths are otherwise each wrapper's own list, unchanged.
+#
+# The three images that are not rows are not application images: the server, the
+# edge and the laptop build bootc artifacts through `scripts/build-image.sh` with
+# build arguments, a resolved base digest, a mutable update handle and a legacy
+# `.sig` lookaside assertion, and none of them has an apps pin row to print.
+# They keep their own workflows, and each is required to by GitHub rather than by
+# taste: `on.push.paths` cannot be per matrix row, so the server's `bootc/**` and
+# the edge's `bootc/edge/**` cannot share a caller without every app commit
+# rebuilding the OS. The laptop builds from `hosts/laptop` with its own `pins.env`
+# and its own checker, and ships the `smorespro-image` repository's artifact.
+name: publish-images
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/agent_egress/**"
+      - "apps/agent_proxy/**"
+      - "apps/brave_ingest/**"
+      - "apps/tuta_calendar/**"
+      - "images/agent-egress/**"
+      - "images/agent-mail/**"
+      - "images/agent-runtime/**"
+      - "images/agent-webui/**"
+      - "images/brave/**"
+      - "images/tuta-calendar/**"
+      - "libs/data_plane/**"
+      - ".github/workflows/publish-images.yml"
+      - ".github/workflows/_publish-image.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    name: ${{ matrix.name }}
+    strategy:
+      # One image failing is not a reason to abandon the other five; each row
+      # signs and reports on its own.
+      fail-fast: false
+      matrix:
+        include:
+          - name: agent-egress
+            dockerfile: images/agent-egress/Containerfile
+          - name: agent-mail
+            dockerfile: images/agent-mail/Containerfile
+          - name: agent-runtime
+            dockerfile: images/agent-runtime/Containerfile
+          - name: agent-webui
+            dockerfile: images/agent-webui/Containerfile
+          - name: brave
+            dockerfile: images/brave/Containerfile
+          - name: tuta-calendar
+            dockerfile: images/tuta-calendar/Containerfile
+    # The pin row's prefix is the Containerfile in every row, so the matrix
+    # carries one path instead of two copies of the same string.
+    uses: ./.github/workflows/_publish-image.yml
+    with:
+      name: ${{ matrix.name }}
+      dockerfile: ${{ matrix.dockerfile }}
+      pin_prefix: ${{ matrix.dockerfile }}
+    secrets: inherit
