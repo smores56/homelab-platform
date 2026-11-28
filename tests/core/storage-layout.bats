@@ -351,7 +351,7 @@ case $1 in
   *) exit 0 ;;
 esac
 SH
-    for bin in blkid install chown chmod; do
+    for bin in blkid install chown chmod setfacl; do
         printf '#!/bin/sh\nexit 0\n' >"$BATS_TEST_TMPDIR/bin/$bin"
     done
     printf '#!/bin/sh\nexit 0\n' >"$BATS_TEST_TMPDIR/bin/mountpoint"
