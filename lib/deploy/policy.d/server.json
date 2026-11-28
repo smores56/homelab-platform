@@ -1,0 +1,14 @@
+{
+  "role": "server",
+  "user_agent": "smortress-deploy-verify",
+  "repos": ["homelab-apps", "homelab-platform"],
+  "images": {
+    "homelab-platform": "smores56/homelab-platform/server"
+  },
+  "api_cache_ttl": 120,
+  "missing_artifact": {
+    "kind": "not-deployable",
+    "reason": "tag-missing"
+  },
+  "signature_gate": null
+}

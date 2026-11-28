@@ -1,24 +1,27 @@
 #!/usr/bin/env bats
 # bats file_tags=deploy
-# The edge verifier (design #939, T6): the server's decision functions under the
-# edge's policy, and bootc's own signature verdict.
+# The edge policy of the verifier (design #939, T6, #1025): one program, two
+# tables, and bootc's own signature verdict.
 #
-# The subject is bootc/edge/rootfs/usr/libexec/deploy-verify.py, which asks
-# bootc/lib/deploy/decisions.py the same questions the server's verifier does --
-# the allowlist, the tag name, the digest and label shapes, descendancy, the
-# state and denylist records -- and adds the two answers that are the edge's own:
-# an absent `edge:sha-<c12>` tag is a hold rather than a verdict, and the
-# signature verdict is `bootc switch --enforce-container-sigpolicy`'s exit code.
+# The subject is lib/deploy/verify.py, the program both hosts install, run here
+# under lib/deploy/policy.d/edge.json. It asks bootc/lib/deploy/decisions.py the
+# questions the server's run asks -- the tag name, the digest and label shapes,
+# descendancy, the state and denylist records -- and the table adds the answers
+# that are the edge's own: one repository, its own image, no API cache, an absent
+# `edge:sha-<c12>` tag held rather than refused, and the gate
+# `bootc switch --enforce-container-sigpolicy` between the label and the verdict.
 #
 # Two things are proven here, in the order the deploy path meets them:
 #
-#   - parity: every golden fixture both roles can be asked ends in the same
-#     verdict from the edge's verifier as from the server's, byte for byte except
-#     the image repository a refusal's detail names. The one document the roles
-#     deliberately answer differently -- an absent tag -- is pinned from both
-#     sides, so neither can drift alone. tests/deploy/fixtures.bats pins the same
-#     documents against the server's own programs; this file is what makes those
-#     fixtures a contract between two roles rather than a description of one.
+#   - parity: every golden fixture both hosts can be asked ends in the same
+#     verdict under the edge's table as under the server's, byte for byte except
+#     the image repository a refusal's detail names. The comparison is between
+#     the same program twice, so what it holds to account is the tables and
+#     nothing else. The one document they deliberately answer differently -- an
+#     absent tag -- is pinned from both sides, so neither can drift alone.
+#     tests/deploy/fixtures.bats pins the same documents under the server's
+#     table; this file is what makes those fixtures a contract between two hosts
+#     rather than a description of one.
 #   - the signature verdict: a policy rejection from bootc is a refusal that
 #     stages nothing, and every other way a switch can fail stays retryable,
 #     because a flaky registry is not a bad image.
@@ -27,8 +30,9 @@
 load ../helpers
 
 fixtures=bootc/lib/deploy/fixtures
-server_verify=bootc/server/rootfs/usr/libexec/deploy-verify.py
-edge_verify=bootc/edge/rootfs/usr/libexec/deploy-verify.py
+verify=lib/deploy/verify.py
+server_policy=lib/deploy/policy.d/server.json
+edge_policy=lib/deploy/policy.d/edge.json
 decisions=bootc/lib/deploy/decisions.py
 # The GitHub API and the ghcr registry, shared with tests/deploy/fixtures.bats:
 # both roles replay one document against one implementation of the world, or a
@@ -89,7 +93,7 @@ setup() {
     state_dir=$work/state
     bootc=$BATS_FILE_TMPDIR/fake-bootc
 
-    for file in "$server_verify" "$edge_verify" "$decisions" "$world_server"; do
+    for file in "$verify" "$server_policy" "$edge_policy" "$decisions" "$world_server"; do
         [[ -r $file ]] || fail "$file is missing"
     done
     for file in jq python3 curl cmp; do
@@ -157,17 +161,18 @@ seed() { # <fixture>
     return 0
 }
 
-# replay <binary> <fixture> <out> <err> [<VAR=value>...]: one verifier run
-# against the fixture's world and its host records. The exit code is left in $rc:
-# a command substitution would run the run in a subshell and lose it.
-replay() { # <binary> <fixture> <out> <err> [<VAR=value>...]
-    local binary=$1 fixture=$2 out=$3 err=$4 repo sha
+# replay <policy> <fixture> <out> <err> [<VAR=value>...]: one run of the one
+# verifier under one host's policy table, against the fixture's world and its host
+# records. The exit code is left in $rc: a command substitution would run the run
+# in a subshell and lose it.
+replay() { # <policy> <fixture> <out> <err> [<VAR=value>...]
+    local policy=$1 fixture=$2 out=$3 err=$4 repo sha
     shift 4
     repo=$(jq -r '.request.repo' "$fixture")
     sha=$(jq -r '.request.commit' "$fixture")
     rc=0
-    env "$@" DEPLOY_GITHUB_API=$base DEPLOY_REGISTRY=$base \
-        python3 "$binary" --repo "$repo" --commit "$sha" >"$out" 2>"$err" || rc=$?
+    env "$@" DEPLOY_VERIFY_POLICY=$repo_root/$policy DEPLOY_GITHUB_API=$base DEPLOY_REGISTRY=$base \
+        python3 "$verify" --repo "$repo" --commit "$sha" >"$out" 2>"$err" || rc=$?
 }
 
 # expect_bytes <fixture> <jq-path>: the fixture's expected bytes, with the one
@@ -212,9 +217,9 @@ parity() { # <fixture>
     start_world "$fixture"
     seed "$fixture"
 
-    replay "$server_verify" "$fixture" "$work/server.out" "$work/server.err"
+    replay "$server_policy" "$fixture" "$work/server.out" "$work/server.err"
     server_rc=$rc
-    replay "$edge_verify" "$fixture" "$work/edge.out" "$work/edge.err" FAKE_BOOTC_SWITCH=ok
+    replay "$edge_policy" "$fixture" "$work/edge.out" "$work/edge.err" FAKE_BOOTC_SWITCH=ok
     edge_rc=$rc
 
     if [[ $name == "$hold_fixture.json" ]]; then
@@ -291,7 +296,7 @@ done
     local fixture=$fixtures/tag-missing.json
     start_world "$fixture"
     seed "$fixture"
-    replay "$edge_verify" "$fixture" "$work/edge.out" "$work/edge.err" FAKE_BOOTC_SWITCH=ok
+    replay "$edge_policy" "$fixture" "$work/edge.out" "$work/edge.err" FAKE_BOOTC_SWITCH=ok
     assert_equal "$rc" 4
     assert_equal "$(jq -r .reason "$work/edge.out")" no-artifact
     assert_equal "$(jq -r .repo "$work/edge.out")" homelab-platform
@@ -303,7 +308,7 @@ done
     local fixture=$fixtures/platform-verified.json
     start_world "$fixture"
     seed "$fixture"
-    replay "$edge_verify" "$fixture" "$work/edge.out" "$work/edge.err" \
+    replay "$edge_policy" "$fixture" "$work/edge.out" "$work/edge.err" \
         FAKE_BOOTC_SWITCH=bad-signature
     assert_equal "$rc" 3
     assert_equal "$(jq -r .verdict "$work/edge.out")" rejected
@@ -327,7 +332,7 @@ done
     local fixture=$fixtures/platform-verified.json
     start_world "$fixture"
     seed "$fixture"
-    replay "$edge_verify" "$fixture" "$work/edge.out" "$work/edge.err" FAKE_BOOTC_SWITCH=outage
+    replay "$edge_policy" "$fixture" "$work/edge.out" "$work/edge.err" FAKE_BOOTC_SWITCH=outage
     assert_equal "$rc" 4
     assert_equal "$(jq -r .verdict "$work/edge.out")" infra-failure
     assert_equal "$(jq -r .reason "$work/edge.out")" switch-failed
@@ -342,7 +347,7 @@ done
     local fixture=$fixtures/platform-verified.json
     start_world "$fixture"
     seed "$fixture"
-    replay "$edge_verify" "$fixture" "$work/edge.out" "$work/edge.err" BOOTC_BIN=/nonexistent/bootc
+    replay "$edge_policy" "$fixture" "$work/edge.out" "$work/edge.err" BOOTC_BIN=/nonexistent/bootc
     assert_equal "$rc" 4
     assert_equal "$(jq -r .reason "$work/edge.out")" bootc-missing
 }
@@ -354,7 +359,7 @@ done
     local fixture=$fixtures/platform-verified.json
     start_world "$fixture"
     jq -nc '{schema:1,repos:{}}' >"$state_dir/state.json"
-    replay "$edge_verify" "$fixture" "$work/edge.out" "$work/edge.err" FAKE_BOOTC_SWITCH=ok
+    replay "$edge_policy" "$fixture" "$work/edge.out" "$work/edge.err" FAKE_BOOTC_SWITCH=ok
     assert_equal "$rc" 3
     assert_equal "$(jq -r .reason "$work/edge.out")" bootstrap-required
     assert_equal "$(bootc_calls)" ""

@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 # bats file_tags=deploy
-# Offline checks for deploy-verify and the drain's verification action
-# (SDLC #798, T2).
+# Offline checks for the deploy verifier, under the server's policy table, and
+# for the drain's verification action (SDLC #798, T2; #1025).
 #
 # The host re-derives every deploy decision, so the checks themselves are driven
 # here against a loopback server that answers as both the GitHub API and the
@@ -16,6 +16,11 @@
 # and its own server under $BATS_TEST_TMPDIR, and the fixture a check needs is
 # rebuilt by a helper named for it.
 #
+# The program is the one both hosts install (lib/deploy/verify.py); what this
+# suite proves is the server's table of it -- two repositories, the server image,
+# the 120 s cache, an absent image being not-deployable -- and, at the end, that
+# each of those rows is the table's and not a branch in the program.
+#
 # Two kinds of check the shell suite carried are not repeated here. The state
 # library's own internals -- `denylist_has_digest` before and after an entry, and
 # `cache_clear` -- are tests/deploy/state.bats's, which owns that file; and a
@@ -23,7 +28,11 @@
 # server's log, not a passing check.
 load ../helpers
 
-verify=bootc/server/rootfs/usr/libexec/deploy-verify.py
+# The verifier both hosts install (lib/deploy/verify.py). What this suite answers
+# is the server's policy: the two-repository allowlist, the 120 s API cache, and
+# a commit with no image being not-deployable rather than a failure.
+verify=lib/deploy/verify.py
+policy=lib/deploy/policy.d/server.json
 lib=scripts/deploy-state.sh
 drain=scripts/deploy-drain.sh
 
@@ -232,7 +241,7 @@ setup() {
     state_dir=$work/state
     : >"$requests"
 
-    for file in "$verify" "$lib" "$drain"; do
+    for file in "$verify" "$policy" "$lib" "$drain"; do
         [[ -r $file ]] || fail "$file is missing"
     done
     for tool in jq python3 timeout; do
@@ -246,6 +255,10 @@ setup() {
     export DEPLOY_LOCK_FILE=$work/deploy.lock
     export DEPLOY_JOURNAL_MAX_BYTES=5242880
     export DEPLOY_VERIFY_BIN=$repo_root/$verify
+    # The program reads its inputs -- allowlist, images, cache window, what an
+    # absent artifact means -- from this host's table, so the drain the tests
+    # start verifies by them too.
+    export DEPLOY_VERIFY_POLICY=$repo_root/$policy
     export DEPLOY_PLATFORM_BIN=$BATS_FILE_TMPDIR/fake-platform
     export DEPLOY_APPS_BIN=$BATS_FILE_TMPDIR/fake-apps
     export FAKE_PLATFORM_LOG=$work/platform-calls
@@ -764,6 +777,79 @@ unwritable_cache() {
 @test "an unwritable cache is named" {
     unwritable_cache
     json_is "$out" .reason cache-unwritable
+}
+
+# --- the policy table is the only statement of this host's inputs --------------
+# The program carries no host, repository or image name -- scripts/check-lib-drift.sh
+# fails the tree if one appears -- so every row it reads is proved here by changing
+# it: a table the repository does not ship still decides the run, which is what
+# makes the rows data rather than a branch the next host would have to edit. These
+# are the rows the two hosts differ on; tests/deploy/edge-verify.bats proves the
+# edge's table end to end.
+policy_run() { # <jq-filter> <repo> <commit>: one run under a table written here
+    jq "$1" "$policy" >"$work/policy.json"
+    rc=0
+    out=$(DEPLOY_STATE_DIR="$state_dir" DEPLOY_VERIFY_POLICY="$work/policy.json" \
+        DEPLOY_GITHUB_API="$base" DEPLOY_REGISTRY="$base" \
+        python3 "$verify" --repo "$2" --commit "$3" 2>"$work/verify.err") || rc=$?
+}
+
+verifiable() {
+    scenario .
+    seed_state "$deployed" >/dev/null
+    : >"$requests"
+}
+
+@test "the image repository is the table's, not the program's" {
+    verifiable
+    policy_run '.images["homelab-platform"] = "example.test/other"' homelab-platform "$commit"
+    assert_equal "$rc" 0
+    assert_equal "$(count_in "$requests" "/v2/example.test/other/manifests/$tag")" 1
+}
+
+@test "a table with no cache window leaves no cache file" {
+    verifiable
+    policy_run '.api_cache_ttl = 0' homelab-platform "$commit"
+    assert_equal "$rc" 0
+    assert [ ! -e "$state_dir/cache.json" ]
+}
+
+@test "an absent artifact is the verdict the table names" {
+    scenario '.tag.found = false'
+    seed_state "$deployed" >/dev/null
+    policy_run '.missing_artifact = {"kind": "infrastructure", "reason": "no-artifact"}' \
+        homelab-platform "$commit"
+    assert_equal "$rc" 4
+    json_is "$out" .verdict infra-failure
+    json_is "$out" .reason no-artifact
+}
+
+@test "a repository outside the table is a usage error" {
+    verifiable
+    policy_run '.repos = ["homelab-apps"] | .images = {}' homelab-platform "$commit"
+    assert_equal "$rc" 2
+}
+
+# The table is read before a single check runs, and a table that contradicts
+# itself stops there: a verifier that ran on half a policy would answer with
+# another host's allowlist or resolve the other host's image.
+@test "a table that names an image for a repository it does not deploy is refused" {
+    verifiable
+    policy_run '.repos = ["homelab-apps"]' homelab-platform "$commit"
+    assert_equal "$rc" 1
+    assert_contains "$(cat "$work/verify.err")" \
+        'images names repositories this host does not deploy'
+}
+
+# A named table that is absent is an error, never a fallback to the installed one:
+# a suite that pointed this at the wrong table would otherwise prove the other
+# host and read as a pass.
+@test "a policy table the run names but that is not there is refused" {
+    rc=0
+    out=$(DEPLOY_STATE_DIR="$state_dir" DEPLOY_VERIFY_POLICY="$work/no-such-policy.json" \
+        python3 "$verify" --repo homelab-platform --commit "$commit" 2>"$work/verify.err") || rc=$?
+    assert_equal "$rc" 1
+    assert_contains "$(cat "$work/verify.err")" 'DEPLOY_VERIFY_POLICY names no file'
 }
 
 # --- usage --------------------------------------------------------------------

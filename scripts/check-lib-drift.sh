@@ -7,9 +7,11 @@
 # Design #1011 asks for one copy per contract and a comparison that fails on
 # drift, and SDLC #1024 lands the artifacts that were duplicated: the containers
 # policy with the cosign public key and registries.d, the sudoers pair, and the
-# greenboot required check. Before this, each of those existed two or three times
-# and nothing compared the copies -- a host could run a policy, a gate or a
-# health check nobody had reviewed for it.
+# greenboot required check. SDLC #1025 adds the last one: the deploy verifier,
+# which existed twice and differed in per-host inputs rather than in behaviour.
+# Before this, each of those existed two or three times and nothing compared the
+# copies -- a host could run a policy, a gate or a health check nobody had
+# reviewed for it.
 #
 # The comparison is these rules:
 #
@@ -21,8 +23,10 @@
 #   3. every host wires lib/. Each Containerfile names the lib files that host
 #      needs, and the image paths it installs them at are the host's data.
 #   4. per-host differences are data. The policy composes from the shared
-#      contract plus the host's registry table, and the greenboot check carries
-#      no host at all while its assertions are that host's file.
+#      contract plus the host's registry table, the greenboot check carries no
+#      host at all while its assertions are that host's file, and the deploy
+#      verifier carries no host, repository or image name while its policy table
+#      is that host's.
 #   5. no stale reference. No file in the tree names the path a copy used to
 #      have.
 #
@@ -92,7 +96,13 @@ one_copy 'the laptop registries.d entry' lib/containers/registries.d/ghcr.io-smo
   'registries\.d/ghcr\.io-smorespro-image\.yaml'
 one_copy 'the greenboot required check' lib/greenboot/required.d/10-health.sh \
   'greenboot/required\.d/10-health\.sh'
+# Both spellings of the verifier's name, because a copy beside a program is the
+# shape the second one took: `<dir>/deploy-verify.py` in a host rootfs, and
+# `deploy/verify.py` in the tree.
+one_copy 'the deploy verifier' lib/deploy/verify.py 'deploy[-/]verify\.py'
 for host in server edge; do
+  one_copy "the $host deploy policy" "lib/deploy/policy.d/$host.json" \
+    "deploy/policy\.d/$host\.json"
   one_copy "the $host greenboot assertions" "lib/greenboot/assertions.d/$host/10-health.sh" \
     "greenboot/assertions\.d/$host/10-health\.sh"
 done
@@ -110,7 +120,9 @@ for host_root in bootc/server/rootfs bootc/edge/rootfs hosts/laptop/rootfs; do
     etc/sudoers.d/11-agent-socket \
     etc/sudoers.d/20-sops-env \
     etc/greenboot/check \
-    etc/greenboot/assertions.d; do
+    etc/greenboot/assertions.d \
+    usr/libexec/deploy-verify.py \
+    usr/libexec/deploy-verify; do
     if [[ -e $repo/$host_root/$contract ]]; then
       fail "$host_root holds no copy of $contract" 'the copy is in lib/; a host tree states only what is that host'"'"'s'
     else
@@ -148,10 +160,14 @@ installs bootc/server/Containerfile \
   lib/sudoers/11-agent-socket \
   lib/sudoers/20-sops-env \
   lib/greenboot/required.d/10-health.sh \
-  lib/greenboot/assertions.d/server/10-health.sh
+  lib/greenboot/assertions.d/server/10-health.sh \
+  lib/deploy/verify.py \
+  lib/deploy/policy.d/server.json
 installs bootc/edge/Containerfile \
   lib/greenboot/required.d/10-health.sh \
-  lib/greenboot/assertions.d/edge/10-health.sh
+  lib/greenboot/assertions.d/edge/10-health.sh \
+  lib/deploy/verify.py \
+  lib/deploy/policy.d/edge.json
 installs hosts/laptop/Containerfile \
   lib/containers/cosign.pub \
   lib/containers/policy.json \
@@ -250,6 +266,86 @@ for host in server edge; do
   fi
 done
 
+# The deploy verifier (SDLC #1025). What a host deploys is its policy table, so a
+# host name in the program is the drift the split removes: two copies differing in
+# one line is how the server's and the edge's verifiers came to answer differently
+# about the same commit. The names checked are the hosts, the owner and the two
+# repositories -- everything a line of this program would have had to hardcode.
+verifier=$lib/deploy/verify.py
+if [[ -x $verifier ]]; then
+  ok 'the deploy verifier ships executable'
+else
+  fail 'the deploy verifier ships executable' 'the drain execs it, and a 0644 one fails with 126'
+fi
+if grep -qE 'smortress|smorespro|smoresnet|sammohr|smores56|homelab-platform|homelab-apps' "$verifier"; then
+  fail 'the deploy verifier carries no host' \
+    "a host, repository or image name in ${verifier#"$repo"/} belongs in lib/deploy/policy.d/<host>.json"
+else
+  ok 'the deploy verifier carries no host'
+fi
+if grep -qE 'decisions\.(ROLES|role|allows)\b' "$verifier"; then
+  fail 'the deploy verifier picks no role' \
+    "${verifier#"$repo"/} names a role the shared table defines, so the host would be in the program again"
+else
+  ok 'the deploy verifier picks no role'
+fi
+
+# A host that runs no deploy installs no verifier and no table: the laptop's
+# updates are its own, and a verifier there would be a program with no queue to
+# read and a policy nobody could fill in.
+if grep -qE 'lib/deploy(/verify\.py|/policy\.d/)' "$repo/hosts/laptop/Containerfile"; then
+  fail 'hosts/laptop/Containerfile installs no deploy verifier' \
+    'the laptop has no deploy queue; the verifier belongs to the hosts that drain one'
+else
+  ok 'hosts/laptop/Containerfile installs no deploy verifier'
+fi
+
+# The table has to say what the rest of the deploy plane already says. The drain
+# refuses a queued entry the role does not allow (`decisions.allows`, and the
+# shell spelling in bootc/lib/deploy/drain.sh), so a verifier with a wider
+# allowlist would answer for a commit the queue never hands it, and a narrower one
+# would refuse a request the queue accepted. The image repository is the other
+# half: a verdict that resolved a tag out of the other host's repository would
+# stage an image nobody signed for this host.
+policy_agrees() {
+  local host=$1 out
+  if ! out=$(python3 - "$lib/deploy/policy.d/$host.json" "$repo/bootc/lib/deploy" <<'PY'
+import json, sys
+
+path, shared = sys.argv[1], sys.argv[2]
+sys.path.insert(0, shared)
+import decisions
+
+with open(path, encoding="utf-8") as handle:
+    table = json.load(handle)
+role = decisions.role(table["role"])
+problems = []
+if sorted(table["repos"]) != sorted(role.repos):
+    problems.append(
+        f"repos {sorted(table['repos'])} are not the {role.name} role's {sorted(role.repos)}"
+    )
+# The platform is the one repository with an image: an apps commit has no reboot
+# and no artifact to resolve, so a table that gave it one would send the tenant
+# apply through a registry.
+want = {decisions.PLATFORM: role.image_repo}
+if table.get("images", {}) != want:
+    problems.append(f"images {table.get('images', {})} are not {want}")
+print("; ".join(problems))
+PY
+  ); then
+    fail "the $host deploy policy is readable" "the comparison could not run it: $out"
+    return
+  fi
+  if [[ -z $out ]]; then
+    ok "the $host deploy policy agrees with the shared role table"
+  else
+    fail "the $host deploy policy agrees with the shared role table" "$out"
+  fi
+}
+for host in server edge; do
+  policy_agrees "$host"
+done
+
 # --- 5. no stale reference -----------------------------------------------------
 
 # The paths the copies used to have. A script, a workflow or a document that still
@@ -266,6 +362,7 @@ stale=(
   'rootfs/etc/sudoers.d/20-sops-env'
   '10-smortress-health.sh'
   '10-edge-health.sh'
+  'rootfs/usr/libexec/deploy-verify.py'
 )
 for pattern in "${stale[@]}"; do
   hit=$(grep -rIlF --exclude-dir=.git --exclude-dir=node_modules --exclude=check-lib-drift.sh --exclude=lib-drift.bats -- "$pattern" "$repo" 2>/dev/null |

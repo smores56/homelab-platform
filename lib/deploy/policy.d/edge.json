@@ -1,0 +1,14 @@
+{
+  "role": "edge",
+  "user_agent": "smoresnet-deploy-verify",
+  "repos": ["homelab-platform"],
+  "images": {
+    "homelab-platform": "smores56/homelab-platform/edge"
+  },
+  "api_cache_ttl": 0,
+  "missing_artifact": {
+    "kind": "infrastructure",
+    "reason": "no-artifact"
+  },
+  "signature_gate": "bootc-switch"
+}

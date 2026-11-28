@@ -3,16 +3,19 @@
 # The golden fixtures for the deploy decision (design #939, T2).
 #
 # The server and the edge ask the same question with different policy, and they
-# will be two verifiers, two drains and two gates. What keeps them honest is this
-# directory: every document under bootc/lib/deploy/fixtures/ names a request, the
-# world behind it (GitHub, the registry, the host's state and denylist) and the
-# outcome today produces -- byte for byte. Both verifiers are meant to replay the
-# same documents, so a fixture this suite accepts is the contract the edge has to
-# meet, not a description of the server's code.
+# run one verifier (lib/deploy/verify.py) under two policy tables. What keeps the
+# two answers honest is this directory: every document under
+# bootc/lib/deploy/fixtures/ names a request, the world behind it (GitHub, the
+# registry, the host's state and denylist) and the outcome today produces -- byte
+# for byte. Both policies are meant to replay the same documents, so a fixture
+# this suite accepts is the contract the edge has to meet, not a description of
+# the server's code.
 #
-# This suite replays each one through the server's own programs, which is what
-# makes it a drift test: a changed reason, a reordered key, a dropped check or a
-# gate code the drain stops honouring fails here.
+# This suite replays each one through the server's own programs under the
+# server's policy table (lib/deploy/policy.d/server.json), which is what makes it
+# a drift test: a changed reason, a reordered key, a dropped check or a gate code
+# the drain stops honouring fails here. tests/deploy/edge-verify.bats replays the
+# same documents through the same program under the edge's table.
 #
 #   bats tests/deploy/fixtures.bats
 #
@@ -28,7 +31,8 @@
 load ../helpers
 
 fixtures=bootc/lib/deploy/fixtures
-verify=bootc/server/rootfs/usr/libexec/deploy-verify.py
+verify=lib/deploy/verify.py
+policy=lib/deploy/policy.d/server.json
 drain=scripts/deploy-drain.sh
 state_lib=scripts/deploy-state.sh
 decisions=bootc/lib/deploy/decisions.py
@@ -67,7 +71,7 @@ setup() {
     work=$BATS_TEST_TMPDIR
     state_dir=$work/state
 
-    for file in "$verify" "$drain" "$state_lib" "$decisions" "$world_server"; do
+    for file in "$verify" "$policy" "$drain" "$state_lib" "$decisions" "$world_server"; do
         [[ -r $file ]] || fail "$file is missing"
     done
     for file in jq python3 timeout cmp; do
@@ -80,6 +84,9 @@ setup() {
     export DEPLOY_STATE_DIR=$state_dir
     export DEPLOY_LOCK_FILE=$work/deploy.lock
     export DEPLOY_VERIFY_BIN=$repo_root/$verify
+    # The verifier is one program for both hosts; this suite is the server's, so
+    # the server's policy table is the one every fixture is replayed under.
+    export DEPLOY_VERIFY_POLICY=$repo_root/$policy
     export DEPLOY_PLATFORM_BIN=$BATS_FILE_TMPDIR/fake-platform
     export DEPLOY_APPS_BIN=$BATS_FILE_TMPDIR/fake-apps
     export DEPLOY_DRAIN_RESCAN_PAUSE=0

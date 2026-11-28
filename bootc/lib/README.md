@@ -18,9 +18,9 @@ host, and the poll is what fills the queue.
 | Path | Consumed by |
 | --- | --- |
 | `pins.env` | `bootc/server/Containerfile`, `images/*` publishers, `scripts/refresh-pins.sh` |
-| `deploy/decisions.py` | both verifiers and both drains: the repo allowlist per role, the tag name, the digest and label shapes, descendancy, the journal vocabulary, the coalesce key, the state and denylist records |
+| `deploy/decisions.py` | the verifier (`lib/deploy/verify.py`, run under each host's `lib/deploy/policy.d/<host>.json`) and both drains: the repo allowlist per role, the tag name, the digest and label shapes, descendancy, the journal vocabulary, the coalesce key, the state and denylist records |
 | `deploy/drain.sh` | both drains: the FIFO/pop/retry loop, with the role's gate and action as hooks |
-| `deploy/fixtures/` | both verifiers: one JSON document per accept/hold/refuse outcome, replayed by `tests/deploy/fixtures.bats` (the server's programs) and `tests/deploy/edge-verify.bats` (the same documents through both verifiers, which is what makes the set a contract between the roles rather than a description of one) |
+| `deploy/fixtures/` | both hosts' policy tables: one JSON document per accept/hold/refuse outcome, replayed by `tests/deploy/fixtures.bats` (the server's programs under the server's table) and `tests/deploy/edge-verify.bats` (the same documents through the same program under the edge's, which is what makes the set a contract between the hosts rather than a description of one) |
 
 The image installs `deploy/` at `/usr/libexec/deploy/`; each program resolves the
 shared directory from its own location, so a checkout runs the checkout's copy and

@@ -61,9 +61,11 @@ fi
 # shellcheck source=/dev/null
 source "$state_lib"
 
-# The verifier ships in the edge rootfs beside this program, and in the image both
-# are /usr/libexec.
-verify_bin=$(deploy_resolve "${DEPLOY_VERIFY_BIN:-}" deploy-verify.py "$self_dir/deploy-verify.py")
+# The verifier is the repository's one program (lib/deploy/verify.py, SDLC #1025).
+# The image installs it as /usr/libexec/deploy-verify.py, beside this drain; a
+# checkout runs it out of lib/ rather than a second copy beside this program.
+verify_bin=$(deploy_resolve "${DEPLOY_VERIFY_BIN:-}" deploy-verify.py \
+  "$self_dir/../../../../../lib/deploy/verify.py")
 
 systemctl_bin=${DEPLOY_SYSTEMCTL:-systemctl}
 reboot_timeout=${DEPLOY_REBOOT_TIMEOUT:-60}

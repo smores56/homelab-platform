@@ -50,10 +50,11 @@ fi
 # shellcheck source=/dev/null
 source "$state_lib"
 
-# The verifier ships in the image rootfs beside the receiver rather than through
-# the `smortress-src` loop, which installs `.sh` files only.
+# The verifier is the repository's one program (lib/deploy/verify.py, SDLC #1025),
+# installed at /usr/libexec/deploy-verify.py beside this drain; it is Python, so
+# the `smortress-src` loop, which installs `.sh` files only, is not how it lands.
 verify_bin=$(deploy_resolve "${DEPLOY_VERIFY_BIN:-}" deploy-verify.py \
-  "$self_dir/../bootc/server/rootfs/usr/libexec/deploy-verify.py")
+  "$self_dir/../lib/deploy/verify.py")
 
 # The platform gate ships the same way and owns its own 3600 s budget and every
 # child's deadline; this is only the net under a wedged gate.
