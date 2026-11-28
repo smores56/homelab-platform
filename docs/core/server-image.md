@@ -55,7 +55,7 @@ rollback path. Operator-only actions are in `docs/manual-steps.md#install-a-host
 | `/usr/lib/systemd/system/smortress-deploy-poll.timer`, `/usr/lib/systemd/system/smortress-deploy-poll.service`, `/usr/lib/systemd/system/smortress-deploy-heartbeat.timer`, `/usr/lib/systemd/system/smortress-deploy-heartbeat.service`, `/usr/lib/systemd/system/smortress-deploy-retry.timer`, `/usr/lib/systemd/system/smortress-boot-gate.service` | The daily 03:00 deploy window, the dead-man beat for the `deploy` Healthchecks check, the five-minute retry of a deferred queue entry, and the gate that runs `Before=boot-complete.target`. |
 | `/usr/lib/systemd/system/smortress-apps-health.timer`, `/usr/lib/systemd/system/smortress-apps-health.service` | The five-minute probe of the tenant's apps, `OnBootSec=5min` then `OnUnitActiveSec=5min` with `Persistent=false`: a host that was off owes no probe for the window nothing was running. Ordered after `smortress-tailscale-serve.service`, because a base path is checked against the routes that unit declares. |
 | `/usr/share/smortress/deploy-units.txt` | The units the boot gate requires: what "serving" means for this host. The receiver's own units are deliberately absent — a missing deploy secret must page, not roll the host back — and so is every unit that reads the tenant's plan (`smortress-tailscale-serve`, `smortress-apps-quota`), because one that exits 1 on an app definition would denylist the platform digest for an app's fault. |
-| `/usr/lib/bootupd/grub2-static/configs.d/10-smortress-count.cfg` | The three-attempt boot counter. It is **not active on this host**: `bootupd` reports every component current and has no way to force a regeneration, so the snippet never reaches `grub.cfg` (`docs/manual-steps.md#the-boot-gate-and-its-denials`). The gate journals `boot-counting-absent` each boot. |
+| `/boot/grub2/custom.cfg` | greenboot's three-attempt boot counter, installed by `smortress-boot-counter.service` from `/usr/share/smortress/boot-counter.cfg`. `grub.cfg` ends with `41_custom.cfg`, which sources this file, so it is how counting works without bootupd (`docs/manual-steps.md#the-boot-gate-and-its-counter`). The gate reads this file to decide whether the counter is armed. |
 | `/etc/systemd/system.conf.d/10-watchdog.conf` | `RuntimeWatchdogSec=1min`, so a hung PID 1 becomes a reboot. No `kernel.panic`: without a bootloader counter, a panic reboot would loop the same image. |
 | `/etc/tmpfiles.d/smortress.conf` | Creates `/var/lib/homelab/deploy`, `queue` and `work` at `0700 root`: the receiver's state tree, outside every recovery group because the journal and `bootc status` rebuild it. |
 
@@ -471,23 +471,30 @@ failed costs a journal line and never a boot.
 ### Below userspace
 
 `bootc` has no boot counting and the gate only runs if userspace starts, so the
-image ships `/usr/lib/bootupd/grub2-static/configs.d/10-smortress-count.cfg`: on
-every boot it would set `boot_success=0`, decrement `boot_counter` from 3, and at
-zero select the previous deployment (`default=1`).
+image installs greenboot's GRUB snippet as `/boot/grub2/custom.cfg`
+(`smortress-boot-counter.service`, `scripts/boot-counter-install.sh`): `grub.cfg`
+ends with `41_custom.cfg`, which sources that file, so the counter runs before any
+userspace without bootupd. On every boot it sets `boot_success=0` and decrements
+`boot_counter` from 3, and at zero it selects the previous deployment
+(`default=1`). `greenboot-grub2-set-counter.service` arms the counter when a
+deployment is staged, and the gate resets it (`boot_success=1`, `boot_counter=3`,
+no `default`) on every boot it reaches, so only a boot that never gets to
+userspace spends an attempt.
 
-**On this host that mechanism is not active.** `bootupctl status` reports every
-component at its latest version and `bootupctl update` has no way to force a
-regeneration, so the snippet never reaches `/boot/grub2/grub.cfg`; the host was
-measured, not assumed (`docs/manual-steps.md#the-boot-gate-and-its-denials`). The gate therefore journals
-`boot-counting-absent` on every boot and writes no GRUB flags, and the image ships
+The gate's predicate is that file: it journals `boot-counting-absent` only when
+`/boot/grub2/custom.cfg` is missing or does not read `boot_counter`, which is the
+state a host is in before `smortress-boot-counter.service` has run. The image ships
 no `kernel.panic`: a panic that reboots with no counter would loop the same image
 forever. `RuntimeWatchdogSec=1min` stays armed, with the same caveat for a PID 1
 that hangs on every boot.
 
-The rollback guarantee is the userspace one: a deployment that boots but fails the
-health gate is denylisted and `bootc rollback --apply` reverts it. A host that
-fails before userspace is a console recovery, and the recovery point is the
-pre-reboot snapshot the gate requires.
+Two rollbacks exist. A deployment that boots but fails the health gate is
+denylisted and `bootc rollback --apply` reverts it. A deployment that never reaches
+userspace is dropped by the bootloader after three attempts, and the gate on that
+boot journals `rolled-back-by-bootloader` because the booted digest is not the
+recorded one. A host whose counter was never installed has neither: that is a
+console recovery, and the recovery point is the pre-reboot snapshot the gate
+requires (`docs/manual-steps.md#the-boot-gate-and-its-counter`).
 
 ### The two backstops
 
@@ -704,12 +711,14 @@ These require the physical host and are not claimed as proven by this task:
   public key.
 - `bootc rollback` with the real deployment history and the next signed switch.
 - The deploy path end to end on the host (#798 T8): a CI notify arriving over
-  `tag:deploy` into `127.0.0.1:8484`, `bootupctl update` installing
-  `10-smortress-count.cfg` into `/boot/grub2/grub.cfg` and `default=1` being
-  honoured, the SP5100 watchdog arming at `RuntimeWatchdogSec=1min`, the gate's
-  sandbox permitting `bootc rollback --apply` and `systemctl reboot`, the tenant
-  probes (`systemctl --user --machine=apps@.host`) and the shape of
-  `tailscale serve status --json`, plus one real deploy of each repository and a
+  `tag:deploy` into `127.0.0.1:8484`, `smortress-boot-counter.service` installing
+  greenboot's snippet as `/boot/grub2/custom.cfg` with
+  `systemctl is-enabled greenboot-grub2-set-counter` reporting `enabled`, and
+  `default=1` being honoured, the SP5100 watchdog arming at
+  `RuntimeWatchdogSec=1min`, the gate's sandbox permitting `bootc rollback --apply`
+  and `systemctl reboot`, the tenant probes (`systemctl --user --machine=apps@.host`)
+  and the shape of `tailscale serve status --json`, plus one real deploy of each
+  repository and a
   rollback drill.
 
 ## Local proof recorded by T2

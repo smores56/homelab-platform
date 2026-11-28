@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 # bats file_tags=deploy
-# The GRUB snippet that ships, the missing tool, and the counter a host's GRUB never reads (§8-§11).
+# The snippet the image installs, the missing GRUB tool, and where the counter is read (§8-§11).
 #
 # One file of the suite that was tests/deploy/boot.bats, split so bats can run
 # the sections in parallel; the fakes, the fixture, the drivers and the
@@ -63,17 +63,23 @@ gate_failed_rollback() {
 }
 
 # --- 10. the boot counter ships with the image ----------------------------
+# The snippet's content is greenboot's, so the tree keeps no copy of it to
+# assert against: the image copies the package's 08_greenboot.cfg to its own path
+# and removes it from bootupd's directory, because a regeneration that injected
+# it would run the counter twice in one boot.
 
-@test "the GRUB snippet clears boot_success on every boot" {
-    assert grep -qF -- 'set boot_success=0' "$snippet"
+@test "the image ships greenboot's snippet at the path its installer reads" {
+    assert grep -qF -- \
+        'install -m 0644 /usr/lib/bootupd/grub2-static/configs.d/08_greenboot.cfg /usr/share/smortress/boot-counter.cfg' \
+        "$containerfile"
 }
 
-@test "the GRUB snippet counts the attempts" {
-    assert grep -qF -- 'boot_counter=' "$snippet"
+@test "the image removes the snippet from bootupd's directory" {
+    assert grep -qF -- 'rm -f /usr/lib/bootupd/grub2-static/configs.d/08_greenboot.cfg' "$containerfile"
 }
 
-@test "the GRUB snippet falls back to the previous deployment" {
-    assert grep -qF -- 'set default=1' "$snippet"
+@test "no hand-rolled copy of the counter ships in the tree" {
+    assert [ ! -e bootc/server/rootfs/usr/lib/bootupd/grub2-static/configs.d ]
 }
 
 @test "a hung PID 1 becomes a reboot the counter can act on" {
@@ -86,19 +92,42 @@ gate_failed_rollback() {
     assert [ ! -e bootc/server/rootfs/etc/sysctl.d/10-panic.conf ]
 }
 
-# --- 11. a host whose GRUB does not read the counter says so ----------------
-# bootupd reports every component current and never regenerates grub.cfg, so the
-# variables are written nowhere it would be read: the gate must journal that and
-# still decide the deployment.
-gate_without_boot_counting() {
-    printf 'menuentry nothing\n' >"$GRUB_CFG"
-    printf 'boot_success=0\nboot_counter=0\ndefault=1\n' >"$GRUB_ENV"
+# --- 11. the counter is the file GRUB sources, /boot/grub2/custom.cfg -------
+# The predicate used to grep grub.cfg, which bootupd generated once and never
+# regenerates, so every boot journaled boot-counting-absent while the snippet sat
+# in custom.cfg and the counter never reset. These cases pin the new path.
+clean_boot() {
     # A clean boot: no deployment record, nothing to revert, and the units a
-    # healthy host has. The previous cases deliberately broke both.
+    # healthy host has. The earlier cases deliberately broke both.
     rm -f "$state_dir/pending.json" "$state_dir/apply.json"
     printf 'core-one.service\ncore-two.service\n' >"$STUB_SYSTEMCTL_ACTIVE"
     : >"$STUB_SYSTEMCTL_FAILED"
     run_gate
+}
+
+gate_with_boot_counting() {
+    clean_boot
+}
+
+gate_without_boot_counting() {
+    # The only file that reads the counter is gone: the installer never reached
+    # custom.cfg, while the decoy grub.cfg still reads it.
+    rm -f "$GRUB_CUSTOM_CFG"
+    printf 'boot_success=0\nboot_counter=0\ndefault=1\n' >"$GRUB_ENV"
+    clean_boot
+}
+
+@test "a host whose custom.cfg reads the counter is marked good" {
+    gate_with_boot_counting
+    assert_equal "$rc" 0
+    assert_equal "$(grub_flags '.boot_success')" 1
+    assert_equal "$(grub_flags '.boot_counter')" 3
+    assert_equal "$(grub_flags '.default')" null
+}
+
+@test "a host with the snippet in custom.cfg journals no boot-counting-absent" {
+    gate_with_boot_counting
+    refute grep -qF -- 'boot-counting-absent' "$state_dir/journal.jsonl"
 }
 
 @test "a host without boot counting still finishes the gate" {
@@ -114,5 +143,12 @@ gate_without_boot_counting() {
 @test "the missing counter is journaled" {
     gate_without_boot_counting
     assert_equal "$(journal_field boot-counting-absent '.reason' | tail -1)" \
-        "grub.cfg does not read boot_counter"
+        "custom.cfg does not read boot_counter"
+}
+
+@test "a grub.cfg that reads the counter is not the file the gate looks at" {
+    gate_without_boot_counting
+    assert grep -qF -- 'set boot_counter=3' "$GRUB_CFG"
+    assert_equal "$(journal_field boot-counting-absent '.reason' | tail -1)" \
+        "custom.cfg does not read boot_counter"
 }

@@ -129,7 +129,7 @@ zpool_bin=${ZPOOL_BIN:-zpool}
 mountpoint_bin=${MOUNTPOINT_BIN:-mountpoint}
 grub_editev=${GRUB_EDITEV:-grub2-editenv}
 grub_env=${GRUB_ENV:-/boot/grub2/grubenv}
-grub_cfg=${GRUB_CFG:-/boot/grub2/grub.cfg}
+grub_custom_cfg=${GRUB_CUSTOM_CFG:-/boot/grub2/custom.cfg}
 deploy_units_file=${DEPLOY_UNITS_FILE:-/usr/share/smortress/deploy-units.txt}
 # Three attempts, matching the GRUB snippet: the number a fresh counter is reset
 # to on every boot the gate accepts.
@@ -176,18 +176,22 @@ grub_available() {
 # `default` is cleared with it -- a fallback entry left selected by an earlier
 # boot would otherwise pull the next reboot back to the older deployment while
 # this one is healthy.
-# The counter only exists when GRUB reads it, and on this host it does not: the
-# snippet ships in /usr/lib/bootupd/grub2-static/configs.d, but bootupd reports
-# every component current and never regenerates grub.cfg, so the variables would
-# be written and ignored. Name that once per boot instead of pretending, and
-# never fail the gate over a flag write -- the gate's job is to keep or roll back
-# this deployment, and a read-only /boot is not a deployment verdict.
+# The counter exists only when GRUB reads it, and the file GRUB reads it from is
+# /boot/grub2/custom.cfg, not grub.cfg: bootupd generated grub.cfg once and never
+# regenerates it, so greenboot's copy in bootupd's configs.d never reaches it,
+# while `41_custom.cfg` at the end of grub.cfg sources custom.cfg whenever it
+# exists -- which is where smortress-boot-counter.service puts the snippet
+# (scripts/boot-counter-install.sh). Reading grub.cfg reported the counter absent
+# on every boot while it was armed. When custom.cfg is missing the flags would be
+# written and ignored, so name that once per boot instead of pretending -- and
+# never fail the gate over a flag write, because the gate's job is to keep or roll
+# back this deployment, and a read-only /boot is not a deployment verdict.
 boot_counting_present() {
-  [[ -r $grub_cfg ]] && grep -q 'boot_counter' "$grub_cfg" 2>/dev/null
+  [[ -r $grub_custom_cfg ]] && grep -q 'boot_counter' "$grub_custom_cfg" 2>/dev/null
 }
 
 grub_flags_unavailable() {
-  journal_append boot-counting-absent '{"reason":"grub.cfg does not read boot_counter"}' || true
+  journal_append boot-counting-absent '{"reason":"custom.cfg does not read boot_counter"}' || true
   return 0
 }
 

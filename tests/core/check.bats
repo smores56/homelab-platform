@@ -265,7 +265,8 @@ runbook_names() { # <step>
 
 # Every human step this feature needs, by the name the code or the console uses.
 for step in deploy-notify TS_OAUTH_CLIENT_ID TS_OAUTH_CLIENT_SECRET \
-    DEPLOY_WEBHOOK_SECRET tag:deploy bootupctl /boot/grub2/grub.cfg journal.jsonl \
+    DEPLOY_WEBHOOK_SECRET tag:deploy bootupctl /boot/grub2/custom.cfg journal.jsonl \
+    greenboot-grub2-set-counter \
     webhook-secret-next.yaml; do
     register "the runbook names $step" runbook_names "$step"
 done
