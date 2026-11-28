@@ -1158,7 +1158,7 @@ service_is() { grep -qF "name  = \"svc:$1\"" <<<"$(service_block "$1")"; }
 service_advertises() { grep -qF 'ports = ["tcp:443"]' <<<"$(service_block "$1")"; }
 service_gated() { grep -qE 'count[[:space:]]*=[[:space:]]*var\.tailnet == "" \? 0 : 1' <<<"$(service_block "$1")"; }
 
-for spec in 'immich:Immich' 'navidrome:Navidrome' 'assistant:personal web UI' \
+for spec in 'immich:Immich' 'navidrome:Navidrome' 'assistant:personal workspace' \
     'agent:general web UI' 'sync:Syncthing GUI' 'recovery:recovery reader'; do
     address=${spec%%:*}
     label=${spec#*:}

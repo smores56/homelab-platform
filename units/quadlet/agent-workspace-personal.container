@@ -1,0 +1,91 @@
+# The personal Hermes Workspace. It shares the personal gateway's network
+# namespace instead of joining agent-local.network: the gateway's dashboard binds
+# loopback (a non-loopback bind fails closed without an auth provider), and only a
+# process in that namespace can reach it. That keeps the unauthenticated
+# dashboard off the bridge, where the model container and the legacy web UI also
+# live. The workspace's own UI listener is in this namespace too, so the gateway's
+# bridge address answers it; its login gate is the boundary for that surface. The
+# workspace reaches the gateway's 18001 and the dashboard's 9119 at 127.0.0.1,
+# and the UI's own 3000 listener is published by agent-local as
+# 127.0.0.1:18008 -- a netns-sharing Quadlet cannot publish a port itself.
+#
+# BindsTo/PartOf follow the gateway: the workspace is a process in the gateway's
+# network namespace, so a gateway restart has to take it along rather than leave
+# it holding a namespace that no longer exists.
+#
+# The image is upstream's prebuilt workspace, mirrored into this repository's
+# namespace and pinned by digest in scripts/app-images.sh. It is not built here:
+# the image ships its Node build, and a sealed deployment never fetches at start.
+#
+# HERMES_UID/HERMES_GID remap the image's `workspace` account to the platform uid
+# before its entrypoint drops privileges, the same way the Hermes runtime does;
+# without it the mounted trees would be owned by an account the container cannot
+# write. ReadOnly=false is deliberate: the entrypoint rewrites /etc/passwd for
+# that remap, and DropCapability cannot be set for the same reason it cannot on
+# agent-local -- the root phase needs the capabilities it drops itself.
+#
+# The data plane is the gateway's authority, not a wider one: the tree is
+# read-only, only todos/ and notes/ are writable, and the vault's nested
+# read-only bind wins at the kernel. The file browser and terminal therefore
+# cannot write where the agent cannot. The memory tree is read-only on top of the
+# workspace's state: the Memory page can browse what the agent remembered, and an
+# edit fails instead of writing a second copy the agent never reads.
+#
+# The Workspace's own state is a named volume, not a directory under
+# /var/lib/agent/local: the agent mounts that dataset read-write, and a session
+# store inside it would be something a prompt-injected agent could read or
+# rewrite. A named volume is outside every agent mount and is not in a recovery
+# group; it holds login sessions and caches, both of which a container recreate
+# may lose without losing the deployment.
+#
+# The gateway token and the workspace password arrive through EnvironmentFile on
+# /run: the workspace reads both from the environment, has no _FILE variant, and
+# podman's type=env secret would carry the ciphertext's trailing newline into a
+# password that never compares equal. /run is outside the agent's mounted
+# dataset, so the agent can neither read the gate nor replace the file the next
+# restart would load.
+#
+# The entrypoint chowns /home/workspace recursively; the state volume is chowned
+# first, and the read-only memory bind fails that chown with a warning the
+# entrypoint continues past. The state is therefore writable and the memory stays
+# read-only.
+[Unit]
+Description=Hermes Workspace, personal deployment (no egress)
+Requires=zfs-ready@state-agent-local.service zfs-ready@raw-files.service sops-decrypt.service smortress-agent-config.service agent-local.service
+BindsTo=agent-local.service
+PartOf=agent-local.service
+After=network-online.target zfs-ready@state-agent-local.service zfs-ready@raw-files.service sops-decrypt.service smortress-agent-config.service agent-local.service
+Wants=network-online.target agent-local.service
+
+[Container]
+Image=ghcr.io/smores56/homelab-platform/agent-workspace@sha256:1ec05339750da7caaf1cd0183c8c3b188856918b377407b4ac1dafca67e42d88
+ContainerName=smortress-agent-workspace-personal
+Network=agent-local.container
+Environment=HERMES_API_URL=http://127.0.0.1:18001
+Environment=HERMES_DASHBOARD_URL=http://127.0.0.1:9119
+Environment=HERMES_HOME=/home/workspace/.hermes
+Environment=HERMES_WORKSPACE_DIR=/workspace
+Environment=HERMES_UID=1000
+Environment=HERMES_GID=1000
+Environment=HOST=0.0.0.0
+Environment=PORT=3000
+Environment=COOKIE_SECURE=1
+Environment=TZ=UTC
+EnvironmentFile=/run/smortress/workspace.env
+Volume=agent-workspace-state:/home/workspace/.hermes
+Volume=/var/lib/agent/local/memory:/home/workspace/.hermes/memory:ro
+Volume=/srv/files:/workspace:ro
+Volume=/srv/files/todos:/workspace/todos:rw
+Volume=/srv/files/notes:/workspace/notes:rw
+Volume=/srv/files/vault:/workspace/vault:ro
+ReadOnly=false
+NoNewPrivileges=true
+
+[Service]
+# 143 is SIGTERM, which a deliberate stop sends: not a failure.
+SuccessExitStatus=143
+Restart=on-failure
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

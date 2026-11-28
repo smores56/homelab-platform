@@ -89,7 +89,7 @@ done
 case ${url#https://} in
     immich.*) code=200 ;;
     navidrome.*) code=302 ;;
-    assistant.*) code=302 ;;
+    assistant.*) code=200 ;;
     agent.*) code=302 ;;
     sync.*) code=200 ;;
     opds.*) code=401 ;;
@@ -101,7 +101,7 @@ case ${STUB_MODE:-} in
     drained) printf '000'; exit 28 ;;
     # A login redirect spelled differently than the one seen on the day the
     # classes were read: the class is the promise, the spelling is not.
-    redirect303) case ${url#https://} in immich.* | sync.* | opds.*) ;; *) code=303 ;; esac ;;
+    redirect303) case ${url#https://} in immich.* | sync.* | assistant.* | opds.*) ;; *) code=303 ;; esac ;;
     # OPDShelf answering 200 instead of refusing: a page where the class says 4xx.
     swap) case ${url#https://} in opds.*) code=200 ;; esac ;;
 esac

@@ -624,8 +624,8 @@ git push
 ### Rotate the agent's credentials
 
 Gateway keys and UI passwords are rewritten by `smortress-agent-config.service`
-(`.env` and `webui.env`) on every start, so a rotation lands when that service
-restarts:
+(`.env`, `webui.env` and `/run/smortress/workspace.env`) on every start, so a
+rotation lands when that service restarts:
 
 ```sh
 scripts/secret.sh edit agent-local-api-key.yaml       # agent.local_api_key: openssl rand -hex 32
@@ -634,7 +634,7 @@ scripts/secret.sh edit agent-hosted-key.yaml          # agent.hosted_key: the pr
 scripts/secret.sh edit agent-ui-personal-password.yaml   # ui.personal_password
 scripts/secret.sh stage agent-local-api-key.yaml      # all four are in agents.json
 sudo systemctl restart smortress-agent-config.service
-sudo systemctl restart agent-webui-personal.service
+sudo systemctl restart agent-webui-personal.service agent-workspace-personal.service
 ```
 
 ### Rotate the deploy webhook key
@@ -1110,7 +1110,10 @@ and confirm the unauthenticated inspect answers, because a private package is a
 failed pull on the first boot after the deploy. The mirror signs the index digest
 and every platform manifest of it, because `containers/image` verifies the manifest
 it copies and rejects an index-only signature with `A signature was required, but
-no signature exists`.
+no signature exists`. A new row also needs its package public before the platform
+image that names it is deployed: the mirror and the server-image build can run in
+parallel, and a host that boots first fails the pull instead of starting the
+container.
 
 ```sh
 gh workflow run publish-agent-webui.yml --repo smores56/homelab-platform
@@ -1228,11 +1231,11 @@ systemctl cat agent-proxy.service | head -40
 ```
 
 ```sh
-sudo systemctl stop agent-webui-personal agent-local agent-model
+sudo systemctl stop agent-webui-personal agent-workspace-personal agent-local agent-model
 sudo systemctl stop agent-local-network.service
 sudo podman network rm systemd-agent-local
 sudo systemctl start agent-local-network.service agent-model.service \
-  agent-local.service agent-webui-personal.service
+  agent-local.service agent-webui-personal.service agent-workspace-personal.service
 ```
 
 ```sh
@@ -1245,7 +1248,7 @@ nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv
 sudo podman logs smortress-agent-local 2>&1 | grep -E 'stage2|Changing hermes'
 ```
 
-Five containers answer `Up`. The memory directories must be `1000:1000 0750` before
+Six containers answer `Up`. The memory directories must be `1000:1000 0750` before
 the gateways start, and `nvidia-smi` must list `llama-server` — a separate fact from
 the container being up; no entry means `ggml_cuda_init` failed or
 `smortress-selinux-nvidia-map.service` did not load its rule. A `Permission
@@ -1299,11 +1302,12 @@ sign-in staged by hand: the SimpleFIN access URL, the TutaBridge session and its
 local IMAP password, the Tuta calendar session, and the Brave Sync seed. The
 commands are `docs/core/applications.md`, "Collector sign-ins".
 
-### Verify the two browser UIs
+### Verify the browser UIs
 
-Both run the pre-baked image, so the first check is that starting them installs
-nothing (`Downloading uv` means the image is not the baked one), and that each
-publishes on loopback only behind its own password gate.
+The general web UI and the legacy personal web UI (kept only as the Workspace
+rollback) run the pre-baked image, so the first check is that starting them
+installs nothing (`Downloading uv` means the image is not the baked one), and that
+each publishes on loopback only behind its own password gate.
 
 ```sh
 sudo systemctl start agent-webui-personal.service agent-webui-general.service
@@ -1317,7 +1321,7 @@ done
 
 Each `/` answers `302` toward `/login?next=/` and `/health` `200` without a
 session; a `200` on `/` means no password reached the process, so read
-`/var/lib/agent/local/webui.env` (which must be `1000:1000 0400`). The personal UI
+`/var/lib/agent/local/webui.env` (which must be `0:0 0400`). The legacy personal UI
 must reach nothing off the host, and each UI must be a client of its own
 deployment's gateway:
 
@@ -1327,21 +1331,53 @@ sudo podman exec smortress-agent-webui-personal python3 -c \
 sudo podman logs --since 2m smortress-agent-local 2>&1 | grep -c 'POST /v1'
 ```
 
-From a tailnet device open `https://smortress.<tailnet>.ts.net:8444/` (personal, the
-pinned local model) and `:8445` (general, through `agent-proxy`), signing in with
-each deployment's own password, read from its bundle at the key the index names:
+From a tailnet device open `https://smortress.<tailnet>.ts.net:8444/` (the personal
+Workspace, on the pinned local model) and `:8445` (the general web UI, through
+`agent-proxy`), signing in with each deployment's own password, read from its
+bundle at the key the index names:
 
 ```sh
 sops -d --extract '["ui"]["personal_password"]' secrets/agents.json
 ```
 
-The same two UIs also answer at `https://assistant.<tailnet>.ts.net/` and
+They also answer at `https://assistant.<tailnet>.ts.net/` and
 `https://agent.<tailnet>.ts.net/` through their own Services, which is the only
 publicly trusted name either has: the `*.sammohr.dev` aliases, their `A` records
 and the Caddy that answered them are retired.
 
-The first-run wizard is disabled, so `Missing imports: run_agent` is expected;
-the gateways are the tool surface.
+The legacy personal web UI is rollback only: it remains on `127.0.0.1:18006` and
+has no tailnet name. The first-run wizard is disabled there, so `Missing imports:
+run_agent` is expected; the gateways are the tool surface.
+
+The personal Workspace is the served UI now, and it replaces the personal web UI
+at the `assistant` name. It is a client of the personal gateway and its
+dashboard, and it uses the same login password:
+
+```sh
+sudo systemctl start agent-workspace-personal.service
+curl -sS -o /dev/null -w '18008 / -> %{http_code} %{redirect_url}\n' http://127.0.0.1:18008/
+curl -sS -o /dev/null -w '18008 /api/sessions -> %{http_code}\n' http://127.0.0.1:18008/api/sessions
+sudo stat -c '%u:%g %a' /run/smortress/workspace.env          # expect 0:0 400
+sudo podman exec smortress-agent-local python3 -c \
+  'import urllib.request; print(urllib.request.urlopen("http://127.0.0.1:9119/api/status", timeout=3).status)'
+sudo podman exec smortress-agent-workspace-personal curl -sS -m 3 https://1.1.1.1 >/dev/null; echo "exit=$?"
+```
+
+`18008 /` answers `200` with the Workspace shell; that shell is public, and
+`/api/sessions` answers `401`, which is the login gate. The dashboard probe answers
+`200`, and the egress probe exits non-zero (the workspace has no route off the
+host).
+Sign in at `https://assistant.<tailnet>.ts.net/` with the personal password and
+confirm the workspace detects the gateway and dashboard. The workspace shares the
+gateway's network namespace, so the dashboard is on that namespace's loopback and
+nothing on `agent-local.network` can reach it. The old personal web UI remains on
+`127.0.0.1:18006` for rollback and is no longer served by a tailnet name; reach it
+through an SSH forward:
+
+```sh
+ssh -N -L 18006:127.0.0.1:18006 smortress
+# then open http://127.0.0.1:18006
+```
 
 ### Fetch the pinned model
 
@@ -1380,7 +1416,7 @@ sudo systemctl stop smortress-agent-collect-finance.timer \
 sudo systemctl stop smortress-agent-mail-stream.service agent-tmail.service \
   agent-brave.service syncthing.service
 sudo systemctl stop agent-webui-personal.service agent-webui-general.service \
-  agent-local.service agent-general.service agent-proxy.service
+  agent-workspace-personal.service agent-local.service agent-general.service agent-proxy.service
 sudo scripts/agent-runtime-drill.sh mounts
 sudo scripts/agent-runtime-drill.sh credentials
 sudo scripts/agent-runtime-drill.sh restore agent-local --backend all
@@ -2163,7 +2199,7 @@ each number landed.
 | §40.1–40.6 | Applications and agents; Restore an application by hand |
 | §40.7, §40.11 | Rotate the agent's credentials; Validate the units |
 | §40.8 | Fetch the pinned model |
-| §40.13 | Verify the two browser UIs |
+| §40.13 | Verify the browser UIs |
 | §40.14 | Claim the SimpleFIN access URL |
 | §40.15 | Sign in to the Tuta mail bridge |
 | §40.16 | Sign in to the Tuta calendar exporter |

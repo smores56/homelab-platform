@@ -47,15 +47,15 @@ setup() { ts_setup; }
     assert_equal "$(service_served svc:navidrome:443)" 'http://127.0.0.1:4533'
 }
 
-@test "the personal web UI Service endpoint is declared exactly once, over https/443" {
+@test "the personal workspace Service endpoint is declared exactly once, over https/443" {
     core_run
     assert_equal \
-        "$(grep -cF -- 'serve --bg --service=svc:assistant --https=443 http://127.0.0.1:18006' "$log" || true)" 1
+        "$(grep -cF -- 'serve --bg --service=svc:assistant --https=443 http://127.0.0.1:18008' "$log" || true)" 1
 }
 
-@test "svc:assistant advertises the personal UI on its own port, not a host port" {
+@test "svc:assistant advertises the personal workspace on its own port, not a host port" {
     core_run
-    assert_equal "$(service_served svc:assistant:443)" 'http://127.0.0.1:18006'
+    assert_equal "$(service_served svc:assistant:443)" 'http://127.0.0.1:18008'
 }
 
 @test "the general web UI Service endpoint is declared exactly once, over https/443" {
@@ -131,9 +131,9 @@ setup() { ts_setup; }
     serves host:8448 / http://127.0.0.1:4533
 }
 
-@test "host:8444 still fronts the personal UI as the rollback" {
+@test "host:8444 still fronts the personal workspace as the rollback" {
     core_run
-    serves host:8444 / http://127.0.0.1:18006
+    serves host:8444 / http://127.0.0.1:18008
 }
 
 @test "host:8445 still fronts the general UI as the rollback" {

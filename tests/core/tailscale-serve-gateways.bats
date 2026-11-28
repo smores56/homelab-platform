@@ -26,9 +26,9 @@ setup() { ts_setup; }
     serves host:443 /apps/agent-general http://127.0.0.1:18002
 }
 
-@test "the personal UI gets its own HTTPS port" {
+@test "the personal workspace gets its own HTTPS port" {
     core_run
-    serves host:8444 / http://127.0.0.1:18006
+    serves host:8444 / http://127.0.0.1:18008
 }
 
 @test "the general UI gets its own HTTPS port" {

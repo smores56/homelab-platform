@@ -48,13 +48,13 @@
 set -uo pipefail
 
 # <app> -> the status class its `GET /` answers with, read off the live Services
-# on 2026-11-25. Three UIs redirect, two serve, the catalogue refuses: the class
-# is what the application promises a stranger, and an exact code would turn a
-# login spelling change into a pager.
+# on 2026-11-27. The Workspace serves its shell (2); the general UI redirects (3);
+# the catalogue refuses (4): the class is what the application promises a
+# stranger, and an exact code would turn a login spelling change into a pager.
 declare -A want=(
   [immich]=2
   [navidrome]=3
-  [assistant]=3
+  [assistant]=2
   [agent]=3
   [sync]=2
   [opds]=4

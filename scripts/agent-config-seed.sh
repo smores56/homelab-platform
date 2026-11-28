@@ -14,7 +14,8 @@
 #      equal. These keys are self-issued and revocable; the hosted provider key is
 #      not here at all, it is in agent-proxy. The same reason writes `webui.env`:
 #      the web UI takes its gateway key and its own password from the environment
-#      and has no `_FILE` variant either.
+#      and has no `_FILE` variant either, and on the personal side
+#      `/run/smortress/workspace.env` gives the workspace the same two values.
 #
 # It also creates `<dataset>/memory` and `<dataset>/webui` with its
 # `state` and `workspace` children for the web UI, plus `index` on the personal
@@ -87,8 +88,23 @@ for spec in personal:local general:general; do
     printf 'HERMES_WEBUI_GATEWAY_API_KEY=%s\n' "$api_key_value"
     printf 'HERMES_WEBUI_PASSWORD=%s\n' "$ui_password_value"
   } >"$home/webui.env.new"
-  install -o 1000 -g 1000 -m 0400 "$home/webui.env.new" "$home/webui.env"
+  install -o 0 -g 0 -m 0400 "$home/webui.env.new" "$home/webui.env"
   rm -f "$home/webui.env.new"
+  # The workspace uses the same two values under its own names: HERMES_API_TOKEN
+  # is the gateway's API_SERVER_KEY, HERMES_PASSWORD is its login gate. The file
+  # lives on /run, outside the agent's mounted dataset: the agent owns
+  # /var/lib/agent/local and could replace a file or directory there, and it must
+  # not be able to substitute its own workspace environment at the next restart.
+  if [[ $state == local ]]; then
+    install -d -o 0 -g 0 -m 0700 /run/smortress
+    {
+      printf 'HERMES_API_TOKEN=%s\n' "$api_key_value"
+      printf 'HERMES_PASSWORD=%s\n' "$ui_password_value"
+    } >/run/smortress/workspace.env.new
+    install -o 0 -g 0 -m 0400 /run/smortress/workspace.env.new \
+      /run/smortress/workspace.env
+    rm -f /run/smortress/workspace.env.new
+  fi
   unset api_key_value ui_password_value
 
   install -d -o 1000 -g 1000 -m 0750 "$home/memory" \
@@ -136,5 +152,5 @@ for spec in personal:local general:general; do
   fi
 
   echo "agent-config-seed: $state is seeded" \
-    "(config, .env, webui.env, memory, index, UI roots)"
+    "(config, .env, webui.env, workspace.env, memory, index, UI roots)"
 done

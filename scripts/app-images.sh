@@ -60,6 +60,11 @@ app_images=(
   # deployment can never do. The digest is the publish-agent-webui run for the
   # Containerfile at that path; a rebuild prints a new row.
   'agent-webui|built:images/agent-webui/Containerfile|sha256:fb50509ef43bcdbe4dc5bda35d725a839ba851a3455a74bb5135d706cf622220'
+  # The personal browser workspace. Mirrored, not built: upstream ships a Node
+  # build and a sealed deployment never fetches at runtime. There is no version
+  # tag past 2.1.3, so `main-c631425` names the v2.3.0 tree and the digest is
+  # the pin.
+  'agent-workspace|ghcr.io/outsourc-e/hermes-workspace:main-c631425|sha256:1ec05339750da7caaf1cd0183c8c3b188856918b377407b4ac1dafca67e42d88'
   # The mail collector's provider half. Tuta serves no IMAP on purpose, so the far
   # side of the sync is TutaBridge: a local TLS IMAP server in front of Tuta's API,
   # and the only process that holds the account session. Mirrored, signed by our

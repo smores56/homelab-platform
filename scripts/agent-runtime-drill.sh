@@ -366,6 +366,7 @@ agent_containers=(
   smortress-agent-proxy
   smortress-agent-webui-personal
   smortress-agent-webui-general
+  smortress-agent-workspace-personal
 )
 collector_containers=(
   smortress-agent-collect-finance

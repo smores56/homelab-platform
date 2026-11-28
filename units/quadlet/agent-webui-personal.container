@@ -1,7 +1,7 @@
 # The personal deployment's browser UI. It is a client of the personal gateway
 # and nothing else: the only peer it can reach is smortress-agent-local:18001 on
-# agent-local.network, which is internal, so the UI has no route off the host
-# either. The tailnet still reaches it because Serve forwards to
+# agent-local.network, which has no default route, so the UI has no route off the
+# host either. The tailnet still reaches it because Serve forwards to
 # 127.0.0.1:18006, which is host-side DNAT -- a published port, not a route in
 # this container's namespace.
 #
