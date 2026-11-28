@@ -47,7 +47,7 @@ while IFS= read -r name; do
   # A built row is published, signed and proved by its own workflow; there is no
   # upstream image to copy, and its digest would never equal ours.
   if upstream=$(app_image_built "$name"); then
-    echo "mirror-app-images: skipping $name, which publish-agent-webui.yml builds from $upstream"
+    echo "mirror-app-images: skipping $name, which publish-images.yml builds from $upstream"
     continue
   fi
   # The source is repo@digest, never tag@digest: skopeo rejects a reference that

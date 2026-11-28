@@ -93,7 +93,7 @@ for _row in "${app_images[@]}"; do
   fi
   registered "$_name pin is a digest" pin_is_a_digest "$_name"
   # A built row names the Containerfile this repository builds and signs itself
-  # (publish-agent-webui.yml). The bytes are ours, so there is no upstream digest
+  # (publish-images.yml). The bytes are ours, so there is no upstream digest
   # to preserve and nothing for the mirror to copy -- only the Containerfile has
   # to exist, and the digest has to be the one that run printed.
   if [[ $_upstream == built:* ]]; then

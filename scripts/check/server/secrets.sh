@@ -203,7 +203,7 @@ for program in $(libexec_programs units bootc/server/rootfs scripts/*.sh); do
   elif grep -qF "/usr/libexec/$program" bootc/server/Containerfile; then
     ok "the image installs /usr/libexec/$program"
   elif grep -qF "/usr/libexec/$program" images/agent-runtime/Containerfile; then
-    # The agent programs ship in their own image (publish-agent-runtime).
+    # The agent programs ship in their own image (publish-images).
     ok "the runtime image installs /usr/libexec/$program"
   else
     check "the image installs /usr/libexec/$program" has "scripts/$program.sh" bootc/server/Containerfile
