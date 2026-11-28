@@ -2,18 +2,18 @@
 # bats file_tags=deploy
 # The edge's two deploy triggers and the queue they feed (design #939, T11).
 #
-# The server has three moving parts between a merge and a reboot: the notify job
-# (its own suite, tests/deploy/edge-notify.bats), the poll on a timer
-# (tests/deploy/poll.bats drives the program), and `smortress-deploy.path`, which
-# turns a queue entry into a drain. The edge gets the same three with edge names,
-# and what this suite asserts is the difference: no sops unit to wait for, the
-# dead-man URL from `/etc/smoresnet`, the one repository the edge receiver admits,
-# the same quarter-hour cadence with no catch-up at boot, and the edge's own state
-# directory writable and nothing else.
+# The server has two moving parts between a merge and a reboot: the poll on a
+# timer (tests/deploy/poll.bats drives the program) and `smortress-deploy.path`,
+# which turns a queue entry into a drain. Since #1018 there is no notify job and no
+# listener on either host. The edge gets the same two with edge names, and what
+# this suite asserts is the difference: no sops unit to wait for, the dead-man URL
+# from `/etc/smoresnet`, the same quarter-hour cadence with no catch-up at boot,
+# no inbound unit at all, and the edge's own state directory writable and nothing
+# else.
 #
 # Nothing runs a real systemd here: the units are read, and the two cross-file
 # invariants -- the writable path is the state directory the image creates, and the
-# polled repository is the receiver's allowlist -- are compared against the files
+# polled repository is the drain's allowlist -- are compared against the files
 # that own them.
 #
 #   bats tests/deploy/edge-triggers.bats
@@ -132,13 +132,13 @@ env_value() { sed -n "s/^Environment=$2=//p" "$1" | head -n1; }
     assert grep -qE '^RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX$' "$service"
 }
 
-# --- the poll asks for what the receiver admits -----------------------------
+# --- the poll asks for what the drain admits -------------------------------
 
-# The poll writes straight into the queue, so it bypasses the receiver's allowlist;
-# polling homelab-apps would spend one of the 32 slots on a request the drain then
-# refuses. The allowlist is read from the shared decision rather than trusted to
-# match by hand.
-@test "the poll asks for exactly the repositories the edge receiver admits" {
+# The poll writes straight into the queue, so it is the edge's only admission
+# point; polling homelab-apps would spend one of the 32 slots on a request the
+# drain then refuses. The allowlist is read from the shared decision rather than
+# trusted to match by hand.
+@test "the poll asks for exactly the repositories the edge drain admits" {
     run python3 - "$decisions" <<'PY'
 import importlib.util
 import sys
@@ -186,25 +186,22 @@ PY
 
 # --- the release trigger is a dispatch, and the poll is its backstop --------
 
-@test "the publish workflow deploys only from a main dispatch" {
-    assert grep -qxF "    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'" "$workflow"
-    assert_equal "$(grep -cF 'tags: tag:deploy' "$workflow")" 1
+@test "the publish workflow tells nobody and keeps no deploy credential" {
+    # Publishing is not deploying: the poll is the only trigger, so the workflow
+    # may hold no tailnet join, no webhook secret and no notify job (#1018).
+    refute grep -qE 'tags: tag:|environment: deploy-notify|WEBHOOK' "$workflow"
+    refute grep -qE '^  notify:$' "$workflow"
 }
 
-@test "the poll is the only thing that deploys without a dispatch" {
-    # The notify job is gated on the event; the timer is not gated on anything, and
-    # that asymmetry is the design: a release is deliberate, and a release nobody
-    # made deliberate still has to arrive.
+@test "the poll is the only thing that deploys" {
     assert grep -qxF 'Persistent=false' "$timer"
     refute grep -qE 'ConditionACPower|ConditionPathExists' "$service"
 }
 
 # --- the suite runs where the other deploy suites do -----------------------
 
-@test "the deploy group runs this suite and the notify suite" {
-    # Both files carry the deploy tag, which is what the area job selects on;
-    # the retired driver used to name them by path.
-    assert grep -qxF '# bats file_tags=deploy' "$BATS_TEST_DIRNAME/edge-notify.bats"
+@test "the deploy group runs this suite" {
+    # The file carries the deploy tag, which is what the area job selects on.
     assert grep -qxF '# bats file_tags=deploy' "$BATS_TEST_DIRNAME/edge-triggers.bats"
 }
 
@@ -212,38 +209,26 @@ PY
     assert grep -qE -- "--filter-tags 'deploy'" .github/workflows/ci.yml
 }
 
-# --- the receiver is reachable from the tailnet ------------------------------
+# --- nothing reaches in -----------------------------------------------------
 #
-# The receiver binds loopback, so without a forward the notify job's POST reaches
-# a port that exists on this host and nowhere else. The forward is `tailscale
-# serve`, which keeps its configuration in the node's own state, so the unit only
-# has to assert it once per boot.
+# #1018 deleted the receiver, its listener unit and the Serve TCP forward. The
+# image states the absence, and the ACL states that no tagged node holds a port on
+# this box, so neither can come back without a failing assertion.
 
-@test "the deploy forward ships and is enabled" {
-    local unit=$units/smoresnet-deploy-forward.service
-    [[ -f $unit ]] || fail 'smoresnet-deploy-forward.service is missing'
-    assert grep -qxF 'ExecStart=/usr/bin/tailscale serve --bg --tcp=8484 tcp://127.0.0.1:8484' "$unit"
-    assert grep -qxF 'WantedBy=multi-user.target' "$unit"
-    assert grep -qxF '      smoresnet-deploy-forward.service \' "$containerfile"
+@test "no inbound deploy unit ships" {
+    refute test -e "$units/smoresnet-deploy-forward.service"
+    refute test -e "$units/smoresnet-deploy-listener.service"
+    refute grep -qE '^[[:space:]]+smoresnet-deploy-(forward|listener)' "$containerfile"
 }
 
-@test "the forward waits for the join and repeats safely" {
-    local unit=$units/smoresnet-deploy-forward.service
-    assert grep -qxF 'ConditionPathExists=/var/lib/smoresnet/tailscale-enrolled' "$unit"
-    assert grep -qE '^After=.*smoresnet-tailscale-up\.service' "$unit"
-    # Type=oneshot with RemainAfterExit: `tailscale serve --bg` is idempotent, and a
-    # unit that kept running would hold a socket it does not need.
-    assert grep -qxF 'Type=oneshot' "$unit"
-    assert grep -qxF 'RemainAfterExit=yes' "$unit"
+@test "the image ships no receiver" {
+    refute test -e "$rootfs/usr/libexec/deploy-receiver.py"
+    refute grep -qF 'bootc/lib/deploy/deploy-receiver.py' "$containerfile"
 }
 
-@test "the forward advertises the port the receiver binds and the ACL admits" {
-    local receiver=bootc/lib/deploy/deploy-receiver.py
-    # 8484 in three places: the program's default, the forward's TCP port, and the
-    # ACL grant that lets tag:deploy reach it.
-    assert grep -qE '8484' "$receiver"
-    assert grep -qF 'tag:vps:8484' tofu/tailscale.tf
-    assert grep -qF 'src    = ["tag:deploy"]' tofu/tailscale.tf
+@test "no ACL grant gives a tagged node a port on either host" {
+    refute grep -qF ':8484' tofu/tailscale.tf
+    refute grep -qF 'tag:deploy' tofu/tailscale.tf
 }
 
 # --- the public ssh window before the join ----------------------------------

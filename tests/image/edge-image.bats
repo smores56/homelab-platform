@@ -134,7 +134,6 @@ the poll waits for a sops unit the image does not ship|the quarter-hour poll bac
 the poll goes back to a daily window|the quarter-hour poll backstop ships and its timer is enabled|bootc/edge/rootfs/usr/lib/systemd/system/smoresnet-deploy-poll.timer|sed|s#^OnCalendar=\*-\*-\* \*:0/15:00$#OnCalendar=*-*-* 03:00:00 America/New_York#
 the queue no longer starts the drain|the queue starts the drain when a request lands|bootc/edge/rootfs/usr/lib/systemd/system/smoresnet-deploy.path|sed|\#^DirectoryNotEmpty=#d
 the drain installs itself at boot|the queue starts the drain when a request lands|bootc/edge/rootfs/usr/lib/systemd/system/smoresnet-deploy.service|sed|s#^Before=shutdown.target$#Before=shutdown.target\n\n[Install]\nWantedBy=multi-user.target#
-the release trigger comes back on push|the edge is told to deploy by a main dispatch, never by a push|.github/workflows/publish-edge-image.yml|sed|s#^    if: github.event_name == .workflow_dispatch.*#    if: github.event_name == 'push'#
 the boot gate's state directory is not created|every path the units name is created before boot|bootc/edge/rootfs/etc/tmpfiles.d/smoresnet-edge.conf|sed|\#^d /var/lib/smoresnet #d
 the Caddy storage directory is not created|every path the units name is created before boot|bootc/edge/rootfs/etc/tmpfiles.d/smoresnet-edge.conf|sed|\#^d /var/lib/caddy #d
 a unit's state directory loses its row|every path the units name is created before boot|bootc/edge/unit-paths.tsv|sed|\#^/var/lib/smoresnet[[:space:]]#d

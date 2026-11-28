@@ -122,17 +122,12 @@ invalid_json_run() {
     fi
 }
 
-@test "a rejected plan still declares the receiver forward" {
+@test "a rejected plan declares no inbound forward" {
     invalid_json_run
-    if ! grep -qF -- '--tcp=8484 tcp://127.0.0.1:8484' "$log"; then
+    if grep -qF -- '--tcp=' "$log"; then
         cat "$log" >&2
         return 1
     fi
-}
-
-@test "a rejected plan leaves the receiver forward in place" {
-    invalid_json_run
-    assert_equal "$(tcp_forward)" 127.0.0.1:8484
 }
 
 # The consequence of being last, on the case that matters: the tenant routes and

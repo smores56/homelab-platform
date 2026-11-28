@@ -19,8 +19,7 @@ setup() { ts_setup; }
 # The script is declarative for the routes it declares, but tailscaled's state is
 # not: a handler whose declaration is gone keeps answering until something turns
 # it off. So a Web port nobody declares is retired on the next run, while every
-# port still in core_routes, 443, the receiver's TCP forward and the per-app
-# Services are left alone.
+# port still in core_routes, 443 and the per-app Services are left alone.
 
 # A host that still answers one Web port the script no longer declares.
 stale_port_run() {
@@ -78,9 +77,9 @@ declared_ports_of_script() {
     fi
 }
 
-@test "the reconcile leaves the receiver forward in place" {
+@test "the reconcile never declares an inbound forward" {
     stale_port_run
-    assert_equal "$(tcp_forward)" 127.0.0.1:8484
+    refute grep -qF -- '--tcp=' "$log"
 }
 
 @test "the reconcile leaves the Service endpoints in place" {

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <zone>
   <short>Tailscale</short>
-  <description>The tailnet side of the edge, and the only route to sshd: the default zone is drop, so a login that is not arriving over tailscale0 is refused before it reaches a listener. 22 is the operator's shell and 8484 is the deploy receiver that T11 puts on loopback behind a notify path. The public names need no port here: Caddy serves them on the public zone and reaches smortress through the tailnet as a client, which firewalld does not filter. ICMP is not inverted here, so the tailnet keeps ping and PMTU diagnosis.</description>
+  <description>The tailnet side of the edge, and the only route to sshd: the default zone is drop, so a login that is not arriving over tailscale0 is refused before it reaches a listener. 22 is the operator's shell and the only port here: nothing on this box answers an inbound deploy any more (design #1010). The public names need no port here: Caddy serves them on the public zone and reaches smortress through the tailnet as a client, which firewalld does not filter. ICMP is not inverted here, so the tailnet keeps ping and PMTU diagnosis.</description>
   <!-- The permanent declaration of the binding. firewalld starts before
        tailscaled creates this interface, so smoresnet-firewall-tailscale.service
        re-binds it at runtime once the tailnet is up; this element is what a
@@ -9,5 +9,4 @@
        reload rather than only the boot unit. -->
   <interface name="tailscale0"/>
   <port port="22" protocol="tcp"/>
-  <port port="8484" protocol="tcp"/>
 </zone>

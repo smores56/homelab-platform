@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# smortress-deploy: the operator's half of the deploy receiver (SDLC #798).
+# smortress-deploy: the operator's half of the deploy queue (SDLC #798; #1018).
 #
 #   smortress-deploy status
 #   smortress-deploy release --force

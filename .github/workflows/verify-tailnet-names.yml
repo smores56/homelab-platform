@@ -9,10 +9,10 @@
 # (`scripts/verify-tailnet-names.sh` says what each probe means).
 #
 # CI is also the only place a genuine non-owner client exists: the runner joins
-# as `tag:deploy`, which the policy grants one port on each of the six Services
-# (`tofu/tailscale.tf`) and nothing else, so the probe proves the names work for
-# a node that is not the owner's laptop. The join is the deploy path's, unchanged:
-# the same OAuth client, the same tag, the same pinned action.
+# as `tag:probe`, which the policy grants one port on each of the six Services
+# (`tofu/tailscale.tf`) and no host port anywhere, so the probe proves the names
+# work for a node that is not the owner's laptop. The tag is a probe's and not a
+# deploy identity: since #1018 nothing tagged reaches a port on either host.
 #
 # The Healthchecks ping is `NAMES_PING_URL` from the `deploy-notify`
 # environment: a capability URL, so a secret, and the same shape the host's own
@@ -57,7 +57,7 @@ jobs:
         with:
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           oauth-secret: ${{ secrets.TS_OAUTH_CLIENT_SECRET }}
-          tags: tag:deploy
+          tags: tag:probe
       - name: probe the two names
         id: probe
         run: scripts/verify-tailnet-names.sh

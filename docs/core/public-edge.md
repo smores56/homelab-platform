@@ -17,7 +17,7 @@ the shape, the failure modes and the rebuild.
 | Provider | RackNerd, 4 GB KVM VPS (Black Friday 2026), New York |
 | Resources | 4 vCPU, 4 GB RAM, 60 GB SSD, 10 TB transfer/month at 1 Gbps |
 | OS | `ghcr.io/smores56/homelab-platform/edge`, a signed bootc image built from `bootc/edge/`; its Caddy is 2.11, and the Caddyfile's `tls` block needs 2.6 (2.4 cannot parse it) |
-| Booted reference | `ostree-image-signed:docker://ghcr.io/smores56/homelab-platform/edge:latest`, active digest `sha256:3657b35e128e40f6b31e7cdb77da61701803207788c71626591a95110afb657c`, version `45.20261030.3.1 (2026-11-27T03:03:35Z)` — measured with `rpm-ostree status` on 2026-11-27. The box follows the tag, so `bootc upgrade` is what moves it, at the 04:00 America/New_York window the image's `bootc-fetch-apply-updates.timer.d/10-schedule.conf` alone sets; a receiver deploy installs a digest instead and leaves it pinned |
+| Booted reference | `ostree-image-signed:docker://ghcr.io/smores56/homelab-platform/edge:latest`, active digest `sha256:3657b35e128e40f6b31e7cdb77da61701803207788c71626591a95110afb657c`, version `45.20261030.3.1 (2026-11-27T03:03:35Z)` — measured with `rpm-ostree status` on 2026-11-27. The box follows the tag, so `bootc upgrade` is what moves it, at the 04:00 America/New_York window the image's `bootc-fetch-apply-updates.timer.d/10-schedule.conf` alone sets; a deploy stage installs a digest instead and leaves it pinned |
 | Address | one IPv4; IPv6 is a support ticket and was not requested |
 | Price | $47.98/year, lifetime recurring |
 | Control plane | RackNerd `ctrl`: reboot, OS reinstall, HTML5 VNC, optional network firewall |
@@ -253,31 +253,25 @@ failing the boot.
 A hold exits 1 on purpose: the deployment was neither blessed nor refused, and a
 clean `boot-complete.target` would be the host claiming otherwise. The tests are
 `tests/deploy/edge-boot.bats`, and the outside-in assertions — 443 answering, 22
-and 8484 closed to the internet — are the scheduled probe's
+and every port but 443 closed to the internet — are the scheduled probe's
 (`scripts/verify-public-edge.sh`), not this gate's.
 
 ## The deploy plane
 
-Five units, and none of them is a sops unit: the edge has no SOPS plane and no age
-identity. The listener (`smoresnet-deploy-listener.service`) binds loopback and
-admits nothing but `homelab-platform`, and `smoresnet-deploy-forward.service`
-advertises that socket on the tailnet with `tailscale serve` — without the
-forward, the notify job's POST reaches a port that exists on this host and
-nowhere else, and only the quarter-hour poll would ever enqueue anything. The listener
-reads one plaintext secret;
-the drain (`smoresnet-deploy.service`, `deploy-drain-edge`) runs the shared
-`bootc/lib/deploy/drain.sh` loop with a no-op where the server's snapshot gate
-sits, records `pending.json` and reboots into the digest the verifier's `bootc
-switch` already staged; the heartbeat (`smoresnet-deploy-heartbeat.service` on a
-five-minute timer) pings the deploy check green only while `/healthz` answers and
-no queue entry is older than 1800 s. The triggers are the server's two, and
-neither deploys on a push: `publish-edge-image.yml`'s notify job posts a signed
-body to the receiver only on a `main` dispatch, and `smoresnet-deploy-poll.timer`
-asks GitHub for the tip every fifteen minutes as the backstop for a release
-nobody dispatched. Both only enqueue; `smoresnet-deploy.path` starts the drain on the
-first file in the queue, so a hand-run (`systemctl start
-smoresnet-deploy.service`) is the same path an operator can take while the
-listener is down.
+Four units, and none of them is a sops unit: the edge has no SOPS plane and no age
+identity. `smoresnet-deploy-poll.timer` asks GitHub for the tip every fifteen
+minutes and enqueues a request when it moved; it is the only trigger (design
+#1010, #1018), and nothing reaches in — no listener, no Serve forward, and no
+tailnet grant but the owner's ssh. The drain (`smoresnet-deploy.service`,
+`deploy-drain-edge`) runs the shared `bootc/lib/deploy/drain.sh` loop with a no-op
+where the server's snapshot gate sits, records `pending.json` and reboots into the
+digest the verifier's `bootc switch` already staged; the heartbeat
+(`smoresnet-deploy-heartbeat.service` on a five-minute timer) pings the deploy
+check green only while no queue entry is older than 1800 s. Publishing never
+triggers a deploy: `publish-edge-image.yml` builds and signs, and the poll is what
+lands the release. Enqueuing is the poll's alone; `smoresnet-deploy.path` starts
+the drain on the first file in the queue, so a hand-run (`systemctl start
+smoresnet-deploy.service`) is the same path an operator can take.
 
 `smoresnet-firewall-prejoin.service` is the one door that is not on the list
 above: the public zone admits no ssh, and that is right for a host with a
@@ -290,13 +284,11 @@ this box accept"; the window is visible in `firewall-cmd --zone=public
 on a box whose join has not happened yet.
 
 The secrets are the operator's, never image content, plaintext and 0600 under
-`/etc/smoresnet` (a `tmpfiles.d` line creates the 0700 directory): the webhook
-secret the listener authenticates against (`webhook-secret.yaml`, plus
-`webhook-secret-next.yaml` for a rotation window), the dead-man URL above and the
-transport credential the join unit reads (`tailscale-authkey`). A missing secret
-is the listener's own refusal to start naming the file, and a secret readable by
-group or other is refused the same way. `scripts/edge-bootstrap.sh` writes all of
-them from stdin — never argv — and a re-run rotates one only with `--force`;
+`/etc/smoresnet` (a `tmpfiles.d` line creates the 0700 directory): the dead-man URL
+above and the transport credential the join unit reads (`tailscale-authkey`).
+There is no webhook secret: the box answers no inbound deploy any more (#1018).
+`scripts/edge-bootstrap.sh` writes both from stdin — never argv — and a re-run
+rotates one only with `--force`;
 `docs/manual-steps.md#bootstrap-the-fresh-edge` is the order.
 
 ## Rebuild
@@ -427,10 +419,10 @@ disagree with itself.
    static address needs. The Ignition document carries the only key sshd accepts,
    and firewalld publishes 22 on the public interface only until the tailnet join,
    so the first `ssh root@<ipv4>` is that window and nothing else is open in it.
-5. **Bootstrap the box.** `scripts/edge-bootstrap.sh` on the box as root, with the
-   four secrets on stdin — `docs/manual-steps.md#bootstrap-the-fresh-edge`. It
-   writes `/etc/caddy/edge.env`, the tailnet key, the webhook secret, the dead-man
-   URL and the first deploy record, and it ends by saying what remains.
+5. **Bootstrap the box.** `scripts/edge-bootstrap.sh` on the box as root, with
+   both secrets on stdin — `docs/manual-steps.md#bootstrap-the-fresh-edge`. It
+   writes `/etc/caddy/edge.env`, the tailnet key, the dead-man URL and the first
+   deploy record, and it ends by saying what remains.
 6. **Declare the Serve routes on smortress**, then prove it from a checkout:
 
    ```sh

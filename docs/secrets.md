@@ -62,7 +62,7 @@ dotted key per output. Two operator YAML files hold what no host unit reads, and
 
 | Ciphertext | Holds |
 | --- | --- |
-| `secrets/boot.json` | the boot plane: `canary`, `restic.password`, `r2`, `healthchecks`, `tailscale`, `smores.password_hash`, `webhook.secret`, `webhook.next`, `deploy.ping_url` |
+| `secrets/boot.json` | the boot plane: `canary`, `restic.password`, `r2`, `healthchecks`, `tailscale`, `smores.password_hash`, `deploy.ping_url` |
 | `secrets/apps.json` | the application plane: `immich.db_password`, `opdshelf.admin_password` |
 | `secrets/agents.json` | the agent plane: `agent.*`, `ui.*`, `simplefin.access_url`, `tmail.bridge_password`, `brave.sync_seed` |
 | `secrets/660-host.yaml`, `secrets/cloudflare.yaml` | operator files: `tofu` and `scripts/unpack-host-secrets.py` only, one key per run |

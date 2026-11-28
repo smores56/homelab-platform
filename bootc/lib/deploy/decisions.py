@@ -214,13 +214,12 @@ def infrastructure(reason: str, detail: str = "") -> Decision:
 
 # Every event this end of the wire writes. The names are read by operators and by
 # `smortress-deploy status`, so they are data here: a new event is a vocabulary
-# change, and the tests hold the Python and the shell to this list.
+# change, and the tests hold the Python and the shell to this list. The three the
+# listener wrote -- `deploy-rejected`, `queue-enqueued`, `queue-failed` -- left
+# with it (#1018); the poll's own `poll-*` events are the trigger's, not this
+# end's.
 JOURNAL_EVENTS = frozenset(
     {
-        # the listener, before anything else looks at the request
-        "deploy-rejected",
-        "queue-enqueued",
-        "queue-failed",
         "already-deployed",
         # the drain's own progress
         "drain-start",

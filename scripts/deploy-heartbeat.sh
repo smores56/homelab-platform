@@ -1,18 +1,17 @@
 #!/usr/bin/env bash
-# Deploy heartbeat: the dead-man for the receiver itself (SDLC #798, T6).
+# Deploy heartbeat: the dead-man for the deploy queue (SDLC #798, T6; #1010).
 #
 #   deploy-heartbeat
 #
-# The deploy check goes green only when the listener answers `/healthz` inside five
-# seconds *and* no queued request has waited more than two hours. Anything else
-# -- a stopped listener, a 5xx, a drain wedged behind a stalled pull with the lock
+# The deploy check goes green only when no queued request has waited more than the
+# host's limit. Anything else -- a drain wedged behind a stalled pull with the lock
 # held -- pings `/fail` with the reason.
 #
-# It is a separate program from the hourly poll on purpose: a poll-driven ping
+# It is a separate program from the quarter-hour poll on purpose: a poll-driven ping
 # cannot see a wedged drain, because the poll's own request would be the one stuck
-# in the queue while the poll keeps reporting that it enqueued something. The
-# receiver's own liveness is therefore asserted from inside the host, not inferred
-# from GitHub.
+# in the queue while the poll keeps reporting that it enqueued something. Since
+# #1018 deleted the receiver there is no listener to probe: the queue is the whole
+# of the state a beat judges, and #1019 replaces this program with a poll-side ping.
 #
 # Exit codes: 0 the check was pinged green (or the ping URL is absent, which is a
 # journaled skip on a host mid-bootstrap), 1 the check was pinged red.
@@ -55,15 +54,12 @@ fi
 # shellcheck source=/dev/null
 source "$state_lib"
 
-health_url=${DEPLOY_HEALTH_URL:-http://127.0.0.1:8484/healthz}
-health_timeout=${DEPLOY_HEALTH_TIMEOUT:-5}
 # Two hours is longer than a drain can legitimately spend on one request with
 # another waiting behind it: the snapshot gate's hour plus an apps apply's ninety
 # minutes, and a healthy queue never comes near it. A request that old means the
 # drain is not running rather than working -- the limit has to sit above the
 # slowest honest deploy, or a healthy host pages on its own slow rollout.
 queue_max_age=${DEPLOY_QUEUE_MAX_AGE:-7200}
-
 
 fail_and_exit() { # <reason>
   # The reason carries the program name already: it is the line Pushover shows, and
@@ -74,14 +70,6 @@ fail_and_exit() { # <reason>
   deploy_notify fail "$1" || warn "cannot report the failure to the deploy check"
   exit 1
 }
-
-# The listener answers this on loopback without touching the queue, so a healthy
-# idle host and a healthy busy host look the same. --fail makes any status >= 400
-# a failure, which is what "answers 200" means here.
-if ! "$deploy_curl_bin" --fail --silent --show-error --output /dev/null \
-  --max-time "$health_timeout" "$health_url"; then
-  fail_and_exit "deploy-heartbeat: the listener did not answer $health_url within ${health_timeout}s"
-fi
 
 # The oldest request, not the count: a queue with one entry younger than a minute
 # is a deploy in flight, and a queue with one entry older than half an hour is a

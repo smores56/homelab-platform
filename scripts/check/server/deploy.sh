@@ -66,7 +66,7 @@ rm -rf "$stage_fixture"
 
 # A deploy change that does not rebuild the image ships a commit whose host code
 # is the previous build's, because the image is the only delivery. Every file the
-# receiver ships must therefore sit under a publish path filter. The entry may be
+# deploy plane ships must therefore sit under a publish path filter. The entry may be
 # quoted, single-quoted or bare -- the YAML quoting is not the assertion, the
 # coverage is -- so the match is on the glob, not on one spelling of it.
 publish_covers() { # <workflow> <top-level dir>
@@ -106,9 +106,9 @@ for file in "${deploy_files[@]}"; do
   publish_covers "$publish" "${file%%/*}" || unpublished+="$file "
 done
 if [[ -n $unpublished ]]; then
-  bad "every file the receiver ships rebuilds the image: $unpublished"
+  bad "every file the deploy plane ships rebuilds the image: $unpublished"
 else
-  ok "every file the receiver ships rebuilds the image"
+  ok "every file the deploy plane ships rebuilds the image"
 fi
 
 # Every timer this image ships must be enabled here, or it silently never fires.
@@ -127,11 +127,6 @@ done
 serve_script=scripts/tailscale-serve.sh
 check "Serve declares the wallpaper library as static files" \
   has "serve --bg --https=443 --set-path=/wallpapers \"\$wallpapers\"" "$serve_script"
-# The receiver's forward is declared with the core routes: a CI notification has to
-# arrive on a host whose tenant plan is unreadable, and a `--tcp` forward is not a
-# Web handler, so the `/apps/` prune below cannot remove it.
-check "Serve forwards the deploy receiver's loopback port" \
-  has 'serve --bg --tcp=8484 tcp://127.0.0.1:8484' "$serve_script"
 check "the wallpaper library is the dataset mount point" has 'WALLPAPERS_DIR:-/srv/wallpapers' "$serve_script"
 check "stale-route pruning only considers tenant handlers" \
   has 'select(startswith("/apps/"))' "$serve_script"
@@ -291,21 +286,17 @@ check "Syncthing's sync port is permitted on the tailscale zone" \
   has '<port port="22000" protocol="tcp"/>' bootc/server/rootfs/etc/firewalld/zones/tailscale.xml
 check "Syncthing's QUIC port is permitted on the tailscale zone" \
   has '<port port="22000" protocol="udp"/>' bootc/server/rootfs/etc/firewalld/zones/tailscale.xml
-# The deploy receiver is the one service whose caller is a CI job, so its port has
-# to be open on the tailnet zone or the notify path silently times out.
-check "the deploy receiver's port is permitted on the tailscale zone" \
-  has '<port port="8484" protocol="tcp"/>' bootc/server/rootfs/etc/firewalld/zones/tailscale.xml
 # The public edge (design #725) proxies the `svc:immich` and `svc:opds` Services,
-# so it needs no port of its own and the zone is Syncthing's two plus the
-# receiver's one. A `<port>` no route stands behind is an opening on the tailnet
-# zone that nothing would notice, so the set is pinned whole rather than one
-# retired entry at a time.
+# so it needs no port of its own and the zone is Syncthing's two. A `<port>` no
+# route stands behind is an opening on the tailnet zone that nothing would
+# notice, so the set is pinned whole rather than one retired entry at a time.
+# Nothing answers an inbound deploy, so no port for one may come back (#1018).
 zone_ports=$(grep -oE '<port port="[0-9]+" protocol="[a-z]+"/>' \
   bootc/server/rootfs/etc/firewalld/zones/tailscale.xml | tr '\n' ' ')
-if [[ $zone_ports == '<port port="22000" protocol="tcp"/> <port port="22000" protocol="udp"/> <port port="8484" protocol="tcp"/> ' ]]; then
-  ok "the tailscale zone opens only Syncthing and the deploy receiver"
+if [[ $zone_ports == '<port port="22000" protocol="tcp"/> <port port="22000" protocol="udp"/> ' ]]; then
+  ok "the tailscale zone opens only Syncthing's two ports"
 else
-  bad "the tailscale zone opens only Syncthing and the deploy receiver" "$zone_ports"
+  bad "the tailscale zone opens only Syncthing's two ports" "$zone_ports"
 fi
 
 # The apps tenant (#726) is named everywhere and numbered nowhere. sysusers

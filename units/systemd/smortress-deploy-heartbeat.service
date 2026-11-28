@@ -1,11 +1,7 @@
 [Unit]
-Description=Ping the deploy check when the receiver is alive and its queue is moving
+Description=Ping the deploy check when the deploy queue is moving
 Requires=sops-decrypt.service
 After=sops-decrypt.service
-# Ordering only: the listener is Restart=always, so a beat that ran before it
-# started would page for a host that is one second into its boot. systemd starts
-# the simple service and returns, which is all this needs.
-After=smortress-deploy-listener.service
 After=systemd-tmpfiles-setup.service
 Conflicts=shutdown.target
 Before=shutdown.target
@@ -13,8 +9,8 @@ Before=shutdown.target
 [Service]
 Type=oneshot
 ExecStart=/usr/libexec/deploy-heartbeat
-# The health probe is bounded to 5 s and the ping to 10 s; this is the net under a
-# run that hangs anyway, and it has to stay well inside the timer's own period.
+# The ping is bounded to 10 s; this is the net under a run that hangs anyway, and
+# it has to stay well inside the timer's own period.
 TimeoutStartSec=120
 UMask=0077
 User=root

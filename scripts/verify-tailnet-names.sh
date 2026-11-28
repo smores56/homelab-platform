@@ -36,7 +36,7 @@
 # node with no `tailscale` binary and for the tests.
 #
 # Exit 0 only when every probe passes. `.github/workflows/verify-tailnet-names.yml`
-# runs it on a schedule from a `tag:deploy` node, which is the only place a
+# runs it on a schedule from a `tag:probe` node, which is the only place a
 # genuine non-owner client exists; nothing here knows about that, so an operator
 # can run it from any node on the tailnet:
 #

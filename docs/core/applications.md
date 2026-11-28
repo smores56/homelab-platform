@@ -647,7 +647,7 @@ provisioned for them, one line each in `scripts/tailscale-serve.sh`.
 
 `scripts/verify-tailnet-names.sh` is the probe on that path (task #848), and
 `.github/workflows/verify-tailnet-names.yml` runs it daily from a CI node that
-joins as `tag:deploy` — the one non-owner client there is. It asserts what a user
+joins as `tag:probe` — the one non-owner client there is. It asserts what a user
 would notice rather than a status code: each name resolves into the tailnet on a
 VIP of its own and no two names share one, the chain verifies against the public
 roots with the name in it, the certificate is not within 14 days of expiry, and

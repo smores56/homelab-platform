@@ -1,8 +1,8 @@
 #!/usr/bin/env bats
 # bats file_tags=deploy
-# Offline parity check for the one durability rule behind three atomic writes
-# (SDLC #812): the state library's `atomic_write`, the verifier's `write_atomic`
-# and the receiver's `atomic_write`.
+# Offline parity check for the one durability rule behind two atomic writes
+# (SDLC #812): the state library's `atomic_write` and the verifier's
+# `write_atomic`.
 #
 # The three are separate code because nothing shared can be installed where the
 # listener and the drain both run, so the rule survives only as long as each
@@ -18,10 +18,9 @@ load ../helpers
 
 lib=scripts/deploy-state.sh
 verify=bootc/server/rootfs/usr/libexec/deploy-verify.py
-receiver=bootc/lib/deploy/deploy-receiver.py
 
 setup() {
-    for file in "$lib" "$verify" "$receiver"; do
+    for file in "$lib" "$verify"; do
         [[ -r $file ]] || fail "$file is missing"
     done
     command -v python3 >/dev/null || fail "python3 is required"
@@ -57,13 +56,12 @@ label_for() { # <impl>
     case $1 in
         state) printf 'atomic_write (deploy-state.sh)' ;;
         verify) printf 'write_atomic (deploy-verify.py)' ;;
-        receiver) printf 'atomic_write (deploy-receiver.py)' ;;
     esac
 }
 
 # Each implementation's own entry point, unchanged: the library reads its
-# content from stdin, the two scripts take (path, bytes). The loader is the one
-# tests/deploy/verify.sh and tests/deploy/receiver.sh already use.
+# content from stdin, the verifier takes (path, bytes). The loader is the one
+# tests/deploy/verify.bats uses.
 write_with() { # <impl> <path> <payload-file>
     case $1 in
         state)
@@ -71,21 +69,19 @@ write_with() { # <impl> <path> <payload-file>
             source "$lib"
             atomic_write "$2" <"$3"
             ;;
-        verify | receiver)
-            python3 - "$1" "$2" "$3" "$verify" "$receiver" <<'PY'
+        verify)
+            python3 - "$2" "$3" "$verify" <<'PY'
 import importlib.util
 import sys
 
-impl, path, payload, verify, receiver = sys.argv[1:6]
-sources = {"verify": verify, "receiver": receiver}
-name = "deploy_verify" if impl == "verify" else "deploy_receiver"
-spec = importlib.util.spec_from_file_location(name, sources[impl])
+path, payload, verify = sys.argv[1:4]
+spec = importlib.util.spec_from_file_location("deploy_verify", verify)
 module = importlib.util.module_from_spec(spec)
-sys.modules[name] = module
+sys.modules["deploy_verify"] = module
 spec.loader.exec_module(module)
 with open(payload, "rb") as handle:
     data = handle.read()
-(module.write_atomic if impl == "verify" else module.atomic_write)(path, data)
+module.write_atomic(path, data)
 PY
             ;;
     esac
@@ -206,10 +202,10 @@ check_leaves_no_temp_file_and_no_partial_record() {
     chmod 0700 "$locked"
 }
 
-# The old suite's `for impl in state verify receiver` verbatim: thirteen cases
-# against each copy, from one fixture, so a case that lands in only two of the
-# three copies shows up as a name missing from this file.
-for impl in state verify receiver; do
+# The old suite's `for impl in state verify receiver`, now without the receiver
+# (#1018): thirteen cases against each copy, from one fixture, so a case that
+# lands in only one of the two copies shows up as a name missing from this file.
+for impl in state verify; do
     who=$(label_for "$impl")
     register "$who writes the record" check_writes_the_record "$impl"
     register "$who writes exactly the payload" check_writes_exactly_the_payload "$impl"

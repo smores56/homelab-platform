@@ -1050,29 +1050,25 @@ done
     has '"tag:vps:22"'
 }
 
-@test "the policy admits the deploy receiver" {
-    has '"tag:smortress:8484"'
+# No rule admits a port on either host to a tagged node: the receiver's 8484
+# grants and the deny entries that pinned them left with it (#1018), so nothing
+# reaches in any more.
+@test "the policy admits no inbound deploy port" {
+    hasnt ':8484'
 }
 
-# The edge's receiver is the same program on the other host, so the CI identity
-# that notifies smortress notifies the public box as well (design #939, T11).
-@test "the policy admits the deploy node to the edge's receiver" {
-    has 'src[[:space:]]*=[[:space:]]*\["tag:deploy"\]'
-    has 'dst[[:space:]]*=[[:space:]]*\["tag:vps:8484"\]'
+@test "the probe tag is owned by the owner group" {
+    has '"tag:probe"[[:space:]]*=[[:space:]]*\["group:owner"\]'
 }
 
-@test "the deploy tag is owned by the owner group" {
-    has '"tag:deploy"[[:space:]]*=[[:space:]]*\["group:owner"\]'
+@test "a test proves the probe reaches the six Service names" {
+    has 'accept[[:space:]]*=[[:space:]]*\["svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443", "svc:opds:443"\]'
 }
 
-@test "a test proves the deploy node reaches both receivers and the six Service names" {
-    has 'accept[[:space:]]*=[[:space:]]*\["tag:smortress:8484", "tag:vps:8484", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443", "svc:opds:443"\]'
-}
-
-# The edge login is the one host port on the public box that is not the receiver,
-# so it staying in this list is what keeps T11's grant a widening of exactly one
-# port rather than the first of several.
-@test "a test proves the deploy node reaches no other host port" {
+# The edge login is the one host port on the public box, so it staying in this
+# list is what keeps the probe a reader of Services rather than the first of
+# several ports a tagged node could open.
+@test "a test proves the probe reaches no host port" {
     has 'deny[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:22000", "tag:vps:22"\]'
 }
 
@@ -1084,17 +1080,6 @@ done
     has 'accept[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:22000", "tag:vps:22", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443", "svc:terminal:443"\]'
 }
 
-@test "a test proves the owner does not reach either deploy receiver" {
-    has 'deny[[:space:]]*=[[:space:]]*\["tag:smortress:8484", "tag:vps:8484"\]'
-}
-
-# Five places and no more: the grant, the deploy node's accept, the two denies
-# that keep the owner and an untagged device off it, and the edge's own deny of
-# every host port. A sixth line is a second port opened on the public box.
-@test "the edge's receiver is granted once and denied to everyone else" {
-    eq "$(count_fixed 'tag:vps:8484')" 5
-}
-
 # One test entry for the edge, and it denies: the two Service destinations come
 # from the grants above and cannot be named here, so every host port and the edge
 # login are the whole guard.
@@ -1103,11 +1088,11 @@ done
 }
 
 @test "a test proves a tagged device reaches none of them" {
-    has 'deny[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:22000", "tag:vps:22", "tag:vps:8484", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443", "svc:terminal:443", "svc:recovery:443"\]'
+    has 'deny[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:22000", "tag:vps:22", "svc:opds:443", "svc:immich:443", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443", "svc:terminal:443", "svc:recovery:443"\]'
 }
 
 @test "a test proves the edge does not reach the other Services" {
-    has 'deny[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:22000", "tag:smortress:8484", "tag:vps:8484", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443", "svc:terminal:443"\]'
+    has 'deny[[:space:]]*=[[:space:]]*\["tag:smortress:22", "tag:smortress:443", "tag:smortress:8443", "tag:smortress:8444", "tag:smortress:8445", "tag:smortress:8448", "tag:smortress:22000", "svc:navidrome:443", "svc:assistant:443", "svc:agent:443", "svc:sync:443", "svc:terminal:443"\]'
 }
 
 # --- the Services -----------------------------------------------------------
@@ -1237,7 +1222,7 @@ grants_block() {
 }
 
 @test "the names probe reaches the six Service names" {
-    eq "$(grep -cF 'src = ["tag:deploy"]' <<<"$(grants_block)")" 6
+    eq "$(grep -cF 'src = ["tag:probe"]' <<<"$(grants_block)")" 6
 }
 
 @test "the public edge reaches the three it proxies" {
@@ -1270,7 +1255,7 @@ grants_block() {
 }
 
 # The catalogue and Immich keep their grant to the edge, which is why the edge's
-# deny test stops naming them: two accepts (the owner's and tag:deploy's) and one
+# deny test stops naming them: two accepts (the owner's and tag:probe's) and one
 # deny, for the device in no group. A grants entry is not a test entry, so the
 # edge's own grant appears nowhere here.
 service_port_twice() { eq "$(count_fixed "\"$1:443\"")" 3; }

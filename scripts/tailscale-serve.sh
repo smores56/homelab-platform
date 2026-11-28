@@ -21,8 +21,9 @@
 #
 # Nothing here is Funnel: Serve answers tailnet clients only.
 #
-# The deploy receiver gets one raw TCP forward (8484) rather than an HTTPS route:
-# the caller is a curl in a CI job that joins the tailnet for this one request.
+# No route here is inbound: every one of them is the host publishing what it
+# serves, and none of them is a forward to a listener that a node outside the
+# fleet reaches (design #1010).
 #
 # The applications are published as Services (design #834) rather than as host
 # ports alone: OPDShelf was the first to leave the per-port scheme, because the
@@ -124,16 +125,6 @@ for https in "${!core_routes[@]}"; do
   fi
 done
 
-# The deploy receiver's forward. `serve --tcp` forwards raw TCP, because the caller
-# is a curl in a CI job and the receiver speaks plain HTTP on loopback; Serve
-# terminates the tailnet side, so the listener never binds a wildcard. It is
-# declared here with the core routes and before anything that reads the tenant
-# plan, so a broken plan cannot take the trigger path down with it -- and a `--tcp`
-# forward is not a Web handler, so the `/apps/` prune below never reaches it.
-if ! "$tailscale_bin" serve --bg --tcp=8484 tcp://127.0.0.1:8484; then
-  fail "could not forward tcp/8484 to the deploy receiver"
-fi
-
 for path in "${!core_path_routes[@]}"; do
   backend=http://127.0.0.1:${core_path_routes[$path]}
   if ! "$tailscale_bin" serve --bg --https=443 --set-path="$path" "$backend"; then
@@ -214,9 +205,8 @@ status=$("$tailscale_bin" serve status --json) || {
 #
 # Every https port in the status is stale unless core_routes names it. 443 is
 # exempt: that is the tenant root, where the two gateways and the wallpaper tree
-# live, and it never retires by dropping an entry. Only `Web` is read: `TCP` is the
-# receiver's forward and `Services` are the per-app names, which the loop below
-# reconciles and neither of which is a host port. Same guard as the `/apps/` prune
+# live, and it never retires by dropping an entry. Only `Web` is read: `Services`
+# are the per-app names, which the loop below reconciles and are not a host port. Same guard as the `/apps/` prune
 # below -- a plan that did not verify leaves the pruning to a run that can read it.
 while IFS= read -r port; do
   $plan_ok || break
@@ -247,7 +237,7 @@ done < <(
 # 443 is the handler's port and not part of the name: `.Services` keys the entry
 # `svc:agent` and other recordings of it `svc:agent:443`, so a key is reduced to the
 # name it holds before it is compared. Only `Services` is read here -- the host
-# ports are the loop above, and the receiver's forward is `TCP`.
+# ports are the loop above.
 declared_services=(svc:opds svc:recovery svc:immich svc:navidrome svc:assistant svc:agent svc:sync svc:terminal)
 while IFS= read -r name; do
   $plan_ok || break

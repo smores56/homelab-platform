@@ -1,11 +1,8 @@
 [Unit]
-Description=Ping the deploy check when the edge's receiver is alive and its queue is moving
+Description=Ping the deploy check when the edge's deploy queue is moving
 # No sops-decrypt: /etc/smoresnet holds the ping URL in plaintext, 0600, and this
 # unit must page on a host where no decrypt unit exists at all.
 After=network-online.target
-# Ordering only: the listener is Restart=always, so a beat that ran before it
-# started would page for a host one second into its boot.
-After=smoresnet-deploy-listener.service
 After=systemd-tmpfiles-setup.service
 Conflicts=shutdown.target
 Before=shutdown.target
@@ -23,8 +20,8 @@ Environment=DEPLOY_QUEUE_MAX_AGE=1800
 # The page is the operator's capability URL, plaintext at rest on this box, written
 # by edge-bootstrap. Absent, every beat journals notify-skipped instead of failing.
 Environment=DEPLOY_PING_SECRET=/etc/smoresnet/deploy-ping-url
-# The health probe is bounded to 5 s and the ping to 10 s; this is the net under a
-# run that hangs anyway, and it has to stay well inside the timer's own period.
+# The ping is bounded to 10 s; this is the net under a run that hangs anyway, and
+# it has to stay well inside the timer's own period.
 TimeoutStartSec=120
 UMask=0077
 User=root

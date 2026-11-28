@@ -10,7 +10,7 @@
 # an absent `edge:sha-<c12>` tag is a hold rather than a verdict, and the
 # signature verdict is `bootc switch --enforce-container-sigpolicy`'s exit code.
 #
-# Three things are proven here, in the order the deploy path meets them:
+# Two things are proven here, in the order the deploy path meets them:
 #
 #   - parity: every golden fixture both roles can be asked ends in the same
 #     verdict from the edge's verifier as from the server's, byte for byte except
@@ -22,8 +22,6 @@
 #   - the signature verdict: a policy rejection from bootc is a refusal that
 #     stages nothing, and every other way a switch can fail stays retryable,
 #     because a flaky registry is not a bad image.
-#   - admission: an homelab-apps post is refused at the receiver before it takes
-#     a queue slot, and a bad HMAC is refused without any switch at all.
 #
 #   bats tests/deploy/edge-verify.bats
 load ../helpers
@@ -31,7 +29,6 @@ load ../helpers
 fixtures=bootc/lib/deploy/fixtures
 server_verify=bootc/server/rootfs/usr/libexec/deploy-verify.py
 edge_verify=bootc/edge/rootfs/usr/libexec/deploy-verify.py
-receiver=bootc/lib/deploy/deploy-receiver.py
 decisions=bootc/lib/deploy/decisions.py
 # The GitHub API and the ghcr registry, shared with tests/deploy/fixtures.bats:
 # both roles replay one document against one implementation of the world, or a
@@ -90,32 +87,27 @@ setup() {
 
     work=$BATS_TEST_TMPDIR
     state_dir=$work/state
-    listener_state=$work/listener-state
-    listener_secrets=$work/secrets
     bootc=$BATS_FILE_TMPDIR/fake-bootc
 
-    for file in "$server_verify" "$edge_verify" "$receiver" "$decisions" "$world_server"; do
+    for file in "$server_verify" "$edge_verify" "$decisions" "$world_server"; do
         [[ -r $file ]] || fail "$file is missing"
     done
     for file in jq python3 curl cmp; do
         command -v "$file" >/dev/null || fail "$file is required"
     done
 
-    mkdir -p "$state_dir" "$listener_state/queue" "$listener_state/work" "$listener_secrets"
-    chmod 0700 "$state_dir" "$listener_state" "$listener_state/queue" "$listener_secrets"
+    mkdir -p "$state_dir"
+    chmod 0700 "$state_dir"
 
     export DEPLOY_STATE_DIR=$state_dir
     export BOOTC_BIN=$bootc
     export DEPLOY_SWITCH_TIMEOUT=20
     export FAKE_BOOTC_LOG=$work/bootc.log
     export FAKE_BOOTC_STAGED=$work/staged
-    secret=$(printf 'edge-%04d' "$RANDOM")
-    printf 'value: %s\n' "$secret" >"$listener_secrets/webhook-secret.yaml"
-    chmod 0600 "$listener_secrets/webhook-secret.yaml"
 }
 
 teardown() {
-    kill "${listener_pid:-}" "${server_pid:-}" 2>/dev/null || true
+    kill "${server_pid:-}" 2>/dev/null || true
     wait 2>/dev/null || true
 }
 
@@ -266,8 +258,8 @@ parity() { # <fixture>
 }
 
 # Every verify document both roles can be asked is a parity case. The apps
-# fixture is the receiver's refusal (below) and the gate documents are the
-# server's snapshot gate, which the edge does not have.
+# fixture is the queue's refusal (a repository the edge does not run) and the gate
+# documents are the server's snapshot gate, which the edge does not have.
 for fixture in "$fixtures"/*.json; do
     [[ $(jq -r '.kind' "$fixture") == verify ]] || continue
     [[ $(jq -r '.request.repo' "$fixture") == homelab-platform ]] || continue
@@ -366,94 +358,4 @@ done
     assert_equal "$rc" 3
     assert_equal "$(jq -r .reason "$work/edge.out")" bootstrap-required
     assert_equal "$(bootc_calls)" ""
-}
-
-# -- admission: the receiver, in the edge's role ----------------------------
-
-hmac_hex() { # <secret> < body
-    python3 -c 'import hashlib, hmac, sys
-print(hmac.new(sys.argv[1].encode(), sys.stdin.buffer.read(), hashlib.sha256).hexdigest())' "$1"
-}
-
-nonce() { head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n'; }
-
-body() { # <repo> <commit> <ts> <nonce>
-    jq -nc --arg repo "$1" --arg commit "$2" --argjson ts "$3" --arg nonce "$4" \
-        '{repo:$repo,commit:$commit,ts:$ts,nonce:$nonce}'
-}
-
-# start_listener: the receiver as the edge runs it -- DEPLOY_ROLE is the image's
-# choice, and the allowlist it enforces is the one under test. Assigns
-# `listener_pid` and `listener_base` rather than printing them: a command
-# substitution would run the listener in a subshell and teardown would have no
-# pid to kill.
-start_listener() {
-    local port _
-    port=$(free_port)
-    listener_base=http://127.0.0.1:$port
-    env DEPLOY_ROLE=edge DEPLOY_STATE_DIR="$listener_state" \
-        DEPLOY_SECRETS_DIR="$listener_secrets" DEPLOY_LISTEN_PORT="$port" \
-        DEPLOY_LISTEN_HOST=127.0.0.1 BOOTC_BIN="$bootc" \
-        python3 "$receiver" >>"$work/listener.log" 2>&1 &
-    listener_pid=$!
-    for _ in $(seq 1 200); do
-        if [[ $(curl -s -o /dev/null -w '%{http_code}' --max-time 1 \
-            "$listener_base/healthz" 2>/dev/null) == 200 ]]; then
-            return 0
-        fi
-        sleep 0.1
-    done
-    fail "the edge listener never answered: $(tail -n 5 "$work/listener.log")"
-}
-
-# post <body> <secret>: the signed request, its status left in $response and its
-# answer in $work/response.
-post() { # <body> <secret>
-    local payload=$1 key=$2 file
-    file=$work/request.json
-    printf '%s' "$payload" >"$file"
-    response=$(curl -sS --max-time 20 -o "$work/response" -w '%{http_code}' -X POST \
-        --header 'Content-Type: application/json' \
-        --header "X-Deploy-Signature: sha256=$(printf '%s' "$payload" | hmac_hex "$key")" \
-        --data-binary "@$file" "$listener_base/v1/deploy" 2>/dev/null) || true
-}
-
-queued() {
-    find "$listener_state/queue" -maxdepth 1 -name '*.json' -type f 2>/dev/null | wc -l | tr -d ' '
-}
-
-@test "an homelab-apps post is refused at the receiver before it takes a slot" {
-    start_listener
-    post "$(body homelab-apps "$commit" "$(date +%s)" "$(nonce)")" "$secret"
-    assert_equal "$response" 400
-    assert_equal "$(jq -r .reason "$work/response")" unsupported-repo
-    # The door, not the queue: a slot taken here would be one of the 32 a platform
-    # deploy needs, held for a repository this host does not run.
-    assert_equal "$(queued)" 0
-    absent "$listener_state/journal.jsonl" "a refusal was journaled"
-    absent "$FAKE_BOOTC_LOG" "a refused repository reached a switch"
-    # ... and it was a refusal, not a listener that answered nothing: the tally is
-    # what /healthz reports for it.
-    assert_equal \
-        "$(curl -s "$listener_base/healthz" | jq -r '.rejected["unsupported-repo"]')" 1
-}
-
-@test "a platform post on the edge does take a slot" {
-    # The positive control for the refusal above: a listener that refused
-    # everything would pass that test for the wrong reason.
-    start_listener
-    post "$(body homelab-platform "$commit" "$(date +%s)" "$(nonce)")" "$secret"
-    assert_equal "$response" 202
-    assert_equal "$(queued)" 1
-    assert_equal "$(jq -r .repo "$listener_state/queue/"*.json)" homelab-platform
-}
-
-@test "a bad HMAC is refused without a switch" {
-    start_listener
-    post "$(body homelab-platform "$commit" "$(date +%s)" "$(nonce)")" "not-the-secret"
-    assert_equal "$response" 401
-    assert_equal "$(jq -r .reason "$work/response")" bad-signature
-    assert_equal "$(queued)" 0
-    absent "$listener_state/journal.jsonl" "a refusal was journaled"
-    absent "$FAKE_BOOTC_LOG" "an unauthenticated request reached a switch"
 }

@@ -138,14 +138,12 @@ COPY scripts/storage-layout.sh scripts/zfs-ready.sh scripts/sops-decrypt.sh \
      scripts/smortress-backrest-watchdog.sh \
      /usr/libexec/smortress-src/
 COPY scripts/deploy/apps/ /usr/libexec/deploy/apps/
-# The shared deploy code (design #939, T2). The receiver and the decisions are
-# consumed by both bootc images -- the server and the edge receive the same wire
-# contract -- so they live in bootc/lib and install here, beside the gate's own
-# programs. The receiver keeps its /usr/libexec name because the listener unit
-# already runs it there; the decisions and the drain loop go under the directory
-# both roles resolve them from (bootc/lib/deploy). The golden fixtures are test
-# data, so they stay out of the image.
-COPY bootc/lib/deploy/deploy-receiver.py /usr/libexec/deploy-receiver.py
+# The shared deploy code (design #939, T2; #1018). The decisions are consumed by
+# both bootc images, so they live in bootc/lib and install here, beside the gate's
+# own programs. The decisions and the drain loop go under the directory both roles
+# resolve them from (bootc/lib/deploy). The golden fixtures are test data, so they
+# stay out of the image. There is no receiver: since #1010 nothing reaches in, and
+# the poll is the only trigger.
 COPY bootc/lib/deploy/decisions.py /usr/libexec/deploy/decisions.py
 COPY bootc/lib/deploy/drain.sh /usr/libexec/deploy/drain.sh
 # The operator CLI is one command, not a second name for the drain: the loop
@@ -319,7 +317,6 @@ RUN set -eux; \
       smortress-syncthing-gui-proxy.service \
       smortress-backrest.service \
       smortress-backrest-watchdog.timer \
-      smortress-deploy-listener.service \
       smortress-deploy.path \
       smortress-boot-gate.service \
       smortress-deploy-poll.timer \

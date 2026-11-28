@@ -8,8 +8,8 @@
 # deadline pair that has to clear the switch's own pull -- T6's review found the
 # shared 300 s default under a 600 s switch, which kills a slow pull after bootc
 # has already staged the entry. The queue is a throwaway directory, the verifier
-# and `systemctl` are fakes, and the listener, the heartbeat and the units are the
-# real files. No root, no reboot, no network.
+# and `systemctl` are fakes, and the heartbeat and the units are the real files.
+# No root, no reboot, no network.
 #
 #   bats tests/deploy/edge-drain.bats
 load ../helpers
@@ -17,12 +17,10 @@ load ../helpers
 drain=bootc/edge/rootfs/usr/libexec/deploy-drain-edge
 state_lib=scripts/deploy-state.sh
 drain_lib=bootc/lib/deploy/drain.sh
-receiver=bootc/lib/deploy/deploy-receiver.py
 heartbeat=scripts/deploy-heartbeat.sh
 fixtures=bootc/lib/deploy/fixtures
 unit_dir=bootc/edge/rootfs/usr/lib/systemd/system
 drain_unit=$unit_dir/smoresnet-deploy.service
-listener_unit=$unit_dir/smoresnet-deploy-listener.service
 heartbeat_unit=$unit_dir/smoresnet-deploy-heartbeat.service
 heartbeat_timer=$unit_dir/smoresnet-deploy-heartbeat.timer
 containerfile=bootc/edge/Containerfile
@@ -53,20 +51,16 @@ setup_file() {
 printf '%s\n' "$*" >>"$FAKE_LOG/systemctl-calls"
 exit "${STUB_SYSTEMCTL_EXIT:-0}"
 STUB
-    # One curl for the two jobs the heartbeat has: the health probe (a status in
-    # $FAKE_HEALTH_STATUS, or `network` for a connect failure) and the page, whose
-    # URL arrives as a curl config on stdin and never reaches argv.
+    # One curl for the heartbeat's page, whose URL arrives as a curl config on
+    # stdin and never reaches argv.
     cat >"$bin/curl" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$FAKE_LOG/curl-calls"
-out=/dev/stdout
 url=
 while (($#)); do
   case $1 in
-    --output | -o) out=$2; shift 2 ;;
-    --config) shift 2 ;;
+    --output | -o | --config | --write-out | --header | --max-time | --retry) shift 2 ;;
     --fail | --fail-with-body) shift ;;
-    --write-out | --header | --max-time | --retry) shift 2 ;;
     -*) shift ;;
     *) url=$1; shift ;;
   esac
@@ -74,15 +68,6 @@ done
 if [[ -z $url ]]; then
   url=$(sed -n 's/^url = "\(.*\)"$/\1/p' | head -n 1)
 fi
-case ${url:-} in
-  *healthz*)
-    status=$(cat "$FAKE_HEALTH_STATUS" 2>/dev/null) || status=200
-    [[ $status == network ]] && exit 7
-    [[ $out == /dev/stdout ]] || printf '{"status":"ok"}' >"$out"
-    [[ $status == 200 ]] && exit 0
-    exit 22
-    ;;
-esac
 printf '%s\n' "${url:-}" >>"$FAKE_LOG/pings"
 exit 0
 STUB
@@ -96,11 +81,8 @@ setup() {
     image=$BATS_FILE_TMPDIR/image
     mkdir -p "$log" "$state/queue"
     export FAKE_LOG=$log
-    # The one fake curl, handed to the programs that page (deploy_notify and the
-    # heartbeat's health probe) rather than put on PATH: the listener's own
-    # readiness probe below is the real one.
+    # The one fake curl, handed to deploy_notify rather than put on PATH.
     export DEPLOY_CURL_BIN=$BATS_FILE_TMPDIR/bin/curl
-    export FAKE_HEALTH_STATUS=$work/health-status
     export DEPLOY_STATE_DIR=$state
     export DEPLOY_LOCK_FILE=$work/deploy.lock
     export DEPLOY_PING_SECRET=$work/deploy-ping-url
@@ -275,89 +257,6 @@ unit_env() { # <unit> <VAR>
     assert_equal "$(queued)" 1
 }
 
-# --- the listener starts with no sops unit and answers /healthz -------------
-
-@test "the edge listener names no sops unit" {
-    run grep -E '^(Requires|Wants|After|Before)=.*sops-decrypt' "$listener_unit"
-    assert_failure
-}
-
-@test "the edge listener reads its secret from /etc/smoresnet as the edge role" {
-    assert_equal "$(unit_env "$listener_unit" DEPLOY_SECRETS_DIR)" /etc/smoresnet
-    assert_equal "$(unit_env "$listener_unit" DEPLOY_ROLE)" edge
-}
-
-free_port() {
-    python3 -c 'import socket
-s = socket.socket()
-s.bind(("127.0.0.1", 0))
-print(s.getsockname()[1])
-s.close()'
-}
-
-# start_listener: the receiver as the unit runs it. The two Environment= values
-# are the unit's own; the secrets directory is the only thing overridden, because
-# /etc/smoresnet is the host's.
-start_listener() { # <secrets-dir> <log>
-    local port _
-    port=$(free_port)
-    listener_base=http://127.0.0.1:$port
-    env DEPLOY_ROLE="$(unit_env "$listener_unit" DEPLOY_ROLE)" \
-        DEPLOY_SECRETS_DIR="$1" DEPLOY_STATE_DIR=$state \
-        DEPLOY_LISTEN_PORT="$port" DEPLOY_LISTEN_HOST=127.0.0.1 \
-        python3 "$receiver" >>"$2" 2>&1 &
-    listener_pid=$!
-    for _ in $(seq 1 100); do
-        if [[ $(curl -s -o /dev/null -w '%{http_code}' --max-time 1 \
-            "$listener_base/healthz" 2>/dev/null) == 200 ]]; then
-            return 0
-        fi
-        sleep 0.1
-    done
-    return 1
-}
-
-teardown() {
-    kill "${listener_pid:-}" 2>/dev/null || true
-    wait 2>/dev/null || true
-}
-
-secrets_fixture() { # <dir> <mode>
-    mkdir -p "$1"
-    chmod 0700 "$1"
-    printf 'value: edge-%04d\n' "$RANDOM" >"$1/webhook-secret.yaml"
-    chmod "$2" "$1/webhook-secret.yaml"
-}
-
-@test "the listener answers /healthz with no sops-decrypt anywhere on the host" {
-    secrets_fixture "$work/secrets" 0600
-    start_listener "$work/secrets" "$work/listener.log" ||
-        fail "the listener never answered: $(tail -n 5 "$work/listener.log")"
-    assert_equal "$(curl -s -o /dev/null -w '%{http_code}' "$listener_base/healthz")" 200
-}
-
-@test "a missing secret exits non-zero naming the file" {
-    mkdir -p "$work/empty"
-    rc=0
-    DEPLOY_ROLE=edge DEPLOY_STATE_DIR=$state DEPLOY_SECRETS_DIR=$work/empty \
-        DEPLOY_LISTEN_PORT="$(free_port)" timeout 20 python3 "$receiver" \
-        >"$work/missing.log" 2>&1 || rc=$?
-    assert_equal "$rc" 1
-    assert grep -qF "$work/empty/webhook-secret.yaml" "$work/missing.log"
-}
-
-# Plaintext at rest is only 0600 if something refuses the alternative: a group- or
-# world-readable HMAC key is the box's second factor published.
-@test "a secret readable by group or other is refused, naming the file and its mode" {
-    secrets_fixture "$work/loose" 0640
-    rc=0
-    DEPLOY_ROLE=edge DEPLOY_STATE_DIR=$state DEPLOY_SECRETS_DIR=$work/loose \
-        DEPLOY_LISTEN_PORT="$(free_port)" timeout 20 python3 "$receiver" \
-        >"$work/loose.log" 2>&1 || rc=$?
-    assert_not_equal "$rc" 0
-    assert grep -qF "$work/loose/webhook-secret.yaml is mode 0640" "$work/loose.log"
-}
-
 # --- the heartbeat pages a wedged queue ------------------------------------
 
 # beat: one run of the shared dead-man under the edge unit's own limits, which is
@@ -373,7 +272,7 @@ edge_beat() {
 @test "the edge heartbeat pages through the operator's file under /etc/smoresnet" {
     assert_equal "$(unit_env "$heartbeat_unit" DEPLOY_PING_SECRET)" \
         /etc/smoresnet/deploy-ping-url
-    contains 'After=smoresnet-deploy-listener.service' "$heartbeat_unit"
+    refute grep -qE 'deploy-listener|deploy-receiver' "$heartbeat_unit"
     contains 'OnCalendar=*-*-* *:0/5:00' "$heartbeat_timer"
 }
 
@@ -404,26 +303,17 @@ edge_beat() {
     assert grep -qx "$ping_url/fail" "$log/pings"
 }
 
-@test "a silent listener pings /fail on the edge too" {
-    printf 'network\n' >"$FAKE_HEALTH_STATUS"
-    edge_beat
-    assert_equal "$rc" 1
-    assert grep -qx "$ping_url/fail" "$log/pings"
-}
-
 # --- the image installs what the units run ---------------------------------
 
 @test "the edge image installs and enables the deploy plane's units" {
-    contains 'smoresnet-deploy-listener.service' "$containerfile"
     contains 'smoresnet-deploy-heartbeat.timer' "$containerfile"
-    contains 'COPY bootc/lib/deploy/deploy-receiver.py /usr/libexec/deploy-receiver.py' \
-        "$containerfile"
+    contains 'smoresnet-deploy-poll.timer' "$containerfile"
     contains 'COPY bootc/lib/deploy/drain.sh /usr/libexec/deploy/drain.sh' "$containerfile"
     contains 'COPY scripts/deploy-heartbeat.sh /usr/libexec/deploy-heartbeat' "$containerfile"
 }
 
 @test "every program the edge deploy units run is in the image tree" {
-    for unit in "$drain_unit" "$listener_unit" "$heartbeat_unit"; do
+    for unit in "$drain_unit" "$heartbeat_unit"; do
         program=$(sed -n 's/^ExecStart=//p' "$unit" | awk '{ print $NF }')
         [[ -n $program ]] || fail "$unit has no ExecStart"
         # Either the rootfs ships it (executable in git) or the Containerfile

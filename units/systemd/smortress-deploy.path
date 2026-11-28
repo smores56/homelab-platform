@@ -4,8 +4,7 @@
 # drained by the same run instead of waiting for the next event.
 #
 # The directory is created by tmpfiles at boot; a missing queue simply never
-# triggers, which is why smortress-deploy-listener.service is the unit that
-# reports the queue unusable.
+# triggers, and the heartbeat's queue scan is what reports one unusable.
 [Unit]
 Description=Drain the deploy queue when a request lands
 

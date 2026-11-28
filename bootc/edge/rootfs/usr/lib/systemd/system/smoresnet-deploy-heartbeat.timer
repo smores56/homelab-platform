@@ -1,5 +1,5 @@
 [Unit]
-Description=Five-minute dead-man beat for the edge's deploy receiver
+Description=Five-minute dead-man beat for the edge's deploy queue
 
 [Timer]
 # The same five minutes the server's deploy check runs on: a beat is what keeps a

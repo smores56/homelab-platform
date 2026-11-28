@@ -312,10 +312,10 @@ PY
 }
 
 @test "the tag name and the coalesce key are the rules both roles share" {
-    # The publish workflow pushes `sha-<12>` and nothing else, so the receiver and
-    # the gate have to recognise that exact shape and refuse a near-miss rather
-    # than slice whatever arrived; the coalesce key is what makes two pending
-    # requests for one repository one deploy.
+    # The publish workflow pushes `sha-<12>` and nothing else, so the poll and the
+    # gate have to recognise that exact shape and refuse a near-miss rather than
+    # slice whatever arrived; the coalesce key is what makes two pending requests
+    # for one repository one deploy.
     run python3 - "$repo_root" <<'PY'
 import sys
 
@@ -355,11 +355,6 @@ sys.path.insert(0, str(root / "bootc/lib/deploy"))
 import decisions  # noqa: E402
 
 used = set()
-for name in ("bootc/lib/deploy/deploy-receiver.py",):
-    for line in (root / name).read_text().splitlines():
-        if line.lstrip().startswith("#"):
-            continue
-        used.update(re.findall(r'journal\(\s*"([a-z][a-z-]*)"', line))
 for name in (
     "scripts/deploy-state.sh",
     "bootc/lib/deploy/drain.sh",

@@ -256,8 +256,6 @@ service_served() { # <service>:<port> -> the target it advertises
     jq -r --arg key "$1" '.Services[$key].Proxy // empty' "$status" 2>/dev/null
 }
 
-tcp_forward() { jq -r '.TCP["8484"].TCPForward // empty' "$status" 2>/dev/null; }
-
 serves() { # port path target: a handler the Serve state carries
     local got
     got=$(served "$1")

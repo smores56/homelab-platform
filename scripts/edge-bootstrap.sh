@@ -3,7 +3,7 @@
 #
 # It runs on the box as root, over the tailnet, after the edge image has booted.
 # The image is the whole host, so what is left for a person is exactly what an
-# image may not carry: the operator's Caddy values, the four plaintext secrets,
+# image may not carry: the operator's Caddy values, the two plaintext secrets,
 # the kit's SSH host key, the tailnet node identity and the first deploy record.
 # The rest of what a hand bootstrap used to do -- packages, firewall, sshd policy,
 # the Caddyfile, the units -- is image content (bootc/edge/), and
@@ -14,9 +14,10 @@
 # here-document is in neither. The document is KEY=value lines, each optional:
 #
 #   TS_AUTHKEY=tskey-auth-...     the preauthorized tag:vps join key
-#   WEBHOOK_SECRET=...            the receiver's HMAC secret
-#   WEBHOOK_SECRET_NEXT=...       the rotation window's secret, if any
 #   DEPLOY_PING_URL=https://...   the dead-man capability URL
+#
+# There is no webhook secret: since #1018 the box answers no inbound deploy, so
+# the only credential it holds is the one the heartbeat pages through.
 #
 # A key the document omits leaves the file it belongs to alone, so a re-run with
 # an empty stdin converges everything else and touches no secret. A value for a
@@ -33,7 +34,6 @@
 #   sudo SMORTRESS_FQDN=smortress.<tailnet>.ts.net EDGE_ACME_EMAIL=you@example.com \
 #     scripts/edge-bootstrap.sh <<'EOF'
 #   TS_AUTHKEY=tskey-auth-...
-#   WEBHOOK_SECRET=...
 #   DEPLOY_PING_URL=https://hc-ping.com/...
 #   EOF
 #
@@ -79,7 +79,7 @@ tailscale_bin=${TAILSCALE_BIN:-tailscale}
 systemctl_bin=${SYSTEMCTL_BIN:-systemctl}
 caddy_bin=${CADDY_BIN:-caddy}
 ssh_keygen_bin=${SSH_KEYGEN_BIN:-ssh-keygen}
-# The trees this step writes. The secrets directory is the listeners' own knob
+# The trees this step writes. The secrets directory is the units' own knob
 # (`DEPLOY_SECRETS_DIR` in the edge units), so the file is written where the unit
 # that reads it looks and there is no second place to keep in sync.
 secrets_dir=${DEPLOY_SECRETS_DIR:-/etc/smoresnet}
@@ -93,8 +93,6 @@ caddy_user=${EDGE_CADDY_USER:-caddy}
 ssh_dir=${EDGE_SSH_DIR:-/etc/ssh}
 edge_env=$caddy_dir/edge.env
 authkey_file=$secrets_dir/tailscale-authkey
-webhook_file=$secrets_dir/webhook-secret.yaml
-webhook_next_file=$secrets_dir/webhook-secret-next.yaml
 ping_file=$secrets_dir/deploy-ping-url
 node_id_file=$state_dir/tailnet-node-id
 # `tailscale up` lands seconds after the join unit starts, not with it, so the
@@ -103,22 +101,15 @@ node_id_file=$state_dir/tailnet-node-id
 # host nobody notices until the node has to be found in the admin console.
 tailnet_wait=${EDGE_TAILNET_WAIT:-30}
 
-document_keys='TS_AUTHKEY WEBHOOK_SECRET WEBHOOK_SECRET_NEXT DEPLOY_PING_URL'
-# The four files a document key owns, and the prefix each one carries. The two
-# webhook secrets are named .yaml and the receiver accepts either spelling; the
-# `value:` form is the one the server's sops manifest and the receiver's own
-# tests use, so one secret reads the same on both hosts. The ping URL is written
-# bare because deploy_notify takes the first non-empty line as the URL itself.
+document_keys='TS_AUTHKEY DEPLOY_PING_URL'
+# The two files a document key owns. The ping URL is written bare because
+# deploy_notify takes the first non-empty line as the URL itself.
 declare -A target_path=(
   [TS_AUTHKEY]=$authkey_file
-  [WEBHOOK_SECRET]=$webhook_file
-  [WEBHOOK_SECRET_NEXT]=$webhook_next_file
   [DEPLOY_PING_URL]=$ping_file
 )
 declare -A target_prefix=(
   [TS_AUTHKEY]=''
-  [WEBHOOK_SECRET]='value: '
-  [WEBHOOK_SECRET_NEXT]='value: '
   [DEPLOY_PING_URL]=''
 )
 declare -A offered=()
@@ -143,8 +134,8 @@ usage: edge-bootstrap [--force] [--commit <40-hex>] [--host-key <path>]
   --host-key       install this ed25519 host key instead of keeping the one
                    sshd generated at first boot (not needed for a normal edge)
 
-The secret document arrives on stdin: TS_AUTHKEY, WEBHOOK_SECRET,
-WEBHOOK_SECRET_NEXT and DEPLOY_PING_URL, one KEY=value per line, all optional.
+The secret document arrives on stdin: TS_AUTHKEY and DEPLOY_PING_URL, one
+KEY=value per line, both optional.
 EOF
   exit "${1:-2}"
 }
@@ -208,7 +199,7 @@ read_document() {
     key=${line%%=*}
     value=${line#*=}
     case $key in
-      TS_AUTHKEY | WEBHOOK_SECRET | WEBHOOK_SECRET_NEXT | DEPLOY_PING_URL) ;;
+      TS_AUTHKEY | DEPLOY_PING_URL) ;;
       *) die "stdin key '$key' is not one of: $document_keys" ;;
     esac
     [[ -z ${seen[$key]:-} ]] || die "$key appears twice on stdin"
@@ -221,10 +212,9 @@ validate_document() {
   local key value
   # A key the operator wrote with nothing after it is a paste that lost its
   # value, not a request to keep the file: omitting the line is how a re-run keeps
-  # it. The rotation secret is the exception, since its blank means "none".
+  # it.
   for key in $document_keys; do
     [[ -z ${seen[$key]:-} ]] && continue
-    [[ $key == WEBHOOK_SECRET_NEXT ]] && continue
     [[ -n ${offered[$key]} ]] || die "$key is blank; omit the line to keep the file it belongs to"
   done
   value=${offered[TS_AUTHKEY]:-}
@@ -238,8 +228,8 @@ validate_document() {
   for key in $document_keys; do
     value=${offered[$key]:-}
     [[ -n $value ]] || continue
-    # One value is one line: a secret with a newline in it would be a file whose
-    # second line the receiver reads as YAML, or a ping URL with a suffix.
+    # One value is one line: a secret with a newline in it would be a second line
+    # in a file that holds one value, or a ping URL with a suffix.
     [[ $value != *[[:space:]]* ]] || die "$key carries whitespace; its file holds one value on one line"
   done
   value=${offered[DEPLOY_PING_URL]:-}
@@ -259,9 +249,8 @@ check_secrets() {
     path=${target_path[$key]}
     want=${target_prefix[$key]}${offered[$key]:-}
     if [[ -z ${offered[$key]:-} ]]; then
-      # The rotation secret is optional by definition; the other three are the
-      # box's minimum to work at all.
-      if [[ ! -s $path && $key != WEBHOOK_SECRET_NEXT ]]; then
+      # Both are the box's minimum to work at all.
+      if [[ ! -s $path ]]; then
         missing="$missing $key"
       fi
       continue
@@ -288,8 +277,8 @@ write_secrets() {
       continue
     fi
     # atomic_write is the state library's 0600 rename: temp file, fsync, rename,
-    # directory fsync. A listener that restarted mid-write would otherwise read a
-    # half-written HMAC key and refuse to start.
+    # directory fsync. A reader that started mid-write would otherwise see a
+    # half-written value.
     printf '%s\n' "$want" | atomic_write "$path" || die "cannot write $path"
     say "wrote $path (0600)"
   done
@@ -512,22 +501,13 @@ write_secrets
 "$systemctl_bin" start smoresnet-tailscale-up.service ||
   die "cannot start smoresnet-tailscale-up.service"
 say "started smoresnet-tailscale-up.service"
-# The forward is conditioned on the enrollment marker, so a boot before the join
-# skipped it. Starting it here is what makes the receiver reachable on the tailnet
-# in the same run that enrolled the box, rather than after the next reboot.
-if [[ -e $state_dir/tailscale-enrolled ]]; then
-  "$systemctl_bin" start smoresnet-deploy-forward.service ||
-    die "cannot start smoresnet-deploy-forward.service; a notify job cannot reach the receiver until it runs"
-  say "started smoresnet-deploy-forward.service (the receiver is on the tailnet)"
-fi
-
 install_host_key
 pin_node_id
 seed_state
 
 say "bootstrap complete; this box now holds"
 note "  $edge_env  SMORTRESS_FQDN, EDGE_ACME_EMAIL and the three Service upstreams"
-note "  $secrets_dir  the auth key, the webhook secret (and its rotation), the ping URL"
+note "  $secrets_dir  the auth key and the ping URL"
 if [[ -n $host_key ]]; then
   note "  $ssh_dir/ssh_host_ed25519_key  the host key you named, installed for sshd"
 else
