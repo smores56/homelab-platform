@@ -390,7 +390,7 @@ poll_backstop_ships() {
   fi
   if $doctrine; then
     grep -qF 'COPY scripts/deploy-poll.sh /usr/libexec/deploy-poll' "$containerfile" || return 1
-    grep -qF 'chmod 0755 /usr/libexec/deploy-heartbeat /usr/libexec/deploy-poll' "$containerfile" || return 1
+    grep -qF 'chmod 0755 /usr/libexec/deploy-poll' "$containerfile" || return 1
   fi
   grep -qxF 'ExecStart=/usr/libexec/deploy-poll' "$poll_service" || return 1
   grep -qxF 'After=edge-boot-gate.service' "$poll_service" || return 1

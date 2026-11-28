@@ -50,7 +50,7 @@ setup() { health_setup; }
 
 # The prober judges and journals; it never acts on the platform or on the tenant,
 # and it never touches the deploy check: one Healthchecks check answered by the
-# host heartbeat cannot carry a tenant verdict, and a `deploy_notify fail` from
+# host dead-man cannot carry a tenant verdict, and a `deploy_notify fail` from
 # here would page a down/recover pair every five minutes for one broken app.
 no_landed_record() { # <case>
     case_probe "$1"

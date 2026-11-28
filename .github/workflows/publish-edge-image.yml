@@ -44,9 +44,6 @@ on:
       - "scripts/lib/**"
       # The boot counter installer both images run (SDLC #939).
       - "scripts/boot-counter-install.sh"
-      # The dead-man beat is the server's program under the edge's own limits
-      # (design #939, T8), so a change to it changes what this image runs.
-      - "scripts/deploy-heartbeat.sh"
       # The poll backstop ships as /usr/libexec/deploy-poll (design #939, T11), so
       # a change to it has to reach the image the timer runs it from.
       - "scripts/deploy-poll.sh"

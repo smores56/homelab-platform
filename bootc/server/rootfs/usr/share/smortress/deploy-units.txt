@@ -20,8 +20,8 @@
 # `smortress-apps-health` (base path per app), and a quota failure is journaled by
 # the apply, which then refuses the revision.
 #
-# The deploy's own units are deliberately absent (the path, the drain, the poll
-# and heartbeat timers): their secret is seeded by hand after the first landing
+# The deploy's own units are deliberately absent (the path, the drain and the
+# poll and retry timers): their secret is seeded by hand after the first landing
 # (docs/manual-steps.md), and a missing one must page rather than roll the host
 # back onto an image that cannot deploy.
 #

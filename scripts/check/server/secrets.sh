@@ -222,12 +222,12 @@ check "the loop installs every staged helper 0755" \
   has 'install -m 0755 "$f" "/usr/libexec/$(basename "${f%.sh}")"' bootc/server/Containerfile
 # The deploy's own programs: the two python helpers ship in the rootfs (the loop
 # would drop them), and the shell helpers go through it.
-for program in deploy-state deploy-drain deploy-platform deploy-apps deploy-poll deploy-heartbeat; do
+for program in deploy-state deploy-drain deploy-platform deploy-apps deploy-poll; do
   check "the image installs scripts/$program.sh" has "scripts/$program.sh" bootc/server/Containerfile
 done
-for program in deploy-poll deploy-heartbeat; do
-  check "a unit runs the installed $program" has "/usr/libexec/$program" units/systemd
-done
+# The poll is the deploy plane's only program with a unit of its own: the drain is
+# queue-triggered, and the poll is the dead-man since #1019 retired the heartbeat.
+check "a unit runs the installed deploy-poll" has '/usr/libexec/deploy-poll' units/systemd
 # deploy-apps has no unit of its own: the drain runs it for a queued apps request.
 # It reaches it through the library's one resolver now, so the assertion follows
 # the call, not a literal path that only the old inline probe carried.
@@ -239,7 +239,7 @@ check "the resolver searches /usr/libexec" has '/usr/libexec' scripts/deploy-sta
 # it would fail the build and starting it at boot would drain an empty queue.
 for unit in smortress-deploy.path \
   smortress-boot-gate.service smortress-deploy-poll.timer \
-  smortress-deploy-heartbeat.timer smortress-deploy-retry.timer; do
+  smortress-deploy-retry.timer; do
   check "image enables $unit" has "$unit" bootc/server/Containerfile
 done
 check "the queue path triggers the drain" \
@@ -251,14 +251,11 @@ check "the drain is triggered by the queue, not enabled at boot" \
 # A oneshot that its own trigger starts must not also be enabled: an enabled
 # drain runs its snapshot gate on an empty queue, and an enabled poll service
 # fires once at boot with no timer behind it.
-for unit in smortress-deploy.service smortress-deploy-poll.service \
-  smortress-deploy-heartbeat.service; do
+for unit in smortress-deploy.service smortress-deploy-poll.service; do
   check "the image leaves $unit to its trigger" lacks "$unit" bootc/server/Containerfile
 done
 check "the poll timer starts the poll service" \
   grep -qxF 'Unit=smortress-deploy-poll.service' units/systemd/smortress-deploy-poll.timer
-check "the heartbeat timer starts the heartbeat service" \
-  grep -qxF 'Unit=smortress-deploy-heartbeat.service' units/systemd/smortress-deploy-heartbeat.timer
 # The tenant prober is a timer and a timer-triggered oneshot: enabling the timer
 # is the whole delivery, because a timer the image does not enable never fires.
 # Enabling the service instead would run it once at boot and never again, which is
@@ -289,7 +286,7 @@ check "the retry timer fires every five minutes" \
 check "the tmpfiles entry creates the queue" \
   has 'd /var/lib/homelab/deploy/queue 0700 root root -' bootc/server/rootfs/etc/tmpfiles.d/smortress.conf
 
-# The one secret the deploy path reads is a `value` scalar: the heartbeat hands the
+# The one secret the deploy path reads is a `value` scalar: the poll hands the
 # bare URL to curl and sops-decrypt writes the scalar alone, so a `yaml` entry
 # would hand it a document.
 check "deploy-ping-url is a manifest value" \
@@ -532,7 +529,7 @@ while IFS= read -r unit; do
   # a wider filter.
   case $unit in
     smortress-deploy.path | \
-      smortress-deploy-poll.timer | smortress-deploy-heartbeat.timer | \
+      smortress-deploy-poll.timer | \
       smortress-deploy-retry.timer) continue ;;
   esac
   # And the plan readers plus the prober: their failures belong to the tenant, so

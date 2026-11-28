@@ -2,10 +2,10 @@
 # Deploy state: the atomic record, journal, denylist, held/apply/pending
 # documents, the request queue and the single-writer lock (SDLC #798, T1).
 #
-# Sourced by the drain, the platform and apps applies, the poll, the heartbeat,
-# the boot gate and the CLI; never run on its own. The verifier is the Python
-# deploy-verify.py, which answers the same files but does not source this: it
-# writes only the API cache, while the drain holds the lock. The receiver
+# Sourced by the drain, the platform and apps applies, the poll, the boot gate and
+# the CLI; never run on its own. The verifier is the Python deploy-verify.py, which
+# answers the same files but does not source this: it writes only the API cache,
+# while the drain holds the lock. The receiver
 # listener reads state.json but writes only its own nonce ring, so two writers
 # never interleave inside state.json.
 #
@@ -241,14 +241,16 @@ journal_append() {
   return 0
 }
 
-# deploy_notify <success|fail> [<reason>]
+# deploy_notify <start|success|fail> [<reason>]
 #
-# The deploy check is the only notification path the receiver has, and its URL is
+# The deploy check is the deploy plane's only notification path, and its URL is
 # the capability to keep that check green: it is read from the decrypted secret
-# and never echoed, journaled or put in a log line. An absent secret is a
-# journaled skip rather than a failure, because a host without the secret is a
-# host mid-bootstrap, not a broken deploy -- and the caller must not treat a
-# missing page as a failed deploy.
+# and never echoed, journaled or put in a log line. `start` and `fail` are the two
+# states Healthchecks hangs off the same URL (`/start`, `/fail`): a run that says
+# it started and never says how it ended is a run the check pages for. An absent
+# secret is a journaled skip rather than a failure, because a host without the
+# secret is a host mid-bootstrap, not a broken deploy -- and the caller must not
+# treat a missing page as a failed deploy.
 deploy_ping_secret=${DEPLOY_PING_SECRET:-/run/smortress/secrets/deploy-ping-url.yaml}
 deploy_notify_timeout=${DEPLOY_NOTIFY_TIMEOUT:-10}
 deploy_curl_bin=${DEPLOY_CURL_BIN:-curl}
@@ -267,7 +269,7 @@ curl_config_url() { # <url>
 deploy_notify() {
   local kind=$1 reason=${2:-} url
   case $kind in
-    success | fail) ;;
+    start | success | fail) ;;
     *) return 2 ;;
   esac
   # `value` format: sops-decrypt writes the scalar alone, so the first non-empty
@@ -279,7 +281,10 @@ deploy_notify() {
       '{kind:$kind,reason:$reason}')" || true
     return 0
   fi
-  if [[ $kind == fail ]]; then url=${url%/}/fail; fi
+  case $kind in
+    fail) url=${url%/}/fail ;;
+    start) url=${url%/}/start ;;
+  esac
   # The URL is the capability to keep the check green, and argv is world-readable
   # (/proc/<pid>/cmdline, `ps`): it goes to curl as a config on stdin instead.
   if ! curl_config_url "$url" | "$deploy_curl_bin" --fail --silent --show-error \
@@ -428,7 +433,7 @@ clamp_timeout() {
 # Anything else -- a subdirectory, a temporary file, a non-JSON name -- is not an
 # entry. Each entry is one JSON object carrying schema, id, repo, commit,
 # queued_at (epoch seconds) and source. The listener writes that shape; the
-# drain, the poll and the heartbeat read only it. Changing the counting rule in
+# drain and the poll read only it. Changing the counting rule in
 # one language without the other would let the listener's cap drift from what
 # the drain sees.
 queue_entries() {
@@ -524,11 +529,12 @@ queue_has() {
 }
 
 # queue_oldest: print "<age> <id>" for the oldest entry, or "0" when the queue is
-# empty. The heartbeat pages on the age, never on the count: one entry younger
-# than a minute is a deploy in flight, and one entry older than the limit is a
-# drain that is not running. An unreadable entry counts as infinitely old -- the
-# drain drops it next run, but until then it is a record nobody can read -- and
-# a queued_at in the future is a clock that stepped, not an old request.
+# empty. The poll's dead-man pages on the age, never on the count: one entry
+# younger than a minute is a deploy in flight, and one entry older than the limit
+# with no drain holding the lock is a drain that is not running. An unreadable
+# entry counts as infinitely old -- the drain drops it next run, but until then it
+# is a record nobody can read -- and a queued_at in the future is a clock that
+# stepped, not an old request.
 queue_oldest() {
   local file id queued age now oldest_age=0 oldest_id=''
   now=$(date +%s)
@@ -620,5 +626,25 @@ deploy_lock_release() {
     exec {deploy_lock_fd}>&-
     deploy_lock_fd=
   fi
+  return 0
+}
+
+# deploy_lock_held: is a drain inside a deploy right now?
+#
+# A shared, non-blocking attempt on a read-only fd: it answers without taking
+# anything and without writing a byte, which is what lets the poll (outside the
+# lock, and forbidden to write it) ask the question. A missing file is "nobody
+# holds it" -- no drain has taken the lock since this boot's tmpfs came up -- and
+# so is a file nothing holds exclusively.
+#
+deploy_lock_held() {
+  local fd
+  [[ -r $deploy_lock_file ]] || return 1
+  exec {fd}<"$deploy_lock_file" || return 1
+  if flock -n -s "$fd"; then
+    exec {fd}<&-
+    return 1
+  fi
+  exec {fd}<&-
   return 0
 }

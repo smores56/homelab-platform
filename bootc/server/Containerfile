@@ -132,7 +132,7 @@ COPY scripts/storage-layout.sh scripts/zfs-ready.sh scripts/sops-decrypt.sh \
      scripts/smortress-apps-health.sh scripts/syncthing-hostcheck.sh \
      scripts/deploy-state.sh scripts/deploy-drain.sh \
      scripts/deploy-platform.sh scripts/smortress-boot-gate.sh \
-     scripts/deploy-apps.sh scripts/deploy-poll.sh scripts/deploy-heartbeat.sh \
+     scripts/deploy-apps.sh scripts/deploy-poll.sh \
      scripts/agent-config-seed.sh \
      scripts/smortress-password.sh \
      scripts/smortress-backrest-watchdog.sh \
@@ -328,7 +328,6 @@ RUN set -eux; \
       smortress-deploy.path \
       smortress-boot-gate.service \
       smortress-deploy-poll.timer \
-      smortress-deploy-heartbeat.timer \
       smortress-apps-health.timer \
       smortress-deploy-retry.timer \
       smortress-immich-dump.timer \

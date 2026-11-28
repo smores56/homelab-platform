@@ -1,5 +1,5 @@
 [Unit]
-Description=Poll GitHub for a newer main on the public edge and enqueue a deploy
+Description=Poll GitHub for a newer main on the public edge, enqueue a deploy, and answer the deploy check
 # No sops-decrypt here, on purpose: the edge has no SOPS plane and no age identity
 # at all (design #939 section 4). The poll reads no secret to poll, and the one it
 # reads to page is plaintext 0600 under /etc/smoresnet, written by edge-bootstrap.
@@ -26,9 +26,9 @@ ExecStart=/usr/libexec/deploy-poll
 # platform deploy needs and be refused downstream. Since #1018 the poll is the
 # only admission point there is -- nothing else reaches in to refuse anything.
 Environment=DEPLOY_POLL_REPOS=homelab-platform
-# The page on a denylisted tip or an exhausted anonymous budget is the operator's
-# capability URL, plaintext at rest on this box. Absent, the page journals
-# notify-skipped instead of failing the poll.
+# The dead-man's pings -- the start, the verdict, the page on a denylisted tip or an
+# exhausted anonymous budget -- are the operator's capability URL, plaintext at rest
+# on this box. Absent, every ping journals notify-skipped instead of failing the poll.
 Environment=DEPLOY_PING_SECRET=/etc/smoresnet/deploy-ping-url
 # One repository, one GitHub call with a 30 s deadline: ten minutes is the same
 # net the server's unit sets, and the gap under it is a single call rather than
@@ -36,9 +36,11 @@ Environment=DEPLOY_PING_SECRET=/etc/smoresnet/deploy-ping-url
 TimeoutStartSec=600
 UMask=0077
 User=root
-# The poll writes one queue entry and its own cache under the state tree, and
-# nothing else: it takes no deploy lock, records no deployment and removes no
-# entry, so the drain remains the only writer of the queue's *decision*.
+# The poll writes one queue entry, its own cache and its journal lines under the
+# state tree, and nothing else: it records no deployment and removes no entry, so
+# the drain remains the only writer of the queue's *decision*. It reads the deploy
+# lock to tell an apply in flight from a queue nothing is working on, and never
+# takes it.
 ProtectSystem=strict
 ReadWritePaths=/var/lib/homelab/deploy
 ProtectHome=yes

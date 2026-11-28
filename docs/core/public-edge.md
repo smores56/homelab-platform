@@ -265,11 +265,12 @@ minutes and enqueues a request when it moved; it is the only trigger (design
 tailnet grant but the owner's ssh. The drain (`smoresnet-deploy.service`,
 `deploy-drain-edge`) runs the shared `bootc/lib/deploy/drain.sh` loop with a no-op
 where the server's snapshot gate sits, records `pending.json` and reboots into the
-digest the verifier's `bootc switch` already staged; the heartbeat
-(`smoresnet-deploy-heartbeat.service` on a five-minute timer) pings the deploy
-check green only while no queue entry is older than 1800 s. Publishing never
-triggers a deploy: `publish-edge-image.yml` builds and signs, and the poll is what
-lands the release. Enqueuing is the poll's alone; `smoresnet-deploy.path` starts
+digest the verifier's `bootc switch` already staged. The poll is the dead-man
+too (#1019): every run pings the deploy check's `/start` and one verdict, green
+only while no queue entry has waited a poll interval with no drain applying it
+and no hold is unreleased, and `/fail` with the reason otherwise. Publishing
+never triggers a deploy: `publish-edge-image.yml` builds and signs, and the poll
+is what lands the release. Enqueuing is the poll's alone; `smoresnet-deploy.path` starts
 the drain on the first file in the queue, so a hand-run (`systemctl start
 smoresnet-deploy.service`) is the same path an operator can take.
 

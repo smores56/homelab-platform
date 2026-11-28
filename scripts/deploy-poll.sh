@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Hourly deploy poll: the backstop trigger (SDLC #798, T6).
+# Quarter-hour deploy poll: the deploy plane's trigger and dead-man (SDLC
+# #798 T6; dead-man per #1010/#1019).
 #
 #   deploy-poll
 #
@@ -10,17 +11,23 @@
 # its own journal lines. A poll that made a decision would be a second, weaker
 # verifier running outside the deploy lock.
 #
-# It is not a liveness signal -- smortress-deploy-heartbeat.timer is -- because a
-# poll whose own request sits behind a wedged drain still looks healthy. What the
-# poll does own is the case an event cannot cover: a notify job that never ran, a
-# tailnet that was down, a build that landed while the host was off.
+# It is also the deploy plane's dead-man (design #1010, #1019), which is why it
+# pings rather than a separate beat: the poll is the one program that runs on a
+# cadence whether or not anything happened, so it is the only one that can tell
+# "nothing to deploy" from "nothing is deploying". Each run pings the check's
+# start, and pings one verdict at the end -- green only when nothing is queued
+# behind an apply that is not happening and no deploy is held; `/fail` names the
+# reason otherwise. The check's own period is the poll interval, so a run that
+# never finishes is paged by silence too. What the poll does not own is the API's
+# availability: an unreachable GitHub fails the unit and leaves the check alone.
 #
 # A denylisted tip pages and enqueues nothing: the same commit would fail the same
 # check on every hour, and a silent retry loop hides the failure until someone
 # reads the journal. Removal from the denylist is the operator's (`unblock`).
 #
-# Exit codes: 0 every repository was polled, 1 at least one could not be (the unit
-# fails, which is the visible signal), 2 usage.
+# Exit codes: 0 every repository was polled and the verdict is green, 1 at least
+# one could not be or the verdict is red (the unit failing is the second signal;
+# the ping is the page), 2 usage.
 #
 # Every knob is environment-overridable so tests/deploy/poll.sh can drive this
 # exact code against a throwaway directory. Production sets none of them.
@@ -79,6 +86,13 @@ poll_cache_ttl=${DEPLOY_POLL_CACHE_TTL:-120}
 # The listener's own queue cap, mirrored rather than read: the listener refuses the
 # 33rd request and the poll must not be the thing that grows the queue past it.
 poll_queue_cap=${DEPLOY_QUEUE_CAP:-32}
+# How long a queued request may wait with no drain applying it before this run goes
+# red: one poll interval, because a request the previous run enqueued is what the
+# queue trigger and the retry timer have had a whole tick to take, and the run after
+# that is the one that reports it. It is not the honest worst case for a deploy --
+# that runs for hours and is exempt below -- it is the point past which waiting
+# stops being explained by the schedule.
+liveness_max_age=${DEPLOY_LIVENESS_MAX_AGE:-900}
 
 
 # -- the 120 s cache --------------------------------------------------------
@@ -162,6 +176,52 @@ github_tip() { # <repo>; prints the tip sha
   printf '%s\n' "$sha"
 }
 
+# -- the dead-man: one start ping, one verdict ------------------------------
+
+# The verdict this run reports is about the deploy path, never about GitHub: the
+# queue is what a wedge shows in, and an unreachable API fails the unit without
+# claiming the path is broken.
+#
+# `page_reason` is the first thing this run must page about, and there is at most
+# one page per run: three /fail pings for one wedge is three Pushover messages for
+# one fact.
+page_reason=
+page() { [[ -n $page_reason ]] || page_reason=$1; }
+
+liveness_reason=
+liveness_oldest=0
+liveness_entry=
+liveness_applying=false
+
+# liveness_judge: the two ways the deploy path is stopped, and the one exclusion.
+#
+#   held        a hold record the operator has not released. The path is stopped
+#               on a person by design, and it stays stopped until someone acts.
+#   stale       an entry that has waited longer than the limit with no drain
+#               holding the lock: work nothing is working on.
+#
+# The exclusion is `deploy_lock_held`: a drain inside an honest deploy holds the
+# lock for hours (the snapshot gate plus an apps apply) and is not a wedge. What
+# that leaves uncovered -- a drain hung with the lock in hand -- is what the drain
+# unit's own TimeoutStartSec is for; no timestamp here distinguishes "still
+# working" from "hung", and a limit low enough to catch it would page every
+# healthy platform deploy.
+liveness_judge() {
+  local held reason
+  read -r liveness_oldest liveness_entry < <(queue_oldest)
+  if deploy_lock_held; then liveness_applying=true; fi
+  if held=$(held_read 2>/dev/null) &&
+    [[ $(jq -r '.released == true' <<<"$held" 2>/dev/null) != true ]]; then
+    reason=$(jq -r '.reason // "unreleased"' <<<"$held" 2>/dev/null) || reason=unreleased
+    liveness_reason="deploy-poll: deploy held ($reason); nothing lands until it is released"
+    return 0
+  fi
+  if ((liveness_oldest > liveness_max_age)) && ! $liveness_applying; then
+    liveness_reason="deploy-poll: entry $liveness_entry has waited ${liveness_oldest}s with no apply running (limit ${liveness_max_age}s)"
+  fi
+  return 0
+}
+
 # -- the queue is the only thing this program writes ------------------------
 
 # `queue_has` is the state library's, so the poll and the drain agree on what an
@@ -185,6 +245,11 @@ deploy_state_init || {
   exit 1
 }
 
+# The mark comes before any decision: a run that dies between here and the verdict
+# -- a hung TLS read, the unit's timeout, a host that never ticks again -- leaves
+# the check started and unfinished, which its own period turns into a page.
+deploy_notify start || warn "cannot mark the start of the run to the deploy check"
+
 status=0
 enqueued=0
 current=0
@@ -202,8 +267,7 @@ for repo in $poll_repos; do
       journal_append poll-failed "$(jq -nc --arg repo "$repo" --arg reason "$tip_reason" \
         '{repo:$repo,reason:$reason,paged:true}')" ||
         warn "cannot journal the rate limit"
-      deploy_notify fail "deploy-poll: $repo $tip_reason" ||
-        warn "cannot report the rate limit to the deploy check"
+      page "deploy-poll: $repo $tip_reason"
     else
       journal_append poll-failed "$(jq -nc --arg repo "$repo" --arg reason "$tip_reason" \
         '{repo:$repo,reason:$reason,paged:false}')" ||
@@ -218,8 +282,7 @@ for repo in $poll_repos; do
     say "$repo $tip: denylisted; not enqueuing"
     journal_append poll-denylisted "$(jq -nc --arg repo "$repo" --arg commit "$tip" \
       '{repo:$repo,commit:$commit}')" || warn "cannot journal the denylisted tip"
-    deploy_notify fail "deploy-poll: $repo $tip is denylisted" ||
-      warn "cannot report the denylisted tip to the deploy check"
+    page "deploy-poll: $repo $tip is denylisted"
     denied=$((denied + 1))
     continue
   fi
@@ -247,16 +310,19 @@ for repo in $poll_repos; do
     continue
   fi
   if [[ $(queue_count) -ge $poll_queue_cap ]]; then
-    # The listener refuses the 33rd request for the same reason; a full queue that
-    # never drains is what the heartbeat's thirty-minute limit exists to catch.
+    # The listener refuses the 33rd request for the same reason. A full queue is
+    # already a wedge -- and a request that cannot enter is work that cannot
+    # land -- so it pages on its own, without waiting for the age limit.
     journal_append poll-queue-full "$(jq -nc --arg repo "$repo" --arg commit "$tip" \
       '{repo:$repo,commit:$commit}')" || warn "cannot journal the full queue"
     warn "$repo $tip: the queue is full; not enqueuing"
+    page "deploy-poll: $repo $tip: the queue is full and not draining"
     status=1
     continue
   fi
   if ! poll_enqueue "$repo" "$tip"; then
     warn "$repo $tip: cannot enqueue"
+    page "deploy-poll: $repo $tip: cannot enqueue"
     status=1
     continue
   fi
@@ -269,4 +335,29 @@ journal_append poll-finish "$(jq -nc --argjson enqueued "$enqueued" --argjson cu
   '{enqueued:$enqueued,current:$current,queued:$queued,denied:$denied,skipped:$skipped}')" ||
   warn "cannot journal the poll finish"
 say "enqueued $enqueued, current $current, queued $queued, denylisted $denied, unseeded $skipped"
+
+# One verdict, after the polling: a page this run already decided on wins over the
+# liveness reading, because it is the more specific fact, and the two are never
+# both needed to say "the deploy path is not moving".
+liveness_judge
+reason=$page_reason
+[[ -n $reason ]] || reason=$liveness_reason
+verdict=green
+if [[ -n $reason ]]; then
+  verdict=red
+  status=1
+fi
+journal_append poll-liveness "$(jq -nc --arg verdict "$verdict" --arg reason "$reason" \
+  --argjson oldest "$liveness_oldest" --argjson applying "$liveness_applying" \
+  '{verdict:$verdict,reason:$reason,oldestQueuedSeconds:$oldest,applyRunning:$applying}')" ||
+  warn "cannot journal the poll verdict"
+
+if [[ -n $reason ]]; then
+  deploy_notify fail "$reason" || warn "cannot report the failure to the deploy check"
+  say "red: $reason"
+else
+  # A success ping clears the check and unpages; the URL never reaches the journal.
+  deploy_notify success || warn "cannot ping the deploy check"
+  say "green; oldest queued request is ${liveness_oldest}s old"
+fi
 exit "$status"
