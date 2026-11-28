@@ -258,7 +258,7 @@ directives are emitted for every name used, and the objects are ordered by
 `(date, account id, transaction id)` so the same state always renders the
 same bytes. `write_journal` replaces the file in one rename and only when the
 bytes differ, so a two-hourly rerun over an unchanged state leaves the
-journal's mtime alone. `smortress-agent-collect-finance.service` runs it as its
+journal's mtime alone. `smortress-agent-collect@finance.service` runs it as its
 third stage, after the collector, because a projection needs a state that
 exists and is published.
 
@@ -362,7 +362,7 @@ provider.
 
 `apps/brave_ingest/snapshot.py` takes the quiesced copy into
 `state/agent-local/quarantine/brave/History`, and
-`smortress-agent-collect-brave.service` runs it as its first stage, with the
+`smortress-agent-collect@brave.service` runs it as its first stage, with the
 collector over the copy as the second. Two steps for the same reason the calendar
 pass has two: the collector refuses a database still being written, and only the
 snapshot knows how to copy one that is.
@@ -536,7 +536,7 @@ python3 -m data_plane.collectors.raw --root /var/lib/agent/local/replica/tasks \
   tasks --entities /srv/files/todos
 ```
 
-On the host the same command runs from `smortress-agent-collect-finance.service`,
+On the host the same command runs from `smortress-agent-collect@finance.service`,
 on `agent-collect.network`, with the access URL as a Podman secret
 (`docs/core/applications.md`, "Collectors").
 

@@ -9,7 +9,7 @@ Description=Every six hours, reconcile a missed Brave browsing pass
 OnCalendar=*-*-* 00/6:20:00
 AccuracySec=1m
 Persistent=true
-Unit=smortress-agent-collect-brave.service
+Unit=smortress-agent-collect@brave.service
 
 [Install]
 WantedBy=timers.target

@@ -14,9 +14,9 @@ core/app-quadlets-datasets	tests/core/app-quadlets-datasets.bats units/quadlet/*
 core/app-quadlets-host	tests/core/app-quadlets-host.bats units/quadlet/* units/systemd/* bootc/server/* scripts/app-images.sh scripts/storage-layout.sh tests/core/*
 core/app-quadlets-agents	tests/core/app-quadlets-agents.bats units/quadlet/* units/systemd/* bootc/server/* scripts/app-images.sh scripts/storage-layout.sh tests/core/*
 core/app-quadlets-webui	tests/core/app-quadlets-webui.bats units/quadlet/* units/systemd/* bootc/server/* scripts/app-images.sh scripts/storage-layout.sh tests/core/*
-core/app-quadlets-collectors	tests/core/app-quadlets-collectors.bats units/quadlet/* units/systemd/* bootc/server/* scripts/app-images.sh scripts/storage-layout.sh tests/core/*
-core/app-quadlets-collections	tests/core/app-quadlets-collections.bats units/quadlet/* units/systemd/* bootc/server/* scripts/app-images.sh scripts/storage-layout.sh tests/core/*
-core/app-quadlets-egress	tests/core/app-quadlets-egress.bats units/quadlet/* units/systemd/* bootc/server/* scripts/app-images.sh scripts/storage-layout.sh tests/core/*
+core/app-quadlets-collectors	tests/core/app-quadlets-collectors.bats units/quadlet/* units/systemd/* bootc/server/* scripts/app-images.sh scripts/storage-layout.sh tests/core/* units/systemd/*.service.d/*
+core/app-quadlets-collections	tests/core/app-quadlets-collections.bats units/quadlet/* units/systemd/* bootc/server/* scripts/app-images.sh scripts/storage-layout.sh tests/core/* units/systemd/*.service.d/*
+core/app-quadlets-egress	tests/core/app-quadlets-egress.bats units/quadlet/* units/systemd/* bootc/server/* scripts/app-images.sh scripts/storage-layout.sh tests/core/* units/systemd/*.service.d/*
 core/storage-layout	tests/core/storage-layout.bats scripts/storage-layout.sh scripts/init-zpool.sh units/systemd/smortress-zpool.service tests/core/*
 core/check	tests/core/check.bats scripts/legacy/* scripts/deploy-state.sh scripts/deploy-cli.sh bootc/lib/deploy/* bootc/server/rootfs/usr/share/smortress/secrets.manifest units/systemd/smortress-deploy* units/systemd/smortress-boot-gate.service docs/core/server-image.md docs/core/t0-gate.md docs/manual-steps.md tests/core/*
 core/operator-access	tests/core/operator-access.bats scripts/operator-access.sh docs/manual-steps.md tests/core/*
@@ -138,7 +138,7 @@ python/webhook	tests/python/webhook.bats apps/webhook/* tests/python/*
 python/agent-proxy	tests/python/agent-proxy.bats apps/agent_proxy/* tests/python/*
 tofu/check	tests/tofu/check.bats tests/tofu/* tofu/* scripts/check-tofu-providers.py
 tags	tests/tags.bats
-core/agent-recovery	tests/core/agent-recovery.bats scripts/restic-plane-common.sh scripts/smortress-restic-backup.sh scripts/smortress-restic-verify.sh scripts/smortress-restic-restore-drill.sh units/systemd/smortress-restic-* units/systemd/smortress-agent-*.service units/quadlet/agent-*.container scripts/storage-layout.sh tests/core/*
+core/agent-recovery	tests/core/agent-recovery.bats scripts/restic-plane-common.sh scripts/smortress-restic-backup.sh scripts/smortress-restic-verify.sh scripts/smortress-restic-restore-drill.sh units/systemd/smortress-restic-* units/systemd/smortress-agent-*.service units/systemd/smortress-agent-*.service.d/* units/quadlet/agent-*.container scripts/storage-layout.sh tests/core/*
 core/smortress-restic-progress	tests/core/smortress-restic-progress.bats scripts/smortress-restic-progress.sh scripts/restic-plane-common.sh scripts/storage-layout.sh tests/core/*
 provision/check	tests/provision/check.bats provision/* tests/provision/*
 edge/check	tests/edge/check.bats scripts/verify-public-edge.sh scripts/verify-caa.sh tests/edge/*
@@ -148,10 +148,10 @@ brave/check	tests/brave/check.bats apps/brave_ingest/* libs/data_plane/collector
 tuta-calendar/check	tests/tuta-calendar/check.bats apps/tuta_calendar/* libs/data_plane/collectors/* images/tuta-calendar/* tests/tuta-calendar/*
 backrest/check	tests/backrest/check.bats tests/backrest/guard.sh backrest/* bootc/edge/* scripts/edge-bootstrap.sh tests/backrest/*
 source-watch/source-watch	tests/source-watch/source-watch.bats tests/source-watch/* scripts/source-watch.py units/systemd/smortress-source-watch.service bootc/server/rootfs/etc/smortress/agent/watch-roots.json bootc/server/Containerfile .github/workflows/ci.yml
-finance/publish	tests/finance/publish.bats tests/finance/* libs/data_plane/collectors/raw/publish_finance.py units/systemd/smortress-agent-collect-finance.service
+finance/publish	tests/finance/publish.bats tests/finance/* libs/data_plane/collectors/raw/publish_finance.py units/systemd/smortress-agent-collect@finance.service.d/*
 mail/publish	tests/mail/publish.bats tests/mail/* libs/data_plane/collectors/raw/publish_mail.py units/systemd/smortress-agent-mail-stream.service
 stream/imap	tests/stream/imap.bats tests/stream/* libs/data_plane/collectors/stream/* units/systemd/smortress-agent-mail-stream.service
-brave/publish	tests/brave/publish.bats libs/data_plane/collectors/raw/publish_brave.py units/systemd/smortress-agent-collect-brave.service
-calendar/publish	tests/calendar/publish.bats tests/calendar/* libs/data_plane/collectors/raw/publish_calendar.py units/systemd/smortress-agent-collect-calendar.service
+brave/publish	tests/brave/publish.bats libs/data_plane/collectors/raw/publish_brave.py units/systemd/smortress-agent-collect@brave.service.d/*
+calendar/publish	tests/calendar/publish.bats tests/calendar/* libs/data_plane/collectors/raw/publish_calendar.py units/systemd/smortress-agent-collect@calendar.service.d/*
 core/syncthing-hostcheck	tests/core/syncthing-hostcheck.bats scripts/syncthing-hostcheck.sh units/systemd/smortress-syncthing-hostcheck.service units/systemd/smortress-syncthing-gui-proxy.service units/systemd/smortress-selinux-caddy-proxy.service bootc/server/Containerfile scripts/tailscale-serve.sh tofu/tailscale.tf tests/core/*
 python/raw-collectors	tests/python/raw-collectors.bats libs/data_plane/collectors/raw/tasks.py libs/data_plane/collectors/raw/notes.py libs/data_plane/collectors/* tests/python/*

@@ -18,79 +18,96 @@ setup() { aq_setup; }
 # 8.1. The finance collector's third stage: the hledger projection. It is derived
 #     state, so it reads the replica read-only and writes one directory under the
 #     personal index -- the same directory the seed unit creates at uid 1000.
-readonly finance_unit=units/systemd/smortress-agent-collect-finance.service
+#
+# Since SDLC #1021 the collector is an instance of `smortress-agent-collect@.service`
+# and the stages that only it runs live in its fragment: the pull is the
+# template's single stage, and the fragment adds the view and the projection.
+readonly finance_frag=units/systemd/smortress-agent-collect@finance.service.d/10-collect.conf
+readonly collector_template=units/systemd/smortress-agent-collect@.service
 
-@test "units/systemd/smortress-agent-collect-finance.service is collect, publish, project" {
+@test "the finance instance is collect, publish, project" {
   # Three stages: the pull, the plain view the agent reads (SDLC #995, T2) and
   # the derived journal. `Type=oneshot` runs them in order, so the view is
   # published from the state the pull just committed.
-  assert_equal "$(grep -cE '^ExecStart=' "$finance_unit")" 3
+  assert_equal "$(grep -cE '^ExecStart(Pre)?=' "$finance_frag")" 2
+  assert_equal "$(grep -cE '^ExecStart(Pre)?=' "$collector_template")" 1
+  # The pull comes first, so the two added stages are the view and then the
+  # projection -- in that order, because the journal is rendered from the replica.
+  assert_equal "$(sed -n 's/^[[:space:]]*-m \(data_plane[a-z._]*\).*/\1/p' "$finance_frag" | paste -sd' ')" \
+    'data_plane.collectors.raw.publish_finance data_plane.derived.hledger'
 }
 
-@test "units/systemd/smortress-agent-collect-finance.service projects the replica into the personal index" {
-  grep -qF -- '--volume /var/lib/agent/local/replica:/replica:ro' "$finance_unit" &&
-    grep -qF -- '--volume /var/lib/agent/local/index:/index:z' "$finance_unit" &&
-    grep -qF -- '--out /index/hledger/finance.journal' "$finance_unit"
+@test "the finance instance projects the replica into the personal index" {
+  grep -qF -- '--volume /var/lib/agent/local/replica:/replica:ro' "$finance_frag" &&
+    grep -qF -- '--volume /var/lib/agent/local/index:/index:z' "$finance_frag" &&
+    grep -qF -- '--out /index/hledger/finance.journal' "$finance_frag"
 }
 
-@test "units/systemd/smortress-agent-collect-finance.service holds its credential in one stage only" {
-  assert_equal "$(grep -cF -- '--secret ' "$finance_unit")" 1
+@test "the finance instance holds its credential in one stage only" {
+  assert_equal "$(grep -cF -- '--secret' "$collector_template" "$finance_frag" |
+    awk -F: '{n += $2} END {print n}')" 1
 }
 
 # 8a. The calendar pair: our own exporter (session held on a volume, no secret)
 #     followed by the collector. The session is the account's access, so it is
-#     mounted read-write only into stage 1 and never into the collector.
-readonly calendar=units/systemd/smortress-agent-collect-calendar.service
+#     mounted read-write only into the export stage and never into the collection.
+readonly calendar_frag=units/systemd/smortress-agent-collect@calendar.service.d/10-collect.conf
 readonly calendar_timer=units/systemd/smortress-agent-collect-calendar.timer
 
-@test "units/systemd/smortress-agent-collect-calendar.service exists" {
-  [[ -f $calendar ]]
+@test "units/systemd/smortress-agent-collect@calendar.service.d/10-collect.conf exists" {
+  [[ -f $calendar_frag ]]
 }
 
-@test "units/systemd/smortress-agent-collect-calendar.service is dump, collect, then publish" {
-  # Three stages: the exporter, the collector, and the plain view the agent reads
+@test "the calendar instance is dump, collect, then publish" {
+  # Three stages: the exporter (`ExecStartPre=`, so it runs before the template's
+  # collection stage), the collection, and the plain view the agent reads
   # (SDLC #995, T4). `Type=oneshot` runs them in order, so the vdir is published
   # from the state the collector just committed.
-  assert_equal "$(grep -cE '^ExecStart=' "$calendar")" 3
+  assert_equal "$(grep -cE '^ExecStartPre=' "$calendar_frag")" 1
+  assert_equal "$(grep -cE '^ExecStart=' "$calendar_frag")" 1
+  assert_equal "$(grep -cE '^ExecStart(Pre)?=' "$collector_template")" 1
+  grep -qF -- '-m data_plane.collectors.raw.publish_calendar' "$calendar_frag"
 }
 
-@test "units/systemd/smortress-agent-collect-calendar.service reaches only the collector network and none" {
-  # The dump and the collector talk to Tuta on the collectors' network; the
-  # projection needs no socket at all.
-  assert_equal "$(grep -cE -- '--network systemd-agent-collect' "$calendar")" 2
-  assert_equal "$(grep -cE -- '--network none([[:space:]\\]|$)' "$calendar")" 1
-  assert_equal "$(grep -cE -- '^[[:space:]]*--network ' "$calendar")" 3
+@test "the calendar instance reaches only the collector network and none" {
+  # The dump names the collectors' network, the collection stage gets it from the
+  # fragment's environment, and the projection needs no socket at all.
+  grep -qxF 'Environment=AGENT_COLLECT_NETWORK=systemd-agent-collect' "$calendar_frag"
+  assert_equal "$(grep -cE -- '^[[:space:]]*--network systemd-agent-collect' "$calendar_frag")" 1
+  assert_equal "$(grep -cE -- '^[[:space:]]*--network none([[:space:]\\]|$)' "$calendar_frag")" 1
+  assert_equal "$(grep -cE -- '^[[:space:]]*--network ' "$calendar_frag")" 2
 }
 
-@test "units/systemd/smortress-agent-collect-calendar.service publishes the vdir beside the replica" {
-  grep -qF -- '--volume /var/lib/agent/local/replica:/replica:ro' "$calendar" &&
-    grep -qF -- '--volume /var/lib/agent/local/sources/calendar:/out:z' "$calendar" &&
-    grep -qF -- '--raw /replica/calendar --out /out' "$calendar"
+@test "the calendar instance publishes the vdir beside the replica" {
+  grep -qF -- '--volume /var/lib/agent/local/replica:/replica:ro' "$calendar_frag" &&
+    grep -qF -- '--volume /var/lib/agent/local/sources/calendar:/out:z' "$calendar_frag" &&
+    grep -qF -- '--raw /replica/calendar --out /out' "$calendar_frag"
 }
 
 @test "the calendar pass holds no Podman secret" {
-  ! grep -qE -- '--secret ' "$calendar"
+  ! grep -qE -- '--secret' "$collector_template" "$calendar_frag"
 }
 
 @test "the calendar pass waits for the sealed session" {
-  grep -qE '^ConditionPathExists=.*quarantine/tuta-calendar/session\.gpg' "$calendar"
+  grep -qE '^ConditionPathExists=.*quarantine/tuta-calendar/session\.gpg' "$calendar_frag"
 }
 
 @test "the session volume is mounted once, read-write" {
-  assert_equal "$(grep -cF -- '/var/lib/agent/local/quarantine/tuta-calendar:/data:z' "$calendar")" 1
+  assert_equal "$(grep -cF -- '/var/lib/agent/local/quarantine/tuta-calendar:/data:z' "$calendar_frag")" 1
 }
 
 @test "the collector reads the dump read-only" {
-  grep -qE -- '/var/lib/agent/local/quarantine/calendar:/entities:ro' "$calendar"
+  grep -qE -- 'AGENT_COLLECT_SOURCE=--volume /var/lib/agent/local/quarantine/calendar:/entities:ro' \
+    "$calendar_frag"
 }
 
-for _image in $(grep -oE 'ghcr\.io/smores56/homelab-platform/[a-z-]+@sha256:[0-9a-f]{64}' "$calendar"); do
+for _image in $(grep -oE 'ghcr\.io/smores56/homelab-platform/[a-z-]+@sha256:[0-9a-f]{64}' "$calendar_frag"); do
   registered "the calendar pass runs a pinned image from the table" image_is_pinned_in_the_table "$_image"
 done
 unset _image
 
 @test "units/systemd/smortress-agent-collect-calendar.timer runs the calendar pass" {
-  assert_equal "$(sed -n 's/^Unit=//p' "$calendar_timer")" "$(basename "$calendar")"
+  assert_equal "$(sed -n 's/^Unit=//p' "$calendar_timer")" "smortress-agent-collect@calendar.service"
 }
 
 @test "units/systemd/smortress-agent-collect-calendar.timer closes a missed run on the next boot" {

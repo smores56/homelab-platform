@@ -1,0 +1,88 @@
+# One collector pass, as an instance: `smortress-agent-collect@notes.service` is
+# the notes pass, `@finance` the SimpleFIN one. What used to be thirteen units
+# repeating the same pinned digest and the same `podman run` triad is this
+# template plus a drop-in per collector and the timers that already named them
+# (SDLC #1021).
+#
+# What lives here, once: the pinned runtime image, the container's Python
+# environment, the flag set every stage runs under, and the one stage every
+# collector has -- the stage that reads a local artifact and commits it to the
+# personal replica. What stays per collector, in
+# `smortress-agent-collect@<name>.service.d/`: the description, the dataset it
+# reads, its subcommand, the extra ordering it needs, the credential it holds and
+# the stages it runs before and after the collection.
+#
+# `%i` is the collector name three times over: it is the replica subdirectory
+# (`--root /replica/%i`), the container name (`smortress-agent-collect-%i`) and
+# the systemd instance. A collector whose name is not also its replica directory
+# does not exist, and the drop-in cannot disagree with the template about it
+# because it never gets to say.
+#
+# Three stages rather than three units, where a collector has three: a stage that
+# has to run first is `ExecStartPre=` in its drop-in, a stage after the
+# collection is an `ExecStart=` line there. systemd appends a drop-in's ExecStart
+# lines after this file's, and `Type=oneshot` runs the whole list in order and
+# stops at the first failure -- which is exactly what the copied units did, so a
+# refusal at any stage still publishes nothing and still fails the unit.
+#
+# The unit holds no `ConditionPathExists`, no `TimeoutStartSec` and no source
+# dataset: each is a fact about one collector (a vault that may not be mounted
+# yet, a library walk that takes an hour), so each lives in the drop-in that
+# knows it, along with the comment that says why.
+[Unit]
+Description=Collect %i into the personal replica
+# Every collector commits into state/agent-local and every one runs the code the
+# agent-runtime image ships, so the dataset readiness and the agent config come
+# before all of them. Any further ordering -- the source dataset, the
+# collectors' network, the sealed session -- is per instance, in the drop-in.
+Requires=zfs-ready@state-agent-local.service smortress-agent-config.service
+After=zfs-ready@state-agent-local.service smortress-agent-config.service
+
+[Service]
+Type=oneshot
+UMask=0077
+# A refusal exits 3 and publishes nothing. That is a failed unit on purpose: the
+# timer is the only signal that the replica stopped advancing, and a red unit is
+# better than a state that looks like the user deleted everything. Nothing
+# retries here; the next tick does.
+Restart=no
+# The runtime image, at the digest `scripts/app-images.sh` pins it to and the
+# runtime image's own publish workflow printed. It is written once, here: every
+# stage in every drop-in names `${AGENT_COLLECT_IMAGE}` and never the digest, so
+# a rebuild moves one line and no collector can run a different runtime than its
+# neighbour.
+Environment=AGENT_COLLECT_IMAGE=ghcr.io/smores56/homelab-platform/agent-runtime@sha256:dd5dc3547ed57bd7b797ddb2afa4b7536f336257a358be3c801bb5da5d37c5c7
+# Every stage runs the package out of the image (images/agent-runtime puts it
+# under /usr/lib/data-plane) and nothing from the host, so no stage may mount a
+# copy of the tree: the running bytes and the reviewed bytes are one image. The
+# package root is `/usr/lib/data-plane/libs` *and* `/usr/lib/data-plane`; naming
+# only the second imports nothing, which is how both collectors shipped once.
+Environment="AGENT_COLLECT_ENV=--env PYTHONPATH=/usr/lib/data-plane/libs:/usr/lib/data-plane --env PYTHONDONTWRITEBYTECODE=1"
+# What any stage may do: a read-only root, no capability, no new privilege, no
+# ambient user, and a tmpfs for the one scratch path Python wants. `--replace`
+# clears a container a killed run left behind, so a stale name cannot wedge the
+# next pass. A stage adds to this (its own tmpfs size, a mount, a credential); it
+# never removes from it.
+Environment="AGENT_COLLECT_HARDENING=--read-only --cap-drop=all --security-opt no-new-privileges --user 1000:1000"
+# The defaults are the local-file collector: no address, no source tree, no extra
+# flag, no arguments beyond the subcommand. A collector that reaches a provider
+# or reads a dataset overrides the keys it needs in its drop-in.
+Environment=AGENT_COLLECT_NETWORK=none
+Environment=AGENT_COLLECT_SOURCE=
+Environment=AGENT_COLLECT_FLAGS=
+Environment=AGENT_COLLECT_ARGS=
+# The collection: the artifact a collector was handed -- a snapshot, a dump, a
+# vault, a library -- becomes one committed state under `replica/%i`. The replica
+# tree is the only writable mount a collection stage ever gets, and the source is
+# read-only wherever it comes from, so nothing here can edit what it reads.
+ExecStart=/usr/bin/podman run --rm --replace --name smortress-agent-collect-%i \
+  --network ${AGENT_COLLECT_NETWORK} \
+  ${AGENT_COLLECT_HARDENING} \
+  --tmpfs /tmp:rw,size=16m \
+  ${AGENT_COLLECT_FLAGS} \
+  ${AGENT_COLLECT_SOURCE} \
+  --volume /var/lib/agent/local/replica:/replica:z \
+  ${AGENT_COLLECT_ENV} \
+  --entrypoint python3 \
+  ${AGENT_COLLECT_IMAGE} \
+  -m data_plane.collectors.raw --root /replica/%i ${AGENT_COLLECT_ARGS}

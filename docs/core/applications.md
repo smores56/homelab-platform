@@ -160,7 +160,7 @@ though it belongs to the `files` unit.
 | Hosted provider key | `secrets/agents.json` `["agent"]["hosted_key"]` | `/run/smortress/secrets/agent-hosted-key.yaml` (`value`, root 0400) | Podman secret `agent-hosted-key`, mounted read-only at `/run/secrets/agent-hosted-key` in `agent-proxy` only. Never in an environment, never in a config file, never in argv |
 | Personal UI password | `secrets/agents.json` `["ui"]["personal_password"]` | `/run/smortress/secrets/agent-ui-personal-password.yaml` (`value`, root 0400) | Not a Podman secret: `smortress-agent-config.service` writes it into `/var/lib/agent/local/webui.env` as `HERMES_WEBUI_PASSWORD`, which `agent-webui-personal` reads through `EnvironmentFile=`. The UI has no `_FILE` variant, and `type=env` would carry the file's trailing newline into a comparison that never matches |
 | General UI password | `secrets/agents.json` `["ui"]["general_password"]` | `/run/smortress/secrets/agent-ui-general-password.yaml` (`value`, root 0400) | Same shape, `/var/lib/agent/general/webui.env`. One password per deployment: the two UIs are separate authority domains, so a leak on one must not open the other |
-| SimpleFIN access URL | `secrets/agents.json` `["simplefin"]["access_url"]` | `/run/smortress/secrets/simplefin-access-url.yaml` (`value`, root 0400) | Podman secret `simplefin-access-url`, mounted at uid 1000 mode 0400 in `smortress-agent-collect-finance.service` only, which reads it through `--access-url-file` |
+| SimpleFIN access URL | `secrets/agents.json` `["simplefin"]["access_url"]` | `/run/smortress/secrets/simplefin-access-url.yaml` (`value`, root 0400) | Podman secret `simplefin-access-url`, mounted at uid 1000 mode 0400 in `smortress-agent-collect@finance.service` only, which reads it through `--access-url-file` |
 | TutaBridge password | `secrets/agents.json` `["tmail"]["bridge_password"]` | `/run/smortress/secrets/tmail-bridge-password.yaml` (`value`, root 0400) | Podman secret `tmail-bridge-password`, mounted at uid 1000 mode 0400 in `smortress-agent-collect-mail.service` only, where isync's `PassCmd` reads it. The bridge generates this password locally; the Tuta account password is never stored in this repository |
 
 `smortress-app-secrets.service` creates all nine Podman secrets with
@@ -339,17 +339,25 @@ not part of a deployment. A collector is the one process that talks to a
 provider, and the deployment that consumes the result must not: the personal side
 has no route off the host.
 
+Every collector is an instance of `smortress-agent-collect@.service` (SDLC #1021):
+the template holds the pinned runtime image, the flag set and the stage that
+commits to `state/agent-local/replica/%i`, and
+`smortress-agent-collect@<name>.service.d/10-collect.conf` holds what only that
+collector knows -- its dataset, its subcommand, its credential and the stages
+before and after the collection. The rows below name the instance each timer
+starts.
+
 | Unit | Network | Writes | Credential |
 | --- | --- | --- | --- |
-| `smortress-agent-collect-finance.timer` → `.service` | `agent-collect.network`, a plain bridge of its own (the projection stage has no network at all) | `state/agent-local/replica/finance`, and `state/agent-local/index/hledger` (the projection) | Podman secret `simplefin-access-url`, uid 1000 mode 0400 |
+| `smortress-agent-collect-finance.timer` → `smortress-agent-collect@finance.service` | `agent-collect.network`, a plain bridge of its own (the projection stage has no network at all) | `state/agent-local/replica/finance`, and `state/agent-local/index/hledger` (the projection) | Podman secret `simplefin-access-url`, uid 1000 mode 0400 |
 | `smortress-agent-mail-stream.service` | `agent-collect.network` | `state/agent-local/replica/mail` | Podman secret `tmail-bridge-password`, uid 1000 mode 0400 |
-| `smortress-agent-collect-calendar.timer` → `.service` | `agent-collect.network` | `state/agent-local/quarantine/calendar` (the dump) and `state/agent-local/replica/calendar` (the collection) | none: the exporter authenticates with the sealed session on `state/agent-local/quarantine/tuta-calendar`, mounted only into the dump stage |
+| `smortress-agent-collect-calendar.timer` → `smortress-agent-collect@calendar.service` | `agent-collect.network` | `state/agent-local/quarantine/calendar` (the dump) and `state/agent-local/replica/calendar` (the collection) | none: the exporter authenticates with the sealed session on `state/agent-local/quarantine/tuta-calendar`, mounted only into the dump stage |
 | `agent-tmail` (Quadlet; it serves, no timer) | `agent-collect.network` | `state/agent-local/quarantine/tmail`, its own session volume | none: its credential is the session on that volume |
-| `smortress-agent-collect-brave.path` → `.service`, plus a six-hourly `.timer` reconcile | `agent-brave.network` for the browser (`agent-brave`); neither collection stage has a network | `state/agent-local/quarantine/brave` (the snapshot) and `state/agent-local/replica/brave` (the collection) | Podman secret `brave-sync-seed`, uid 1000 mode 0400, held by the seed unit only |
-| `smortress-agent-collect-notes.timer` → `.service` | none: it reads `/srv/files/vault` and needs no address | `state/agent-local/replica/notes` | none: the vault is already on this host |
-| `smortress-agent-collect-tasks.timer` → `.service` | none: it reads `/srv/files/todos` | `state/agent-local/replica/tasks` | none |
-| `smortress-agent-collect-photos.timer` → `.service` | none: it reads `/srv/photos` and needs no address | `state/agent-local/replica/photos` (metadata only; the media stays on `raw/photos`) | none |
-| `smortress-agent-collect-music.timer` → `.service` | none: it reads `/srv/music` | `state/agent-local/replica/music` (metadata only; the audio stays on `raw/music`) | none |
+| `smortress-agent-collect-brave.path` → `smortress-agent-collect@brave.service`, plus a six-hourly `.timer` reconcile | `agent-brave.network` for the browser (`agent-brave`); neither collection stage has a network | `state/agent-local/quarantine/brave` (the snapshot) and `state/agent-local/replica/brave` (the collection) | Podman secret `brave-sync-seed`, uid 1000 mode 0400, held by the seed unit only |
+| `smortress-agent-collect-notes.timer` → `smortress-agent-collect@notes.service` | none: it reads `/srv/files/vault` and needs no address | `state/agent-local/replica/notes` | none: the vault is already on this host |
+| `smortress-agent-collect-tasks.timer` → `smortress-agent-collect@tasks.service` | none: it reads `/srv/files/todos` | `state/agent-local/replica/tasks` | none |
+| `smortress-agent-collect-photos.timer` → `smortress-agent-collect@photos.service` | none: it reads `/srv/photos` and needs no address | `state/agent-local/replica/photos` (metadata only; the media stays on `raw/photos`) | none |
+| `smortress-agent-collect-music.timer` → `smortress-agent-collect@music.service` | none: it reads `/srv/music` | `state/agent-local/replica/music` (metadata only; the audio stays on `raw/music`) | none |
 
 Tuta serves no IMAP at all, so `agent-tmail` -- TutaBridge, mirrored and pinned
 like every other application image -- is the mail provider half: it holds the
@@ -360,7 +368,7 @@ replica it feeds (`docs/manual-steps.md#collector-sign-ins`). It shares
 `agent-collect.network` with the finance collector: both are personal-authority
 processes writing into the personal dataset, and neither can reach a deployment.
 
-`smortress-agent-collect-calendar.service` is two stages like the finance
+`smortress-agent-collect@calendar.service` is two stages like the finance
 collector: the pinned `tuta-calendar` image signs in with its sealed session and
 rewrites the dump, then the collector commits the replica state. The session is the
 account's access, so it is mounted read-write only into the first stage; the
@@ -425,7 +433,7 @@ The browsing collector is the one pair where the provider half is a process of i
 own. `agent-brave.container` is the only container on `agent-brave.network`, and
 therefore the only one with an address to dial: the snapshot and the collection
 that follow it read and write local paths, so
-`smortress-agent-collect-brave.service` runs both stages with `--network none` and
+`smortress-agent-collect@brave.service` runs both stages with `--network none` and
 cannot reach the proxy even if it were asked to. The profile volume it shares with
 the seed unit is the chain membership -- the planted seed and the sync engine's
 device id live in it -- so it is mounted into the browser and written by exactly
@@ -930,7 +938,7 @@ volume is genuinely lost, move the replica aside too and let the bridge resync.
 ### The Tuta calendar exporter
 
 `apps/tuta_calendar/` ships in `images/tuta-calendar/`;
-`smortress-agent-collect-calendar.service` runs the exporter and then the collector
+`smortress-agent-collect@calendar.service` runs the exporter and then the collector
 every two hours, and skips the run while the seal is missing
 (`ConditionPathExists=`), so a start that leaves nothing in the journal means the
 sign-in has not run.
@@ -942,7 +950,7 @@ tuta-calendar')` names the same reference.)
 
 ```sh
 image=$(grep -o 'ghcr\.io/smores56/homelab-platform/tuta-calendar@sha256:[0-9a-f]*' \
-  /usr/lib/systemd/system/smortress-agent-collect-calendar.service | head -1)
+  /usr/lib/systemd/system/smortress-agent-collect@calendar.service.d/10-collect.conf | head -1)
 sudo podman run --rm -it \
   -v /var/lib/agent/local/quarantine/tuta-calendar:/data:z \
   "$image" init --store /data          # prints: session for <address> sealed at /data/session.gpg
@@ -959,7 +967,7 @@ sudo podman run --rm \
   -v /var/lib/agent/local/quarantine/tuta-calendar:/data:z \
   -v /var/lib/agent/local/quarantine/calendar:/out:z \
   "$image" dump --store /data --out /out      # one JSON line, exit 0; exit 3 writes nothing
-sudo systemctl start smortress-agent-collect-calendar.service
+sudo systemctl start smortress-agent-collect@calendar.service
 ```
 
 Run the dump only when you want the entity directory without a commit; the unit's
@@ -988,8 +996,8 @@ scripts/secret.sh edit simplefin-access-url.yaml   # simplefin.access_url
 scripts/secret.sh stage simplefin-access-url.yaml
 git commit -am 'chore(core): claim the SimpleFIN access URL'
 git push
-sudo systemctl start smortress-agent-collect-finance.service
-sudo journalctl -u smortress-agent-collect-finance.service -n 20 --no-pager
+sudo systemctl start smortress-agent-collect@finance.service
+sudo journalctl -u smortress-agent-collect@finance.service -n 20 --no-pager
 ```
 
 The run is good when `published` names the replica's `state.sqlite` and
@@ -1012,7 +1020,7 @@ for (object_id,) in connection.execute(
     print(object_id)
 EOF
 sudo vi /var/lib/agent/local/index/hledger/accounts.json   # {"<id>": "assets:bank:checking"}
-sudo systemctl start smortress-agent-collect-finance.service
+sudo systemctl start smortress-agent-collect@finance.service
 ```
 
 A mapping that is not a JSON object of string to string, or a name that is empty or

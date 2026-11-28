@@ -50,8 +50,13 @@ unit_class() { # path -> general|personal|aux|ambiguous
     fi
 }
 
+# The drop-ins are agent units too: SDLC #1021 moved the collector stages that
+# only one collector runs into `smortress-agent-collect@<name>.service.d/`, so a
+# mount that used to sit in a service file now sits in a fragment. An audit that
+# read only `*.service` would stop seeing it and say nothing.
 agent_units() {
-    printf '%s\n' units/quadlet/agent-*.container units/systemd/smortress-agent-*.service
+    printf '%s\n' units/quadlet/agent-*.container units/systemd/smortress-agent-*.service \
+        units/systemd/smortress-agent-*.service.d/*.conf
 }
 
 # Datasets on each side of the authority split. Anything else is either app
@@ -470,13 +475,13 @@ mutate() { # file perl-expression
 
 @test "collector-writes-to-the-general-group is caught as agent-mount-cross" {
     expect_finding collector-writes-to-the-general-group 0 agent-mount-cross \
-        mutate units/systemd/smortress-agent-collect-finance.service \
+        mutate units/systemd/smortress-agent-collect@.service \
         's|/var/lib/agent/local/replica:/replica:z|/var/lib/agent/general/replica:/replica:z|'
 }
 
 @test "nameless-unit-mounts-agent-state is caught as agent-mount-unclassified" {
     expect_finding nameless-unit-mounts-agent-state 0 agent-mount-unclassified \
-        sh -c 'mv units/systemd/smortress-agent-collect-finance.service units/systemd/smortress-agent-sync.service'
+        sh -c 'mv units/systemd/smortress-agent-collect@.service units/systemd/smortress-agent-sync@.service'
 }
 
 @test "model-mounted-writable is caught as agent-model-writable" {
