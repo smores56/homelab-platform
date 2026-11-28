@@ -44,7 +44,7 @@ rollback path. Operator-only actions are in `docs/manual-steps.md#install-a-host
 | `/usr/lib/systemd/system/smortress-agent-config.service` | Seeds each gateway's `config.yaml` (`cp -n`), rewrites `.env`'s `API_SERVER_KEY` and `webui.env`'s gateway key and UI password at every boot, writes the personal Workspace's `/run/smortress/workspace.env` (`0:0 0400`, outside the agent's dataset), and creates each gateway's memory root, the source watcher's feed directory, and each UI's state and workspace directories; the Workspace's own state is a named volume. |
 | `/usr/libexec/agent-config-seed` | `scripts/agent-config-seed.sh`: the seeding itself, so the token is read from a file into a variable instead of being spliced into an `ExecStart` line. |
 | `/usr/lib/systemd/system/smortress-nvidia-cdi.service` | Generates `/etc/cdi/nvidia.yaml` at boot so `AddDevice=nvidia.com/gpu=all` resolves for the model container; ordered before it. |
-| `/usr/libexec/deploy-verify.py` | The host's own verification: tip of `main`, descendancy from the deployed commit, tag `sha-<commit[:12]>` → digests, `org.opencontainers.image.revision` label, denylist. Anonymous GitHub and registry calls, cached 120 s, 30 s each. This file is the server role only: the questions themselves are pure functions in `/usr/libexec/deploy/decisions.py` (`bootc/lib/deploy/`), which both bootc images install, and `bootc/lib/deploy/fixtures/` pins the answers the edge has to match. Still rootfs, because the build's `smortress-src` loop installs `*.sh` only. |
+| `/usr/libexec/deploy-verify.py`, `/usr/libexec/deploy/policy.json` | The host's own verification: tip of `main`, descendancy from the deployed commit, tag `sha-<commit[:12]>` → digests, `org.opencontainers.image.revision` label, denylist. Anonymous GitHub and registry calls, 30 s each. One program runs on both hosts (`lib/deploy/verify.py`); what differs is the table installed beside it (`lib/deploy/policy.d/server.json`), which names the repository allowlist, the image repository, the 120 s API cache window, what an absent image means, and which gate has the last word. The questions themselves are pure functions in `/usr/libexec/deploy/decisions.py` (`bootc/lib/deploy/`), and `bootc/lib/deploy/fixtures/` pins the answers both tables have to produce. |
 | `/usr/libexec/{deploy-state,deploy-drain,deploy-platform,deploy-apps,deploy-poll}` | `scripts/deploy-*.sh`: the state library, the queue drain (single writer of `state.json`), the platform snapshot gate and stage, the apps apply and revert, and the quarter-hour deploy poll, which is also the deploy dead-man. The apps apply sources its phases from `/usr/libexec/deploy/apps/` (`scripts/deploy/apps/*.sh`). |
 | `/usr/libexec/smortress-boot-gate` | `scripts/smortress-boot-gate.sh`: reconciles an interrupted apps apply, then keeps or rolls back the deployment this host just booted. |
 | `/usr/libexec/smortress-deploy` | `scripts/deploy-cli.sh`, staged under the name the runbook uses: `status`, `release --force`, `unblock`, `bootstrap`. |
@@ -347,8 +347,10 @@ drain, and every external command inside it has its own deadline.
 The drain's loop is `bootc/lib/deploy/drain.sh` and the answers it acts on are
 `bootc/lib/deploy/decisions.py`, both installed under `/usr/libexec/deploy/`;
 `scripts/deploy-drain.sh` is only the server role's part -- the snapshot gate, the
-stage and the tenant apply. `/usr/libexec/deploy-verify.py` answers "may this
-commit deploy" for every entry, fail-closed and journaled with the reason:
+stage and the tenant apply. `/usr/libexec/deploy-verify.py` -- the same program
+the edge installs, run under this host's `/usr/libexec/deploy/policy.json` --
+answers "may this commit deploy" for every entry, fail-closed and journaled with
+the reason:
 
 1. The commit is off the denylist, is the tip of `main` *now*
    (`GET /repos/smores56/<repo>/git/ref/heads/main`), is not the deployed commit,

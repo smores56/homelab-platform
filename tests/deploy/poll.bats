@@ -25,7 +25,8 @@ load ../helpers
 
 poll=scripts/deploy-poll.sh
 lib=scripts/deploy-state.sh
-verify=bootc/server/rootfs/usr/libexec/deploy-verify.py
+verify=lib/deploy/verify.py
+policy=lib/deploy/policy.d/server.json
 timer=units/systemd/smortress-deploy-poll.timer
 service=units/systemd/smortress-deploy-poll.service
 ping_url=http://ping.test/deploy
@@ -175,15 +176,19 @@ poll_both_repos() {
     seed_state homelab-apps "$sha_current"
 }
 
-# The verifier's own reader of the same 120 s cache rule, from its module.
+# The verifier's own reader of the same rule, from its module and the window its
+# policy table names: the cache is the server's row of that table, not a constant
+# in the program, so the suite reads the row rather than restating it.
 verify_cache_get() { # <url> -> hit|miss
-    python3 - "$verify" "$state/cache.json" "$1" <<'PY'
-import importlib.util, sys
+    python3 - "$verify" "$policy" "$state/cache.json" "$1" <<'PY'
+import importlib.util, json, sys
 spec = importlib.util.spec_from_file_location("deploy_verify", sys.argv[1])
 module = importlib.util.module_from_spec(spec)
 sys.modules["deploy_verify"] = module
 spec.loader.exec_module(module)
-print("miss" if module.Cache(sys.argv[2]).get(sys.argv[3]) is None else "hit")
+with open(sys.argv[2], encoding="utf-8") as handle:
+    ttl = json.load(handle)["api_cache_ttl"]
+print("miss" if module.Cache(sys.argv[3], ttl).get(sys.argv[4]) is None else "hit")
 PY
 }
 

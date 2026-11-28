@@ -105,11 +105,18 @@ COPY scripts/lib/ /usr/libexec/lib/
 COPY scripts/boot-counter-install.sh /usr/libexec/boot-counter
 COPY scripts/deploy-state.sh /usr/libexec/deploy-state
 # The deploy plane's programs, under the names the units run them by (design #939,
-# T8). The drain loop is the one both roles source. deploy-drain-edge,
-# deploy-verify.py and edge-boot-gate are the edge rootfs's own and arrive with the
-# COPY above. There is no receiver: since #1010 nothing reaches in, and the
-# quarter-hour poll is the only trigger and the only dead-man.
+# T8). The drain loop is the one both roles source. deploy-drain-edge and
+# edge-boot-gate are the edge rootfs's own and arrive with the COPY above. There is
+# no receiver: since #1010 nothing reaches in, and the quarter-hour poll is the
+# only trigger and the only dead-man.
 COPY bootc/lib/deploy/drain.sh /usr/libexec/deploy/drain.sh
+# The verifier and this host's policy table (SDLC #1025). The program is the one
+# the server runs, byte for byte; the table is the edge's -- one repository, the
+# edge image, no API cache, an absent tag held rather than refused, and bootc's
+# switch as the gate. It installs at the path the program reads, so the image, not
+# the program, says which host it is.
+COPY lib/deploy/verify.py /usr/libexec/deploy-verify.py
+COPY lib/deploy/policy.d/edge.json /usr/libexec/deploy/policy.json
 # The poll backstop, under the name its timer runs it by (design #939, T11). It is
 # the server's program unmodified: the two hosts differ in what the unit around it
 # is allowed to do, not in what a poll is -- including the dead-man ping, which is
@@ -205,6 +212,8 @@ RUN set -eux; \
 RUN set -eux; \
     test -x /usr/libexec/deploy-verify.py || { echo "the edge verifier is missing or not executable: nothing would verify a deploy"; exit 1; }; \
     test -f /usr/libexec/deploy/decisions.py || { echo "the shared deploy decision is missing: the verifier would refuse to start"; exit 1; }; \
+    test -f /usr/libexec/deploy/policy.json || { echo "the verifier's policy table is missing: it would refuse to start"; exit 1; }; \
+    test "$(jq -r .role /usr/libexec/deploy/policy.json)" = edge || { echo "the verifier's policy table is not this host's: it would verify by another host's allowlist and image repository"; exit 1; }; \
     case "${BASE_IMAGE}" in \
       *:latest) echo "BASE_IMAGE must be a stream tag, not :latest: ${BASE_IMAGE}" >&2; exit 1 ;; \
       *@sha256:*) echo "BASE_IMAGE must be a stream tag, not a digest: ${BASE_IMAGE}" >&2; exit 1 ;; \

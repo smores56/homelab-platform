@@ -209,19 +209,19 @@ for program in $(libexec_programs units bootc/server/rootfs scripts/*.sh); do
     check "the image installs /usr/libexec/$program" has "scripts/$program.sh" bootc/server/Containerfile
   fi
 done
-# `COPY` preserves the mode, so a rootfs program committed non-executable is a
-# unit that fails with 203/EXEC at the first boot rather than at review time. The
+# `COPY` preserves the mode, so a program committed non-executable is a unit that
+# fails with 203/EXEC at the first boot rather than at review time. The
 # same holds for every shell helper: the install loop strips the `.sh` and the
 # unit runs the result, which is how smortress-boot-gate.sh shipped 100644 and
 # would have failed the boot gate with 203/EXEC on the first boot after a deploy.
-for program in bootc/server/rootfs/usr/libexec/deploy-verify.py scripts/*.sh; do
+for program in lib/deploy/verify.py scripts/*.sh; do
   check "$program is committed executable" \
     test "$(git ls-files -s "$program" | cut -d' ' -f1)" = 100755
 done
 check "the loop installs every staged helper 0755" \
   has 'install -m 0755 "$f" "/usr/libexec/$(basename "${f%.sh}")"' bootc/server/Containerfile
-# The deploy's own programs: the two python helpers ship in the rootfs (the loop
-# would drop them), and the shell helpers go through it.
+# The deploy's own programs: the python helpers are copied from where they live
+# (the loop would drop them), and the shell helpers go through it.
 for program in deploy-state deploy-drain deploy-platform deploy-apps deploy-poll; do
   check "the image installs scripts/$program.sh" has "scripts/$program.sh" bootc/server/Containerfile
 done

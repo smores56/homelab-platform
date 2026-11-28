@@ -19,7 +19,8 @@ checker=scripts/check-lib-drift.sh
 
 # fixture <dir>: the tree the checker derives from its own location, which is
 # lib/ (the artifacts and their halves), the three host trees it holds copies
-# against, and the Containerfiles that state which lib files each host installs.
+# against, the Containerfiles that state which lib files each host installs, and
+# bootc/lib/deploy (the role table each policy has to agree with).
 fixture() {
     local dir=$1
     mkdir -p "$dir/lib" "$dir/scripts" "$dir/bootc/server" "$dir/bootc/edge" "$dir/hosts/laptop"
@@ -28,7 +29,9 @@ fixture() {
     cp bootc/server/Containerfile "$dir/bootc/server/"
     cp bootc/edge/Containerfile "$dir/bootc/edge/"
     cp hosts/laptop/Containerfile "$dir/hosts/laptop/"
-    mkdir -p "$dir/bootc/server/rootfs/etc" "$dir/bootc/edge/rootfs/etc" "$dir/hosts/laptop/rootfs/etc"
+    mkdir -p "$dir/bootc/lib" "$dir/bootc/server/rootfs/etc" "$dir/bootc/edge/rootfs/etc" \
+        "$dir/hosts/laptop/rootfs/etc"
+    cp -a bootc/lib/deploy "$dir/bootc/lib/"
 }
 
 @test "the drift comparison passes on the tree as committed" {
@@ -160,6 +163,52 @@ mutation_fails() {
 @test "a greenboot check that is not executable fails the comparison" {
     mutation_fails 'ships executable' \
         chmod 0644 lib/greenboot/required.d/10-health.sh
+}
+
+# The deploy verifier (SDLC #1025): one program, and what a host deploys is its
+# table. The names the program must not carry are the whole check -- a host, an
+# owner, a repository or an image in the program is the line the second copy used
+# to differ on -- and the table must say what the rest of the deploy plane says.
+@test "a host name in the shared verifier fails the comparison" {
+    mutation_fails 'carries no host' \
+        bash -c 'printf "\n# the smortress verifier\n" >>lib/deploy/verify.py'
+}
+
+@test "a verifier that names a role in code fails the comparison" {
+    mutation_fails 'picks no role' \
+        bash -c 'printf "\nROLE = decisions.role(decisions.SERVER)\n" >>lib/deploy/verify.py'
+}
+
+@test "a second copy of the verifier in a host rootfs fails the comparison" {
+    mutation_fails 'one copy of the deploy verifier' \
+        bash -c 'mkdir -p bootc/edge/rootfs/usr/libexec && cp lib/deploy/verify.py bootc/edge/rootfs/usr/libexec/deploy-verify.py'
+}
+
+@test "a verifier committed non-executable fails the comparison" {
+    mutation_fails 'ships executable' chmod 0644 lib/deploy/verify.py
+}
+
+@test "a Containerfile that stops installing the verifier fails the comparison" {
+    mutation_fails 'installs its lib/ files' \
+        sed -i 's|^COPY lib/deploy/verify.py |COPY nothing-here |' bootc/edge/Containerfile
+}
+
+# The allowlist and the image repository are stated twice -- in the policy table
+# and in the shared role table the drain refuses a queued entry by -- so the two
+# statements are compared rather than trusted.
+@test "a policy table that allows a repository the role does not run fails the comparison" {
+    mutation_fails 'agrees with the shared role table' \
+        bash -c 'jq ".repos += [\"homelab-other\"]" lib/deploy/policy.d/edge.json >t && mv t lib/deploy/policy.d/edge.json'
+}
+
+@test "a policy table that resolves the other host's image fails the comparison" {
+    mutation_fails 'agrees with the shared role table' \
+        bash -c 'jq ".images[\"homelab-platform\"] = \"smores56/homelab-platform/server\"" lib/deploy/policy.d/edge.json >t && mv t lib/deploy/policy.d/edge.json'
+}
+
+@test "a policy table for a host that runs no deploy fails the comparison" {
+    mutation_fails 'installs no deploy verifier' \
+        bash -c 'printf "COPY lib/deploy/policy.d/server.json /tmp/policy.json\n" >>hosts/laptop/Containerfile'
 }
 
 # The retired paths: a reader of a file that no longer exists fails on a booted

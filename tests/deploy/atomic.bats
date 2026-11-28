@@ -17,7 +17,7 @@
 load ../helpers
 
 lib=scripts/deploy-state.sh
-verify=bootc/server/rootfs/usr/libexec/deploy-verify.py
+verify=lib/deploy/verify.py
 
 setup() {
     for file in "$lib" "$verify"; do
@@ -55,7 +55,7 @@ strays_in() { # <dir> <target name>: everything beside the target, whatever it i
 label_for() { # <impl>
     case $1 in
         state) printf 'atomic_write (deploy-state.sh)' ;;
-        verify) printf 'write_atomic (deploy-verify.py)' ;;
+        verify) printf 'write_atomic (lib/deploy/verify.py)' ;;
     esac
 }
 

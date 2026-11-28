@@ -148,6 +148,13 @@ COPY scripts/deploy/apps/ /usr/libexec/deploy/apps/
 # the poll is the only trigger.
 COPY bootc/lib/deploy/decisions.py /usr/libexec/deploy/decisions.py
 COPY bootc/lib/deploy/drain.sh /usr/libexec/deploy/drain.sh
+# The verifier and this host's policy table (SDLC #1025). One program runs on both
+# hosts and the table is the half that differs: the repository allowlist, the image
+# repository each one publishes to, the anonymous-API cache window, what an absent
+# image means here, and which gate has the last word. The table installs at the
+# path the program reads, so the image, not the program, says which host it is.
+COPY lib/deploy/verify.py /usr/libexec/deploy-verify.py
+COPY lib/deploy/policy.d/server.json /usr/libexec/deploy/policy.json
 # The operator CLI is one command, not a second name for the drain: the loop
 # above names a helper after its file, so it is staged under the name the
 # runbook uses and the loop installs it as /usr/libexec/smortress-deploy.
@@ -413,6 +420,9 @@ RUN set -eux; \
     esac; \
     test -n "${BASE_DIGEST}" || { echo "BASE_DIGEST is empty: the image would not record the base it was built on" >&2; exit 1; }; \
     command -v python3 >/dev/null || { echo "the image has no python3 for the plan verifier" >&2; exit 1; }; \
+    test -x /usr/libexec/deploy-verify.py || { echo "the deploy verifier is missing or not executable: nothing would verify a deploy" >&2; exit 1; }; \
+    test -f /usr/libexec/deploy/policy.json || { echo "the verifier's policy table is missing: the verifier would refuse to start" >&2; exit 1; }; \
+    test "$(jq -r .role /usr/libexec/deploy/policy.json)" = server || { echo "the verifier's policy table is not this host's: it would verify by another host's allowlist and image repository" >&2; exit 1; }; \
     jq -e '.default[0].type == "reject"' /etc/containers/policy.json >/dev/null; \
     jq -e '.transports.docker["ghcr.io/smores56/homelab-platform"][0].keyPath == "/etc/pki/containers/smortress.pub"' /etc/containers/policy.json >/dev/null; \
     test -e /etc/systemd/system/timers.target.wants/bootc-fetch-apply-updates.timer || { echo "the bootc update timer is not enabled: this host would never upgrade itself" >&2; exit 1; }; \
