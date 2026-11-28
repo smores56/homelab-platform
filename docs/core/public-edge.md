@@ -17,6 +17,7 @@ the shape, the failure modes and the rebuild.
 | Provider | RackNerd, 4 GB KVM VPS (Black Friday 2026), New York |
 | Resources | 4 vCPU, 4 GB RAM, 60 GB SSD, 10 TB transfer/month at 1 Gbps |
 | OS | `ghcr.io/smores56/homelab-platform/edge`, a signed bootc image built from `bootc/edge/`; its Caddy is 2.11, and the Caddyfile's `tls` block needs 2.6 (2.4 cannot parse it) |
+| Booted reference | `ostree-image-signed:docker://ghcr.io/smores56/homelab-platform/edge:latest`, active digest `sha256:3657b35e128e40f6b31e7cdb77da61701803207788c71626591a95110afb657c`, version `45.20261030.3.1 (2026-11-27T03:03:35Z)` — measured with `rpm-ostree status` on 2026-11-27. The box follows the tag, so `bootc upgrade` is what moves it, at the 04:00 America/New_York window the image's `bootc-fetch-apply-updates.timer.d/10-schedule.conf` alone sets; a receiver deploy installs a digest instead and leaves it pinned |
 | Address | one IPv4; IPv6 is a support ticket and was not requested |
 | Price | $47.98/year, lifetime recurring |
 | Control plane | RackNerd `ctrl`: reboot, OS reinstall, HTML5 VNC, optional network firewall |

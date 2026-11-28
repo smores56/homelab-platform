@@ -232,16 +232,45 @@ sudo bootc rollback
 
 `bootc rollback` reverts the deployment, not `/var`, the ZFS datasets or a
 database migration. Application and base images are pinned; `podman-auto-update.timer`,
-`bootc-fetch-apply-updates.timer`, `rpm-ostreed-automatic.timer` and `zincati`
-are masked, so every deployment change lands in a maintenance-window reboot.
+`rpm-ostreed-automatic.timer` and `zincati` are masked. `bootc-fetch-apply-updates.timer`
+is not: `bootc/server/Containerfile` enables it at build time and fails the build if
+it is masked, absent or off its window, so this host is meant to upgrade itself. The
+window lives in exactly one place, the image's
+`bootc/server/rootfs/usr/lib/systemd/system/bootc-fetch-apply-updates.timer.d/10-schedule.conf`
+(05:00 America/New_York, the vendor's boot+1h and 8h cycle cleared, no jitter,
+`Persistent=false`); no other file carries a second one.
+
+## What each host reports
+
+The reference a host boots is the fact that decides which mechanism can move it, so
+it is measured rather than assumed. `sudo rpm-ostree status` on 2026-11-27:
+
+| Host | Booted reference | Active digest | Version | What moves it |
+| --- | --- | --- | --- | --- |
+| smortress | `ostree-image-signed:docker://ghcr.io/smores56/homelab-platform/server:latest` | `sha256:446846eea0313040d3a58f6a81b38dbf5979ae9569d5109077f38b73385a4ba3` | `45.20261030.3.1 (2026-11-27T03:06:28Z)` | the tag: the update timer stages `bootc upgrade` in its 05:00 window (`AutomaticUpdates: stage`, and a second deployment of the same `:latest` was already staged), and the next reboot boots it |
+| smoresnet | `ostree-image-signed:docker://ghcr.io/smores56/homelab-platform/edge:latest` | `sha256:3657b35e128e40f6b31e7cdb77da61701803207788c71626591a95110afb657c` | `45.20261030.3.1 (2026-11-27T03:03:35Z)` | the same `bootc upgrade` on the tag, in the edge image's own 04:00 window (`docs/core/public-edge.md#host`) |
+| smorespro (laptop) | `ostree-image-signed:docker://ghcr.io/smores56/smorespro-image:latest` | `sha256:52a74ef36d0826bc825a76587f2d5ee81bb89ef377a7fcdd46cfd7030b6e7d80` | `45.20261124.0 (2026-11-25T04:24:00Z)` | `bootc upgrade` on the tag; that image is `smorespro-image`, a separate repository, and it owns its own schedule |
+
+All three boot a tag, so on all three `bootc upgrade` is a live deploy path: what
+`:latest` names is staged by the update timer and becomes the booted deployment at
+the next reboot. The other mechanism is `bootc switch ...@sha256:<digest>`, which is
+what the receiver's stage runs: it leaves the host on that digest, and from then on
+`bootc upgrade` has no tag to follow and only another switch moves the host. Both
+paths check the same signature policy; they differ in who chose the digest and in
+whether the host can move with no operator involved.
+
+One measured caveat, and it is task #1014's: `smortress-deploy-poll.timer` reads
+`disabled` on smortress, disabled by a live-only
+`/etc/systemd/system/smortress-deploy-poll.timer.d/10-window.conf` that the image
+does not ship, so the receiver's 03:00 poll is not the path moving this host today.
 
 ## Moving a host forward by hand
 
-A running host's deployment reference is a digest, and `bootc upgrade` only
-re-checks the reference it was given, so a digest-pinned host never moves: the
-operator switches it to the new digest. CI also moves `:latest` onto every
-signed `main` build, so a host can follow that instead and then upgrade with one
-command:
+`bootc upgrade` only re-checks the reference the host was last switched to, so a
+host switched to a digest never moves and the operator switches it to the new
+digest. Every host above boots the tag instead, and CI moves `:latest` onto every
+signed `main` build, so on those `bootc upgrade` alone is the update; the switch
+below is the digest path, kept for the host that must not follow a tag:
 
 ```sh
 # Break-glass only: switch to the digest the receiver verified.
@@ -256,15 +285,18 @@ an unsigned or branch-built digest is still refused.
 
 What the tag gives up is the deploy receiver's descendancy check: the receiver
 refuses a signed image whose commit does not descend from the deployed one, and
-nothing on the host makes that comparison for a hand-run upgrade. Moving
+nothing on the host makes that comparison for a bare `bootc upgrade`. Moving
 `:latest` backwards therefore deploys an older build, which is why only `main`
-runs may move the tag and why the receiver stays the authoritative path. A
-tag-following host is the operator's convenience, not the deployment policy.
+runs may move the tag. That trade is the one every host above has taken: the timer
+follows the tag in the window and no comparison of the new commit against the
+deployed one happens on the host, so a host that must not drift is one the
+operator switches by digest.
 
-`bootc rollback` boots the previous deployment. Because the reference is a
-digest, the next deploy cannot silently re-stage the escaped build. The deploy
-record can still name the staged digest after a rollback; the next successful
-stage and boot gate overwrite it.
+`bootc rollback` boots the previous deployment. A receiver stage names a digest, so
+the next deploy cannot silently re-stage the escaped build; on a host that boots
+the tag the timer stages whatever `:latest` names, which is the trade above, not a
+second guard. The deploy record can still name the staged digest after a rollback;
+the next successful stage and boot gate overwrite it.
 
 The install path keeps a digest (`ignition/operator/derived-image`): a fresh host
 must come up on the build that was verified, not on whatever `:latest` names.
@@ -376,9 +408,11 @@ resolution and switch cannot stage an image nobody verified. It waits for
 `ostree-finalize-staged` to publish the entry before writing `pending.json` and
 requesting the reboot.
 
-The host is digest-pinned. `bootc upgrade` has no tag to follow and is not a
-deploy path. A hand switch by tag bypasses the receiver's descendancy check and
-can stage a build nobody verified, so use the digest from the deploy journal.
+This switch names a digest, so a host it leaves behind is digest-pinned: `bootc
+upgrade` has no tag to follow and only the next switch moves it. The host measured
+above boots the tag, so until this stage runs `bootc upgrade` on `:latest` is also
+a live deploy path. A hand switch by tag bypasses the receiver's descendancy check
+and can stage a build nobody verified, so use the digest from the deploy journal.
 
 The sandbox has to re-open `/sysroot` itself, not just `/sysroot/ostree`. bootc's
 first act is not a write to a file: `sysroot_is_read_only()` finds `/sysroot`
@@ -493,10 +527,10 @@ pre-reboot snapshot the gate requires.
 
 `smortress-deploy-poll.timer` runs once a day at 03:00 America/New_York and
 enqueues a request when the newest published image differs from the recorded one.
-It is the only path that deploys an image nobody asked for: a manual dispatch
-covers everything else, and the window exists so an unattended reboot happens at
-an hour its owner chose. `Persistent=false` on purpose — a host that was off at
-03:00 is not owed a deploy on the way up.
+It is the only path through the receiver that deploys an image nobody asked for: a
+manual dispatch covers everything else, and the window exists so an unattended
+reboot happens at an hour its owner chose. `Persistent=false` on purpose — a host
+that was off at 03:00 is not owed a deploy on the way up.
 
 `smortress-deploy-heartbeat.timer` (every 5 minutes) pings the `deploy` check
 green only when `GET /healthz` answers `200` within 5 s *and* no queue entry has
