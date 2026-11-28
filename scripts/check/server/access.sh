@@ -78,21 +78,28 @@ else
   ok "no sha512crypt hash is tracked in the image or ignition tree"
 fi
 
-probe "policy rejects by default" jq -e '.default[0].type == "reject"' bootc/server/rootfs/etc/containers/policy.json
+# The policy is two halves in lib/containers and the image renders them, so the
+# probes read what a host would: the document the renderer produces from the
+# contract and this host's registry table. A stale copy in the host tree has
+# nowhere to be, which is what scripts/check-lib-drift.sh holds.
+policy=$(mktemp)
+trap 'rm -f "$policy"' EXIT
+./lib/containers/render-policy.sh smortress >"$policy"
+probe "policy rejects by default" jq -e '.default[0].type == "reject"' "$policy"
 # An empty docker scope is the transport default and shadows the global reject
 # for every registry reference, so it must not exist.
-probe "no docker transport-wide accept" jq -e '.transports.docker[""] == null' bootc/server/rootfs/etc/containers/policy.json
+probe "no docker transport-wide accept" jq -e '.transports.docker[""] == null' "$policy"
 check "firewalld is enabled in the image" has "firewalld.service" bootc/server/Containerfile
 probe "policy trusts the smortress key by path" jq -e \
   '.transports.docker["ghcr.io/smores56/homelab-platform"][0].keyPath == "/etc/pki/containers/smortress.pub"' \
-  bootc/server/rootfs/etc/containers/policy.json
+  "$policy"
 check "signature attachments enabled for our repo" has 'use-sigstore-attachments: true' \
-  bootc/server/rootfs/etc/containers/registries.d/ghcr.io-smortress.yaml
+  lib/containers/registries.d/ghcr.io-smortress.yaml
 
-if [[ -f bootc/server/cosign.pub ]]; then
-  check "operator public key is PEM" has 'BEGIN PUBLIC KEY' bootc/server/cosign.pub
+if [[ -f lib/containers/cosign.pub ]]; then
+  check "operator public key is PEM" has 'BEGIN PUBLIC KEY' lib/containers/cosign.pub
 else
-  printf 'warn %s\n' "bootc/server/cosign.pub is not provisioned yet (docs/manual-steps.md section 37)"
+  printf 'warn %s\n' "lib/containers/cosign.pub is not provisioned yet (docs/manual-steps.md section 37)"
 fi
 if grep -rIl --exclude-dir=.git --exclude=check-server-image.sh --exclude-dir=check \
     -e '-----BEGIN [A-Z ]*PRIVATE KEY-----' -e 'AGE-SECRET-KEY-1[A-Z0-9]{10,}' \

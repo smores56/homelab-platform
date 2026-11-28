@@ -57,15 +57,18 @@ onward the image's own policy enforces every upgrade.
 # Stage the shipped policy against the committed key and pull in a scratch dir.
 tmp=$(mktemp -d)
 mkdir -p "$tmp/registries.d"
-curl -fsSLo "$tmp/cosign.pub" \
-  https://raw.githubusercontent.com/smores56/homelab-platform/main/hosts/laptop/cosign.pub
-curl -fsSLo "$tmp/policy.json" \
-  https://raw.githubusercontent.com/smores56/homelab-platform/main/hosts/laptop/rootfs/etc/containers/policy.json
-jq --arg k "$tmp/cosign.pub" \
-  '.transports.docker["ghcr.io/smores56/smorespro-image"][0].keyPath=$k' \
+raw=https://raw.githubusercontent.com/smores56/homelab-platform/main/lib/containers
+curl -fsSLo "$tmp/cosign.pub" "$raw/cosign.pub"
+curl -fsSLo "$tmp/policy.json" "$raw/policy.json"
+curl -fsSLo "$tmp/policy.d.json" "$raw/policy.d/smorespro.json"
+# The image renders the policy it ships from these two files, so this renders the
+# same document and then points its one signing key at the staged copy.
+jq --arg k "$tmp/cosign.pub" --slurpfile table "$tmp/policy.d.json" \
+  '.transports = ({docker: $table[0]} + .transports)
+   | .transports.docker["ghcr.io/smores56/smorespro-image"][0].keyPath=$k' \
   "$tmp/policy.json" >"$tmp/policy.local.json"
 curl -fsSLo "$tmp/registries.d/smorespro.yaml" \
-  https://raw.githubusercontent.com/smores56/homelab-platform/main/hosts/laptop/rootfs/etc/containers/registries.d/ghcr.io-smorespro-image.yaml
+  "$raw/registries.d/ghcr.io-smorespro-image.yaml"
 skopeo copy --policy "$tmp/policy.local.json" --registries.d "$tmp/registries.d" \
   docker://ghcr.io/smores56/smorespro-image:latest "dir:$tmp/out"
 digest=$(skopeo inspect --format '{{.Digest}}' docker://ghcr.io/smores56/smorespro-image:latest)

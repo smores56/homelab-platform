@@ -124,7 +124,6 @@ read_password_hash() {
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-files_dir=$repo
 template=$repo/ignition/smortress.bu
 
 if $no_account; then
@@ -134,8 +133,8 @@ if $no_account; then
   # is refused here rather than rendered.
   template=$repo/ignition/edge.bu
   require_file "$template"
-  [[ -s $repo/bootc/server/cosign.pub ]] \
-    || die "bootc/server/cosign.pub is missing; the document installs it as the key its policy trusts"
+  [[ -s $repo/lib/containers/cosign.pub ]] \
+    || die "lib/containers/cosign.pub is missing; the document installs it as the key its policy trusts"
   derived_image=${EDGE_REF:-}
   [[ -n $derived_image ]] \
     || die "--no-account needs EDGE_REF=<registry>/<repo>@sha256:<digest>: the published edge digest, pinned after the signature verifies"
@@ -143,23 +142,16 @@ if $no_account; then
     die "$template carries an account hash placeholder; the edge document has no account, and the only values that could fill it are a sops decrypt or a fixture"
   fi
 elif $synthetic; then
-  files_dir=$tmp
   template=$tmp/ignition/smortress.bu
-  mkdir -p "$tmp/ignition/operator" "$tmp/bootc/server/rootfs/etc/containers/registries.d" "$tmp/bootc/server/rootfs/etc/containers"
+  mkdir -p "$tmp/ignition"
   cp "$repo/ignition/smortress.bu" "$template"
-  cp "$repo/bootc/server/rootfs/etc/containers/policy.json" "$tmp/bootc/server/rootfs/etc/containers/policy.json"
-  cp "$repo/bootc/server/rootfs/etc/containers/registries.d/ghcr.io-smortress.yaml" \
-    "$tmp/bootc/server/rootfs/etc/containers/registries.d/ghcr.io-smortress.yaml"
-  cp "$repo/tests/fixtures/cosign.pub" "$tmp/bootc/server/cosign.pub"
-  printf '%s\n' 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFixtureOnlyForButaneValidation smortress-fixture' \
-    >"$tmp/ignition/operator/ssh_authorized_keys"
   derived_image="${IMAGE_REPO}@sha256:0000000000000000000000000000000000000000000000000000000000000000"
   disk='/dev/disk/by-id/nvme-SyntheticDisk'
   password_hash=$fixture_hash
   tang_url='http://10.0.0.193:7654'
   tang_thumbprint=$(printf 'A%.0s' {1..43})
 else
-  require_file "$repo/bootc/server/cosign.pub"
+  require_file "$repo/lib/containers/cosign.pub"
   for f in derived-image disk tang-thumbprint ssh_authorized_keys; do
     require_file "$repo/ignition/operator/$f"
   done
@@ -216,6 +208,34 @@ if ! $no_account; then
     || die "Tang URL must be http(s)://host:port: $tang_url"
   [[ $tang_thumbprint =~ ^[A-Za-z0-9_-]{43}$ ]] \
     || die "Tang thumbprint must be 43 base64url characters: $tang_thumbprint"
+fi
+
+# Every file a template names as `contents.local:` is resolved under --files-dir,
+# and the containers policy is not one of them: it is rendered from the shared
+# contract and this host's registry table (lib/containers), so no tracked file
+# holds the finished document. The render therefore stages its own files dir in
+# every mode -- real, --check and --synthetic -- at the relative paths the
+# templates name, so all three read one shape and the document the installer
+# writes is the one the image renders.
+files_dir=$tmp/files
+mkdir -p "$files_dir/lib/containers/registries.d" "$files_dir/ignition/operator" \
+  "$files_dir/bootc/server/rootfs/etc/ssh/authorized_keys.d"
+"$repo/lib/containers/render-policy.sh" smortress >"$files_dir/lib/containers/policy.json"
+cp "$repo/lib/containers/registries.d/ghcr.io-smortress.yaml" \
+  "$files_dir/lib/containers/registries.d/ghcr.io-smortress.yaml"
+cp "$repo/bootc/server/rootfs/etc/ssh/authorized_keys.d/smores" \
+  "$files_dir/bootc/server/rootfs/etc/ssh/authorized_keys.d/smores"
+# A synthetic render must not be mistakable for a real one, so it carries the
+# fixture key rather than the operator's public one.
+if $synthetic; then
+  cp "$repo/tests/fixtures/cosign.pub" "$files_dir/lib/containers/cosign.pub"
+  printf '%s\n' 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFixtureOnlyForButaneValidation smortress-fixture' \
+    >"$files_dir/ignition/operator/ssh_authorized_keys"
+else
+  cp "$repo/lib/containers/cosign.pub" "$files_dir/lib/containers/cosign.pub"
+  if ! $no_account; then
+    cp "$repo/ignition/operator/ssh_authorized_keys" "$files_dir/ignition/operator/ssh_authorized_keys"
+  fi
 fi
 
 work=$tmp/$(basename -- "$template")

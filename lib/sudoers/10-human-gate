@@ -1,4 +1,4 @@
-# The human gate for sudo on smortress (design #748, T6).
+# The human gate for sudo, shipped by every host in this repository.
 #
 # 30 minutes, cached per TTY. A second sudo in the same terminal inside the
 # window does not prompt; a different TTY does. This is the deliberate soft spot
@@ -9,14 +9,11 @@
 # timestamp.c, start_time_matches), so a process that later reopens the same pts
 # number in a new session does not inherit it: only what is already in this
 # session does, which is the soft spot above.
+#
+# The factor behind this gate is the host's own and stays per host: the server
+# keeps SSH_AUTH_SOCK for pam_rssh and installs lib/sudoers/11-agent-socket
+# beside this file, while the laptop's pam_u2f needs nothing kept. This file is
+# the part both must agree on, so neither image carries a copy of it.
 Defaults timestamp_timeout=30
 Defaults timestamp_type=tty
 Defaults log_subcmds
-
-# pam_rssh resolves the forwarded socket from the process environment, and sudo
-# drops SSH_AUTH_SOCK before the PAM stack runs unless it is kept: on smortress
-# without this line the module logs "SSH agent socket address not configured"
-# and every escalation silently falls back to the password (verified 2026-11-20).
-# It is the only variable kept here; a sudoed command inherits it too, which is
-# what lets a root command drive the agent if it ever needs to.
-Defaults env_keep += "SSH_AUTH_SOCK"

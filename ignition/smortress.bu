@@ -98,17 +98,17 @@ storage:
       mode: 0644
       overwrite: true
       contents:
-        local: bootc/server/cosign.pub
+        local: lib/containers/cosign.pub
     - path: /etc/containers/policy.json
       mode: 0644
       overwrite: true
       contents:
-        local: bootc/server/rootfs/etc/containers/policy.json
+        local: lib/containers/policy.json
     - path: /etc/containers/registries.d/ghcr.io-smortress.yaml
       mode: 0644
       overwrite: true
       contents:
-        local: bootc/server/rootfs/etc/containers/registries.d/ghcr.io-smortress.yaml
+        local: lib/containers/registries.d/ghcr.io-smortress.yaml
 
 systemd:
   units:

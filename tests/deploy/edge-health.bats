@@ -8,16 +8,22 @@
 # not fail on a merely slow boot -- a check that gives up early is a rollback
 # loop that punishes a healthy host.
 #
+# The check is the shared program (lib/greenboot/required.d) and what it asserts
+# is the edge's file (lib/greenboot/assertions.d/edge), which is the file the
+# image installs into /etc/greenboot/assertions.d (SDLC #1024).
+#
 #   bats tests/deploy/edge-health.bats
 load ../helpers
 
-check=bootc/edge/rootfs/etc/greenboot/check/required.d/10-edge-health.sh
+check=lib/greenboot/required.d/10-health.sh
+assertions=lib/greenboot/assertions.d/edge/10-health.sh
 
 setup() {
     bin=$BATS_TEST_TMPDIR/bin
     rm -rf "$bin"
     mkdir -p "$bin"
     export GREENBOOT_EDGE_BUDGET=0
+    export GREENBOOT_ASSERTIONS_DIR=$repo_root/lib/greenboot/assertions.d/edge
     # curl: 200 for the served page, 401 for opds, or $STUB_CURL_STATUS when set.
     cat >"$bin/curl" <<'STUB'
 #!/usr/bin/env bash
@@ -85,7 +91,7 @@ STUB
     # systemd's default TimeoutStartSec is 90 s; a check that waits longer is
     # killed and reads as a failure, which rolls back a healthy host.
     local budget
-    budget=$(grep -o 'GREENBOOT_EDGE_BUDGET:-[0-9]*' "$check" | grep -o '[0-9]*$')
+    budget=$(grep -o 'GREENBOOT_EDGE_BUDGET:-[0-9]*' "$assertions" | grep -o '[0-9]*$')
     [[ -n $budget ]] || fail "the budget is not a literal"
     ((budget < 90)) || fail "a ${budget}s budget outlives the unit's 90s start limit"
 }

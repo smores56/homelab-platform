@@ -22,8 +22,8 @@ cosign_bin=${COSIGN_BIN:-cosign}
 skopeo_bin=${SKOPEO_BIN:-skopeo}
 authfile=${AUTHFILE:-${DOCKER_CONFIG:-$HOME/.docker}/config.json}
 
-if [[ ! -s bootc/server/cosign.pub ]]; then
-  echo "mirror-app-images: bootc/server/cosign.pub is missing; nothing to verify against" >&2
+if [[ ! -s lib/containers/cosign.pub ]]; then
+  echo "mirror-app-images: lib/containers/cosign.pub is missing; nothing to verify against" >&2
   exit 1
 fi
 
@@ -37,7 +37,7 @@ sign_and_prove() {
   "$cosign_bin" sign --key env://COSIGN_PRIVATE_KEY --yes "$ref"
   "$skopeo_bin" inspect --raw --authfile "$authfile" \
     "docker://${ref%@*}:${digest/:/-}.sig" >/dev/null
-  "$cosign_bin" verify --key bootc/server/cosign.pub "$ref"
+  "$cosign_bin" verify --key lib/containers/cosign.pub "$ref"
 }
 
 # app_repo and the lookup helpers come from the sourced table.

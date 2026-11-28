@@ -51,8 +51,10 @@ on:
       # a change to it has to reach the image the timer runs it from.
       - "scripts/deploy-poll.sh"
       # The repository has one signing key and the edge is verified against its
-      # public half, so a change there re-publishes the edge as well.
-      - "bootc/server/cosign.pub"
+      # public half, and its greenboot check is the shared one with the edge's
+      # assertions beside it (SDLC #1024), so a change under lib/ re-publishes the
+      # edge as well.
+      - "lib/**"
       - "scripts/build-image.sh"
       - ".github/workflows/publish-edge-image.yml"
   workflow_dispatch:
@@ -95,9 +97,9 @@ jobs:
           COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
         run: |
           set -euo pipefail
-          test -s bootc/server/cosign.pub
+          test -s lib/containers/cosign.pub
           cosign public-key --key env://COSIGN_PRIVATE_KEY >"$RUNNER_TEMP/cosign.pub"
-          diff -u bootc/server/cosign.pub "$RUNNER_TEMP/cosign.pub"
+          diff -u lib/containers/cosign.pub "$RUNNER_TEMP/cosign.pub"
       - name: permit the base pull for the builder
         # The runtime policy is the one that matters and arrives with T4's rootfs.
         # The builder has no uCore public key and the base is a uCore stream tag,
@@ -158,7 +160,7 @@ jobs:
           cosign sign --key env://COSIGN_PRIVATE_KEY --yes "$image@$digest"
           # The lookaside tag is <repo>:<sha256-hex>.sig, not repo:tag:<hex>.sig.
           skopeo inspect --raw "docker://${EDGE_IMAGE_REPO}:${digest/:/-}.sig" >/dev/null
-          cosign verify --key bootc/server/cosign.pub "$image@$digest"
+          cosign verify --key lib/containers/cosign.pub "$image@$digest"
           # `latest` is the edge's update handle: `bootc switch` adopts it once
           # and `bootc upgrade` re-resolves it every night, so the host follows a
           # pointer that only ever names a signed digest. It moves only after the

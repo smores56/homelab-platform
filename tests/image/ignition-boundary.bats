@@ -118,7 +118,7 @@ done
 # key it names and the sigstore-attachment switch before bootc took over.
 @test "the edge template installs the policy, the key and registries.d" {
     grep -qF '/etc/containers/policy.json' "$edge_template"
-    grep -qF 'bootc/server/cosign.pub' "$edge_template"
+    grep -qF 'lib/containers/cosign.pub' "$edge_template"
     grep -qF '/etc/containers/registries.d/ghcr.io-smortress.yaml' "$edge_template"
     grep -qF '/etc/pki/containers/smortress.pub' "$edge_template"
 }
@@ -301,11 +301,15 @@ import base64, gzip, json, subprocess, sys, urllib.parse
 
 # The public files the document writes, and the tracked file each must equal.
 sources = {
-    "/etc/pki/containers/smortress.pub": "bootc/server/cosign.pub",
-    "/etc/containers/policy.json": "bootc/server/rootfs/etc/containers/policy.json",
+    "/etc/pki/containers/smortress.pub": "lib/containers/cosign.pub",
     "/etc/containers/registries.d/ghcr.io-smortress.yaml":
-        "bootc/server/rootfs/etc/containers/registries.d/ghcr.io-smortress.yaml",
+        "lib/containers/registries.d/ghcr.io-smortress.yaml",
 }
+# The one file with no tracked copy: the policy is rendered from the shared
+# contract and this host's registry table, so the document is compared with what
+# the renderer produces rather than with a second copy of the finished file.
+policy = "/etc/containers/policy.json"
+renderer = "lib/containers/render-policy.sh"
 key_file = "bootc/server/rootfs/etc/ssh/authorized_keys.d/smores"
 hostname = "smoresnet"
 autorebase_dir = "/etc/ucore-autorebase"
@@ -359,7 +363,7 @@ if not tracked(key_file):
 elif keys != [line for line in open(key_file).read().splitlines() if line]:
     problems.append(f"the keys are not exactly {key_file}")
 
-want = sorted([*sources, "/etc/hostname"])
+want = sorted([*sources, policy, "/etc/hostname"])
 files = storage.get("files", [])
 got = sorted(entry.get("path", "") for entry in files)
 if got != want:
@@ -375,6 +379,11 @@ for entry in files:
     elif path in sources and tracked(sources[path]):
         if text != open(sources[path]).read():
             problems.append(f"{path} is not {sources[path]}")
+    elif path == policy:
+        rendered = subprocess.run([renderer, "smortress"],
+                                  capture_output=True, text=True)
+        if rendered.returncode != 0 or text != rendered.stdout:
+            problems.append(f"{policy} is not what {renderer} renders")
 
 directories = storage.get("directories", [])
 if directories != [{"path": autorebase_dir, "mode": 0o754}]:
@@ -423,7 +432,8 @@ PY
 # how `bootc switch` failed on the live edge, with the tag and the signature both
 # fine, because ignition had copied this document onto the host.
 @test "every policy transport is a repository map, not an array" {
-    run jq -e '[.transports[] | type] | all(. == "object")' \
-        "$BATS_TEST_DIRNAME/../../bootc/server/rootfs/etc/containers/policy.json"
+    local rendered=$BATS_TEST_TMPDIR/policy.json
+    "$BATS_TEST_DIRNAME/../../lib/containers/render-policy.sh" smortress >"$rendered"
+    run jq -e '[.transports[] | type] | all(. == "object")' "$rendered"
     assert_success
 }

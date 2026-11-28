@@ -1,0 +1,26 @@
+{
+    "ghcr.io/smores56/smorespro-image": [
+        {
+            "type": "sigstoreSigned",
+            "keyPath": "/etc/pki/containers/smorespro.pub",
+            "signedIdentity": {
+                "type": "matchRepository"
+            }
+        }
+    ],
+    "docker.io": [
+        {
+            "type": "insecureAcceptAnything"
+        }
+    ],
+    "quay.io": [
+        {
+            "type": "insecureAcceptAnything"
+        }
+    ],
+    "registry.fedoraproject.org": [
+        {
+            "type": "insecureAcceptAnything"
+        }
+    ]
+}

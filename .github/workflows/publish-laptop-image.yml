@@ -12,10 +12,13 @@ name: publish-laptop-image
 on:
   push:
     branches: [main]
-    # Everything the Containerfile COPYs, plus the pins it reads. The workflow
-    # itself is here because a build-argument change is a build change.
+    # Everything the Containerfile COPYs, plus the pins it reads. The build
+    # context is the repository root because the signature policy, its registry
+    # table, the public key and the sudoers gate live in lib/ (SDLC #1024). The
+    # workflow itself is here because a build-argument change is a build change.
     paths:
       - "hosts/laptop/**"
+      - "lib/**"
       - ".github/workflows/publish-laptop-image.yml"
   workflow_dispatch:
 
@@ -66,9 +69,9 @@ jobs:
           COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
         run: |
           set -euo pipefail
-          test -s hosts/laptop/cosign.pub
+          test -s lib/containers/cosign.pub
           cosign public-key --key env://COSIGN_PRIVATE_KEY >"$RUNNER_TEMP/cosign.pub"
-          diff -u hosts/laptop/cosign.pub "$RUNNER_TEMP/cosign.pub"
+          diff -u lib/containers/cosign.pub "$RUNNER_TEMP/cosign.pub"
 
       - name: build
         run: |
@@ -96,9 +99,9 @@ jobs:
           done
           tag="sha-$(git rev-parse --short=12 HEAD)"
           echo "TAG=$tag" >>"$GITHUB_ENV"
-          # The context is the host tree, so the Containerfile's COPY paths stay
-          # relative to hosts/laptop and nothing from the rest of the repository
-          # can enter the image.
+          # The context is the repository root (SDLC #1024): the Containerfile
+          # copies the containers policy, its registry table, the public key and
+          # the sudoers gate from lib/, which no host tree contains.
           podman build \
             --build-arg "BASE_IMAGE=$BASE_IMAGE" \
             --build-arg "BASE_DIGEST=$base_digest" \
@@ -109,7 +112,7 @@ jobs:
             -f hosts/laptop/Containerfile \
             -t "${IMAGE_REPO}:${tag}" \
             -t "${IMAGE_REPO}:latest" \
-            hosts/laptop
+            .
 
       - name: push the digest tag
         env:
@@ -149,7 +152,7 @@ jobs:
           # the host rejects the image; prove the lookaside tag containers/image
           # actually reads, then verify the signature.
           skopeo inspect --raw "docker://${IMAGE_REPO}:${IMAGE_DIGEST/:/-}.sig" >/dev/null
-          cosign verify --key hosts/laptop/cosign.pub "${IMAGE_REPO}@${IMAGE_DIGEST}"
+          cosign verify --key lib/containers/cosign.pub "${IMAGE_REPO}@${IMAGE_DIGEST}"
           podman push "${IMAGE_REPO}:latest" --authfile "$REGISTRY_AUTH_FILE"
           latest=$(skopeo inspect --format '{{.Digest}}' "docker://${IMAGE_REPO}:latest")
           if [[ $latest != "$IMAGE_DIGEST" ]]; then
