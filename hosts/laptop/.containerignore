@@ -1,9 +1,7 @@
-# Build context exclusions. The Containerfile only reads image/; the
-# repository's tests, docs and git history never need to enter the build.
-.git
-.github
-.worktrees
-docs
+# Build context exclusions. The context is this host tree, and the Containerfile
+# only reads rootfs/ and cosign.pub: the checker, the scripts, the pins and this
+# README never need to enter the build.
+.containerignore
 tests
 scripts
 README.md

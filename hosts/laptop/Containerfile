@@ -1,10 +1,11 @@
 # Derived bootc image for smorespro: Fedora's minimal bootc base plus a niri
 # session. Built by scripts/build-image.sh and published by
-# .github/workflows/publish.yml.
+# .github/workflows/publish-laptop-image.yml, with this host tree as the build
+# context.
 #
 # The base is the moving fedora-bootc release tag, resolved to a digest at build
 # time. Everything added here is a distribution package from that base's Fedora
-# repositories, the configuration under image/rootfs, or one of two documented
+# repositories, the configuration under rootfs/, or one of two documented
 # exceptions: Brave Origin from Brave's RPM repository, and NymVPN's release
 # tarball (no RPM exists). No signing key, secret or per-machine state enters
 # the image.
@@ -18,14 +19,14 @@ ARG BASE_IMAGE
 ARG BASE_DIGEST
 # NymVPN's tarball is per architecture, and `uname -m` inside the build already
 # says x86_64 or aarch64, which is what the asset names use. The hashes come
-# from image/pins.env; a wrong one fails the build.
+# from pins.env; a wrong one fails the build.
 ARG NYM_VERSION
 ARG NYM_SHA256_AMD64
 ARG NYM_SHA256_ARM64
 
 LABEL org.opencontainers.image.title="smorespro image" \
       org.opencontainers.image.description="Fedora bootc base with a niri session for the smorespro laptop" \
-      org.opencontainers.image.source="https://github.com/smores56/smorespro-image" \
+      org.opencontainers.image.source="https://github.com/smores56/homelab-platform" \
       org.opencontainers.image.base.name="${BASE_IMAGE}" \
       org.opencontainers.image.base.digest="${BASE_DIGEST}" \
       org.opencontainers.image.vendor="smores56"
@@ -64,7 +65,7 @@ LABEL org.opencontainers.image.title="smorespro image" \
 # without it: playback still works, but there is no PulseAudio protocol behind
 # it (stream restore, pactl, clients that require the PA interface), and the
 # fallback is a log line rather than an error. The package's scriptlet presets
-# pipewire-pulse.socket for every user, so nothing goes in image/rootfs.
+# pipewire-pulse.socket for every user, so nothing goes in rootfs/.
 #
 # libva-intel-media-driver is iHD, and mesa ships no VA-API driver for Xe.
 # Without it vaInitialize fails and Chromium loses the platform decoder
@@ -131,8 +132,8 @@ RUN set -eux; \
 # Configuration: greetd autologin, the niri portal override, the signature
 # policy, the public half of the signing key, the login and sudo PAM stacks with
 # the FIDO2 mapping both read, and the NymVPN daemon's unit and polkit action.
-COPY image/rootfs/ /
-COPY image/cosign.pub /etc/pki/containers/smorespro.pub
+COPY rootfs/ /
+COPY cosign.pub /etc/pki/containers/smorespro.pub
 
 # The escalation stack in /etc/pam.d/sudo is a touch on a key listed in the
 # shipped /etc/u2f_mappings, with the account password behind it. git stores

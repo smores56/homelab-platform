@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Resolve the moving upstream references behind image/pins.env: the newest stable
+# Resolve the moving upstream references behind pins.env: the newest stable
 # NymVPN release that carries a Linux core tarball, and -- informationally -- the
 # digest the Fedora bootc base tag currently resolves to.
 #
 #   scripts/refresh-pins.sh          print the base tag and its current digest
 #   scripts/refresh-pins.sh --check  exit 0 if the NymVPN pin is current, 1 if a
 #                                    newer release exists, 2 on error (CI watcher)
-#   scripts/refresh-pins.sh --write  rewrite the NymVPN pin in image/pins.env
+#   scripts/refresh-pins.sh --write  rewrite the NymVPN pin in pins.env
 #
-# The base is not a pin, so nothing here moves it: image/pins.env carries the
+# The base is not a pin, so nothing here moves it: pins.env carries the
 # fedora-bootc release tag, each build resolves it, and the digest it gets is
 # recorded on the image. That digest is printed and validated here only -- quay
 # garbage-collects it within hours, so writing it down is what used to rot the
@@ -23,9 +23,9 @@
 # notes before running --write.
 set -euo pipefail
 
-repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-# shellcheck source=../image/pins.env disable=SC1091
-source "$repo/image/pins.env"
+host=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+# shellcheck source=../pins.env disable=SC1091
+source "$host/pins.env"
 
 nym_repo=nymtech/nym-vpn-client
 curl_opts=(--fail --silent --show-error --location --proto '=https'
@@ -53,7 +53,7 @@ done
 # --- base ------------------------------------------------------------------
 
 # Information only: the build resolves this same tag, so this is what it would
-# record. Nothing writes the result back into image/pins.env.
+# record. Nothing writes the result back into pins.env.
 tag=$BASE_IMAGE
 if [[ $tag != "quay.io/fedora/fedora-bootc:${FEDORA_VERSION}" ]]; then
   echo "refresh-pins.sh: BASE_IMAGE is not the fedora-bootc:${FEDORA_VERSION} release tag: $tag" >&2
@@ -127,22 +127,22 @@ case $mode in
     # Drift is a NymVPN question: the base tag is always current by
     # construction, so only a stale release may open the watcher's issue.
     if [[ $drift -eq 0 ]]; then
-      printf 'image/pins.env: current (nym %s; base %s resolves to %s)\n' "$NYM_VERSION" "$tag" "$digest"
+      printf 'pins.env: current (nym %s; base %s resolves to %s)\n' "$NYM_VERSION" "$tag" "$digest"
       exit 0
     fi
-    printf 'image/pins.env: newer NymVPN release available\n  pinned:  %s\n  current: %s\n' "$NYM_VERSION" "$nym_latest"
+    printf 'pins.env: newer NymVPN release available\n  pinned:  %s\n  current: %s\n' "$NYM_VERSION" "$nym_latest"
     exit 1
     ;;
   write)
     if [[ $drift -eq 0 ]]; then
-      printf 'image/pins.env: unchanged (nym %s)\n' "$NYM_VERSION"
+      printf 'pins.env: unchanged (nym %s)\n' "$NYM_VERSION"
       exit 0
     fi
     # sed cannot create a line, so a pins.env missing a key would "succeed"
     # while writing nothing.
     for key in NYM_VERSION NYM_SHA256_AMD64 NYM_SHA256_ARM64; do
-      if ! grep -q "^${key}=" "$repo/image/pins.env"; then
-        echo "refresh-pins.sh: image/pins.env has no ${key} line" >&2
+      if ! grep -q "^${key}=" "$host/pins.env"; then
+        echo "refresh-pins.sh: pins.env has no ${key} line" >&2
         exit 2
       fi
     done
@@ -150,7 +150,7 @@ case $mode in
       -e "s|^NYM_VERSION=.*|NYM_VERSION=$nym_latest|" \
       -e "s|^NYM_SHA256_AMD64=.*|NYM_SHA256_AMD64=$nym_amd|" \
       -e "s|^NYM_SHA256_ARM64=.*|NYM_SHA256_ARM64=$nym_arm|" \
-      "$repo/image/pins.env"
-    printf 'image/pins.env: NYM_VERSION=%s\n' "$nym_latest"
+      "$host/pins.env"
+    printf 'pins.env: NYM_VERSION=%s\n' "$nym_latest"
     ;;
 esac

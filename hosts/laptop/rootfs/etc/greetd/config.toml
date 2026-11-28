@@ -2,7 +2,7 @@
 # at power-on: the initial session starts without authentication, so the next
 # prompt is Noctalia's lock screen after idle or an explicit lock.
 #
-# The user must exist before this runs; docs/switch.md covers both the in-place
+# The user must exist before this runs; docs/laptop/switch.md covers both the in-place
 # switch and a fresh install.
 [terminal]
 vt = 1

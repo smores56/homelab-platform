@@ -58,14 +58,14 @@ onward the image's own policy enforces every upgrade.
 tmp=$(mktemp -d)
 mkdir -p "$tmp/registries.d"
 curl -fsSLo "$tmp/cosign.pub" \
-  https://raw.githubusercontent.com/smores56/smorespro-image/main/image/cosign.pub
+  https://raw.githubusercontent.com/smores56/homelab-platform/main/hosts/laptop/cosign.pub
 curl -fsSLo "$tmp/policy.json" \
-  https://raw.githubusercontent.com/smores56/smorespro-image/main/image/rootfs/etc/containers/policy.json
+  https://raw.githubusercontent.com/smores56/homelab-platform/main/hosts/laptop/rootfs/etc/containers/policy.json
 jq --arg k "$tmp/cosign.pub" \
   '.transports.docker["ghcr.io/smores56/smorespro-image"][0].keyPath=$k' \
   "$tmp/policy.json" >"$tmp/policy.local.json"
 curl -fsSLo "$tmp/registries.d/smorespro.yaml" \
-  https://raw.githubusercontent.com/smores56/smorespro-image/main/image/rootfs/etc/containers/registries.d/ghcr.io-smorespro-image.yaml
+  https://raw.githubusercontent.com/smores56/homelab-platform/main/hosts/laptop/rootfs/etc/containers/registries.d/ghcr.io-smorespro-image.yaml
 skopeo copy --policy "$tmp/policy.local.json" --registries.d "$tmp/registries.d" \
   docker://ghcr.io/smores56/smorespro-image:latest "dir:$tmp/out"
 digest=$(skopeo inspect --format '{{.Digest}}' docker://ghcr.io/smores56/smorespro-image:latest)

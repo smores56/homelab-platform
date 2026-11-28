@@ -110,8 +110,8 @@ account password, exactly as before this feature; a host that installs one gets
 the FIDO2 PIN and a touch there. The shipped mapping does not apply to it.
 
 The mapping is public credential data — a key handle and a public key per token,
-no secret — so it is committed at `image/rootfs/etc/u2f_mappings` and shipped to
-`/etc/u2f_mappings` with the rest of `image/rootfs`. A fresh host therefore needs
+no secret — so it is committed at `rootfs/etc/u2f_mappings` and shipped to
+`/etc/u2f_mappings` with the rest of `rootfs/`. A fresh host therefore needs
 no hand-written file; what it needs is a mapping that describes credentials the
 owner's keys actually hold.
 
@@ -126,7 +126,7 @@ a key handle:
 first=$(pamu2fcfg -u smores)      # key 1 in the port
 second=$(pamu2fcfg -n -u smores)  # key 2
 third=$(pamu2fcfg -n -u smores)   # key 3, the spare
-printf '%s:%s:%s\n' "$first" "$second" "$third" >image/rootfs/etc/u2f_mappings
+printf '%s:%s:%s\n' "$first" "$second" "$third" >rootfs/etc/u2f_mappings
 ```
 
 Then commit the file and `bootc upgrade`; neither command needs root —

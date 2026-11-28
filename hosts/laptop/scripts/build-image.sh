@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # Build the derived bootc image locally. Never pushes and never signs.
 #
-# The base is the fedora-bootc release tag from image/pins.env, which moves: the
+# The base is the fedora-bootc release tag from pins.env, which moves: the
 # build resolves it to a digest, fails closed when the registry will not answer,
 # and records that digest in the image's org.opencontainers.image.base.digest
 # label. The build also fails closed when the base is not that tag, when the
 # public cosign key is not in place, or when a pin is missing.
 set -euo pipefail
 
-repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-# shellcheck source=../image/pins.env disable=SC1091
-source "$repo/image/pins.env"
+host=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+# shellcheck source=../pins.env disable=SC1091
+source "$host/pins.env"
 
 engine=${ENGINE:-podman}
 if ! command -v "$engine" >/dev/null 2>&1; then
@@ -36,20 +36,20 @@ if [[ ! $base_digest =~ ^sha256:[0-9a-f]{64}$ ]]; then
 fi
 for pin in NYM_VERSION NYM_SHA256_AMD64 NYM_SHA256_ARM64; do
   if [[ -z ${!pin:-} ]]; then
-    echo "build-image: $pin is missing from image/pins.env" >&2
+    echo "build-image: $pin is missing from pins.env" >&2
     exit 1
   fi
 done
-if [[ ! -s $repo/image/cosign.pub ]]; then
-  echo "build-image: image/cosign.pub is missing; copy it from homelab-platform" >&2
+if [[ ! -s $host/cosign.pub ]]; then
+  echo "build-image: cosign.pub is missing; it is committed at hosts/laptop/cosign.pub" >&2
   exit 1
 fi
-if ! grep -q 'BEGIN PUBLIC KEY' "$repo/image/cosign.pub"; then
-  echo "build-image: image/cosign.pub is not a PEM public key" >&2
+if ! grep -q 'BEGIN PUBLIC KEY' "$host/cosign.pub"; then
+  echo "build-image: cosign.pub is not a PEM public key" >&2
   exit 1
 fi
 
-revision=$(git -C "$repo" rev-parse HEAD)
+revision=$(git -C "$host" rev-parse HEAD)
 tag="localhost/smorespro-image:sha-${revision:0:12}"
 
 "$engine" build \
@@ -59,9 +59,9 @@ tag="localhost/smorespro-image:sha-${revision:0:12}"
   --build-arg "NYM_SHA256_AMD64=$NYM_SHA256_AMD64" \
   --build-arg "NYM_SHA256_ARM64=$NYM_SHA256_ARM64" \
   --label "org.opencontainers.image.revision=$revision" \
-  -f "$repo/image/Containerfile" \
+  -f "$host/Containerfile" \
   -t "$tag" \
   -t "localhost/smorespro-image:latest" \
-  "$repo"
+  "$host"
 
 echo "built $tag from $BASE_IMAGE@$base_digest"

@@ -1,29 +1,33 @@
-# smorespro-image
+# The laptop image (`hosts/laptop`)
 
 The bootc image for the smorespro laptop: Fedora's minimal `fedora-bootc` base
 plus a niri session with the Noctalia shell. Built, signed, and published to
-`ghcr.io/smores56/smorespro-image` by GitHub Actions.
+`ghcr.io/smores56/smorespro-image` by `.github/workflows/publish-laptop-image.yml`.
+
+This host tree was its own repository, `smorespro-image`, until SDLC #1011
+merged it into `homelab-platform`; the merge commit carries that repository's
+history, so `git log --follow` on any file here reaches it.
 
 The design and the task graph live in the private ledger: `sdlc show 732`.
-The migration runbook is `docs/switch.md`.
+The migration runbook is `docs/laptop/switch.md`.
 
 ## Contract
 
 | File | Owns |
 | --- | --- |
-| `image/pins.env` | every external reference: the `FEDORA_VERSION` knob the base tag follows, and the NymVPN pin a refresh edits |
-| `image/Containerfile` | the derived image: one explicit package set, config copy, unit enables, `bootc container lint` |
-| `image/rootfs/` | files copied into `/`: greetd autologin, portal override, signature policy, the NymVPN unit and its polkit action, the Tailscale operator unit, the `login` and `sudo` PAM stacks, and the FIDO2 mapping the `sudo` stack reads |
-| `image/cosign.pub` | the public half of the signing key shared with `homelab-platform` |
+| `pins.env` | every external reference: the `FEDORA_VERSION` knob the base tag follows, and the NymVPN pin a refresh edits |
+| `Containerfile` | the derived image: one explicit package set, config copy, unit enables, `bootc container lint` |
+| `rootfs/` | files copied into `/`: greetd autologin, portal override, signature policy, the NymVPN unit and its polkit action, the Tailscale operator unit, the `login` and `sudo` PAM stacks, and the FIDO2 mapping the `sudo` stack reads |
+| `cosign.pub` | the public half of the signing key shared with the other hosts in this repository |
 | `scripts/refresh-pins.sh` | resolves the NymVPN release and prints the base tag's current digest; `--check` for the watcher, `--write` to move the NymVPN pin |
 | `scripts/build-image.sh` | local build; never pushes or signs |
-| `docs/manual-steps.md` | the steps only a hand at the keyboard can do: token enrolment for the disk keyslot, the lock screen and sudo, and rotating the FIDO2 mapping |
-| `tests/check.sh` | static checks over the files above |
+| `docs/laptop/manual-steps.md` | the steps only a hand at the keyboard can do: token enrolment for the disk keyslot, the lock screen and sudo, and rotating the FIDO2 mapping |
+| `tests/check.sh` | static checks over the files above; `tests/image/laptop-image.bats` runs it in the `image` CI area |
 
 ## Rules
 
 - The base tracks the `fedora-bootc` release tag (`FEDORA_VERSION=45` in
-  `image/pins.env`), not a digest. Quay garbage-collects the manifests behind
+  `pins.env`), not a digest. Quay garbage-collects the manifests behind
   that tag within hours, so a pinned digest rots into `manifest unknown`: three
   build failures in one day is what moved this repository off pinning. Each
   build resolves the tag and records the result in the
@@ -51,7 +55,7 @@ The migration runbook is `docs/switch.md`.
 ## Rebuilds
 
 Nothing rebuilds on a schedule. A build happens when this repository changes,
-and a change to `image/**` or `scripts/**` is what publishes a new image. The
+and a change to `hosts/laptop/**` is what publishes a new image. The
 base needs no refresh step: the next build picks up whatever
 `fedora-bootc:${FEDORA_VERSION}` resolves to, and the digest it got is on the
 image.
@@ -64,7 +68,7 @@ scripts/refresh-pins.sh --check  # is there a newer NymVPN release?
 scripts/refresh-pins.sh --write  # move that pin
 ```
 
-then commit the `image/pins.env` change. The scheduled watcher opens an issue
+then commit the `pins.env` change. The scheduled watcher opens an issue
 when `--check` sees a newer release; it has nothing to say about the base.
 
 ## Package sources
@@ -84,7 +88,7 @@ Two exceptions, both absent from Fedora:
   re-disables so nothing else in the image trusts it.
 - NymVPN publishes no RPM (`.deb`, AUR, AppImage, Flatpak and a shell installer
   only), so the Containerfile vendors the pinned release tarball: the daemon and
-  the CLI, checked against the per-architecture sha256 in `image/pins.env`.
+  the CLI, checked against the per-architecture sha256 in `pins.env`.
   `scripts/refresh-pins.sh` is what moves that pin.
 
 kitty (terminal), dolphin (file manager), ImageMagick and jq come from Fedora.

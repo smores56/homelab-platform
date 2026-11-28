@@ -27,3 +27,5 @@ host that is running: the image, its Quadlets, its backups and its edge.
 | `core/backrest.md` | The hosted Backrest reader: the read-only boundary, readiness and its gate matrix. |
 | `core/storage-migration.md` | The storage layout move onto ZFS recovery groups, and its attic. |
 | `core/pool-rebuild.md` | Rebuilding the pool from the datasets a restore returns. |
+| `laptop/switch.md` | The migration of the laptop onto the `smorespro-image` bootc image, and the way back. |
+| `laptop/manual-steps.md` | The laptop's operator runbook: FIDO2 enrolment for the disk keyslot, the lock screen and sudo, and rotating the mapping. |

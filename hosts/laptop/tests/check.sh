@@ -1,12 +1,18 @@
 #!/usr/bin/env bash
-# Static checks for the image repository. No container build, no registry, no
+# Static checks for the laptop image. No container build, no registry, no
 # credentials: everything here reads files.
 #
-#   tests/check.sh
+#   hosts/laptop/tests/check.sh
+#
+# The tree this reads is hosts/laptop/; the one file outside it is the workflow
+# that publishes the image, which lives at the repository root with every other
+# workflow.
 set -uo pipefail
 
-repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-cd "$repo" || exit 1
+host=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$host" || exit 1
+repo=$(cd -- "$host/../.." && pwd)
+publish_workflow=$repo/.github/workflows/publish-laptop-image.yml
 
 pass=0
 fail=0
@@ -23,10 +29,10 @@ bad() {
 
 # --- pins -------------------------------------------------------------------
 
-if pins=$(bash -c 'set -euo pipefail; source "$1"; printf "%s\n" "$BASE_IMAGE"' _ image/pins.env 2>/dev/null); then
-  ok "image/pins.env sources"
+if pins=$(bash -c 'set -euo pipefail; source "$1"; printf "%s\n" "$BASE_IMAGE"' _ pins.env 2>/dev/null); then
+  ok "pins.env sources"
 else
-  bad "image/pins.env sources"
+  bad "pins.env sources"
   pins=""
 fi
 
@@ -48,7 +54,7 @@ fi
 
 # FEDORA_VERSION is the knob; a tag that drifts from it would track a release
 # nobody chose.
-fedora_version=$(bash -c 'set -euo pipefail; source "$1"; printf "%s\n" "$FEDORA_VERSION"' _ image/pins.env 2>/dev/null)
+fedora_version=$(bash -c 'set -euo pipefail; source "$1"; printf "%s\n" "$FEDORA_VERSION"' _ pins.env 2>/dev/null)
 if [[ -n $fedora_version && $pins == "quay.io/fedora/fedora-bootc:${fedora_version}" ]]; then
   ok "BASE_IMAGE tracks the FEDORA_VERSION release"
 else
@@ -58,37 +64,37 @@ fi
 # --- Containerfile ----------------------------------------------------------
 
 # shellcheck disable=SC2016 # the literal ${BASE_IMAGE} is what must appear
-if grep -qx 'FROM ${BASE_IMAGE}' image/Containerfile; then
+if grep -qx 'FROM ${BASE_IMAGE}' Containerfile; then
   ok "Containerfile builds from the base argument"
 else
   bad "Containerfile builds from the base argument"
 fi
 
-if [[ $(grep -c '^FROM ' image/Containerfile) -eq 1 ]]; then
+if [[ $(grep -c '^FROM ' Containerfile) -eq 1 ]]; then
   ok "Containerfile has exactly one FROM"
 else
   bad "Containerfile has exactly one FROM"
 fi
 
-if ! grep -qE '(^|[^/-])dnf[[:space:]]' image/Containerfile; then
+if ! grep -qE '(^|[^/-])dnf[[:space:]]' Containerfile; then
   ok "Containerfile uses dnf5, not dnf"
 else
   bad "Containerfile uses dnf5, not dnf"
 fi
 
-if grep -q 'bootc container lint' image/Containerfile; then
+if grep -q 'bootc container lint' Containerfile; then
   ok "Containerfile runs bootc container lint"
 else
   bad "Containerfile runs bootc container lint"
 fi
 
-if ! grep -qE 'curl .*\| *(ba)?sh' image/Containerfile; then
+if ! grep -qE 'curl .*\| *(ba)?sh' Containerfile; then
   ok "Containerfile never pipes curl into a shell"
 else
   bad "Containerfile never pipes curl into a shell"
 fi
 
-if grep -qx 'ARG BASE_DIGEST' image/Containerfile; then
+if grep -qx 'ARG BASE_DIGEST' Containerfile; then
   ok "the Containerfile takes the resolved base digest as a build arg"
 else
   bad "the Containerfile takes the resolved base digest as a build arg" "without it the build has no digest to record"
@@ -97,8 +103,8 @@ fi
 # The tag moves, so the labels are the only place a built image still says which
 # base it came from; an arg nobody passes would ship an empty digest.
 # shellcheck disable=SC2016 # the literal ${BASE_IMAGE} and ${BASE_DIGEST} must appear
-if grep -qF 'org.opencontainers.image.base.name="${BASE_IMAGE}"' image/Containerfile \
-    && grep -qF 'org.opencontainers.image.base.digest="${BASE_DIGEST}"' image/Containerfile; then
+if grep -qF 'org.opencontainers.image.base.name="${BASE_IMAGE}"' Containerfile \
+    && grep -qF 'org.opencontainers.image.base.digest="${BASE_DIGEST}"' Containerfile; then
   ok "the Containerfile labels its base name and digest"
 else
   bad "the Containerfile labels its base name and digest"
@@ -106,8 +112,8 @@ fi
 
 # A digest would pin a manifest quay collects within hours; latest would track a
 # release nobody chose.
-if grep -qF '*@sha256:*)' image/Containerfile \
-    && grep -qF 'quay.io/fedora/fedora-bootc:latest)' image/Containerfile; then
+if grep -qF '*@sha256:*)' Containerfile \
+    && grep -qF 'quay.io/fedora/fedora-bootc:latest)' Containerfile; then
   ok "the build refuses a base digest and a latest tag"
 else
   bad "the build refuses a base digest and a latest tag"
@@ -122,81 +128,81 @@ else
   bad "build-image.sh resolves the base digest and passes it"
 fi
 
-if grep -qF "skopeo inspect --format '{{.Digest}}' \"docker://\$BASE_IMAGE\"" .github/workflows/publish.yml \
-    && grep -qF -- '--build-arg "BASE_DIGEST=' .github/workflows/publish.yml; then
-  ok "publish.yml resolves the base digest and passes it"
+if grep -qF "skopeo inspect --format '{{.Digest}}' \"docker://\$BASE_IMAGE\"" "$publish_workflow" \
+    && grep -qF -- '--build-arg "BASE_DIGEST=' "$publish_workflow"; then
+  ok "publish-laptop-image.yml resolves the base digest and passes it"
 else
-  bad "publish.yml resolves the base digest and passes it"
+  bad "publish-laptop-image.yml resolves the base digest and passes it"
 fi
 
 # --- signing ----------------------------------------------------------------
 
-if grep -q 'BEGIN PUBLIC KEY' image/cosign.pub 2>/dev/null; then
-  ok "image/cosign.pub is a PEM public key"
+if grep -q 'BEGIN PUBLIC KEY' cosign.pub 2>/dev/null; then
+  ok "cosign.pub is a PEM public key"
 else
-  bad "image/cosign.pub is a PEM public key"
+  bad "cosign.pub is a PEM public key"
 fi
 
-if [[ -f image/rootfs/etc/containers/policy.json ]]; then
-  if jq -e '.default[0].type == "reject"' image/rootfs/etc/containers/policy.json >/dev/null 2>&1; then
+if [[ -f rootfs/etc/containers/policy.json ]]; then
+  if jq -e '.default[0].type == "reject"' rootfs/etc/containers/policy.json >/dev/null 2>&1; then
     ok "policy.json rejects by default"
   else
     bad "policy.json rejects by default"
   fi
   if jq -e '.transports.docker["ghcr.io/smores56/smorespro-image"][0].signedIdentity.type == "matchRepository"' \
-      image/rootfs/etc/containers/policy.json >/dev/null 2>&1; then
+      rootfs/etc/containers/policy.json >/dev/null 2>&1; then
     ok "policy.json scopes the signing key to this repository"
   else
     bad "policy.json scopes the signing key to this repository"
   fi
   if jq -e '.transports | to_entries | all(.value | type == "object")' \
-      image/rootfs/etc/containers/policy.json >/dev/null 2>&1; then
+      rootfs/etc/containers/policy.json >/dev/null 2>&1; then
     ok "policy.json transport values are objects"
   else
     bad "policy.json transport values are objects" "each transport maps a repository name to requirements"
   fi
   if jq -e '.transports.docker["ghcr.io/smores56/smorespro-image"][0].keyPath == "/etc/pki/containers/smorespro.pub"' \
-      image/rootfs/etc/containers/policy.json >/dev/null 2>&1; then
+      rootfs/etc/containers/policy.json >/dev/null 2>&1; then
     ok "policy.json points at the shipped public key"
   else
     bad "policy.json points at the shipped public key"
   fi
 else
-  bad "image/rootfs/etc/containers/policy.json exists"
+  bad "rootfs/etc/containers/policy.json exists"
 fi
 
 if grep -q 'use-sigstore-attachments: true' \
-    image/rootfs/etc/containers/registries.d/ghcr.io-smorespro-image.yaml 2>/dev/null; then
+    rootfs/etc/containers/registries.d/ghcr.io-smorespro-image.yaml 2>/dev/null; then
   ok "registries.d enables sigstore attachments for the image repository"
 else
   bad "registries.d enables sigstore attachments for the image repository"
 fi
 
-if grep -q 'spawn-at-startup "noctalia"' image/rootfs/etc/niri/config.kdl 2>/dev/null; then
+if grep -q 'spawn-at-startup "noctalia"' rootfs/etc/niri/config.kdl 2>/dev/null; then
   ok "the fallback niri config starts Noctalia"
 else
   bad "the fallback niri config starts Noctalia"
 fi
 
-if grep -q 'spawn "kitty"' image/rootfs/etc/niri/config.kdl 2>/dev/null \
-    && grep -q 'spawn "brave-origin"' image/rootfs/etc/niri/config.kdl \
-    && grep -q 'spawn "dolphin"' image/rootfs/etc/niri/config.kdl \
-    && ! grep -q 'wezterm' image/rootfs/etc/niri/config.kdl; then
+if grep -q 'spawn "kitty"' rootfs/etc/niri/config.kdl 2>/dev/null \
+    && grep -q 'spawn "brave-origin"' rootfs/etc/niri/config.kdl \
+    && grep -q 'spawn "dolphin"' rootfs/etc/niri/config.kdl \
+    && ! grep -q 'wezterm' rootfs/etc/niri/config.kdl; then
   ok "the fallback session opens the image's apps"
 else
   bad "the fallback session opens the image's apps"
 fi
 
-if grep -q 'install brave-origin' image/Containerfile \
-    && grep -q 'gpgcheck=1' image/Containerfile \
-    && grep -q "sed -i 's/^enabled=1\$/enabled=0/'" image/Containerfile \
-    && grep -qE ' dolphin ImageMagick jq' image/Containerfile; then
+if grep -q 'install brave-origin' Containerfile \
+    && grep -q 'gpgcheck=1' Containerfile \
+    && grep -q "sed -i 's/^enabled=1\$/enabled=0/'" Containerfile \
+    && grep -qE ' dolphin ImageMagick jq' Containerfile; then
   ok "Brave Origin comes from the vendor repo, disabled after install"
 else
   bad "Brave Origin must come from the vendor repo, disabled after install"
 fi
 
-if ! grep -qE 'tuned-ppd|playerctl|brightnessctl|grim|slurp|wl-clipboard|gvfs-mtp|iwlwifi-mvm-firmware|rsync|alsa-utils|foot|tuigreet' image/Containerfile; then
+if ! grep -qE 'tuned-ppd|playerctl|brightnessctl|grim|slurp|wl-clipboard|gvfs-mtp|iwlwifi-mvm-firmware|rsync|alsa-utils|foot|tuigreet' Containerfile; then
   ok "no package the session never calls"
 else
   bad "no package the session never calls"
@@ -207,10 +213,10 @@ fi
 # for, and without the symlink the first login would start nothing. The folder
 # root and the todo directory are tmpfiles entries so bootc regenerates them
 # with the right owner instead of carrying unpacked /var content in the image.
-if grep -qE '^ +(.* )?syncthing[ ;]' image/Containerfile \
-    && grep -q 'systemctl --global enable syncthing.service' image/Containerfile \
-    && grep -qxF 'd /var/srv/files 0700 smores smores -' image/rootfs/usr/lib/tmpfiles.d/smorespro.conf \
-    && grep -qxF 'd /var/srv/files/todos 0700 smores smores -' image/rootfs/usr/lib/tmpfiles.d/smorespro.conf; then
+if grep -qE '^ +(.* )?syncthing[ ;]' Containerfile \
+    && grep -q 'systemctl --global enable syncthing.service' Containerfile \
+    && grep -qxF 'd /var/srv/files 0700 smores smores -' rootfs/usr/lib/tmpfiles.d/smorespro.conf \
+    && grep -qxF 'd /var/srv/files/todos 0700 smores smores -' rootfs/usr/lib/tmpfiles.d/smorespro.conf; then
   ok "syncthing is installed, enabled globally, and the file roots are declared"
 else
   bad "syncthing is installed, enabled globally, and the file roots are declared"
@@ -221,7 +227,7 @@ fi
 # tailscaled runs before the first login, and the root-run first `tailscale up`
 # clears it. The state-file condition is the post-login boundary; the runbook
 # passes the same grant on a fresh join.
-unit=image/rootfs/usr/lib/systemd/system/tailscale-operator.service
+unit=rootfs/usr/lib/systemd/system/tailscale-operator.service
 if grep -qx 'Type=oneshot' "$unit" 2>/dev/null \
     && grep -qx 'ExecStart=/usr/bin/tailscale set --operator=smores' "$unit" \
     && grep -qx 'ConditionPathExists=/var/lib/tailscale/tailscaled.state' "$unit" \
@@ -230,8 +236,8 @@ if grep -qx 'Type=oneshot' "$unit" 2>/dev/null \
     && grep -qx 'WantedBy=multi-user.target' "$unit" \
     && ! grep -qE '^(Restart|PartOf)=' "$unit" \
     && ! grep -rq 'ExecStartPost=.*tailscale set --operator' \
-        image/rootfs/usr/lib/systemd/system/tailscaled.service.d 2>/dev/null \
-    && grep -qE '^ +tailscale-operator\.service \\$' image/Containerfile; then
+        rootfs/usr/lib/systemd/system/tailscaled.service.d 2>/dev/null \
+    && grep -qE '^ +tailscale-operator\.service \\$' Containerfile; then
   ok "the Tailscale operator grant is a state-gated oneshot, not a tailscaled hook"
 else
   bad "the Tailscale operator grant is a state-gated oneshot, not a tailscaled hook"
@@ -240,15 +246,15 @@ fi
 # xdg-utils supplies xdg-open for the admin console; xdg-user-dirs supplies
 # xdg-user-dir for the Taildrop folder. Relying on Brave's hard dependency
 # would drop xdg-utils if Brave ever leaves the image.
-if grep -qE '(^|[[:space:]])xdg-user-dirs([[:space:]]|$)' image/Containerfile \
-    && grep -qE '(^|[[:space:]])xdg-utils([[:space:]]|$)' image/Containerfile; then
+if grep -qE '(^|[[:space:]])xdg-user-dirs([[:space:]]|$)' Containerfile \
+    && grep -qE '(^|[[:space:]])xdg-utils([[:space:]]|$)' Containerfile; then
   ok "the image declares the Tailnet widget's xdg helpers"
 else
   bad "the image declares the Tailnet widget's xdg helpers"
 fi
 
-if grep -qF 'sudo tailscale up --operator=smores' docs/switch.md \
-    && grep -qF 'sudo tailscale set --operator=smores' docs/manual-steps.md; then
+if grep -qF 'sudo tailscale up --operator=smores' "$repo/docs/laptop/switch.md" \
+    && grep -qF 'sudo tailscale set --operator=smores' "$repo/docs/laptop/manual-steps.md"; then
   ok "the runbook grants operator on first join and on an existing host"
 else
   bad "the runbook grants operator on first join and on an existing host"
@@ -259,8 +265,8 @@ fi
 # restore, pactl and the PA interface; the fallback is a log line, not a
 # failure, so anchor the check to the install line and the preset-enabled
 # socket rather than to a comment.
-if grep -qE '^ +pipewire .*pipewire-pulseaudio' image/Containerfile \
-    && grep -q 'test -L /etc/systemd/user/sockets.target.wants/pipewire-pulse.socket' image/Containerfile; then
+if grep -qE '^ +pipewire .*pipewire-pulseaudio' Containerfile \
+    && grep -q 'test -L /etc/systemd/user/sockets.target.wants/pipewire-pulse.socket' Containerfile; then
   ok "the image ships the PulseAudio server the session's clients expect"
 else
   bad "the image ships the PulseAudio server the session's clients expect"
@@ -269,22 +275,22 @@ fi
 # Intel Xe has no VA-API driver in mesa: iHD is a separate package. Without it
 # vaInitialize fails and Chromium cannot hardware-decode HEVC at all, which
 # shows up as a black video element rather than an error.
-if grep -qE '^ +libva-intel-media-driver' image/Containerfile \
-    && grep -q 'test -f /usr/lib64/dri/iHD_drv_video.so' image/Containerfile \
-    && grep -q 'test -f /usr/lib64/libva.so.2' image/Containerfile; then
+if grep -qE '^ +libva-intel-media-driver' Containerfile \
+    && grep -q 'test -f /usr/lib64/dri/iHD_drv_video.so' Containerfile \
+    && grep -q 'test -f /usr/lib64/libva.so.2' Containerfile; then
   ok "the image ships the iHD VA-API driver Xe needs"
 else
   bad "the image ships the iHD VA-API driver Xe needs"
 fi
 
-if grep -qE '^u[[:space:]]+greeter[[:space:]]' image/rootfs/usr/lib/sysusers.d/smorespro-greeter.conf 2>/dev/null; then
+if grep -qE '^u[[:space:]]+greeter[[:space:]]' rootfs/usr/lib/sysusers.d/smorespro-greeter.conf 2>/dev/null; then
   ok "the image creates the greeter user greetd validates"
 else
   bad "the image creates the greeter user greetd validates"
 fi
 
-if grep -q '^\[initial_session\]' image/rootfs/etc/greetd/config.toml 2>/dev/null \
-    && grep -q '^user = "smores"' image/rootfs/etc/greetd/config.toml; then
+if grep -q '^\[initial_session\]' rootfs/etc/greetd/config.toml 2>/dev/null \
+    && grep -q '^user = "smores"' rootfs/etc/greetd/config.toml; then
   ok "greetd autologins through initial_session"
 else
   bad "greetd autologins through initial_session"
@@ -295,8 +301,8 @@ fi
 # The dock's DP link can be up before its EDID reads, which leaves niri on
 # 640x480 until the hub is re-plugged. The unit has to finish before greetd
 # starts niri, and has to be a oneshot or that ordering is empty.
-unit=image/rootfs/usr/lib/systemd/system/dp-edid-reprobe.service
-dropin=image/rootfs/usr/lib/systemd/system/greetd.service.d/10-dp-edid-reprobe.conf
+unit=rootfs/usr/lib/systemd/system/dp-edid-reprobe.service
+dropin=rootfs/usr/lib/systemd/system/greetd.service.d/10-dp-edid-reprobe.conf
 if grep -qx 'ExecStart=/usr/libexec/smorespro/dp-edid-reprobe' "$unit" 2>/dev/null \
     && grep -qx 'Type=oneshot' "$unit" \
     && grep -qx 'Before=greetd.service' "$unit" \
@@ -304,7 +310,7 @@ if grep -qx 'ExecStart=/usr/libexec/smorespro/dp-edid-reprobe' "$unit" 2>/dev/nu
     && ! grep -qE '^[A-Za-z]+=.*systemd-udev-settle' "$unit" \
     && grep -qx 'Wants=dp-edid-reprobe.service' "$dropin" \
     && grep -qx 'After=dp-edid-reprobe.service' "$dropin" \
-    && grep -qE '^ +dp-edid-reprobe\.service \\$' image/Containerfile; then
+    && grep -qE '^ +dp-edid-reprobe\.service \\$' Containerfile; then
   ok "the DP EDID re-probe is a boot oneshot that greetd always waits for"
 else
   bad "the DP EDID re-probe is a boot oneshot that greetd always waits for"
@@ -312,7 +318,7 @@ fi
 
 # The script is the whole recovery: only a connector without a valid EDID is
 # probed, and a probe that never works must fail the unit, not exit 0.
-script=image/rootfs/usr/libexec/smorespro/dp-edid-reprobe
+script=rootfs/usr/libexec/smorespro/dp-edid-reprobe
 # shellcheck disable=SC2016 # the literal $connector must appear in the script
 if [[ -x $script ]] \
     && grep -qF 'echo detect >"$connector/status"' "$script" \
@@ -325,7 +331,7 @@ fi
 
 # --- NymVPN -----------------------------------------------------------------
 
-if nympins=$(bash -c 'set -euo pipefail; source "$1"; printf "%s %s %s\n" "$NYM_VERSION" "$NYM_SHA256_AMD64" "$NYM_SHA256_ARM64"' _ image/pins.env 2>/dev/null); then
+if nympins=$(bash -c 'set -euo pipefail; source "$1"; printf "%s %s %s\n" "$NYM_VERSION" "$NYM_SHA256_AMD64" "$NYM_SHA256_ARM64"' _ pins.env 2>/dev/null); then
   read -r nymver nymamd nymarm <<<"$nympins"
   if [[ $nymver =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
       && [[ $nymamd =~ ^[0-9a-f]{64}$ ]] && [[ $nymarm =~ ^[0-9a-f]{64}$ ]]; then
@@ -338,11 +344,11 @@ else
 fi
 
 # shellcheck disable=SC2016 # the literal ${NYM_VERSION} is what must appear
-if grep -qF 'nym-vpn-core-v${NYM_VERSION}_linux_${arch}.tar.gz' image/Containerfile \
-    && grep -qF 'sha256sum -c -' image/Containerfile \
-    && grep -q 'aarch64)' image/Containerfile \
-    && grep -q -- '--location' image/Containerfile \
-    && grep -q -- '--strip-components=1' image/Containerfile; then
+if grep -qF 'nym-vpn-core-v${NYM_VERSION}_linux_${arch}.tar.gz' Containerfile \
+    && grep -qF 'sha256sum -c -' Containerfile \
+    && grep -q 'aarch64)' Containerfile \
+    && grep -q -- '--location' Containerfile \
+    && grep -q -- '--strip-components=1' Containerfile; then
   ok "the Containerfile fetches the pinned tarball per arch and verifies its hash"
 else
   bad "the Containerfile fetches the pinned tarball per arch and verifies its hash"
@@ -351,20 +357,20 @@ fi
 # The install line is the allowlist: the tarball also ships nym-exclude (a
 # setuid split-tunnel helper), nym-diagnostic and the NetworkManager plugin.
 if grep -qF 'install -m 0755 /tmp/nym/nym-vpnd /tmp/nym/nym-vpnc /tmp/nym/nym-socks5-proxy /usr/bin/' \
-    image/Containerfile; then
+    Containerfile; then
   ok "the Containerfile installs exactly the daemon, CLI and SOCKS5 proxy"
 else
   bad "the Containerfile installs exactly the daemon, CLI and SOCKS5 proxy"
 fi
 
-unit=image/rootfs/usr/lib/systemd/system/nym-vpnd.service
+unit=rootfs/usr/lib/systemd/system/nym-vpnd.service
 if grep -qx 'ExecStart=/usr/bin/nym-vpnd run-as-service' "$unit" 2>/dev/null \
     && grep -qx 'NoNewPrivileges=true' "$unit" \
     && grep -qx 'ProtectSystem=strict' "$unit" \
     && grep -qx 'StateDirectory=nym-vpnd' "$unit" \
     && grep -qx 'LimitCORE=0' "$unit" \
     && grep -q '^WantedBy=multi-user.target$' "$unit" \
-    && grep -q 'nym-vpnd.service' image/Containerfile; then
+    && grep -q 'nym-vpnd.service' Containerfile; then
   ok "the shipped daemon unit is hardened and enabled by the build"
 else
   bad "the shipped daemon unit is hardened and enabled by the build"
@@ -374,8 +380,8 @@ fi
 # ordering on resolved and shipping resolved enabled are what choose it.
 if grep -q '^After=.*systemd-resolved.service' "$unit" 2>/dev/null \
     && grep -q '^Wants=.*systemd-resolved.service' "$unit" \
-    && grep -q 'systemd-resolved nftables' image/Containerfile \
-    && grep -q 'systemd-resolved.service' image/Containerfile \
+    && grep -q 'systemd-resolved nftables' Containerfile \
+    && grep -q 'systemd-resolved.service' Containerfile \
     && ! grep -q 'NYM_DNS_MODULE' "$unit"; then
   ok "the daemon is ordered after systemd-resolved, which the image installs and enables"
 else
@@ -383,13 +389,13 @@ else
 fi
 
 if grep -q 'nft delete table inet nym' "$unit" 2>/dev/null \
-    && grep -q 'vendor-manifest' image/Containerfile; then
+    && grep -q 'vendor-manifest' Containerfile; then
   ok "the unit clears a stale kill-switch and the build records the vendor binaries"
 else
   bad "the unit clears a stale kill-switch and the build records the vendor binaries"
 fi
 
-policy=image/rootfs/usr/share/polkit-1/actions/com.nymvpn.vpnd.unix-access.policy
+policy=rootfs/usr/share/polkit-1/actions/com.nymvpn.vpnd.unix-access.policy
 if grep -q 'com.nymvpn.vpnd.unix-access' "$policy" 2>/dev/null \
     && grep -q '<allow_active>auth_admin</allow_active>' "$policy" \
     && ! grep -q 'auth_self' "$policy"; then
@@ -398,7 +404,7 @@ else
   bad "the baked polkit action demands admin auth, never the caller's own"
 fi
 
-if ! grep -q '^g[[:space:]]*nym-vpn' image/rootfs/usr/lib/sysusers.d/*.conf 2>/dev/null; then
+if ! grep -q '^g[[:space:]]*nym-vpn' rootfs/usr/lib/sysusers.d/*.conf 2>/dev/null; then
   ok "no nym-vpn group gives passwordless control of a root daemon"
 else
   bad "no nym-vpn group gives passwordless control of a root daemon"
@@ -413,7 +419,7 @@ fi
 
 # --- unlock (pam_u2f) -------------------------------------------------------
 
-login=image/rootfs/etc/pam.d/login
+login=rootfs/etc/pam.d/login
 if [[ $(grep -c 'pam_u2f\.so' "$login" 2>/dev/null) -eq 1 ]] \
     && grep -qxE 'auth +sufficient +pam_u2f\.so pinverification=1 cue' "$login"; then
   ok "login's one u2f line asks for the key and its PIN"
@@ -447,14 +453,14 @@ fi
 
 # The greeter must stay password-only: greetd ships its service files in
 # /usr/lib/pam.d, so anything under /etc/pam.d/greetd* is this image's doing.
-if [[ ! -e image/rootfs/etc/pam.d/greetd && ! -e image/rootfs/etc/pam.d/greetd-greeter ]]; then
+if [[ ! -e rootfs/etc/pam.d/greetd && ! -e rootfs/etc/pam.d/greetd-greeter ]]; then
   ok "the greeter's PAM service is left to greetd"
 else
   bad "the greeter's PAM service is left to greetd"
 fi
 
-if grep -qE '^ +pam-u2f pamu2fcfg' image/Containerfile \
-    && grep -q 'test -f /usr/lib64/security/pam_u2f.so' image/Containerfile; then
+if grep -qE '^ +pam-u2f pamu2fcfg' Containerfile \
+    && grep -q 'test -f /usr/lib64/security/pam_u2f.so' Containerfile; then
   ok "the image installs pam-u2f and pamu2fcfg and proves the module is there"
 else
   bad "the image installs pam-u2f and pamu2fcfg and proves the module is there"
@@ -464,11 +470,11 @@ fi
 # silent way sudo loses the tap, since every failure of the module falls through
 # to the password. The build has to assert what git cannot: ownership, and the
 # shape of the lines it shipped.
-if grep -q 'test -s /etc/u2f_mappings' image/Containerfile \
-    && grep -q 'stat -c %U:%G /etc/u2f_mappings' image/Containerfile \
-    && grep -q 'stat -c %a /etc/u2f_mappings' image/Containerfile \
-    && grep -qF "grep -qE '^[^#:]+:[^:]*,.*' /etc/u2f_mappings" image/Containerfile \
-    && grep -qF "! grep -qF '+pin' /etc/u2f_mappings" image/Containerfile; then
+if grep -q 'test -s /etc/u2f_mappings' Containerfile \
+    && grep -q 'stat -c %U:%G /etc/u2f_mappings' Containerfile \
+    && grep -q 'stat -c %a /etc/u2f_mappings' Containerfile \
+    && grep -qF "grep -qE '^[^#:]+:[^:]*,.*' /etc/u2f_mappings" Containerfile \
+    && grep -qF "! grep -qF '+pin' /etc/u2f_mappings" Containerfile; then
   ok "the build proves the shipped mapping is root-owned 0644, populated and PIN-free"
 else
   bad "the build proves the shipped mapping is root-owned 0644, populated and PIN-free"
@@ -476,15 +482,15 @@ fi
 
 # FIDO2 is HID through libfido2 everywhere in this design; a smartcard stack
 # would add a daemon and a PIN cache for nothing.
-if ! grep -qE '^ +(pcsc-lite|pcscd|opensc) ' image/Containerfile; then
+if ! grep -qE '^ +(pcsc-lite|pcscd|opensc) ' Containerfile; then
   ok "no PC/SC or smartcard stack enters the image"
 else
   bad "no PC/SC or smartcard stack enters the image"
 fi
 
-if [[ -f docs/manual-steps.md ]] \
-    && grep -q 'systemd-cryptenroll --fido2-device=auto --fido2-with-client-pin=yes' docs/manual-steps.md \
-    && grep -q 'pamu2fcfg -n -u smores' docs/manual-steps.md; then
+if [[ -f "$repo/docs/laptop/manual-steps.md" ]] \
+    && grep -q 'systemd-cryptenroll --fido2-device=auto --fido2-with-client-pin=yes' "$repo/docs/laptop/manual-steps.md" \
+    && grep -q 'pamu2fcfg -n -u smores' "$repo/docs/laptop/manual-steps.md"; then
   ok "manual-steps.md carries the token enrolment commands"
 else
   bad "manual-steps.md carries the token enrolment commands"
@@ -494,7 +500,7 @@ fi
 # upgrade and sudo silently keeps using the old credentials -- either straight
 # through to the password, or into the FIDO2 PIN prompt the rotation exists to
 # avoid.
-if grep -q 'diff /usr/etc/u2f_mappings /etc/u2f_mappings' docs/manual-steps.md; then
+if grep -q 'diff /usr/etc/u2f_mappings /etc/u2f_mappings' "$repo/docs/laptop/manual-steps.md"; then
   ok "manual-steps.md says to reconcile the runtime mapping after an upgrade"
 else
   bad "manual-steps.md says to reconcile the runtime mapping after an upgrade"
@@ -506,7 +512,7 @@ fi
 # passage that meets a locked screen has to say so before it says how to fall
 # back, or an operator reads that prompt as an account-password prompt and
 # spends the keyslot's budget on it.
-if grep -q 'burns one of its attempts' docs/manual-steps.md; then
+if grep -q 'burns one of its attempts' "$repo/docs/laptop/manual-steps.md"; then
   ok "manual-steps.md warns that a wrong lock-screen PIN spends a token attempt"
 else
   bad "manual-steps.md warns that a wrong lock-screen PIN spends a token attempt" \
@@ -521,7 +527,7 @@ fi
 # and the failure is silent. Comments are deliberately outside the comparison:
 # they carry the reasoning, and a rationale that needs no test edit gets written.
 directives() { grep -vE '^[[:space:]]*(#|$)' "$1"; }
-sudo_pam=image/rootfs/etc/pam.d/sudo
+sudo_pam=rootfs/etc/pam.d/sudo
 expected=$(cat <<'EOT'
 auth required                   pam_faillock.so preauth deny=5 unlock_time=300
 auth [success=2 default=ignore] pam_u2f.so authfile=/etc/u2f_mappings cue userpresence=1 pinverification=0
@@ -533,7 +539,6 @@ password   include system-auth
 session    optional pam_keyinit.so revoke
 session    required  pam_limits.so
 session    include system-auth
-EOT
 EOT
 )
 if [[ $(directives "$sudo_pam" 2>/dev/null) == "$expected" ]] \
@@ -672,9 +677,8 @@ Defaults timestamp_timeout=30
 Defaults timestamp_type=tty
 Defaults log_subcmds
 EOT
-EOT
 )
-if [[ $(directives image/rootfs/etc/sudoers.d/10-human-gate 2>/dev/null) == "$expected" ]]; then
+if [[ $(directives rootfs/etc/sudoers.d/10-human-gate 2>/dev/null) == "$expected" ]]; then
   ok "the shipped sudoers drop-in is the design's directives"
 else
   bad "the shipped sudoers drop-in is the design's directives"
@@ -695,7 +699,7 @@ fi
 # spare) all authenticate the same account, so the count is a minimum, not an
 # equality -- replacing a key changes it. Base64url and base64 both appear in
 # real pamu2fcfg output, so the class carries +, / and =.
-mappings=image/rootfs/etc/u2f_mappings
+mappings=rootfs/etc/u2f_mappings
 map_line=$(sed -n 1p "$mappings" 2>/dev/null)
 cred_re='^[A-Za-z0-9_+/=-]{20,},[A-Za-z0-9_+/=-]{40,}(,[A-Za-z0-9_+-]*){0,3}$'
 map_ok=0
@@ -715,11 +719,11 @@ if [[ $map_ok -eq 1 ]]; then
   ok "the shipped mapping is smores' per-key credentials, no +pin, group/other not writable"
 else
   bad "the shipped mapping is smores' per-key credentials, no +pin, group/other not writable" \
-    "$mappings is missing or malformed: plug in one 5C Nano at a time and run pamu2fcfg -u smores for the first and pamu2fcfg -n -u smores for each further key, then join them with ':' (docs/manual-steps.md section 2)"
+    "$mappings is missing or malformed: plug in one 5C Nano at a time and run pamu2fcfg -u smores for the first and pamu2fcfg -n -u smores for each further key, then join them with ':' (docs/laptop/manual-steps.md section 2)"
 fi
 
-if grep -q 'chmod 0440 /etc/sudoers.d/10-human-gate' image/Containerfile \
-    && grep -q 'visudo -c' image/Containerfile; then
+if grep -q 'chmod 0440 /etc/sudoers.d/10-human-gate' Containerfile \
+    && grep -q 'visudo -c' Containerfile; then
   ok "the build sets the drop-in's mode and proves it parses"
 else
   bad "the build sets the drop-in's mode and proves it parses"
@@ -728,14 +732,14 @@ fi
 # A NOPASSWD rule skips pam_authenticate, so the touch row never runs and sudo
 # is passwordless with nothing at the prompt to show it. The build has to refuse
 # one rather than let a drop-in arrive unnoticed.
-if grep -qF "grep -rqE '^[^#]*NOPASSWD' /etc/sudoers /etc/sudoers.d" image/Containerfile; then
+if grep -qF "grep -rqE '^[^#]*NOPASSWD' /etc/sudoers /etc/sudoers.d" Containerfile; then
   ok "the build refuses a sudoers rule that grants NOPASSWD"
 else
   bad "the build refuses a sudoers rule that grants NOPASSWD"
 fi
 
-if grep -q 'chmod 0440 /etc/sudoers.d/10-human-gate /etc/sudoers.d/20-sops-env' image/Containerfile \
-    && grep -q '^Defaults env_delete += ' image/rootfs/etc/sudoers.d/20-sops-env; then
+if grep -q 'chmod 0440 /etc/sudoers.d/10-human-gate /etc/sudoers.d/20-sops-env' Containerfile \
+    && grep -q '^Defaults env_delete += ' rootfs/etc/sudoers.d/20-sops-env; then
   ok "the sops env drop-in is installed and drops every identity source"
 else
   bad "the sops env drop-in is installed and drops every identity source"
@@ -744,7 +748,7 @@ fi
 # The build's own assert names the word as the pattern it refuses, so that one
 # line is the only occurrence allowed: a rule or a doc that grants NOPASSWD
 # anywhere else is escalation that never reaches the touch stack.
-if ! grep -rnF 'NOPASSWD' image docs README.md scripts 2>/dev/null \
+if ! grep -rnF 'NOPASSWD' Containerfile pins.env rootfs "$repo/docs/laptop" README.md scripts 2>/dev/null \
     | grep -vF "NOPASSWD' /etc/sudoers" | grep -q .; then
   ok "nothing in the tree grants NOPASSWD"
 else
@@ -756,27 +760,27 @@ fi
 # that still had one. The scan stays, scoped to the tree that ships, so a
 # re-introduction is caught where the removal is tested rather than nowhere.
 # shellcheck disable=SC2016 # the literal $6$ is what must not appear
-if ! grep -rqF '$6$' image docs README.md \
-    && [[ -z $(find image docs scripts tests README.md \
+if ! grep -rqF '$6$' Containerfile rootfs "$repo/docs/laptop" README.md \
+    && [[ -z $(find Containerfile rootfs "$repo/docs/laptop" scripts tests README.md \
         \( -name 'sudopin*' -o -name '*.gdbm' \) -type f -print 2>/dev/null) ]] \
-    && ! grep -rqE 'pam_userdb|gdbmtool' image docs README.md; then
+    && ! grep -rqE 'pam_userdb|gdbmtool' Containerfile rootfs "$repo/docs/laptop" README.md; then
   ok "no PIN database, no crypt hash and no pam_userdb anywhere in the tree"
 else
   bad "no PIN database, no crypt hash and no pam_userdb anywhere in the tree"
 fi
 
-if grep -q 'image/rootfs/etc/u2f_mappings' docs/manual-steps.md \
-    && grep -q 'pamu2fcfg -n -u smores' docs/manual-steps.md \
-    && grep -q 'bootc upgrade' docs/manual-steps.md \
-    && ! grep -qE 'gdbmtool|sudopin' docs/manual-steps.md; then
+if grep -q 'rootfs/etc/u2f_mappings' "$repo/docs/laptop/manual-steps.md" \
+    && grep -q 'pamu2fcfg -n -u smores' "$repo/docs/laptop/manual-steps.md" \
+    && grep -q 'bootc upgrade' "$repo/docs/laptop/manual-steps.md" \
+    && ! grep -qE 'gdbmtool|sudopin' "$repo/docs/laptop/manual-steps.md"; then
   ok "manual-steps.md rotates the shipped mapping instead of building a PIN database"
 else
   bad "manual-steps.md rotates the shipped mapping instead of building a PIN database"
 fi
 
-if grep -q 'sudo -k; sudo true' docs/manual-steps.md \
-    && grep -q 'faillock --user smores --reset' docs/manual-steps.md \
-    && grep -q 'unplugged' docs/manual-steps.md; then
+if grep -q 'sudo -k; sudo true' "$repo/docs/laptop/manual-steps.md" \
+    && grep -q 'faillock --user smores --reset' "$repo/docs/laptop/manual-steps.md" \
+    && grep -q 'unplugged' "$repo/docs/laptop/manual-steps.md"; then
   ok "manual-steps.md proves the tap-or-password gate and its recovery"
 else
   bad "manual-steps.md proves the tap-or-password gate and its recovery"
@@ -785,7 +789,7 @@ fi
 # --- shell ------------------------------------------------------------------
 
 if command -v shellcheck >/dev/null 2>&1 && shellcheck --version >/dev/null 2>&1; then
-  if shellcheck -x scripts/*.sh tests/*.sh image/rootfs/usr/libexec/smorespro/*; then
+  if shellcheck -x scripts/*.sh tests/*.sh rootfs/usr/libexec/smorespro/*; then
     ok "shellcheck"
   else
     bad "shellcheck"

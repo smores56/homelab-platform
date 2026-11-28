@@ -1,11 +1,11 @@
-# Opens an issue when the moving NymVPN pin in image/pins.env is stale. It never
-# commits and never rebuilds: a refresh stays a reviewed change made with
-# scripts/refresh-pins.sh --write.
+# Opens an issue when the moving NymVPN pin in hosts/laptop/pins.env is stale.
+# It never commits and never rebuilds: a refresh stays a reviewed change made
+# with hosts/laptop/scripts/refresh-pins.sh --write.
 #
-# The base is not watched and has nothing to refresh: image/pins.env carries the
-# fedora-bootc release tag and every build resolves it, so drift there is
-# impossible by construction.
-name: pins-watch
+# The base is not watched and has nothing to refresh: hosts/laptop/pins.env
+# carries the fedora-bootc release tag and every build resolves it, so drift
+# there is impossible by construction.
+name: pins-watch-laptop
 
 on:
   schedule:
@@ -36,7 +36,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set +e
-          ./scripts/refresh-pins.sh --check >"$RUNNER_TEMP/check" 2>&1
+          ./hosts/laptop/scripts/refresh-pins.sh --check >"$RUNNER_TEMP/check" 2>&1
           status=$?
           cat "$RUNNER_TEMP/check"
           case $status in
@@ -74,7 +74,9 @@ jobs:
           body=$(cat <<'BODY'
           $title
 
-          Refresh with `scripts/refresh-pins.sh --write`, commit `image/pins.env`, and let publish.yml rebuild. A NymVPN bump is a new release tarball: check its notes before pinning.
+          Refresh with `hosts/laptop/scripts/refresh-pins.sh --write`, commit
+          `hosts/laptop/pins.env`, and let publish-laptop-image.yml rebuild. A
+          NymVPN bump is a new release tarball: check its notes before pinning.
 
           ```
           $detail

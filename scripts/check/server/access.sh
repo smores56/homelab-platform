@@ -54,10 +54,13 @@ check "the image wires no policy loader" lacks 'smortress-selinux-sudo-rssh' boo
 
 # The retired TOTP stack may not leave a trace: the skill moved to a touch, and a
 # leftover usersfile, enrollment script or package reference would be state
-# nothing reads and the runbooks would still describe.
+# nothing reads and the runbooks would still describe. A checker names the
+# patterns it refuses, so the checkers are outside the scan for the same reason
+# the server's own is: the laptop's sudo stack asserts the module is absent.
 check "the enrollment script is gone" test ! -e scripts/enroll-yubikey-totp.sh
 if git grep -qF -e 'pam_oath' -e 'users.oath' -e 'HOTP/T30' -- . \
-    ':(exclude)scripts/check-server-image.sh' ':(exclude)scripts/check/server/*' ':(exclude)bootc/server/Containerfile'; then
+    ':(exclude)scripts/check-server-image.sh' ':(exclude)scripts/check/server/*' \
+    ':(exclude)bootc/server/Containerfile' ':(exclude)hosts/laptop/tests/*'; then
   bad "no TOTP artifact is left anywhere"
 else
   ok "no TOTP artifact is left anywhere"
