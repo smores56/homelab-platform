@@ -5,7 +5,7 @@
 # not of a host's role, and two copies of it would be two chances to drift.
 #
 # grub.cfg is generated once by bootupd, which reports every component current
-# and will not regenerate (docs/core/public-edge.md, "There is no boot counting
+# and will not regenerate (bootc/edge/runbook.md, "There is no boot counting
 # on this box"), so the snippet greenboot ships in
 # /usr/lib/bootupd/grub2-static/configs.d/ never reaches it and the counter it
 # implements never runs. grub.cfg ends with `41_custom.cfg`, which sources

@@ -7,8 +7,8 @@ loopback, link-local and reserved answers are dropped, so a compromised
 allowlisted name cannot point a container at the LAN or at the bridge itself.
 
 As with the proxy, the source label is the listener's, not the client's: nftables
-decides which container reaches this port (`docs/core/applications.md`, "Collector
-egress"), and the allowlist decides what it may learn from it. The proxy does not
+decides which container reaches this port, and the allowlist decides what it may
+learn from it. The proxy does not
 need this responder to work -- it resolves upstream names itself -- so a resolver
 outage costs cache hits, not egress.
 

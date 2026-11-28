@@ -5,5 +5,4 @@
 # nix-config (`webProxy.services.kanbei`) is the only piece left, and it has no
 # connector to answer it.
 #
-# This file stays as the note `docs/cloudflare.md` references; it declares no
-# resource.
+# This file stays as the note it always was; it declares no resource.

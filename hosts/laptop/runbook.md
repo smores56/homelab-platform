@@ -218,6 +218,10 @@ ls -ld /var/srv/files /var/srv/files/todos
 device in the same window as this one**: Syncthing does not support nesting folders.
 A phone that should not hold the vault can ignore `/vault` in its own `.stignore`.
 
+**After smortress has restored the vault's Syncthing identity, do not connect this
+laptop until smortress has designated a primary**: a peer that syncs first writes
+over a tree whose identity was just replaced.
+
 ## 6. Reboot for a staged update
 
 Nothing reboots this laptop for you. The image follows

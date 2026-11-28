@@ -27,7 +27,7 @@ ARG BASE_IMAGE
 # resolve as a type, and an unconfined domain already holds every permission the
 # forwarded agent socket needs. A module for sudo_t could not even link (verified
 # on the host), and a policy for unconfined_t would grant nothing it lacks. The
-# tripwire is the AVC drill in docs/core/server-image.md: if a future base confines
+# tripwire is the AVC drill in hosts/server/runbook.md: if a future base confines
 # sudo, `denied { connectto }` names the domain to write the rule for.
 FROM ${BASE_IMAGE} AS sudo-build
 

@@ -24,7 +24,7 @@
 # are owned by uid 1000 for it. The runtime image (agent-runtime) drops privileges
 # to uid 10000 internally, which is *not* honoured here on purpose: a container
 # uid that no dataset is owned by cannot write its own state. See the residual risk
-# in docs/core/applications.md.
+# in hosts/server/runbook.md.
 [Unit]
 Description=llama.cpp model server for the agent-local deployment
 Requires=zfs-ready@state-agent-model.service smortress-nvidia-cdi.service

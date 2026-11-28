@@ -5,6 +5,10 @@ live ISO, bootstrap the values only a person can supply, and release a build. It
 runs the repository's own signed image and terminates TLS for `photos`, `opds` and
 `recovery`.
 
+**There are no provider snapshots and no API**: a rebuild from the live ISO is the
+only way back, so anything stateful that the image and `edge-bootstrap.sh` do not
+recreate must be a recovery-kit item or must not exist.
+
 ## Render and commit the edge Ignition
 
 Regenerate the document whenever the published edge digest changes, and never with a
@@ -50,6 +54,10 @@ with `226/NAMESPACE`:
 systemd-tmpfiles --cat-config | grep -E '/var/lib/(caddy|homelab/deploy|smoresnet)'
 ```
 
+**A reinstall destroys the node identity**: mint a fresh single-use preauthorized
+`tag:vps` key in the Tailscale console, and without the admin login and its 2FA
+recovery codes the box never rejoins.
+
 ## Bootstrap the fresh edge
 
 `scripts/edge-bootstrap.sh` runs on the box as root, refuses a bad value before it
@@ -84,6 +92,12 @@ here-document is in neither. `TS_AUTHKEY` is the preauthorized `tag:vps` key, ty
 once; the box keeps it root-only at `/etc/smoresnet/tailscale-authkey`, and the join
 unit re-runs on every boot until the node has enrolled.
 
+**The first boot after an install or a reinstall holds, pages once and writes the
+marker that says it did**: the previous deployment on a fresh box is the install
+medium's, so there is no history to roll back on. **A popped edge yields no corpus
+access at all**: the reader and its R2 credential run on smortress, and this box is
+only a TLS proxy.
+
 What it refuses, before writing anything: an `SMORTRESS_FQDN` with no tailnet
 domain, a missing `EDGE_ACME_EMAIL`, a key that is not `tskey-`-shaped, a secret
 carrying whitespace, and `caddy validate` on the values about to be installed.
@@ -97,6 +111,16 @@ not the one committed in `tofu/terraform.tfvars`, update `edge_ipv4` and apply
 ```sh
 scripts/verify-fleet.sh
 ```
+
+**Issuance needs the public name**: ACME resolves a name before it can validate it,
+so while the record is proxied or points elsewhere the order fails and Caddy keeps
+retrying. A new box or an `edge_ipv4` change is followed by a wait, not a config
+edit. A 502 on `recovery` while `photos` works is the reader or its Service on
+smortress, never this box.
+
+**10 TB/month is a null-route, not a throttle**: over the allowance RackNerd
+suspends the service, which takes both public names down while every tailnet route
+stays up — the same allowance is why this box advertises no exit node.
 
 ## Release and deploy the edge
 
@@ -122,3 +146,32 @@ only for the commits that touch its tree, so a request that lands on a tip which
 not rebuild is `no-artifact` and the next request supersedes it. Until
 `edge-bootstrap` has seeded `/var/lib/homelab/deploy/state.json` every request is
 `bootstrap-required`.
+
+**There is no boot counting on this box**: a deployment whose PID1 never reaches
+userspace is the RackNerd HTML5 console and the previous boot entry, and no
+automatic rollback is coming. The gate's only rollback is the one it runs in
+userspace.
+
+## The zone, when it changes
+
+Applied from the smortress checkout; what a wrong apply takes down is on this box.
+
+- **`prevent_destroy` is read from configuration, not from state**: deleting a
+  resource block plans a destroy, with no `tofu state rm` first and no dashboard
+  deletion before the apply.
+- **A plan that says replace on a record is wrong**: a replacement is a window in
+  which the name publishes nothing. Stop and compare.
+- **Never `init` against an empty or partial state**: the first plan then proposes
+  creating every object that already exists. A leftover `/var/lib/cloudflare-tofu`
+  plans a whole-zone create the API rejects object by object, and a stale
+  `tofu/terraform.tfstate` in a checkout is an orphan a later `init` offers to copy
+  back.
+- The zone allows exactly one `http_ratelimit` rule, and a second fails the apply.
+- **Do not pin the ACME account in `CAA`**: a rebuild registers a new account, so an
+  `accounturi` pin turns it into an outage that surfaces at renewal. Turning on
+  Advanced Certificate Manager stops Cloudflare appending its own CAA set, so add
+  the new CA to the records first and move the certificate afterwards — otherwise
+  renewal stops weeks before anyone notices.
+- `recovery.sammohr.dev` is password-only and has no Access gate: write denial is
+  the control. If that denial weakens, add an Access application back as a reviewed
+  change, never as a dashboard edit.

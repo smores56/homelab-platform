@@ -5,7 +5,7 @@ runs is seeded rather than joined: ``seed`` plants the OSCrypt blob the desktop'
 own join wrote into ``Preferences`` before the browser starts, and ``snapshot``
 takes the one quiesced copy of ``History`` that the raw collector reads.
 
-``docs/raw-replicas.md`` ("Brave") describes the shape of what lands and
+``libs/data_plane/collectors/raw/brave.py`` describes the shape of what lands and
 ``hosts/server/runbook.md``, "Collector sign-ins", is the operator's half: exporting the seed,
 encrypting it, and proving it planted.
 """

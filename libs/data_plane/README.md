@@ -19,10 +19,10 @@ provider SDK. The same code runs in the local and external planes.
 | `backup.restic` | Argv-only restic commands and snapshot parsing; no tags, no shell |
 | `backup.runner` | One recursive ZFS snapshot, staged backup, copies, prune, freshness, check |
 | `collectors.relay` | Authenticated, schema-validated, rate-limited, idempotent ingest |
-| `collectors.state` | The replica store: content-addressed objects and one `state.sqlite` per source; commit, tombstones, cursors, GC (`docs/raw-replicas.md`) |
-| `collectors.raw` | Raw mail, calendar, finance, Brave, notes and tasks replicas; the absence ledger (`docs/raw-replicas.md`) |
-| `collectors.stream` | Push-based collectors: an IMAP event updates the mail state in place (`docs/raw-replicas.md`) |
-| `derived.hledger` | The finance replica as one hledger journal: the operator's mapping, the provider's own sign, an atomic no-churn write (`docs/raw-replicas.md`) |
+| `collectors.state` | The replica store: content-addressed objects and one `state.sqlite` per source; commit, tombstones, cursors, GC (`libs/data_plane/collectors/state.py`) |
+| `collectors.raw` | Raw mail, calendar, finance, Brave, notes and tasks replicas; the absence ledger (`libs/data_plane/collectors/raw/replica.py`) |
+| `collectors.stream` | Push-based collectors: an IMAP event updates the mail state in place (`libs/data_plane/collectors/stream/`) |
+| `derived.hledger` | The finance replica as one hledger journal: the operator's mapping, the provider's own sign, an atomic no-churn write (`libs/data_plane/derived/hledger.py`) |
 | `memory.file_memory` | Portable per-profile file memory with provenance and tombstones |
 | `migration` | Ordered migration phases and the plan-driven backup gate |
 | `github.backup` | Safe argv for mirror/bundle capture and a verifiable manifest |
@@ -33,7 +33,7 @@ provider SDK. The same code runs in the local and external planes.
 - **Authority is per field.** No database is called disposable because its media survives.
 - **Raw first.** A replica stores the provider's bytes; an index, a ledger view or an
   ICS projection is derived and rebuildable, never the evidence. Absence is carried
-  forward with a reason, not read as deletion (`docs/raw-replicas.md`).
+  forward with a reason, not read as deletion (`libs/data_plane/collectors/raw/replica.py`).
 - **Personal is local-only.** `IdentityIssuer` rejects a personal scope on the external profile.
 - **Destructive, bulk, irreversible, and local-to-general writes need a human.**
   The gate binds a token to the operation hash, intent id, and source epoch; it is

@@ -13,18 +13,18 @@ changes by pull request from a fork, so no PR workflow can read a secret.
 
 | Path | Contents |
 | --- | --- |
-| `bootc/server/` | The server image: Containerfile, rootfs and pins (`docs/core/server-image.md`) |
+| `bootc/server/` | The server image: Containerfile, rootfs and pins (`hosts/server/runbook.md`) |
 | `lib/` | The artifacts every host shares, once: the containers policy with its per-host registry table, the cosign public key, `registries.d`, the sudoers gate and the greenboot required check with per-host assertions (`scripts/check-lib-drift.sh`) |
 | `units/systemd/` | systemd units baked into the image: gates, backup timers, mounts (Quadlets are below) |
 | `units/quadlet/` | Podman Quadlet workloads: the agents, Immich, OPDShelf, Syncthing and their networks |
 | `ignition/` | First-boot Ignition for the bootc deployment |
 | `scripts/deploy-platform.sh` | The platform deploy path: image change plus a maintenance-window reboot |
 | `scripts/deploy-apps.sh` | The `homelab-apps` tenant deploy path: schemas in, rootless Quadlets out (`docs/core/apps-tenant.md`) |
-| `libs/data_plane/` | The portable replica library the collectors run: provider bytes into one transactional state per source (`docs/raw-replicas.md`) |
+| `libs/data_plane/` | The portable replica library the collectors run: provider bytes into one transactional state per source (`libs/data_plane/README.md`) |
 | `backrest/` | The Backrest reader Worker: source, TypeScript typecheck and static tests (`docs/core/backrest.md`) |
 | `images/` | Container image sources: agent egress, agent mail, agent runtime, agent WebUI, brave, tuta-calendar |
-| `tofu/` | Cloudflare OpenTofu (provider v5): the zone's DNS, the CAA pin (`docs/cloudflare.md`), tailnet policy |
-| `bootc/edge/` | The edge image: Caddyfile, firewalld zones, sshd drop-in and deploy units (`docs/core/public-edge.md`) |
+| `tofu/` | Cloudflare OpenTofu (provider v5): the zone's DNS, the CAA pin (`bootc/edge/runbook.md`), tailnet policy |
+| `bootc/edge/` | The edge image: Caddyfile, firewalld zones, sshd drop-in and deploy units (`bootc/edge/runbook.md`) |
 | `hosts/laptop/` | The laptop image: Containerfile, rootfs, pins, its checker and runbook; merged in with `smorespro-image`'s history (`hosts/laptop/README.md`) |
 | `secrets/` | SOPS+age ciphertext, decrypted at boot or by the operator; CI references none |
 | `tests/core/` | Offline checks for the core gate, the Restic plane, the apps tenant and the Serve routes |
