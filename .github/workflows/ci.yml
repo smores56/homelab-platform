@@ -216,3 +216,21 @@ jobs:
           test -z "${CLOUDFLARE_API_TOKEN:-}"
       - name: no pull_request workflow references a secret
         run: scripts/check-pr-secret-boundary.sh
+
+  drift:
+    name: drift (sops policy, shared lib)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      # smores56/dotfiles is public, so scripts/check-sops-drift.sh fetches the
+      # pinned policy anonymously: this job reads no secret, and a pull_request
+      # run needs nothing a fork does not already have. The lib comparison also
+      # runs inside the image area's suite; here it is the job that names drift,
+      # so a host tree that grows a second copy fails as a rule, not as a test.
+      - name: drift
+        run: |
+          scripts/check-sops-drift.sh
+          scripts/check-lib-drift.sh
