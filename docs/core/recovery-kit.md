@@ -9,7 +9,7 @@ Rules that make it a kit rather than a list:
 
 - No backup contains the only copy of anything needed to read that backup.
 - Every value is recorded once, in one place, and referenced here rather than
-  duplicated into chat, issues or `manual-steps`.
+  duplicated into chat, issues or a runbook.
 - An item is only "in the kit" after a cold restore used it. Adding a row
   without the drill is the same as not having it.
 
@@ -41,7 +41,22 @@ needs `pg_restore`.
 | RackNerd ctrl login + 2FA recovery codes | the only way to reinstall the edge VPS or open its console; without them a dead edge is a support ticket | T1 | — |
 | Tailscale admin login + 2FA recovery codes | a reinstall destroys the edge's node identity, and rejoining needs a new preauthorized `tag:vps` key minted in that console | T1 | — |
 | Edge Caddy data directory | `/var/lib/caddy/.local/share/caddy`: the ACME account key and the two certificates, so a rebuild re-issues nothing (`bootc/edge/runbook.md`) | T1 | — |
-| This runbook | printed `docs/core/` set: gate, kit, backrest, public edge, manual steps | T0 | — |
+| This kit and the three host runbooks | printed set: this page, `hosts/server/runbook.md`, `hosts/laptop/runbook.md`, `bootc/edge/runbook.md` | T0 | — |
+
+## Where each row is used
+
+Every item is only real when a procedure spends it. The runbook that spends it:
+
+| Recovery | Runbook |
+| --- | --- |
+| Reinstall smortress from the image, and the passphrases the install adds | `hosts/server/runbook.md`, "1. Install the server from the image" |
+| Unlock a disk by hand when Tang and TPM2 are both unavailable | `hosts/server/runbook.md`, "1.6 Add the offline recovery passphrases" |
+| Restore a dataset or an application from Restic | `hosts/server/runbook.md`, "6.1 Restore an application by hand" |
+| Read the backups without smortress, through the hosted reader | `hosts/server/runbook.md`, "6.3 Hosted Backrest" |
+| Rebuild the edge VPS from the image and its Caddy data directory | `bootc/edge/runbook.md`, "Install the edge from the live ISO" and "Bootstrap the fresh edge" |
+| Rejoin the edge to the tailnet with a new `tag:vps` key | `bootc/edge/runbook.md`, "Bootstrap the fresh edge" |
+| Unlock the laptop's disk and repair its sudo gate | `hosts/laptop/runbook.md`, "1. Enrol the key for disk unlock" and "2. The key for sudo" |
+| Re-sign a derived image when CI is unavailable | `hosts/server/runbook.md`, "1.2 Sign and publish the image" |
 
 Bitwarden item: **homelab core recovery**. Custom fields for short values;
 attachments for files (age identity, host key, cosign key). The paper copy
