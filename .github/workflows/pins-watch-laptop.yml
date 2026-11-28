@@ -1,0 +1,90 @@
+# Opens an issue when the moving NymVPN pin in image/pins.env is stale. It never
+# commits and never rebuilds: a refresh stays a reviewed change made with
+# scripts/refresh-pins.sh --write.
+#
+# The base is not watched and has nothing to refresh: image/pins.env carries the
+# fedora-bootc release tag and every build resolves it, so drift there is
+# impossible by construction.
+name: pins-watch
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  watch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+
+      - name: install skopeo, jq and curl
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends skopeo jq curl
+
+      - name: check the NymVPN pin
+        id: check
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+          ./scripts/refresh-pins.sh --check >"$RUNNER_TEMP/check" 2>&1
+          status=$?
+          cat "$RUNNER_TEMP/check"
+          case $status in
+            0) echo "drift=false" >>"$GITHUB_OUTPUT" ;;
+            1) echo "drift=true" >>"$GITHUB_OUTPUT" ;;
+            *) echo "refresh-pins.sh failed (status $status)" >&2; exit "$status" ;;
+          esac
+
+      - name: open, update, or close the issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DRIFT: ${{ steps.check.outputs.drift }}
+        run: |
+          set -euo pipefail
+          title="Newer NymVPN release available"
+          # The watcher predates this title the way it predates the base tag; a
+          # stray open issue under either would otherwise never be closed again.
+          legacy_titles=("Newer base digest or NymVPN release available"
+            "Newer fedora-bootc base digest available")
+          detail=$(cat "$RUNNER_TEMP/check")
+          existing=""
+          for candidate in "$title" "${legacy_titles[@]}"; do
+            number=$(gh issue list --state open --limit 100 --json number,title \
+              --jq "[.[] | select(.title == \"$candidate\")][0].number // empty")
+            [[ -n $number ]] || continue
+            existing=$number
+            [[ $candidate == "$title" ]] && break
+          done
+          if [[ $DRIFT != "true" ]]; then
+            if [[ -n $existing ]]; then
+              gh issue close "$existing" --comment "The pin is current again: $detail"
+            fi
+            exit 0
+          fi
+          body=$(cat <<'BODY'
+          $title
+
+          Refresh with `scripts/refresh-pins.sh --write`, commit `image/pins.env`, and let publish.yml rebuild. A NymVPN bump is a new release tarball: check its notes before pinning.
+
+          ```
+          $detail
+          ```
+          BODY
+          )
+          body=${body//\$title/$title}
+          body=${body//\$detail/$detail}
+          if [[ -n $existing ]]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi

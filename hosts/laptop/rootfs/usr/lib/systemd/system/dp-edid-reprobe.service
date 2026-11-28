@@ -1,0 +1,21 @@
+# The USB-C dock's DisplayPort link can be up before the monitor answers over
+# AUX, leaving xe with a fallback mode list and niri on 640x480 until the hub is
+# re-plugged. This is the re-probe that re-plug performed, run once at boot
+# before the session can enumerate the connector. It must be a oneshot: a
+# Type=simple start returns immediately, which would order nothing.
+[Unit]
+Description=Re-probe DisplayPort connectors whose EDID did not read at boot
+# greetd starts niri, and niri's first enumeration is what caches 640x480. No
+# udev dependency: the script waits for the connector itself, and pulling
+# systemd-udev-settle into every boot would buy no guarantee for this state.
+Before=greetd.service
+
+[Service]
+Type=oneshot
+# The script bounds itself at ten seconds; this only catches a wedged AUX read
+# so a hung probe cannot hold the session open past the default start timeout.
+TimeoutStartSec=30
+ExecStart=/usr/libexec/smorespro/dp-edid-reprobe
+
+[Install]
+WantedBy=graphical.target

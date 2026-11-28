@@ -1,0 +1,6 @@
+# Fetch cosign signatures stored as OCI 1.1 referrers from GHCR. Without this,
+# containers/image never looks for the signature and bootc's signature policy
+# rejects the image it just pulled.
+docker:
+  ghcr.io/smores56/smorespro-image:
+    use-sigstore-attachments: true

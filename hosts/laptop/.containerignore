@@ -1,0 +1,9 @@
+# Build context exclusions. The Containerfile only reads image/; the
+# repository's tests, docs and git history never need to enter the build.
+.git
+.github
+.worktrees
+docs
+tests
+scripts
+README.md

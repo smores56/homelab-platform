@@ -1,0 +1,31 @@
+#%PAM-1.0
+# util-linux's /etc/pam.d/login, shadowed by this image so one auth line can be
+# added in front of it. Noctalia's lock screen authenticates against the
+# "login" service (its pam_service build option defaults to "login"), so this
+# file is both the lock screen and a TTY. sudo, su, sshd and greetd each read
+# their own service file and keep the stacks configured there: the greeter
+# stays password-only.
+#
+# pam_u2f with pinverification=1 asks for the token's FIDO2 client PIN, so a
+# docked key alone cannot unlock the machine. `sufficient`, not `required`,
+# leaves system-auth's account password behind it as the path for a lost or
+# blocked token. No authfile= is given, so the module reads its own default,
+# $XDG_CONFIG_HOME/Yubico/u2f_keys (else ~/.config/Yubico/u2f_keys); this image
+# ships no such file, so on a stock host the lock screen falls through to the
+# password. /etc/u2f_mappings is the sudo stack's, not this one's.
+auth       sufficient   pam_u2f.so pinverification=1 cue
+auth       substack     system-auth
+auth       include      postlogin
+account    required     pam_nologin.so
+account    include      system-auth
+password   include      system-auth
+# pam_selinux.so close should be the first session rule
+session    required     pam_selinux.so close
+session    required     pam_loginuid.so
+# pam_selinux.so open should only be followed by sessions to be executed in the user context
+session    required     pam_selinux.so open
+session    required     pam_namespace.so
+session    optional     pam_keyinit.so force revoke
+session    include      system-auth
+session    include      postlogin
+-session   optional     pam_ck_connector.so
