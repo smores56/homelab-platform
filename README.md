@@ -25,12 +25,11 @@ changes by pull request from a fork, so no PR workflow can read a secret.
 | `tofu/` | Cloudflare OpenTofu (provider v5): the zone's DNS, the CAA pin (`docs/cloudflare.md`), tailnet policy |
 | `bootc/edge/` | The edge image: Caddyfile, firewalld zones, sshd drop-in and deploy units (`docs/core/public-edge.md`) |
 | `hosts/laptop/` | The laptop image: Containerfile, rootfs, pins, its checker and runbook; merged in with `smorespro-image`'s history (`hosts/laptop/README.md`) |
-| `provision/smortress/` | Autoinstall user-data for the bootc host |
 | `secrets/` | SOPS+age ciphertext, decrypted at boot or by the operator; CI references none |
 | `tests/core/` | Offline checks for the core gate, the Restic plane, the apps tenant and the Serve routes |
 | `tests/deploy/` | Offline checks for the deploy receiver: listener, verification, gates, apps apply, CI notify |
 | `tests/tofu/` | Static assertions on the Cloudflare config (`tests/tofu/check.bats`) |
-| `tests/edge/` | Offline checks for the public-edge probe (`tests/edge/check.bats`) |
+| `tests/fleet/` | Offline checks for the fleet probe (`tests/fleet/check.bats`) |
 | `scripts/` | CI helpers, shellchecked |
 | `docs/` | Core image, apps tenant, Restic plane, backrest, public edge, recovery kit, runbook, manual steps |
 

@@ -30,7 +30,7 @@
 #   scripts/check-edge-unit-paths.sh
 #
 # Exit 0 when every claim holds; otherwise one `FAIL <path>: <why>` line per
-# problem and `N paths, N problems`, in the style of scripts/verify-public-edge.sh.
+# problem and `N paths, N problems`, in the style of scripts/verify-fleet.sh.
 #
 # DirectoryNotEmpty is read along with the path keys systemd derives directories
 # from (ReadWritePaths, StateDirectory, CacheDirectory, LogsDirectory,

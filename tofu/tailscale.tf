@@ -159,14 +159,14 @@ locals {
         ip  = ["443"]
       },
       {
-        # The names probe, from `.github/workflows/verify-tailnet-names.yml`: a
-        # node carrying tag:probe for the length of one run resolves the six
-        # names, verifies each certificate and reads each application's status
-        # class. It is the one non-owner client, so it is also the only way the
-        # names are proven to work for anyone but the owner. One grant per
-        # Service, because the probe reads six VIPs and a grant is one
-        # source/destination pair; the deny test for tag:probe is what keeps it
-        # a probe.
+
+        # The names probe, from `.github/workflows/verify-fleet.yml`: a node
+        # carrying tag:probe for the length of one run resolves the six names,
+        # verifies each certificate and reads each application's status class. It
+        # is the one non-owner client, so it is also the only way the names are
+        # proven to work for anyone but the owner. One grant per Service, because
+        # the probe reads six VIPs and a grant is one source/destination pair; the
+        # deny test for tag:probe is what keeps it a probe.
         src = ["tag:probe"]
         dst = ["svc:immich"]
         ip  = ["443"]

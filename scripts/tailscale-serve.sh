@@ -3,14 +3,16 @@
 # applications. Serve state lives in tailscaled's state file, which is not part
 # of a recovery group and not worth backing up: it is re-declared on every boot.
 #
-# The core applications own a root path on their own HTTPS port, because none of
-# them supports being served under a subpath. The two agent gateways are not
-# applications with a root path to spare: those ports are taken, so they
-# get one fixed path each on 443. Tenant apps from `homelab-apps`
-# get one `/apps/<name>` path each on 443 instead: the core applications already
-# own every root-path HTTPS port, and a path on 443 is what is left. Their
-# loopback ports come from the rendered plan, never from a definition, and every
-# path the plan no longer names is removed, including when the tenant is empty.
+# Each core application answers on a Service name of its own (`svc:immich` and
+# friends, design #834), because none of them supports being served under a
+# subpath: the name is the interface, and the per-port host routes that stood in
+# for it until every client had moved are gone (task #1030). 443 is the host's own
+# name, and what lives there has no root path to itself -- the two agent gateways
+# own one fixed path each, the wallpaper tree is a static directory under
+# `/wallpapers`, and tenant apps from `homelab-apps` get one `/apps/<name>` path
+# each. Tenant loopback ports come from the rendered plan, never from a
+# definition, and every path the plan no longer names is removed, including when
+# the tenant is empty.
 #
 # The wallpaper library is a fourth core route and the only one with no
 # application behind it: `/srv/wallpapers` is a directory, so Serve publishes it
@@ -44,21 +46,21 @@ fail() {
 
 command -v jq >/dev/null 2>&1 || fail "jq is missing"
 
-# https port -> loopback port. 443 Immich, 8443 OPDShelf, 8444 the personal
-# workspace, 8445 the general web UI, 8448 Navidrome. Every one of them serves the
-# owner's own tailnet clients; the public edge does not read them. The Syncthing
-# GUI has no host port: since #897 T2 its only route is the `svc:sync` Service below. It
-# proxies the `svc:immich` and `svc:opds` Services instead (design #725), because
-# the edge may not use 443, which also carries the agent gateways and the
-# wallpaper tree, and a port-scoped tailnet rule cannot express a path. The
-# wallpaper library is absent here: it is a directory published as static files
-# under a path on 443, not a loopback port with a root path.
+# https port -> loopback port. Only 443 survives, and it is not one application's:
+# Immich answers on its root, the two agent gateway APIs and the wallpaper tree
+# hang off it, and a box's own clients read it there. The per-port routes that used
+# to front the other core applications served the owner's tailnet clients while the
+# `svc:` names were the interface, and task #1030 retired them: every one of those
+# applications answers on its Service now, and the reconcile below turns a port a
+# box still carries off. The public edge never read them; it proxies `svc:immich`
+# and `svc:opds` instead (design #725), because the edge may not use 443, which
+# also carries the agent gateways and the wallpaper tree, and a port-scoped tailnet
+# rule cannot express a path. The Syncthing GUI has no host port either: since #897
+# T2 its only route is the `svc:sync` Service below. The wallpaper library is
+# absent here: it is a directory published as static files under a path on 443,
+# not a loopback port with a root path.
 declare -A core_routes=(
   [443]=2283
-  [8443]=8083
-  [8444]=18008
-  [8445]=18007
-  [8448]=4533
 )
 
 # https/443 path -> loopback port, for the two agent gateway APIs. A fixed path
@@ -146,7 +148,7 @@ fi
 # belongs to the application rather than to a port on the host, and Tailscale
 # terminates TLS and provisions the certificate for that name. Declared after the
 # host routes, so a Service the tailnet does not have yet costs this route alone.
-# The 8443 host route stays as the rollback until every client has moved.
+# Its per-port host route was the rollback until task #1030 retired it with the rest.
 if ! "$tailscale_bin" serve --bg --service=svc:opds --https=443 http://127.0.0.1:8083; then
   fail "could not advertise the OPDShelf Service on svc:opds https/443"
 fi
@@ -200,8 +202,9 @@ status=$("$tailscale_bin" serve status --json) || {
 # file: Serve answers a handler for as long as its config names it, and nothing in
 # tailscaled knows a newer script retired the route. So deleting an entry from
 # core_routes above is enough to retire it on the next run -- without this loop the
-# handler outlived the declaration. That is how the two host ports the public edge
-# used (8446 and 8447) leave, now that the edge reads the Services instead.
+# handler outlived the declaration. That is how the per-port routes task #1030
+# retired leave a box that still carries them, and how the two ports the public
+# edge used (8446 and 8447) left when the edge started reading the Services.
 #
 # Every https port in the status is stale unless core_routes names it. 443 is
 # exempt: that is the tenant root, where the two gateways and the wallpaper tree

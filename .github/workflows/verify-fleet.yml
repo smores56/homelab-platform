@@ -1,0 +1,89 @@
+# The fleet's scheduled proof (design #725, #834 and #842; task #1030).
+#
+# Two probes with two checkouts, two tailnet joins and two pages became one: no
+# repository check can see the VPS's public names or a tailnet Service VIP, so one
+# job joins the tailnet -- the only genuine non-owner client there is -- runs
+# `scripts/verify-fleet.sh` once against the three public names, the six Service
+# names and the zone's `CAA` policy, and pages once. The script says what each leg
+# means; the summary it prints is the whole verdict.
+#
+# The join is the deploy path's, unchanged: the same OAuth client, the same tag,
+# the same pinned action. CI is also the only place a genuine non-owner client
+# exists -- the runner joins as `tag:deploy`, which the policy grants one port on
+# each of the six Services (`tofu/tailscale.tf`) and nothing else -- so the run
+# proves the names work for a node that is not the owner's laptop.
+#
+# The Healthchecks ping is `FLEET_PING_URL` from the `deploy-notify` environment: a
+# capability URL, so a secret, and the same shape the host's own monitors use
+# (docs/manual-steps.md). It replaces the `EDGE_PING_URL` and `NAMES_PING_URL` the
+# two daily runs each had, which is the one operator step this change carries: the
+# merged check has one period and one page.
+name: verify-fleet
+
+on:
+  schedule:
+    # Daily. A lapsed certificate, a name that stopped proxying, a Service the host
+    # stopped advertising and a CAA record that forbids the served CA are all
+    # noticed the next morning rather than the next month, and the run is a handful
+    # of TLS handshakes.
+    - cron: "23 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-fleet
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    name: probe the public names, the Service names and the zone's CAA
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: deploy-notify
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      # OAuth, not an authkey: the action mints a preauthorized key from the
+      # client, so the node it creates is ephemeral and disappears with the job,
+      # and the tag it carries is the one the policy admits to the Service ports.
+      # No `ping:` input: the probe below is the reachability check, and its
+      # failure names the name rather than the tailnet.
+      - uses: tailscale/github-action@064b10558093f38325e838ddea35486bdc6b1d5c # v4.4.0
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_CLIENT_SECRET }}
+          tags: tag:deploy
+      # One step, three checks: the edge probe sets its own exit status, the tailnet
+      # legs and the CAA scan ride in the same run, and the step's outcome is the
+      # whole fleet's.
+      - name: probe the fleet
+        id: probe
+        run: scripts/verify-fleet.sh
+      # `always()` because the ping is the report, not a gate: a red probe must
+      # still page, and a probe that never ran (a join that failed) is a red run the
+      # operator should hear about. The URL carries the capability, so it is never
+      # echoed.
+      - name: page through Healthchecks
+        if: always()
+        env:
+          FLEET_PING_URL: ${{ secrets.FLEET_PING_URL }}
+          PROBE_OUTCOME: ${{ steps.probe.outcome }}
+        run: |
+          set -euo pipefail
+          if [[ -z ${FLEET_PING_URL:-} ]]; then
+            echo "::warning::FLEET_PING_URL is unset in deploy-notify; no page is sent (docs/manual-steps.md)"
+            exit 0
+          fi
+          # The check's period is what turns silence into a page, so a success is a
+          # ping to the URL and a failure is a ping to `/fail`, which takes the
+          # check down at once instead of waiting out the period.
+          if [[ $PROBE_OUTCOME == success ]]; then
+            url=$FLEET_PING_URL
+          else
+            url="${FLEET_PING_URL%/}/fail"
+          fi
+          curl --fail-with-body --silent --show-error --max-time 30 "$url"
+          echo "pinged Healthchecks: $PROBE_OUTCOME"

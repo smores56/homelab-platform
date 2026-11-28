@@ -1,6 +1,7 @@
 #!/usr/bin/env bats
 # bats file_tags=core
-# Serve's core routes exist on a host with no tenant plan: every fixed port still fronts its app.
+# Serve's core routes exist on a host with no tenant plan: 443 fronts Immich, and
+# no application keeps a per-port route of its own.
 #
 # One file of the suite that was tests/core/tailscale-serve.bats, split so bats
 # can run the sections as parallel files (a file is one job). The fake, the Serve
@@ -26,12 +27,21 @@ setup() { ts_setup; }
     serves host:443 / http://127.0.0.1:2283
 }
 
-@test "8443 still fronts OPDShelf" {
+# The per-port routes the applications left when the `svc:` names became the
+# interface served the owner alone; task #1030 retired them, so the declaration
+# holds 443 and nothing else. Read out of the script, because the count is the
+# claim: an entry someone adds back to core_routes fails here.
+@test "443 is the only host port the script declares" {
     core_run
-    serves host:8443 / http://127.0.0.1:8083
+    assert_equal "$(declared_ports | paste -sd' ' -)" 443
 }
 
-@test "8448 fronts Navidrome" {
+@test "no route is declared on a port other than 443" {
     core_run
-    serves host:8448 / http://127.0.0.1:4533
+    assert_equal "$(grep -oE -- '--https=[0-9]+' "$log" | sort -u | tr '\n' ' ')" '--https=443 '
+}
+
+@test "the Serve state carries one host port after a run" {
+    core_run
+    assert_equal "$(jq -r '.Web | keys | join(" ")' "$status")" 'host:443'
 }

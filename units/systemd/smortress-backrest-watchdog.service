@@ -6,7 +6,7 @@
 # still running and answers nothing, which is the failure this timer exists for.
 #
 # A host with no /etc/backrest/env has no reader to watch: skipping is the honest
-# state there, and the probe that pages is scripts/verify-public-edge.sh, not a
+# state there, and the probe that pages is scripts/verify-fleet.sh, not a
 # watchdog pinging `fail` for a reader nobody configured.
 Description=Probe the recovery reader and restart it when it stops answering
 ConditionPathExists=/etc/backrest/env

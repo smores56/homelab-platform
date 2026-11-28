@@ -1,1 +1,4 @@
 # Accepted stale references. Shrink-only: remove a line when fixed.
+# docs/manual-steps.md is being replaced by per-host runbooks (task #1038), so its
+# remaining mention of the two probes this task merged (task #1030) is fixed there.
+docs/manual-steps.md	scripts/verify-public-edge.sh

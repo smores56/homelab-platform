@@ -20,7 +20,7 @@
 # leaves every ordinary order refused, which is a renewal outage weeks out.
 #
 # Knobs: CAA_ZONE (sammohr.dev), CAA_NAME (photos.sammohr.dev), CAA_WILDCARD (0),
-# DIG_BIN and OPENSSL_BIN (tests/edge/check.bats drives the same code).
+# DIG_BIN and OPENSSL_BIN (tests/fleet/check.bats drives the same code).
 set -uo pipefail
 
 zone=${CAA_ZONE:-sammohr.dev}
@@ -76,7 +76,7 @@ if [[ -z $org ]]; then
   bad "$name serves no certificate whose issuer can be read" "'$openssl_bin s_client' printed nothing"
 elif [[ -z $ca ]]; then
   bad "the issuer organization '$org' has no mapped CA domain" \
-    'add it to the case statement here and to tests/edge/check.bats'
+    'add it to the case statement here and to tests/fleet/check.bats'
 else
   ok "$name is issued by $org, whose CAA domain is $ca"
 fi

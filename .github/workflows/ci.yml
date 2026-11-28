@@ -88,14 +88,13 @@ jobs:
         run: |
           scripts/install-ci-tools.sh "$RUNNER_TEMP/bin"
           echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
-      # Stubs only: the edge probes themselves need a public host and a tailnet
-      # node, and verify-public-edge.yml / verify-tailnet-names.yml have them.
+      # Stubs only: the fleet probe itself needs a public host and a tailnet node,
+      # and verify-fleet.yml has them.
       - name: edge
         run: |
           git ls-files -z 'tests/*.bats' 'tests/*/*.bats' |
             xargs -0 bats \
-              --filter-tags edge \
-              --filter-tags tailnet-names \
+              --filter-tags fleet \
               --filter-tags agent-egress \
               --filter-tags brave \
               --filter-tags finance \
@@ -167,7 +166,7 @@ jobs:
               --jobs "$(nproc)" --no-parallelize-within-files
 
   tenants:
-    name: tenants (backrest, tuta-calendar, provision)
+    name: tenants (backrest, tuta-calendar)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -195,7 +194,6 @@ jobs:
         run: |
           git ls-files -z 'tests/*.bats' 'tests/*/*.bats' |
             xargs -0 bats \
-              --filter-tags provision \
               --filter-tags backrest \
               --filter-tags tuta-calendar \
               --jobs "$(nproc)" --no-parallelize-within-files

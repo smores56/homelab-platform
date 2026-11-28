@@ -457,7 +457,7 @@ wrote_nothing() {
 
 @test "the summary names the probe and the tofu ordering" {
     run_ok "$(standard_document)" --host-key "$kit_key"
-    assert_contains "$out" "scripts/verify-public-edge.sh"
+    assert_contains "$out" "scripts/verify-fleet.sh"
     assert_contains "$out" "tofu/terraform.tfvars"
 }
 

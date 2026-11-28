@@ -49,21 +49,16 @@ stale_port_run() {
 
 # The declared ports are read out of the script rather than repeated here, so the
 # assertion keeps up when an entry leaves core_routes -- which is the edit this
-# reconcile exists to make safe.
-declared_ports_of_script() {
-    sed -n '/^declare -A core_routes=(/,/^)/p' "$script" |
-        grep -oE '\[[0-9]+\]' | tr -dc '0-9\n' | paste -sd'|' -
-}
-
+# reconcile exists to make safe, and the one task #1030 made.
 @test "core_routes is readable" {
     stale_port_run
-    [[ -n $(declared_ports_of_script) ]]
+    [[ -n $(declared_ports) ]]
 }
 
 @test "a port core_routes still declares is never turned off" {
     stale_port_run
-    declared_ports=$(declared_ports_of_script || true)
-    if grep -qE -- "--https=($declared_ports) off$" "$log"; then
+    declared=$(declared_ports | paste -sd'|' - || true)
+    if grep -qE -- "--https=($declared) off$" "$log"; then
         grep -E -- ' off$' "$log" >&2
         return 1
     fi
@@ -95,19 +90,26 @@ declared_ports_of_script() {
     fi
 }
 
-# The two host ports the public edge used before it proxied the Services (design
-# #725) are exactly that case, and a box that still carries them must lose them:
-# nothing has any reason to reach Immich or OPDShelf on the host's own address but
-# the owner, who has 443 and 8443.
+# The host ports the fleet no longer declares are exactly that case, and a box that
+# still carries them must lose them: the two the public edge used before it proxied
+# the Services (design #725), and the per-port routes the core applications left
+# when their `svc:` names became the interface (task #1030). Only 443 keeps a
+# handler, because it is the host's own name and not one application's.
+retired_ports=(8446 8447 8448 8445 8444 8443)
+
 retired_ports_run() {
     reset_case
     jq '.Web["host:8446"] = {"Handlers": {"/": {"Proxy": "http://127.0.0.1:2283"}}}
-        | .Web["host:8447"] = {"Handlers": {"/": {"Proxy": "http://127.0.0.1:8083"}}}' \
+        | .Web["host:8447"] = {"Handlers": {"/": {"Proxy": "http://127.0.0.1:8083"}}}
+        | .Web["host:8448"] = {"Handlers": {"/": {"Proxy": "http://127.0.0.1:4533"}}}
+        | .Web["host:8445"] = {"Handlers": {"/": {"Proxy": "http://127.0.0.1:18007"}}}
+        | .Web["host:8444"] = {"Handlers": {"/": {"Proxy": "http://127.0.0.1:18008"}}}
+        | .Web["host:8443"] = {"Handlers": {"/": {"Proxy": "http://127.0.0.1:8083"}}}' \
         "$status" >"$tmp/s" && mv "$tmp/s" "$status"
     drive
 }
 
-@test "the retired edge ports do not fail the run" {
+@test "the retired ports do not fail the run" {
     retired_ports_run
     assert_equal "$rc" 0
 }
@@ -118,13 +120,14 @@ check_retired_port_off_once() {
     assert_equal "$(grep -cF -- "serve --https=$1 off" "$log" || true)" 1
 }
 
-for port in 8446 8447; do
-    register "the retired edge port $port is turned off exactly once" check_retired_port_off_once "$port"
+for port in "${retired_ports[@]}"; do
+    register "the retired port $port is turned off exactly once" check_retired_port_off_once "$port"
 done
 
-@test "neither retired edge port is left in the Serve config" {
+@test "no retired port is left in the Serve config" {
     retired_ports_run
-    if ! jq -e '.Web | (has("host:8446") or has("host:8447")) | not' "$status" >/dev/null 2>&1; then
+    left=$(jq -r '.Web | keys[] | select(test("^host:844[3-8]$"))' "$status" 2>/dev/null || true)
+    if [[ -n $left ]]; then
         jq -r '.Web | keys | join(" ")' "$status" >&2 || true
         return 1
     fi

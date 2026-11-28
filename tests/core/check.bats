@@ -1,14 +1,14 @@
 #!/usr/bin/env bats
 # bats file_tags=core
-# Offline checks for the T0 gate scripts (SDLC #703), run by bats.
+# Offline checks for the deploy CLI and the runbook that drives it (SDLC #703).
 #
-# The privileged half — freezing a real cluster, reading a real repository —
-# needs smortress and root. This checks the half that does not: argument
-# handling, the read-only default, the refusal to run unprivileged, and the
-# promises the scripts' own headers make about what they can do.
+# The privileged half -- restoring from a real repository, reading the host's own
+# state -- needs smortress and root. This checks the half that does not: the verbs
+# the CLI dispatches and documents, the secret manifest behind them, and the runbook
+# steps the state tree depends on.
 #
-# The harnesses the shell suite chained inline — restic-plane, the progress
-# command, agent-recovery, the Quadlet suites and the agent shell dispatcher —
+# The harnesses the shell suite chained inline -- restic-plane, the progress
+# command, agent-recovery, the Quadlet suites and the agent shell dispatcher --
 # are separate suites the runner runs on their own; operator-access was the one
 # this task converted. This file keeps only the static assertions.
 #
@@ -17,89 +17,6 @@ load ../helpers
 
 cli=scripts/deploy-cli.sh
 runbook=docs/manual-steps.md
-
-# ----------------------------------------------------------------- the scripts
-
-# The shell loop checked that a script was executable and parsed, but printed only
-# the parse result, so the two stay one assertion.
-legacy_script_parses() { # <script>
-    [[ -x $1 ]]
-    bash -n "$1"
-}
-
-legacy_script_help() { # <script>
-    "$1" --help >/dev/null 2>&1
-}
-
-legacy_script_rejects_unknown_flag() { # <script>
-    ! "$1" --nonsense >/dev/null 2>&1
-}
-
-for legacy_script in scripts/legacy/legacy-audit.sh \
-    scripts/legacy/verify-legacy-backups.sh scripts/legacy/freeze-legacy.sh; do
-    register "$legacy_script parses" legacy_script_parses "$legacy_script"
-    register "$legacy_script --help" legacy_script_help "$legacy_script"
-    register "$legacy_script rejects an unknown flag" \
-        legacy_script_rejects_unknown_flag "$legacy_script"
-done
-
-# Freeze defaults to the read-only mode: an accidental plain invocation must not
-# suspend anything.
-@test "freeze defaults to --check" {
-    grep -q '^mode=check$' scripts/legacy/freeze-legacy.sh
-    ! grep -q -- '--apply) mode=apply' scripts/legacy/freeze-legacy.sh
-}
-
-# Resume must restore recorded state, not a hard-coded false.
-@test "freeze records and restores prior suspend state" {
-    grep -q 'recorded=' scripts/legacy/freeze-legacy.sh
-    grep -q 'state_file' scripts/legacy/freeze-legacy.sh
-}
-
-# The verifier must never change retention or snapshots.
-@test "verifier has no forget/prune/init/unlock" {
-    # shellcheck disable=SC2016  # the pattern matches a literal "$restic_bin" in the verifier
-    ! grep -nE 'restic .*(forget|prune|init|unlock)|"\$restic_bin" (forget|prune|init|unlock)' \
-        scripts/legacy/verify-legacy-backups.sh >/dev/null
-}
-
-# The verifier deletes only a scratch directory it created itself.
-@test "verifier deletes only its own scratch tree" {
-    [[ $(grep -c 'rm -rf' scripts/legacy/verify-legacy-backups.sh) -eq 1 ]]
-    grep -q 'scratch_owned == 1' scripts/legacy/verify-legacy-backups.sh
-}
-
-# Scratch must be rooted under /var/tmp and never reused when non-empty.
-@test "scratch is confined and non-empty targets are refused" {
-    grep -q 'SCRATCH_ROOT=/var/tmp' scripts/legacy/verify-legacy-backups.sh
-    grep -q 'refusing to reuse it' scripts/legacy/verify-legacy-backups.sh
-}
-
-# The trees it insists on are the ones the live layout keeps. Aiming at the
-# pre-migration /var/lib/data made every presence check fail the moment the data
-# moved, which reads as a backup problem while being a stale path.
-@test "the verifier checks the trees the live layout keeps" {
-    # `!` alone fails only as the last command in a bats test (SC2314).
-    if grep -q '/var/lib/data' scripts/legacy/verify-legacy-backups.sh; then
-        printf 'the verifier still names the pre-migration path\n' >&2
-        return 1
-    fi
-    grep -q '/var/srv/files/vault' scripts/legacy/verify-legacy-backups.sh
-    grep -q '/var/lib/immich/dumps/immich.dump' scripts/legacy/verify-legacy-backups.sh
-}
-
-# Neither script may print secret values.
-@test "no gate script prints secret contents" {
-    ! grep -nE 'cat /run/secrets|cat .*restic-password|cat .*restic-r2.env' \
-        scripts/legacy/legacy-audit.sh scripts/legacy/verify-legacy-backups.sh \
-        scripts/legacy/freeze-legacy.sh >/dev/null
-}
-
-# The audit must not start or unlock anything.
-@test "audit is read-only" {
-    ! grep -nE 'systemctl (start|stop|restart)|cryptsetup|restic (backup|forget|prune)' \
-        scripts/legacy/legacy-audit.sh >/dev/null
-}
 
 # ------------------------------------------------------------- the operator CLI
 

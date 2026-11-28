@@ -214,18 +214,14 @@ plan_with() { jq -cn --argjson apps "$1" '{version: 1, apps: $apps}'; }
 core_status() {
     cat >"$status" <<'EOF'
 {
-  "TCP": {"443": {"HTTPS": true}, "8443": {"HTTPS": true},
-          "8444": {"HTTPS": true}, "8445": {"HTTPS": true}},
+  "TCP": {"443": {"HTTPS": true}},
   "Web": {
     "host:443": {"Handlers": {
       "/": {"Proxy": "http://127.0.0.1:2283"},
       "/apps/agent-local": {"Proxy": "http://127.0.0.1:18001"},
       "/apps/agent-general": {"Proxy": "http://127.0.0.1:18002"},
       "/apps/agent-ui-personal": {"Proxy": "http://127.0.0.1:18006"},
-      "/apps/agent-ui-general": {"Proxy": "http://127.0.0.1:18007"}}},
-    "host:8443": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:8083"}}},
-    "host:8444": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:18008"}}},
-    "host:8445": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:18007"}}}
+      "/apps/agent-ui-general": {"Proxy": "http://127.0.0.1:18007"}}}
   }
 }
 EOF
@@ -238,10 +234,20 @@ reset_case() {
 }
 
 # The number of host ports the script declares, read out of it rather than repeated
-# here: three assertions below count the routes a run logs, and every one of them
-# moves when an entry leaves core_routes.
+# here: several assertions below count the routes a run logs, and every one of them
+# moves when an entry leaves core_routes -- which is how task #1030 retired the
+# per-port routes.
 core_route_count() {
     sed -n '/^declare -A core_routes=(/,/^)/p' "$script" | grep -cE '^  \[[0-9]+\]='
+}
+
+# The https ports core_routes declares, one per line, read out of the script rather
+# than repeated here: the core-route suite asserts the set and the reconcile suite
+# asserts none of them is turned off, and the set moved when task #1030 retired the
+# per-port routes.
+declared_ports() {
+    sed -n '/^declare -A core_routes=(/,/^)/p' "$script" |
+        grep -oE '\[[0-9]+\]' | tr -dc '0-9\n' | sort -n
 }
 
 served() { # port -> handler path or empty
