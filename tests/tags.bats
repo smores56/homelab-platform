@@ -211,7 +211,7 @@ suite_tags() {  # the area each suite declares
         declared=$(grep -hE '^# bats file_tags=' "$suite" | head -n1 | sed -E 's/.*file_tags=//')
         case $suite in
             tests/*/*.bats) expected=${suite#tests/}; expected=${expected%%/*} ;;
-            tests/lint.bats | tests/tags.bats) expected=lint ;;
+            tests/lint.bats | tests/tags.bats | tests/ci-gate.bats) expected=lint ;;
             tests/docs.bats) expected=docs ;;
             tests/actionlint.bats) expected=actionlint ;;
             tests/tofu-fmt.bats) expected=tofu ;;

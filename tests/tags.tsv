@@ -127,6 +127,7 @@ secrets/migration	tests/secrets/migration.bats scripts/smortress-secrets-seed.sh
 secrets/policy	tests/secrets/policy.bats scripts/sops-policy.py tests/secrets/*
 secrets/rotate	tests/secrets/rotate.bats scripts/secret.sh secrets/index.json secrets/boot.json .sops.yaml scripts/sops-policy.py scripts/secrets-check.py tests/secrets/*
 lint	tests/lint.bats .github/* CODEOWNERS .yamllint.yaml scripts/* tests/* backrest/* .githooks/* bootc/lib/* hosts/*
+ci-gate	tests/ci-gate.bats scripts/ci-gate.py scripts/ci-areas.sh .github/workflows/ci.yml .github/workflows/tofu-plan-pr.yml tests/ci-gate.bats
 docs	tests/docs.bats scripts/check-doc-refs.py scripts/doc-refs-baseline.txt hosts/*/runbook.md bootc/*/runbook.md
 tofu-fmt	tests/tofu-fmt.bats tofu/*
 actionlint	tests/actionlint.bats .github/*

@@ -19,6 +19,7 @@ load ../helpers
 
 apply=.github/workflows/tofu-apply.yml
 plan_pr=.github/workflows/tofu-plan-pr.yml
+ci=.github/workflows/ci.yml
 drift=.github/workflows/tofu-drift.yml
 backend=tofu/backend.tf
 providers=scripts/check-tofu-providers.py
@@ -723,11 +724,26 @@ for name in TAILSCALE_OAUTH_CLIENT_ID TAILSCALE_OAUTH_CLIENT_SECRET; do
 done
 
 # --- the pre-merge plan ------------------------------------------------------
-# The pre-merge plan: the required check that makes the merge meaningful, with
-# read-only credentials because on a pull_request the head workflow runs.
+# The pre-merge plan: the check that makes the merge meaningful, with read-only
+# credentials because on a pull_request the head workflow runs. It is `ci.yml`'s
+# `plan` job through a `workflow_call`: `PR gate` is the one required check, so
+# the plan's verdict has to reach it through `needs` instead of sitting beside
+# it as a second required check.
 
 @test "the pre-merge plan runs on pull requests" {
-    grep -qE '^[[:space:]]*pull_request:' "$plan_pr"
+    grep -qE '^[[:space:]]*pull_request:' "$ci"
+    grep -qxF "    uses: ./$plan_pr" "$ci"
+}
+
+@test "the plan is invoked, not triggered on its own" {
+    # Two triggers would plan twice and comment twice on every pull request.
+    run grep -qE '^[[:space:]]*pull_request:' "$plan_pr"
+    assert_failure
+    grep -qxF '  workflow_call:' "$plan_pr"
+}
+
+@test "the gate needs the plan" {
+    grep -qxF '      - plan' "$ci"
 }
 
 @test "the pre-merge plan uses the read-only environment" {
@@ -823,7 +839,7 @@ done
 }
 
 @test "the plan no longer triggers on label events" {
-    grep -qE '^[[:space:]]*types: \[opened, synchronize, reopened\]$' "$plan_pr"
+    grep -qE '^[[:space:]]*types: \[opened, synchronize, reopened\]$' "$ci"
 }
 
 @test "the executable-HCL guard carries its marker" {

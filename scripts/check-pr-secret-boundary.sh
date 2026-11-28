@@ -18,6 +18,11 @@
 # default in public repositories on 2026-12-02 (GitHub changelog), so nothing
 # may be built on it.
 #
+# The scan follows a local `uses:` into the workflow_call file it names, because
+# that file runs on the caller's tree with the caller's credentials: moving a
+# job behind `uses:` must not move it out of this rule. The plan is such a move
+# (it is `ci.yml`'s `plan` job now) and stays the one exemption.
+#
 # The runtime half of the test needs a second GitHub identity and is a manual
 # step, not part of this script.
 set -euo pipefail
@@ -51,9 +56,31 @@ for file in "${files[@]}"; do
     echo "$file: pull_request_target runs with base-repo secrets; forbidden" >&2
     status=1
   fi
+done
 
-  grep -qE '^[[:space:]]*pull_request(_[a-z]+)?[[:space:]]*:' "$file" || continue
+# pr_reachable: the workflows a pull_request run can reach. A local `uses:` of a
+# workflow_call file runs it on the caller's tree with the caller's credentials,
+# so the rule has to follow the reference: otherwise moving a job behind
+# `uses:` would take it out of this scan. The plan is exactly that move (it is
+# `ci.yml`'s `plan` job now), and the exemption below still polices it. One level
+# is enough; no reusable here calls another.
+mapfile -t pr_reachable < <(
+  for file in "${files[@]}"; do
+    grep -qE '^[[:space:]]*pull_request(_[a-z]+)?[[:space:]]*:' "$file" || continue
+    printf '%s\n' "$file"
+    grep -oE 'uses:[[:space:]]+\./\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml' "$file" |
+      sed -E 's#^uses:[[:space:]]+\./##'
+  done | sort -u
+)
 
+# A reference that names no file would scan nothing and read as a clean file, so
+# a reachable path that is not there is a failure of its own.
+for file in "${pr_reachable[@]}"; do
+  if [[ ! -f $file ]]; then
+    echo "$file: a pull_request workflow uses a local workflow that is not here" >&2
+    status=1
+    continue
+  fi
   while IFS= read -r secret; do
     case "$secret" in
       GITHUB_TOKEN|github_token) continue ;;

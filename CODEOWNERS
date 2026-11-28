@@ -12,6 +12,12 @@
 # Workflows and repo automation: run with the deploy token in the environment.
 .github/ @smores56
 
+# The CI gate's own definition: the selector decides which areas a diff runs and
+# the decision script decides what the required check reports. Both are read by
+# the workflow file the pull request itself ships.
+scripts/ci-areas.sh @smores56
+scripts/ci-gate.py @smores56
+
 # The shared lib: what every host installs and runs as root. Design #1011 keeps
 # lib/ owner-gated.
 lib/ @smores56

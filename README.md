@@ -62,7 +62,9 @@ is `workflow_dispatch` only and applies a reviewed plan (SDLC #622).
 
 ## Ownership
 
-Every path is owned by `@smores56`. `*.tf`, `.github/` and `hosts/` are
-Kanbei-critical: a change there can publish a name in the zone, expose the
-Cloudflare token, or ship in the OS on a host.
+Every path is owned by `@smores56`. `*.tf`, `.github/`, `hosts/` and the CI
+gate's own selector and decision scripts (`scripts/ci-areas.sh`,
+`scripts/ci-gate.py`) are Kanbei-critical: a change there can publish a name in
+the zone, expose the Cloudflare token, ship in the OS on a host, or narrow the
+required check that lets all of it through.
 See `CODEOWNERS` and `docs/kanbei-critical.md`.
