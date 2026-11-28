@@ -551,15 +551,34 @@ git push
 
 ### 3.5 Rotate the agent's credentials
 
+The gateways read none of these from a `_FILE`: `smortress-agent-config.service`
+rewrites `API_SERVER_KEY` into `/var/lib/agent/{local,general}/.env`, the UI's key
+and password into `webui.env`, and the workspace's pair into
+`/run/smortress/workspace.env` at every start, and
+`smortress-app-secrets.service` recreates the Podman secret the Quadlets mount.
+A rotation therefore reaches nothing until the writers restart first and the
+containers that read them restart after:
+
 ```sh
 scripts/secret.sh edit agent-local-api-key.yaml       # agent.local_api_key: openssl rand -hex 32
 scripts/secret.sh edit agent-general-api-key.yaml     # agent.general_api_key: same
 scripts/secret.sh edit agent-hosted-key.yaml          # agent.hosted_key: the provider's key, not ours
 scripts/secret.sh edit agent-ui-personal-password.yaml   # ui.personal_password
 scripts/secret.sh stage agent-local-api-key.yaml      # all four are in agents.json
-sudo systemctl restart smortress-agent-config.service
-sudo systemctl restart agent-webui-personal.service agent-workspace-personal.service
+sudo systemctl restart smortress-app-secrets.service smortress-agent-config.service
+sudo systemctl restart agent-local.service agent-general.service
+sudo systemctl restart agent-webui-personal.service agent-webui-general.service
+git commit -am 'chore(agent): rotate the agent credentials'
+git push
 ```
+
+Restarting `agent-local` is the step that is easy to skip and the one that
+matters: the gateway took the old key into its environment when it started, so
+the UI that picks up the new one is refused until the gateway restarts too.
+`agent-workspace-personal.service` reads the same pair from
+`/run/smortress/workspace.env`; restart it as well once the image ships it, and
+restart `agent-proxy.service` when the rotation is the hosted provider key: it
+mounts `agent-hosted-key` as a secret and names it in `AGENT_PROXY_KEY_FILE`.
 
 
 **Both gateway keys sit inside a restorable dataset**, so they are in the Restic
